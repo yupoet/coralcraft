@@ -7,11 +7,19 @@ CoralCraft 是一个净室（clean-room）、开源、Rust 原生的矢量插画
 
 ## 每个会话从这里开始
 
-1. 读 [`ROADMAP.md`](ROADMAP.md)（阶段、各维度数字、下一步）与
+1. **必读 AI 记忆库（`docs/ai-memory/`）**：开始任何工作前，必须先读取：
+   - [`docs/ai-memory/00-project.md`](docs/ai-memory/00-project.md) — 项目目标、模块、目录说明
+   - [`docs/ai-memory/01-commands.md`](docs/ai-memory/01-commands.md) — 常用命令、启动方式、测试方式
+   - [`docs/ai-memory/02-architecture.md`](docs/ai-memory/02-architecture.md) — 架构、关键决策、依赖关系
+   - [`docs/ai-memory/03-current.md`](docs/ai-memory/03-current.md) — 当前任务、进行中问题、下一步
+   - [`docs/ai-memory/04-known-issues.md`](docs/ai-memory/04-known-issues.md) — 已知 bug、坑点、规避方式
+   - 按需读取 [`docs/ai-memory/05-ref-docs/`](docs/ai-memory/05-ref-docs/) — 参考的外部信息、知识梳理等（多文件）
+2. **持续回写记忆库**：当做出重要发现、推进任务状态、遇到新坑点或整理外部知识时，必须将重要结论持久化回写到 `docs/ai-memory/03-current.md`、`04-known-issues.md` 或 `05-ref-docs/`。
+3. 读 [`ROADMAP.md`](ROADMAP.md)（阶段、各维度数字、下一步）与
    [`docs/gaps.md`](docs/gaps.md)（排序后的差距清单）。除非操作者给定任务，
    从差距清单选活干。
-2. 读当前里程碑计划 `docs/superpowers/plans/*.md`，按其中的 Task 执行。
-3. 遵循自主运行协议：定向 → 计划 → 失败测试先行 → 实现 → 全量回归 → 记录 → 提交。
+4. 读当前里程碑计划 `docs/superpowers/plans/*.md`，按其中的 Task 执行。
+5. 遵循自主运行协议：定向 → 计划 → 失败测试先行 → 实现 → 全量回归 → 记录（同步更新 `docs/ai-memory/`） → 提交。
    除非计划中标注为"操作者裁决"，不要停下来问。
 
 `plan/` 是 gitignored 的本地会话笔记目录。
