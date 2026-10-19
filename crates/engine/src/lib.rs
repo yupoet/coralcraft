@@ -247,6 +247,7 @@ impl EditorEngine {
                 ObjectKind::Polygon(_) => "Polygon on Layer".to_owned(),
                 ObjectKind::Path(_) => "Curve on Layer".to_owned(),
                 ObjectKind::ArtisticText { .. } => "Artistic Text".to_owned(),
+                ObjectKind::ParagraphText(_) => "Paragraph Text on Layer".to_owned(),
                 ObjectKind::Group { children } => format!("Group of {} objects", children.len()),
                 ObjectKind::Bitmap { pixel_width, pixel_height, .. } => format!("Bitmap ({pixel_width}x{pixel_height}) on Layer"),
                 ObjectKind::Unsupported(_) => "Unsupported CDR Object".to_owned(),
@@ -455,7 +456,14 @@ impl EditorEngine {
             EngineCommand::ConvertToCurves => {
                 let has_convertible = self.selected_nodes().into_iter().any(|o| {
                     !o.locked
-                        && matches!(o.kind, ObjectKind::Rect(_) | ObjectKind::Ellipse(_) | ObjectKind::Polygon(_) | ObjectKind::ArtisticText { .. })
+                        && matches!(
+                            o.kind,
+                            ObjectKind::Rect(_)
+                                | ObjectKind::Ellipse(_)
+                                | ObjectKind::Polygon(_)
+                                | ObjectKind::ArtisticText { .. }
+                                | ObjectKind::ParagraphText(_)
+                        )
                 });
                 if !has_convertible {
                     return false;
@@ -1237,6 +1245,17 @@ fn object_to_path(obj: &ObjectNode) -> Option<coralcraft_geom::Path> {
         ObjectKind::Polygon(p) => p.to_path().ok(),
         ObjectKind::Path(p) => Some(p.clone()),
         ObjectKind::ArtisticText { text, font_family, size_pt, position } => Some(artistic_text_to_path(text, font_family, size_pt.get(), *position)),
+        ObjectKind::ParagraphText(pt) => {
+            let layout = coralcraft_doc::layout_paragraph_text(pt);
+            let mut combined = Vec::new();
+            for line in &layout.lines {
+                if let Ok(origin) = Point::new(line.origin_x, line.origin_y) {
+                    let line_path = artistic_text_to_path(&line.text, &pt.font_family, pt.font_size_pt.get(), origin);
+                    combined.extend(line_path.elements);
+                }
+            }
+            coralcraft_geom::Path::from_elements(combined, coralcraft_geom::FillRule::NonZero).ok()
+        }
         _ => None,
     }
 }

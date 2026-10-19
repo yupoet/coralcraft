@@ -382,6 +382,29 @@ fn emit_pdf_node(s: &mut String, node: &ObjectNode) -> Result<(), RenderError> {
             s.push_str("Q\n");
             return Ok(());
         }
+        ObjectKind::ParagraphText(pt) => {
+            let layout = coralcraft_doc::layout_paragraph_text(pt);
+            if !layout.lines.is_empty() {
+                if let Some(FillStyle::Uniform { color }) = &node.fill {
+                    emit_pdf_color(s, color, false);
+                } else {
+                    s.push_str("0 0 0 rg\n");
+                }
+                for line in &layout.lines {
+                    let _ = writeln!(
+                        s,
+                        "BT /F1 {} Tf {} Tw 1 0 0 -1 {} {} Tm ({}) Tj ET",
+                        fmt_num(pt.font_size_pt.get()),
+                        fmt_num(line.word_spacing_pt),
+                        fmt_num(line.origin_x),
+                        fmt_num(line.origin_y),
+                        escape_pdf_string(&line.text)
+                    );
+                }
+            }
+            s.push_str("Q\n");
+            return Ok(());
+        }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
             let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
             let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);

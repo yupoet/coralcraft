@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
     ChunkTag, Document, FillStyle, FountainGeometry, Layer, LayerId, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId,
-    RawChunk, RawPayload, Residual, UnsupportedObject,
+    ParagraphTextSpec, RawChunk, RawPayload, Residual, TextAlignment, UnsupportedObject,
 };
 use coralcraft_geom::{Affine2, CdrUnit, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size};
 
@@ -519,6 +519,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut outline: Option<OutlineStyle> = None;
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
     let mut bmp_payload: Option<&[u8]> = None;
+    let mut txtd_payload: Option<&[u8]> = None;
     let mut residual = Residual::default();
 
     for (slot_idx, ch) in flat_children.iter().enumerate() {
@@ -544,6 +545,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
             b"bmp " | b"CDIB" => {
                 if bmp_payload.is_none() && !ch.payload.is_empty() {
                     bmp_payload = Some(&ch.payload);
+                }
+            }
+            b"txtd" | b"txts" => {
+                if txtd_payload.is_none() && !ch.payload.is_empty() {
+                    txtd_payload = Some(&ch.payload);
                 }
             }
             b"loda" | b"lobj" => {
@@ -598,6 +604,8 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         }
     } else if let Some((payload, tag)) = loda_payload {
         decode_loda_geometry(payload, tag, ctx.endian, ctx.version, page_size, bbox_rect, warnings)
+    } else if let Some(txtd) = txtd_payload {
+        decode_txtd_chunk(txtd, bbox_rect)
     } else if let Some(b) = bbox_rect {
         ObjectKind::Rect(RectSpec::sharp(b))
     } else {
@@ -871,6 +879,12 @@ fn decode_loda_geometry(
                     return bmp;
                 }
             }
+            7 => {
+                // Paragraph Text Frame
+                if let Some(para) = decode_loda_paragraph_text(payload.get(4..).unwrap_or(&[]), endian, version, page_size, bbox_rect) {
+                    return para;
+                }
+            }
             _ => {}
         }
     }
@@ -930,6 +944,94 @@ fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_si
     let position = Point::new(rect.x0.get(), rect.y0.get()).ok()?;
     let size_pt = F64::new(rect.height().clamp(6.0, 288.0)).ok()?;
     Some(ObjectKind::ArtisticText { text: "Text".to_owned(), font_family: "Sans".to_owned(), size_pt, position })
+}
+
+fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
+    if slice.len() >= 28 && slice.get(0..4) == Some(b"PTXT") {
+        let (x_cdr, s) = cdr_coord_to_pt(endian, slice, 4, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4 + s, version)?;
+        let (w_pt, _) = cdr_coord_to_pt(endian, slice, 4 + s * 2, version)?;
+        let (h_pt, _) = cdr_coord_to_pt(endian, slice, 4 + s * 3, version)?;
+        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4 + s * 4, version)?;
+        let cursor = 4 + s * 5;
+        let align_code = *slice.get(cursor)?;
+        let columns = u32::from(*slice.get(cursor + 1)?).max(1);
+        let gutter_tenths = read_u16(endian, slice, cursor + 2)? as f64 / 10.0;
+        let spacing_pct = read_u16(endian, slice, cursor + 4)? as f64 / 100.0;
+        let fam_len = read_u16(endian, slice, cursor + 6)? as usize;
+        let fam_end = cursor + 8 + fam_len;
+        let font_family = std::str::from_utf8(slice.get(cursor + 8..fam_end)?).ok()?.to_owned();
+        let txt_len = read_u32(endian, slice, fam_end)? as usize;
+        let txt_end = fam_end + 4 + txt_len;
+        let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
+        let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
+        let alignment = match align_code {
+            1 => TextAlignment::Center,
+            2 => TextAlignment::Right,
+            3 => TextAlignment::Justify,
+            _ => TextAlignment::Left,
+        };
+        let spec = ParagraphTextSpec::new(
+            position,
+            w_pt.abs().max(1.0),
+            h_pt.abs().max(1.0),
+            text,
+            font_family,
+            size_pt_raw.abs().clamp(1.0, 1440.0),
+            spacing_pct.clamp(0.5, 5.0),
+            alignment,
+            columns,
+            gutter_tenths,
+        )
+        .ok()?;
+        return Some(ObjectKind::ParagraphText(Box::new(spec)));
+    }
+    let rect = bbox_rect?;
+    let spec = ParagraphTextSpec::new(
+        Point::new(rect.x0.get(), rect.y0.get()).ok()?,
+        rect.width().max(10.0),
+        rect.height().max(10.0),
+        "Paragraph Text",
+        "Sans",
+        12.0,
+        1.2,
+        TextAlignment::Left,
+        1,
+        0.0,
+    )
+    .ok()?;
+    Some(ObjectKind::ParagraphText(Box::new(spec)))
+}
+
+fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
+    // Per GLM-5.2 spec: byte 0 is encoding flag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE)
+    let text = if payload.first() == Some(&0x02) && payload.len() >= 3 {
+        let u16s: Vec<u16> = payload[1..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&ch| ch != 0).collect();
+        String::from_utf16_lossy(&u16s)
+    } else if payload.first().is_some_and(|&b| b <= 0x01) && payload.len() >= 2 {
+        String::from_utf8_lossy(&payload[1..]).trim_end_matches('\0').to_owned()
+    } else {
+        String::from_utf8_lossy(payload).trim_end_matches('\0').to_owned()
+    };
+    let rect = bbox_rect.unwrap_or_else(|| Rect::new(36.0, 36.0, 236.0, 136.0).unwrap_or_default());
+    if let Ok(pt) = Point::new(rect.x0.get(), rect.y0.get())
+        && let Ok(spec) = ParagraphTextSpec::new(
+            pt,
+            rect.width().max(20.0),
+            rect.height().max(20.0),
+            if text.is_empty() { "Text".to_owned() } else { text },
+            "Arial",
+            12.0,
+            1.2,
+            TextAlignment::Left,
+            1,
+            0.0,
+        )
+    {
+        ObjectKind::ParagraphText(Box::new(spec))
+    } else {
+        ObjectKind::Rect(RectSpec::sharp(rect))
+    }
 }
 
 fn decode_loda_bitmap(slice: &[u8], endian: Endian, _version: u16, _page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
@@ -1329,6 +1431,38 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
             loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
             loda.extend_from_slice(txt_bytes);
         }
+        ObjectKind::ParagraphText(pt) => {
+            let mut txtd = Vec::with_capacity(1 + pt.text.len());
+            txtd.push(0x01); // UTF-8 encoding flag per GLM-5.2 spec
+            txtd.extend_from_slice(pt.text.as_bytes());
+            append_riff_chunk(&mut obj_children, *b"txtd", &txtd);
+
+            loda.extend_from_slice(&7u32.to_le_bytes());
+            loda.extend_from_slice(b"PTXT");
+            loda.extend_from_slice(&pt_to_cdr_i32(pt.position.x.get() - cx).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(cy - pt.position.y.get()).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(pt.frame_width_pt.get()).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(pt.frame_height_pt.get()).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(pt.font_size_pt.get()).to_le_bytes());
+            let align_code: u8 = match pt.alignment {
+                TextAlignment::Left => 0,
+                TextAlignment::Center => 1,
+                TextAlignment::Right => 2,
+                TextAlignment::Justify => 3,
+            };
+            loda.push(align_code);
+            loda.push((pt.columns.clamp(1, 64)) as u8);
+            let gutter_tenths = (pt.gutter_pt.get().clamp(0.0, 6000.0) * 10.0).round() as u16;
+            let spacing_pct = (pt.line_spacing_multiplier.get().clamp(0.5, 5.0) * 100.0).round() as u16;
+            loda.extend_from_slice(&gutter_tenths.to_le_bytes());
+            loda.extend_from_slice(&spacing_pct.to_le_bytes());
+            let fam_bytes = pt.font_family.as_bytes();
+            loda.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
+            loda.extend_from_slice(fam_bytes);
+            let txt_bytes = pt.text.as_bytes();
+            loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
+            loda.extend_from_slice(txt_bytes);
+        }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
             loda.extend_from_slice(&6u32.to_le_bytes());
             loda.extend_from_slice(b"BMP ");
@@ -1419,6 +1553,13 @@ fn node_bbox_for_export(node: &ObjectNode) -> Rect {
             let y0 = position.y.get();
             let w = (text.chars().count().max(1) as f64) * size_pt.get() * 0.6;
             let h = size_pt.get().max(8.0);
+            Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or(default_rect)
+        }
+        ObjectKind::ParagraphText(pt) => {
+            let x0 = pt.position.x.get();
+            let y0 = pt.position.y.get();
+            let w = pt.frame_width_pt.get().max(1.0);
+            let h = pt.frame_height_pt.get().max(1.0);
             Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or(default_rect)
         }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {

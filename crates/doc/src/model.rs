@@ -149,6 +149,8 @@ pub enum ObjectKind {
         /// Baseline origin in local coordinates.
         position: Point,
     },
+    /// Multi-line word-wrapped paragraph text frame with multi-column flow (`F8` drag frame).
+    ParagraphText(Box<ParagraphTextSpec>),
     /// Group of child objects.
     Group {
         /// Ordered child nodes (`0` = bottom, `len - 1` = top).
@@ -184,6 +186,13 @@ impl ObjectKind {
                 let w = (text.len() as f64) * size_pt.get() * 0.6;
                 let h = size_pt.get();
                 Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get()).ok()
+            }
+            Self::ParagraphText(pt) => {
+                let px = pt.position.x.get();
+                let py = pt.position.y.get();
+                let w = pt.frame_width_pt.get();
+                let h = pt.frame_height_pt.get();
+                Rect::new(px, py, px + w, py + h).ok()
             }
             Self::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
                 let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
@@ -276,6 +285,72 @@ impl TransparencyStyle {
             blend_mode: FountainBlendMode::Direct,
             stops,
         }
+    }
+}
+
+/// Text horizontal alignment within a line or paragraph text frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextAlignment {
+    #[default]
+    Left,
+    Center,
+    Right,
+    Justify,
+}
+
+/// Multi-line word-wrapped paragraph text frame specification (`F8` drag frame).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ParagraphTextSpec {
+    /// Frame origin (top-left) in local coordinates.
+    pub position: Point,
+    /// Width of the bounding text frame in typographic points.
+    pub frame_width_pt: F64,
+    /// Height of the bounding text frame in typographic points.
+    pub frame_height_pt: F64,
+    /// Raw text content (may contain newlines).
+    pub text: String,
+    /// Font family name.
+    pub font_family: String,
+    /// Font point size.
+    pub font_size_pt: F64,
+    /// Line spacing multiplier (1.0 = single em, 1.2 = default CorelDRAW spacing).
+    pub line_spacing_multiplier: F64,
+    /// Horizontal paragraph alignment.
+    pub alignment: TextAlignment,
+    /// Number of vertical columns within the frame.
+    pub columns: u32,
+    /// Gutter space between columns in points.
+    pub gutter_pt: F64,
+}
+
+impl ParagraphTextSpec {
+    /// Constructs a valid paragraph text frame specification.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        position: Point,
+        frame_width_pt: f64,
+        frame_height_pt: f64,
+        text: impl Into<String>,
+        font_family: impl Into<String>,
+        font_size_pt: f64,
+        line_spacing_multiplier: f64,
+        alignment: TextAlignment,
+        columns: u32,
+        gutter_pt: f64,
+    ) -> Result<Self, coralcraft_geom::GeomError> {
+        Ok(Self {
+            position,
+            frame_width_pt: F64::new(frame_width_pt)?,
+            frame_height_pt: F64::new(frame_height_pt)?,
+            text: text.into(),
+            font_family: font_family.into(),
+            font_size_pt: F64::new(font_size_pt)?,
+            line_spacing_multiplier: F64::new(line_spacing_multiplier)?,
+            alignment,
+            columns: columns.max(1),
+            gutter_pt: F64::new(gutter_pt.max(0.0))?,
+        })
     }
 }
 

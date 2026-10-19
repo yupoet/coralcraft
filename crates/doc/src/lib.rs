@@ -4,13 +4,15 @@
 pub mod container;
 pub mod model;
 pub mod style;
+pub mod text_layout;
 
 pub use container::{BLOB_THRESHOLD, crc32, list_zip_blobs, load_bytes, save_json, save_zip, sha256_hex};
 pub use model::{
-    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, SchemaVersion, TransparencyStyle,
-    UnsupportedObject, VectorEffect,
+    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, ParagraphTextSpec, SchemaVersion,
+    TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
 };
 pub use style::{ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex};
+pub use text_layout::{ParagraphLayout, PositionedTextLine, advance_pt, layout_paragraph_text};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -257,5 +259,88 @@ mod tests {
         // Master Even BG -> P2 Layer 1 -> Master All FG
         let p2_export: Vec<&str> = doc.effective_layers_for_page(1, true).unwrap().into_iter().map(|l| l.name.as_str()).collect();
         assert_eq!(p2_export, vec!["Master Even BG", "P2 Layer 1", "Master All FG"]);
+    }
+
+    #[test]
+    fn paragraph_text_wrapping_alignment_multicol_and_serde() {
+        use coralcraft_geom::Point;
+
+        // 1. Single column word wrapping and justification
+        let spec_justified = ParagraphTextSpec::new(
+            Point::new(10.0, 20.0).unwrap(),
+            120.0,
+            100.0,
+            "The quick brown fox jumps over the lazy dog\nSecond paragraph text line.",
+            "Arial",
+            12.0,
+            1.2,
+            TextAlignment::Justify,
+            1,
+            0.0,
+        )
+        .unwrap();
+
+        let layout_j = layout_paragraph_text(&spec_justified);
+        assert!(!layout_j.overflow);
+        assert_eq!(layout_j.column_count, 1);
+        assert!(layout_j.lines.len() >= 3);
+        // Non-final lines of a paragraph in Justify mode should have word_spacing_pt > 0
+        assert!(layout_j.lines[0].word_spacing_pt > 0.0);
+        // Final lines of paragraph should have word_spacing_pt == 0
+        assert_eq!(layout_j.lines.last().unwrap().word_spacing_pt, 0.0);
+
+        // 2. Multi-column flow
+        let spec_multicol = ParagraphTextSpec::new(
+            Point::ZERO,
+            200.0,
+            40.0, // Short height forces flow into column 2
+            "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8 Word9 Word10",
+            "Helvetica",
+            10.0,
+            1.2,
+            TextAlignment::Left,
+            2,
+            10.0, // 10pt gutter
+        )
+        .unwrap();
+
+        let layout_multi = layout_paragraph_text(&spec_multicol);
+        assert_eq!(layout_multi.column_count, 2);
+        assert!((layout_multi.column_width_pt - 95.0).abs() < 1e-4); // (200 - 10) / 2 = 95
+        let has_col0 = layout_multi.lines.iter().any(|l| l.column == 0);
+        let has_col1 = layout_multi.lines.iter().any(|l| l.column == 1);
+        assert!(has_col0 && has_col1);
+
+        // 3. Overflow detection
+        let spec_overflow = ParagraphTextSpec::new(
+            Point::ZERO,
+            50.0,
+            20.0, // Only fits ~1 line
+            "This text is far too long to fit in this tiny frame and must overflow",
+            "Arial",
+            12.0,
+            1.2,
+            TextAlignment::Left,
+            1,
+            0.0,
+        )
+        .unwrap();
+
+        let layout_ovf = layout_paragraph_text(&spec_overflow);
+        assert!(layout_ovf.overflow);
+
+        // 4. Serde roundtrip
+        let node = ObjectNode::new(
+            ObjectId(100),
+            Some("Body Text".to_owned()),
+            ObjectKind::ParagraphText(Box::new(spec_justified.clone())),
+            Some(FillStyle::uniform(Color::rgb8(0, 0, 0))),
+            None,
+        );
+
+        let json = serde_json::to_string(&node).unwrap();
+        assert!(json.contains(r#""kind":"paragraph_text""#));
+        let decoded: ObjectNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(node, decoded);
     }
 }

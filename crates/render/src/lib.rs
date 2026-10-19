@@ -518,6 +518,24 @@ fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>
                 .unwrap_or_else(|| Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get()).unwrap_or_default());
             Ok(Some((path, bbox)))
         }
+        ObjectKind::ParagraphText(pt) => {
+            let layout = coralcraft_doc::layout_paragraph_text(pt);
+            let mut combined = Vec::new();
+            for line in &layout.lines {
+                if let Ok(origin) = Point::new(line.origin_x, line.origin_y) {
+                    let line_path = artistic_text_to_path(&line.text, &pt.font_family, pt.font_size_pt.get(), origin);
+                    combined.extend(line_path.elements);
+                }
+            }
+            let px = pt.position.x.get();
+            let py = pt.position.y.get();
+            let bbox = Rect::new(px, py, px + pt.frame_width_pt.get().max(1.0), py + pt.frame_height_pt.get().max(1.0))?;
+            if combined.is_empty() {
+                return Ok(None);
+            }
+            let path = Path::from_elements(combined, FillRule::NonZero)?;
+            Ok(Some((path, bbox)))
+        }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
             let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
             let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
@@ -865,5 +883,47 @@ mod tests {
         let svg = export_svg(&doc, 0).unwrap();
         assert!(svg.contains("<mask id=\"mask-obj-120\" maskUnits=\"userSpaceOnUse\">"));
         assert!(svg.contains("mask=\"url(#mask-obj-120)\""));
+    }
+
+    #[test]
+    fn paragraph_text_raster_svg_tspan_and_pdf_export() {
+        use coralcraft_doc::{ParagraphTextSpec, TextAlignment};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(200.0, 120.0).unwrap();
+        let spec = ParagraphTextSpec::new(
+            Point::new(10.0, 10.0).unwrap(),
+            160.0,
+            90.0,
+            "CoralCraft clean-room paragraph text wrapping across multiple lines in a frame.\nSecond paragraph line.",
+            "Arial",
+            12.0,
+            1.2,
+            TextAlignment::Justify,
+            1,
+            0.0,
+        )
+        .unwrap();
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(140),
+            Some("Body Copy".to_owned()),
+            ObjectKind::ParagraphText(Box::new(spec)),
+            Some(FillStyle::uniform(Color::rgb8(20, 30, 40))),
+            None,
+        ));
+
+        let out = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        assert_eq!(out.surface.width, 200);
+        assert_eq!(out.surface.height, 120);
+
+        let svg = export_svg(&doc, 0).unwrap();
+        assert!(svg.contains("<text id=\"obj-140\""));
+        assert!(svg.contains("<tspan x=\""));
+        assert!(svg.contains("word-spacing=\""));
+
+        let pdf_bytes = export_pdf(&doc).unwrap();
+        let pdf_str = String::from_utf8_lossy(&pdf_bytes);
+        assert!(pdf_str.contains("Tw 1 0 0 -1"));
+        assert!(pdf_str.contains("Tj ET"));
     }
 }

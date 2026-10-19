@@ -279,6 +279,45 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             );
             return Ok(());
         }
+        ObjectKind::ParagraphText(pt) => {
+            let layout = coralcraft_doc::layout_paragraph_text(pt);
+            if layout.lines.is_empty() {
+                return Ok(());
+            }
+            let px = pt.position.x.get();
+            let py = pt.position.y.get();
+            let bbox = Rect::new(px, py, px + pt.frame_width_pt.get().max(1.0), py + pt.frame_height_pt.get().max(1.0))?;
+            let fill_str = match &node.fill {
+                Some(FillStyle::Uniform { color }) => svg_hex_color(color),
+                Some(fill @ FillStyle::Fountain { .. }) => {
+                    let grad_id = format!("obj-{}", node.id.0);
+                    emit_fountain_def(defs, &grad_id, fill, bbox);
+                    format!("url(#grad-{grad_id})")
+                }
+                Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
+            };
+            let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
+            let _ = writeln!(
+                body,
+                "{indent}<text id=\"obj-{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">",
+                node.id.0,
+                escape_xml(&pt.font_family),
+                fmt_num(pt.font_size_pt.get())
+            );
+            for line in &layout.lines {
+                let ws_attr =
+                    if line.word_spacing_pt > 1e-4 { format!(" word-spacing=\"{}\"", fmt_num(line.word_spacing_pt)) } else { String::new() };
+                let _ = writeln!(
+                    body,
+                    "{indent}  <tspan x=\"{}\" y=\"{}\"{ws_attr}>{}</tspan>",
+                    fmt_num(line.origin_x),
+                    fmt_num(line.origin_y),
+                    escape_xml(&line.text)
+                );
+            }
+            let _ = writeln!(body, "{indent}</text>");
+            return Ok(());
+        }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
             let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
             let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
@@ -447,6 +486,15 @@ pub(crate) fn extract_shape_path_and_bbox(kind: &ObjectKind) -> Result<Option<(P
             let x0 = position.x.get();
             let y0 = position.y.get() - h;
             let bbox = Rect::new(x0, y0, x0 + w, position.y.get())?;
+            let path = RectSpec::sharp(bbox).to_path()?;
+            Ok(Some((path, bbox)))
+        }
+        ObjectKind::ParagraphText(pt) => {
+            let x0 = pt.position.x.get();
+            let y0 = pt.position.y.get();
+            let w = pt.frame_width_pt.get().max(1.0);
+            let h = pt.frame_height_pt.get().max(1.0);
+            let bbox = Rect::new(x0, y0, x0 + w, y0 + h)?;
             let path = RectSpec::sharp(bbox).to_path()?;
             Ok(Some((path, bbox)))
         }

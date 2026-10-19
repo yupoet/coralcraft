@@ -714,4 +714,45 @@ mod tests {
             panic!("expected Bitmap, got {:?}", objs[0].kind);
         }
     }
+
+    #[test]
+    fn write_cdr7_roundtrip_paragraph_text() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment};
+        use coralcraft_geom::Point;
+
+        let mut doc = Document::new_a4_portrait();
+        let spec = ParagraphTextSpec::new(
+            Point::new(36.0, 48.0).unwrap(),
+            240.0,
+            120.0,
+            "Multi-column CorelDRAW paragraph text frame with clean-room wrapping.",
+            "Arial",
+            12.0,
+            1.2,
+            TextAlignment::Justify,
+            2,
+            12.0,
+        )
+        .unwrap();
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(21),
+            Some("Paragraph Frame".to_owned()),
+            ObjectKind::ParagraphText(Box::new(spec)),
+            None,
+            None,
+        ));
+
+        let cdr_bytes = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr_bytes).expect("parse cdr7");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 1);
+        if let ObjectKind::ParagraphText(pt) = &objs[0].kind {
+            assert_eq!(pt.text, "Multi-column CorelDRAW paragraph text frame with clean-room wrapping.");
+            assert_eq!(pt.alignment, TextAlignment::Justify);
+            assert_eq!(pt.columns, 2);
+            assert!((pt.gutter_pt.get() - 12.0).abs() < 1e-3);
+        } else {
+            panic!("expected ParagraphText, got {:?}", objs[0].kind);
+        }
+    }
 }

@@ -3,7 +3,7 @@
 
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, ObjectId, ObjectKind, TransparencyStyle};
+use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
 use coralcraft_render::{export_pdf, export_svg};
@@ -120,6 +120,11 @@ impl McpServer {
                         {
                             "name": "add_artistic_text",
                             "description": "Adds a CorelDRAW Artistic Text object (x, y, text, font_family, size_pt).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_paragraph_text",
+                            "description": "Adds a multi-line word-wrapped Paragraph Text frame (x, y, width, height, text, font_family, size_pt, alignment, columns, gutter_pt).",
                             "inputSchema": { "type": "object" }
                         },
                         {
@@ -354,6 +359,30 @@ impl McpServer {
                 });
                 Ok(json!({ "added": "artistic_text", "selected_id": self.engine.selection.first().map(|id| id.0) }))
             }
+            "add_paragraph_text" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(72.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(72.0);
+                let width = args.get("width").and_then(Value::as_f64).unwrap_or(240.0);
+                let height = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let text = args.get("text").and_then(Value::as_str).unwrap_or("Paragraph text frame").to_owned();
+                let font_family = args.get("font_family").and_then(Value::as_str).unwrap_or("Arial").to_owned();
+                let size_pt = args.get("size_pt").and_then(Value::as_f64).unwrap_or(12.0);
+                let line_spacing = args.get("line_spacing").and_then(Value::as_f64).unwrap_or(1.2);
+                let columns = args.get("columns").and_then(Value::as_u64).unwrap_or(1) as u32;
+                let gutter_pt = args.get("gutter_pt").and_then(Value::as_f64).unwrap_or(12.0);
+                let alignment = match args.get("alignment").and_then(Value::as_str) {
+                    Some("center") => TextAlignment::Center,
+                    Some("right") => TextAlignment::Right,
+                    Some("justify") => TextAlignment::Justify,
+                    _ => TextAlignment::Left,
+                };
+                let position = Point::new(x, y).map_err(|e| e.to_string())?;
+                let spec = ParagraphTextSpec::new(position, width, height, text, font_family, size_pt, line_spacing, alignment, columns, gutter_pt)
+                    .map_err(|e| e.to_string())?;
+                self.engine
+                    .execute(EngineCommand::AddObject { name: Some("Paragraph Text".to_owned()), kind: ObjectKind::ParagraphText(Box::new(spec)) });
+                Ok(json!({ "added": "paragraph_text", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
             "set_style_rgb" => {
                 let channel = match args.get("channel").and_then(Value::as_str) {
                     Some("outline") => PaletteChannel::Outline,
@@ -550,7 +579,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 27);
+        assert_eq!(tools, 28);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

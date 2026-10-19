@@ -629,6 +629,13 @@ pub fn object_local_bounds(kind: &ObjectKind) -> Rect {
             let y0 = position.y.get();
             Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or_else(|_| zero_rect())
         }
+        ObjectKind::ParagraphText(pt) => {
+            let x0 = pt.position.x.get();
+            let y0 = pt.position.y.get();
+            let w = pt.frame_width_pt.get();
+            let h = pt.frame_height_pt.get();
+            Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or_else(|_| zero_rect())
+        }
         ObjectKind::Group { children } => {
             let refs: Vec<&ObjectNode> = children.iter().collect();
             if refs.is_empty() { zero_rect() } else { combined_selection_bounds(&refs) }
