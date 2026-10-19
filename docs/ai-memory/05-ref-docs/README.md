@@ -7,3 +7,4 @@
 1. [`01-artcraft-ecosystem.md`](01-artcraft-ecosystem.md) — ArtCraft (`storytold`) 13 应用矩阵、方法论拆解与共享基础设施梳理
 2. [`02-cdr-open-source-ecosystem.md`](02-cdr-open-source-ecosystem.md) — CDR/CMX 开源生态现状调研（`libcdr`、`Photopea CDR-specification`、`UniConvertor`、逆向助手 `REA` 与许可红线）
 3. [`03-cdr-format-primer.md`](03-cdr-format-primer.md) — CDR 文件格式结构初探（基于 Photopea 公开规范的 `WL` 与 `RIFF` 容器、基本数据类型与 chunk 规则梳理）
+4. [`04-m1-plan-four-way-review.md`](04-m1-plan-four-way-review.md) — M0/M1 实施计划四方独立评审汇总（GLM-5.3 / Kimi K3 / DeepSeek V4.1 Flash / Grok 4.6）
