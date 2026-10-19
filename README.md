@@ -1,139 +1,121 @@
 <h1 align="center">CoralCraft</h1>
 
 <p align="center">
-  <b>Vector illustration, multipage layout, and print production — an open-source, clean-room studio built from scratch in pure Rust.</b>
+  <b>Vector illustration, multipage layout, and print production; an open-source, modern CorelDRAW-parity application, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  A fast, local-first vector graphics and desktop publishing workflow targeting CorelDRAW parity (and beyond), with native <code>.cdr</code> / <code>.cmx</code> format interoperability. Designed to run natively on macOS, Windows, and Linux, and in the browser via WebAssembly.
+  A fast, open-source vector illustration and desktop publishing workflow targeting <b>CorelDRAW</b> parity (often searched as <i>CoralDraw</i>) with native <code>.cdr</code> and <code>.cmx</code> format support. It runs natively on macOS, Windows, Linux and FreeBSD, and in the browser via WebAssembly.
 </p>
 
 <p align="center">
-  <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-e8573f?style=flat-square">
-  <img alt="Written in pure Rust" src="https://img.shields.io/badge/written%20in-Rust-b83a24?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Runs on macOS, Windows, Linux and Web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Web-555555?style=flat-square">
-  <img alt="Formats: CDR, CMX, SVG, PDF" src="https://img.shields.io/badge/formats-CDR%20%C2%B7%20CMX%20%C2%B7%20SVG%20%C2%B7%20PDF-0b6f88?style=flat-square">
-  <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP%20server-14a3c7?style=flat-square">
-  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-4d7a0a?style=flat-square">
+  <img alt="Status: in active development" src="https://img.shields.io/badge/status-in%20active%20development-e8573f">
+  <img alt="Written in pure Rust" src="https://img.shields.io/badge/pure-Rust-b83a24?logo=rust&logoColor=white">
+  <img alt="Target parity: CorelDRAW (.cdr / .cmx)" src="https://img.shields.io/badge/parity-CorelDRAW%20(.cdr%20%C2%B7%20.cmx)-555555">
+  <img alt="Runs on macOS, Windows, Linux, FreeBSD and the web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web-555555">
+  <img alt="MCP server for agents" src="https://img.shields.io/badge/agents-MCP%20server-555555">
+  <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-555555">
 </p>
 
 <p align="center">
   <a href="#why-coralcraft">Why CoralCraft</a> ·
-  <a href="#clean-room-methodology">Clean-Room Methodology</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#roadmap--status">Roadmap</a> ·
-  <a href="#license">License</a>
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#status">Status</a> ·
+  <a href="#clean-room-methodology">Clean-room methodology</a> ·
+  <a href="#downloads">Downloads</a> ·
+  <a href="#star-history">Star history</a> ·
+  <a href="#license-and-credits">License</a>
 </p>
-
----
-
-## About
-
-**CoralCraft** is an open-source, clean-room reimplementation of the vector illustration, multipage layout, and print-production workflow popularized by CorelDRAW, written from scratch in pure Rust.
-
-The name combines **Coral** (a nod to reef ecosystems and a phonetic tribute to the workflow it serves) + **Craft** (following the architectural conventions of the open-source [ArtCraft Crafting Apps](https://getartcraft.com/apps) ecosystem such as [VectorCraft](https://github.com/storytold/vectorcraft), [DesignCraft](https://github.com/storytold/designcraft), and [CADCraft](https://github.com/storytold/cadcraft)).
-
-> [!IMPORTANT]
-> **Trademark & Clean-Room Notice:** CoralCraft is an independent open-source project and is **not** affiliated with, endorsed by, or sponsored by Corel or Alludo. CorelDRAW is a registered trademark of its respective owner. CoralCraft contains zero proprietary code, binaries, icons, presets, fonts, or assets from Corel products.
-
----
 
 ## Why CoralCraft
 
-- **The Workflow Print & Signage Professionals Expect.** Unlike single-artboard illustration tools, CoralCraft is built around a **multipage document and spread model** (`Page` / `Spread` / `Master Page` / `Layer`), tailored for signage, engraving, laser cutting, print shops, and multi-page commercial layouts.
-- **Native `.cdr` & `.cmx` Interoperability.** Built-in clean-room format support (`coralcraft-cdr`) evolving across three stages:
-  1. **Probe** (`M1`): container detection (`RIFF` vs. legacy `WL`), version byte identification, and hostile-input-safe RIFF chunk walking.
-  2. **Parse** (`M3`): translating `.cdr` / `.cmx` object trees into the CoralCraft document model with transparent import-warning ledgers.
-  3. **Write** (`M5+` long-term campaign): pioneering open-source `.cdr` export for real-world round-trip workflows.
-- **Print-First Color Engine.** First-class CMYK, spot colors, and palette formats (`.cpl` / XML palettes) designed from day one for production output.
-- **Fast, Native, Everywhere.** Pure Rust and `egui` — no Electron, no web view, no subscription, no telemetry. Compiles to native desktop binaries on macOS, Windows, and Linux, plus WebAssembly for the browser.
-- **Agent-Native by Design.** Every document operation and tool action is exposed through a structured command API, CLI, JSON control channel, and **MCP server** (`coralcraft-mcp`), enabling AI agents to inspect, draw, lay out, and verify documents programmatically.
+- **Familiar to CorelDRAW users.** Designed around the layout, tools, menus, dockers and shortcuts of **CorelDRAW** (frequently searched as *CoralDraw*): Pick, Shape (node editing), Freehand and Bézier, Smart Fill, Shaping (`Weld` / `Trim` / `Intersect`), Contour, Blend, PowerClip, Object Manager, Multipage spreads and Color Palettes.
+- **Native `.cdr` and `.cmx` format support.** A dedicated clean-room format engine (`coralcraft-cdr`) for CorelDRAW `.cdr` files (from legacy `WL` v1–v2 and RIFF-based v3–X3 to ZIP+RIFF X4–2024+) and `.cmx` exchange files, progressing across three milestones:
+  1. **Probe (`M1`)**: container detection (`RIFF` vs. `WL` vs. `ZIP+RIFF`), version identification, and hostile-input-safe chunk tree inspection.
+  2. **Parse (`M3`)**: translating `.cdr` / `.cmx` object hierarchies, curves, fills, strokes, pages and layers into the CoralCraft document model with structured import-warning ledgers.
+  3. **Write (`M5+`)**: pioneering open-source `.cdr` export for round-trip production workflows.
+- **Multipage & print-first.** Unlike single-artboard illustration tools, CoralCraft's document model (`coralcraft-doc`) is built from day one around multipage documents, facing-page spreads, master pages, drawing scales (`1:10`, `1:100`), and CMYK + Spot color palettes (`.cpl` / XML) for signage, print shops, vinyl cutting, laser engraving and packaging.
+- **Fast.** Multithreaded SIMD rendering off the UI thread, backed by a zero-dependency 2D geometry kernel (`coralcraft-geom`) and hybrid software/GPU rendering (`coralcraft-render`).
+- **Robust.** Every parser treats `.cdr` / `.cmx` files as untrusted hostile input — `unwrap`, `expect` and `panic` are denied at the workspace level (`Cargo.toml` lints), curve booleans are exact, and undo/redo uses structural sharing.
+- **Open.** A documented native format alongside `.cdr`, `.cmx`, SVG, PDF (including PDF/X), EPS, DXF/DWG and EMF/WMF exchange.
+- **Agent-native.** Every menu item, tool gesture, docker and document operation is designed to be driven over a JSON control channel and an **MCP server** (`coralcraft-mcp`), so Claude Code and other AI agents can inspect, draw, lay out and export documents programmatically.
+- **Everywhere.** One pure-Rust codebase for native desktop apps on macOS, Windows, Linux and FreeBSD, and the same `egui` interface in the browser via WebAssembly.
 
----
-
-## Clean-Room Methodology
-
-CoralCraft strictly enforces a **dual-track clean-room protocol** (see [`AGENTS.md`](AGENTS.md) and [`cargo xtask cleanroom`](xtask/src/main.rs)):
-
-1. **Behavior Track (Public Documentation Only):**
-   - Application behavior, tools, panels, and shortcuts are derived **exclusively from public documentation** (official online user manuals, published guides, books, and public forum posts, cited by URL).
-   - Contributors and agents **never** launch, run, script, screenshot, measure, or disassemble CorelDRAW or any proprietary binaries, and **never** use proprietary software to generate test fixtures.
-2. **Format Track (Public Specs & Owned Samples):**
-   - Binary format parsing is implemented from scratch using public community specifications ([Photopea CDR Format Specification](https://github.com/photopea/CDR-specification)), public format documentation ([Document Liberation Project / libcdr wiki](https://wiki.documentfoundation.org/DLP/Libraries/libcdr)), and synthetic byte fixtures written from the specification.
-   - All inputs are treated as **hostile / untrusted data**: parsers return `Result` and forbid `unwrap` / panics.
-   - No GPL/AGPL code (e.g., Inkscape, UniConvertor, sK1) is ever copied or linked; MPL-2.0 references (`libcdr`) are consulted strictly as read-only semantic references with findings documented in [`docs/reverse/`](docs/).
-
----
-
-## Architecture
-
-CoralCraft is organized as a modular Rust workspace decoupling core engine crates from UI and host frontends:
-
-```text
-coralcraft/
-├── crates/
-│   ├── geom/           # 2D geometry kernel (Bézier curves, boolean path ops, snapping)
-│   ├── color/          # Color spaces (CMYK, Spot colors, RGB) & palette formats (.cpl / XML)
-│   ├── doc/            # Multipage document model (Page, Spread, Master Page, Layer, Object)
-│   ├── cdr/            # Clean-room .cdr / .cmx format engine (probe → parse → build)
-│   ├── render/         # SIMD software & GPU rendering pipeline
-│   ├── tools/          # Interactive tool state machines & panel semantics
-│   ├── engine/         # Command dispatch, undo/redo snapshots, and workspace orchestration
-│   ├── ui-egui/        # Replaceable egui desktop/web frontend
-│   └── mcp/            # Model Context Protocol (MCP) server for AI agents
-├── apps/
-│   ├── coralcraft/     # Native desktop application
-│   └── coralcraft-cli/ # Headless CLI & format inspection tool (`coralcraft-cli probe`)
-├── xtask/              # Quality & compliance gates (`ci`, `cleanroom`, `assets`)
-├── scripts/            # Environment bootstrap scripts (`bootstrap-refs.sh`)
-├── refs/               # Git-ignored local reference repositories & license boundaries (`REFS.md`)
-└── docs/               # Roadmap, gap list, reverse-engineering logs, plans, and AI memory
-```
-
----
-
-## Quick Start
+## Quick start
 
 Requires **Rust 1.95+** (Edition 2024).
 
 ```sh
-# Clone the repository
 git clone https://github.com/yupoet/coralcraft
 cd coralcraft
 
-# (Optional) Populate git-ignored reference repos in refs/ (~200 MB, pinned SHAs in refs/REFS.md)
+# (Optional) Populate git-ignored reference repositories in refs/ (pinned SHAs in refs/REFS.md)
 ./scripts/bootstrap-refs.sh
 
-# Run clean-room & asset compliance gates
-cargo run -p xtask -- cleanroom
-cargo run -p xtask -- assets
+# Run the desktop app & CLI
+cargo run --release -p coralcraft                           # desktop app
+cargo run --release -p coralcraft-cli -- probe <file.cdr>   # inspect .cdr / .cmx container (M1)
+cargo run --release -p coralcraft-cli -- probe --json <file.cdr>
 
-# Run workspace tests (excluding M1 TDD red-light anchors in coralcraft-cdr prior to Task 10)
-cargo test --workspace --exclude coralcraft-cdr
-
-# Run full CI suite (once M1 probe tasks turn green)
-cargo run -p xtask -- ci
-
-# Inspect a .cdr / .cmx container via CLI (M1 deliverable)
-cargo run -p coralcraft-cli -- probe <file.cdr>
-cargo run -p coralcraft-cli -- probe --json <file.cdr>
+# Workspace quality, layering & clean-room gates (aligned with vectorcraft xtask)
+cargo xtask cleanroom                                       # scan for forbidden vendor copyright markers & fixtures
+cargo xtask assets                                          # verify every asset is registered in ASSETS.md
+cargo xtask layers                                          # enforce L0..L7 crate dependency layering
+cargo xtask stats                                           # crate-by-crate file, line & test counts
+cargo xtask ci                                              # fmt, clippy, cleanroom, assets, layers, tests
 ```
 
----
+### Use it from Claude Code and other agents
 
-## Roadmap & Status
+Once the MCP stdio endpoint in `coralcraft-cli` is enabled (`M4`), register CoralCraft with Claude Code:
 
-CoralCraft is currently in **pre-alpha (M0 scaffold complete, M1 CDR format probe in progress)**.
+```sh
+claude mcp add coralcraft -- /path/to/coralcraft-cli mcp
+```
 
-- **[`ROADMAP.md`](ROADMAP.md)**: Current stage, self-scored parity dimensions (`0–100%`), and milestone breakdown (`M0`–`M5+`).
-- **[`docs/gaps.md`](docs/gaps.md)**: Prioritized work queue.
-- **[`docs/superpowers/specs/`](docs/superpowers/specs/2026-10-19-coralcraft-brainstorm.md)**: Brainstorm & architectural decision records (`D1`–`D8`).
-- **[`docs/superpowers/plans/`](docs/superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md)**: Step-by-step TDD implementation plan for M0 & M1.
-- **[`refs/REFS.md`](refs/REFS.md)**: Index of reference projects, license boundaries, and pinned commits.
+## Status
 
----
+CoralCraft is under active development. [**ROADMAP.md**](ROADMAP.md) has the current stage, self-scored percentages by dimension and milestone criteria; [`docs/gaps.md`](docs/gaps.md) tracks the prioritized work queue; and [`docs/superpowers/plans/`](docs/superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md) contains the active step-by-step TDD implementation plan.
 
-## License
+**Where we are (2026-10-19): pre-alpha (`M0` complete, `M1` in progress).** The 12-member Rust workspace (`crates/*`, `apps/*`, `xtask`), strict layering (`L0`–`L7`), clean-room and asset verification gates (`cargo xtask cleanroom`, `cargo xtask assets`, `cargo xtask layers`), reference repository bootstrap (`scripts/bootstrap-refs.sh`), and persistent AI memory (`docs/ai-memory/`) are in place. Next up in `M1` is turning the red-light TDD anchors in `crates/cdr/tests/probe_smoke.rs` green and publishing [`docs/target-app-parity.md`](docs/gaps.md) and [`docs/file-format-parity.md`](docs/gaps.md).
 
-Code and original assets are dual-licensed under **[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)**, at your option. See [`NOTICE`](NOTICE) and [`ASSETS.md`](ASSETS.md) for attribution details.
+**What's missing:**
+- `M1` CDR/CMX container probe (`RIFF` / `WL` / `ZIP+RIFF` detection, version map, hostile-input fuzzing) and initial parity matrices (`docs/target-app-parity.md`, `docs/file-format-parity.md`);
+- `M2` interactive canvas, `Pick` / `Shape` / `Bezier` / rectangle / ellipse tools, boolean shaping (`Weld` / `Trim` / `Intersect`), and Undo/Redo history;
+- `M3` real-world `.cdr` object tree parsing (`Page` / `Layer` / `Curve` / `Rectangle` / `Ellipse` / `Text` + fill/stroke) and multipage spread switching;
+- `M4` live effects (Contour, Blend, Envelope, Extrude, PowerClip), artistic & paragraph text, PDF/X & SVG export, and the `coralcraft-mcp` server;
+- `M5+` open-source `.cdr` writer/exporter and a modern scripting/automation replacement for CorelDRAW VBA macros.
+
+**Where we're going:** immediate focus is **M1 (`coralcraft-cdr` probe + parity matrices)** following strict red-green-refactor TDD in [`docs/superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md`](docs/superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md). The ranked backlog is in [`docs/gaps.md`](docs/gaps.md).
+
+**Workspace:** `crates/{geom, color, doc, cdr, render, tools, engine, ui-egui, mcp}` and `apps/{coralcraft, coralcraft-cli}`. The `egui` frontend is isolated in its own `L6` crate (`coralcraft-ui-egui`), enforced by `cargo xtask layers`, so the UI can be swapped without touching the core engine.
+
+Agent and contributor rules (clean-room protocol, license boundaries, asset policy, zero panics in shipped code, TDD gates) are in [`AGENTS.md`](AGENTS.md) and [`CLAUDE.md`](CLAUDE.md). Every bundled asset is registered with its license in [`ASSETS.md`](ASSETS.md).
+
+## Clean-room methodology
+
+CoralCraft follows the clean-room engineering discipline established by [storytold/vectorcraft](https://github.com/storytold/vectorcraft), extended with a dual-track protocol for `.cdr` / `.cmx` format interoperability (see [`AGENTS.md`](AGENTS.md)):
+
+1. **Behavior track (public documentation only):**
+   - Application features, workflows, dockers and shortcuts are derived **exclusively from public documentation** (official online user manuals, published books, public tutorials and forum discussions, cited by URL).
+   - Contributors and AI agents **never** run, script, automate, screenshot, measure or disassemble CorelDRAW or any Corel software, and **never** use Corel software to create test files.
+2. **Format track (public specifications & owned samples):**
+   - Binary format support is written from scratch in safe Rust using public specifications ([Photopea CDR Format Specification](https://github.com/photopea/CDR-specification), [Document Liberation Project / libcdr documentation](https://wiki.documentfoundation.org/DLP/Libraries/libcdr), RIFF and ISO 32000 specs) and synthetic byte fixtures authored directly in code.
+   - No GPL/AGPL code (such as Inkscape, UniConvertor or sK1) is ever copied or linked. MPL-2.0 references (`libcdr`) are consulted strictly as read-only format documentation, with chunk-level findings recorded in `docs/reverse/`.
+
+> [!NOTE]
+> **Trademark Disclaimer:** CoralCraft is an independent open-source project and is **not** affiliated with, endorsed by, or sponsored by Corel or Alludo. **CorelDRAW** is a registered trademark of its respective owner and is referenced here solely for descriptive interoperability and feature-parity comparison.
+
+## Downloads
+
+Pre-built binaries for **Windows** (`x64` / `arm64`), **macOS** (universal `.dmg`), **Linux** (`AppImage`, `Flatpak`, `.deb`, `.rpm`, `.tar.gz`), **FreeBSD** and **Web (WebAssembly)** will be published on [GitHub Releases](https://github.com/yupoet/coralcraft/releases) starting with the first interactive milestone (`M2`/`M3`). Until then, build from source with `cargo build --release`.
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=yupoet/coralcraft&type=Date&legend=top-left)](https://www.star-history.com/?repos=yupoet%2Fcoralcraft&type=date&legend=top-left)
+
+## License and credits
+
+CoralCraft is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Required notices are in [NOTICE](NOTICE), and every bundled asset is listed with its author, source and license in [ASSETS.md](ASSETS.md).
+
+CoralCraft's workspace architecture, crate layering (`L0`–`L7`), agent-native MCP design, and clean-room engineering methodology are modeled after [VectorCraft](https://github.com/storytold/vectorcraft) and the [ArtCraft Crafting Apps](https://getartcraft.com/apps) family (`DesignCraft`, `CADCraft`, `PhotoCraft`, `PdfCraft`).

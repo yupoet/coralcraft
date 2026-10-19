@@ -74,13 +74,7 @@ mod tests {
     #[test]
     fn detects_riff_cdr_container_and_version() {
         let got = probe(&synth_riff_cdr(0x07)).expect("RIFF/CDR 头应识别成功");
-        assert_eq!(
-            got,
-            CdrContainer::Riff {
-                kind: CdrKind::Cdr,
-                version_byte: 0x07
-            }
-        );
+        assert_eq!(got, CdrContainer::Riff { kind: CdrKind::Cdr, version_byte: 0x07 });
     }
 
     #[test]
@@ -88,13 +82,7 @@ mod tests {
         let mut v = synth_riff_cdr(0x01);
         v[8..11].copy_from_slice(b"CMX");
         let got = probe(&v).expect("RIFF/CMX 头应识别成功");
-        assert_eq!(
-            got,
-            CdrContainer::Riff {
-                kind: CdrKind::Cmx,
-                version_byte: 0x01
-            }
-        );
+        assert_eq!(got, CdrContainer::Riff { kind: CdrKind::Cmx, version_byte: 0x01 });
     }
 
     #[test]

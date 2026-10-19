@@ -1,30 +1,17 @@
 # 04 — 已知 Bug、坑点与规避方式
 
-## 1. `scripts/bootstrap-refs.sh` 短 SHA 无法被 GitHub `git fetch --depth 1` 直接拉取
+## 1. [已修复] `scripts/bootstrap-refs.sh` 短 SHA 无法被 GitHub `git fetch --depth 1` 直接拉取
 
-- **现象**：[`scripts/bootstrap-refs.sh`](../../scripts/bootstrap-refs.sh) 中 `ENTRIES` 配置的是 7 位短 SHA（如 `a466625`、`ba866a2`）。执行 `git fetch -q --depth 1 origin <7位SHA>` 时，GitHub 服务端会报错 `fatal: couldn't find remote ref <short-sha>`，从而触发脚本的 fallback 分支 `git clone --depth 1 --single-branch` 拉取远端最新 `HEAD`。當上游仓库有新提交时（例如 `morluto-rea` 远端已推进到 `3927542`），会导致本地检出版本偏离 [`refs/REFS.md`](../../refs/REFS.md) §D 的冻结版本。
-- **规避/修复方式**：
-  - Git 传输协议仅支持对完整 **40 位 commit SHA** 执行按哈希浅拉取（`git fetch --depth 1 origin <40-char-sha>`）。
-  - 当前环境已手动通过 `git -C refs/morluto-rea fetch --depth 20 origin && git -C refs/morluto-rea checkout --detach ba866a2` 还原到精确冻结版本。
-  - 若需修改 `scripts/bootstrap-refs.sh`，应将 `ENTRIES` 中的 `pin` 字段替换为以下已核实的 40 位完整 SHA：
-    - `vectorcraft`: `a466625c8987550635cda951ebf36e08e1e80a56`
-    - `designcraft`: `443ea4640ca368fcf0241b04813bd3817acd5df8`
-    - `cadcraft`: `0b32c2e6a14c761835ea62c01e7b20845971d781`
-    - `craft-libs`: `ae2f796b673f29cf3161f36eb6a8933f0a3fe028`
-    - `craft-common-actions`: `d7bf8f06e138618890d0ebe8a84a18b010bf3f66`
-    - `craft-fonts`: `d1cf47d05e04426615fbda1d637b9ca6b1e7af35`
-    - `libcdr`: `22c396810e72d40b94f78c192eb06e6d09bc34a0`
-    - `cdr-spec`: `f91b3c7e8c812b28473f6399e95a624a72a3d6b8`
-    - `uniconvertor`: `973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472`
-    - `rea`: `a05a6b0a18649efd6d74ec8447bdadf8d468c365`
-    - `morluto-rea`: `ba866a26ecbe179a717e746cbc0d1605ae616ad5`
+- **现象**：原 [`scripts/bootstrap-refs.sh`](../../scripts/bootstrap-refs.sh) 中 `ENTRIES` 配置的是 7 位短 SHA（如 `a466625`、`ba866a2`）。执行 `git fetch -q --depth 1 origin <7位SHA>` 时，GitHub 服务端会报错 `fatal: couldn't find remote ref <short-sha>`，从而触发脚本的 fallback 分支拉取远端最新 `HEAD`。
+- **修复状态**：已将 [`scripts/bootstrap-refs.sh`](../../scripts/bootstrap-refs.sh) 中的 `ENTRIES` 升级为 40 位完整 commit SHA，`git fetch -q --depth 1 origin "$pin"` 可一次性直接拉取冻结版本。
 
-## 2. `cargo xtask cleanroom` 扫描范围覆盖 `docs/`
+## 2. `cargo xtask cleanroom` 扫描范围覆盖 `docs/`（以及对品牌词的边界）
 
 - **现象**：[`xtask/src/main.rs`](../../xtask/src/main.rs) 的 `cleanroom()` 会递归扫描 `crates/`、`apps/` 与 `docs/` 下的所有文本文件和文件后缀。
-- **坑点**：
-  1. 严禁在 `crates/`、`apps/`、`docs/` 下存放任何 `.cdr` 或 `.cmx` 后缀的文件（哪怕是数字节的合成测试文件也不行，测试 fixture 应在内存构造或用非 `.cdr`/`.cmx` 方式内嵌于测试代码中）。
-  2. 严禁在 `docs/`（包括本 `docs/ai-memory/` 目录）中写出 `xtask/src/main.rs` 第 85 行定义的三个版权特征字符串，否则 `cargo run -p xtask -- cleanroom` 会直接报错退出。
+- **坑点与规则对比**：
+  1. 严禁在 `crates/`、`apps/`、`docs/` 下存放任何 `.cdr` 或 `.cmx` 后缀的文件（测试 fixture 应在内存构造或用非 `.cdr`/`.cmx` 方式内嵌于测试代码中）。
+  2. 严禁在 `crates/`、`apps/`、`docs/`（包括本 `docs/ai-memory/` 目录）中写出 `xtask/src/main.rs` 定义的三个版权特征字符串（如 Corel 版权声明或公司全称后缀），否则 `cargo xtask cleanroom` 会直接报错退出。
+  3. **品牌词边界（对照 `refs/vectorcraft/xtask/src/brands.rs`）**：`vectorcraft` 禁止在 **Rust 源码字符串字面量（UI 菜单、工具名、MCP 描述）与 `Cargo.toml` 描述** 中出现竞品厂商/产品名（要求 UI 内统一称 `"the reference app"`），但**明确豁免 Markdown 文档（`README.md`、`ROADMAP.md`、`docs/*.md`）** 用于公开定位与对标比较。因此 `README.md` 首页可以且应当明确强调 `CorelDRAW`（及常见拼写 `CoralDraw`），而应用内 UI 字符串则保持自有命名。
 
 ## 3. `refs/uniconvertor` 的 AGPL-3.0 污染红线
 

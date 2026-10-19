@@ -31,4 +31,12 @@ coralcraft-mcp = { path = "crates/mcp" }
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
-unwrap_used = "warn"
+dbg_macro = "warn"
+# CoralCraft never crashes in shipped code: return Result/Option instead of panicking.
+# Tests may unwrap/expect/panic via clippy.toml.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[profile.dev.package."*"]
+opt-level = 2

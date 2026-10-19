@@ -4,13 +4,16 @@
 
 ## 1. 当前阶段状态
 
-- **阶段**：`pre-alpha`（M0 骨架已全部交付并验证通过，处于 **M1 启动前**）。
+- **阶段**：`pre-alpha`（M0 骨架已全部交付并对齐 `vectorcraft` 工程规范，处于 **M1 启动前**）。
 - **本轮已完成工作**：
   1. 克隆仓库 `https://github.com/yupoet/coralcraft` 至 `/data/coralcraft`。
-  2. 执行 `./scripts/bootstrap-refs.sh` 下载全部 11 个参考仓库至 `refs/`，并修复短 SHA 导致 `morluto-rea` 落到新 tip 的问题，确保 11 个参考仓全部精确检出在 [`refs/REFS.md`](../../refs/REFS.md) §D 冻结版本。
-  3. 验证 Rust 1.97.1 工具链、`cargo fmt --check`、`cargo clippy`、`cargo run -p xtask -- cleanroom`、`cargo run -p xtask -- assets` 及除 `coralcraft-cdr` 红灯锚点外的全部单元测试通过。
-  4. 建立 `docs/ai-memory/` 持久记忆体系，并将读写规范写入 [`AGENTS.md`](../../AGENTS.md) 与 [`CLAUDE.md`](../../CLAUDE.md)。
-  5. 将 [`README.md`](../../README.md) 更新为英文版（对齐 ArtCraft 家族风格与徽章体系），修正 [`Cargo.toml`](../../Cargo.toml) 仓库地址，并通过 `gh repo edit` 更新了 GitHub 仓库的 About 描述与 Topics。
+  2. 执行 `./scripts/bootstrap-refs.sh` 下载全部 11 个参考仓库至 `refs/`，并将 `scripts/bootstrap-refs.sh` 升级为 40 位完整 SHA，确保 11 个参考仓全部精确检出在 [`refs/REFS.md`](../../refs/REFS.md) §D 冻结版本。
+  3. 建立 `docs/ai-memory/` 持久记忆体系，并将读写规范写入 [`AGENTS.md`](../../AGENTS.md) 与 [`CLAUDE.md`](../../CLAUDE.md)。
+  4. **全面对齐 `refs/vectorcraft` 风格与行为**：
+     - 补齐 [`.cargo/config.toml`](../../.cargo/config.toml)（支持 `cargo xtask <cmd>` 别名）、[`clippy.toml`](../../clippy.toml)（测试允许 unwrap/expect/panic，库与二进制严禁）与 [`rustfmt.toml`](../../rustfmt.toml)（`max_width = 150`、`use_small_heuristics = "Max"`）。
+     - 对齐 [`Cargo.toml`](../../Cargo.toml) 的 `[workspace.lints.clippy]`（`dbg_macro = "warn"`, `unwrap_used = "deny"`, `expect_used = "deny"`, `panic = "deny"`）及 `[profile.dev.package."*"] opt-level = 2`。
+     - 升级 [`xtask/src/main.rs`](../../xtask/src/main.rs)：新增 `layers`（强制执行 `L0`..`L7` 分层架构，禁止 `L6` 以下依赖 UI 库）与 `stats`（按 crate 统计文件数、代码行数与 `#[test]` 数），并将 `cleanroom`、`assets`、`layers` 全部并入 `cargo xtask ci`。
+     - 重写 [`README.md`](../../README.md) 首页与 GitHub `About`：采用与 `vectorcraft/README.md` 完全一致的章节布局、徽章配色（`#e8573f` / `#b83a24` / `#555555`）与 Star History 图表，同时在首屏与核心卖点中突出 **CorelDRAW**（及常见搜索拼写 *CoralDraw*）与 `.cdr` / `.cmx` 格式原生支持。
 
 ## 2. 下一步待执行任务（M1：CDR 格式探测纵切，见 [`docs/gaps.md`](../gaps.md)）
 
