@@ -633,6 +633,11 @@ pub fn object_local_bounds(kind: &ObjectKind) -> Rect {
             let refs: Vec<&ObjectNode> = children.iter().collect();
             if refs.is_empty() { zero_rect() } else { combined_selection_bounds(&refs) }
         }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            Rect::new(0.0, 0.0, w, h).unwrap_or_else(|_| zero_rect())
+        }
         ObjectKind::Unsupported(u) => u.fallback_bounds.unwrap_or_else(zero_rect),
     }
 }

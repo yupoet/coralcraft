@@ -678,4 +678,40 @@ mod tests {
         let cmx_parsed = parse_document(&cmx_bytes).expect("parse cmx1");
         assert_eq!(cmx_parsed.document.pages[0].layers[0].objects.len(), 5);
     }
+
+    #[test]
+    fn write_cdr7_roundtrip_embedded_bitmap() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::F64;
+
+        let mut doc = Document::new_a4_portrait();
+        let layer = &mut doc.pages[0].layers[0];
+
+        let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255];
+        layer.objects.push(ObjectNode::new(
+            ObjectId(15),
+            Some("Embedded Bitmap".to_owned()),
+            ObjectKind::Bitmap {
+                pixel_width: 2,
+                pixel_height: 2,
+                dpi_x: F64::new(72.0).unwrap(),
+                dpi_y: F64::new(72.0).unwrap(),
+                rgba_pixels: rgba.clone(),
+            },
+            None,
+            None,
+        ));
+
+        let cdr_bytes = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr_bytes).expect("parse cdr7");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 1);
+        if let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &objs[0].kind {
+            assert_eq!(*pixel_width, 2);
+            assert_eq!(*pixel_height, 2);
+            assert_eq!(rgba_pixels, &rgba);
+        } else {
+            panic!("expected Bitmap, got {:?}", objs[0].kind);
+        }
+    }
 }

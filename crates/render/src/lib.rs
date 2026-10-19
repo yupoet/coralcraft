@@ -12,7 +12,7 @@ use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, 
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use pdf::export_pdf;
-pub use png::{adler32, decode_stored_png_rgba, encode_png};
+pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
     MAX_CLIP_DEPTH, MAX_SURFACE_PIXELS, MAX_SURFACE_SIDE, RenderError, RenderWarning, Surface, premul_to_straight, src_over_premul,
@@ -231,8 +231,10 @@ fn paint_geometry_and_powerclip(
         paint_outline(surface, &dev_polys, outline, node.transform, page_scale, eff_opacity)?;
     }
 
-    // 2. Draw object Fill
-    if let (Some(fill), Some(cov)) = (&node.fill, &container_cov) {
+    // 2. Draw object Fill or Bitmap
+    if let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &node.kind {
+        paint_bitmap(surface, *pixel_width, *pixel_height, rgba_pixels, local_bbox, local_to_dev, eff_opacity, container_cov.as_deref());
+    } else if let (Some(fill), Some(cov)) = (&node.fill, &container_cov) {
         shade_coverage(surface, cov, fill, local_bbox, local_to_dev, eff_opacity, warnings, node.id.0)?;
     }
 
@@ -331,6 +333,114 @@ fn paint_outline(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn paint_bitmap(
+    surface: &mut Surface,
+    pixel_width: u32,
+    pixel_height: u32,
+    rgba_pixels: &[u8],
+    local_bbox: Rect,
+    local_to_dev: Affine2,
+    eff_opacity: f64,
+    container_cov: Option<&[u8]>,
+) {
+    if pixel_width == 0 || pixel_height == 0 || surface.width == 0 || surface.height == 0 {
+        return;
+    }
+    let expected_len = (pixel_width as usize) * (pixel_height as usize) * 4;
+    if rgba_pixels.len() < expected_len {
+        return;
+    }
+    let Ok(dev_to_local) = local_to_dev.invert() else {
+        return;
+    };
+
+    let w = surface.width as usize;
+    let h = surface.height as usize;
+    let pw_f = pixel_width as f64;
+    let ph_f = pixel_height as f64;
+    let bw = local_bbox.width();
+    let bh = local_bbox.height();
+    if bw <= 0.0 || bh <= 0.0 {
+        return;
+    }
+
+    let sample_texel = |ix: i32, iy: i32| -> [f64; 4] {
+        if ix < 0 || ix >= pixel_width as i32 || iy < 0 || iy >= pixel_height as i32 {
+            [0.0, 0.0, 0.0, 0.0]
+        } else {
+            let offset = ((iy as usize) * (pixel_width as usize) + (ix as usize)) * 4;
+            if offset + 4 <= rgba_pixels.len() {
+                let a = f64::from(rgba_pixels[offset + 3]) / 255.0;
+                let r = (f64::from(rgba_pixels[offset]) / 255.0) * a;
+                let g = (f64::from(rgba_pixels[offset + 1]) / 255.0) * a;
+                let b = (f64::from(rgba_pixels[offset + 2]) / 255.0) * a;
+                [r, g, b, a]
+            } else {
+                [0.0, 0.0, 0.0, 0.0]
+            }
+        }
+    };
+
+    for py in 0..h {
+        let y_center = (py as f64) + 0.5;
+        for px in 0..w {
+            let cov = container_cov.map_or(16, |c| c[py * w + px]);
+            if cov == 0 {
+                continue;
+            }
+            let x_center = (px as f64) + 0.5;
+            let Ok(dev_pt) = Point::new(x_center, y_center) else {
+                continue;
+            };
+            let Ok(loc) = dev_to_local.apply_point(dev_pt) else {
+                continue;
+            };
+
+            let lx = loc.x.get();
+            let ly = loc.y.get();
+            if lx < 0.0 || lx >= bw || ly < 0.0 || ly >= bh {
+                continue;
+            }
+
+            let tx = (lx / bw) * pw_f - 0.5;
+            let ty = (ly / bh) * ph_f - 0.5;
+
+            let x0 = tx.floor() as i32;
+            let y0 = ty.floor() as i32;
+            let x1 = x0 + 1;
+            let y1 = y0 + 1;
+
+            let fx = (tx - tx.floor()).clamp(0.0, 1.0);
+            let fy = (ty - ty.floor()).clamp(0.0, 1.0);
+
+            let s00 = sample_texel(x0, y0);
+            let s10 = sample_texel(x1, y0);
+            let s01 = sample_texel(x0, y1);
+            let s11 = sample_texel(x1, y1);
+
+            let mut blended = [0.0; 4];
+            for c in 0..4 {
+                let top = s00[c] + fx * (s10[c] - s00[c]);
+                let bot = s01[c] + fx * (s11[c] - s01[c]);
+                blended[c] = top + fy * (bot - top);
+            }
+
+            let a = blended[3];
+            if a <= 1e-4 {
+                continue;
+            }
+
+            let r = ((blended[0] / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+            let g = ((blended[1] / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+            let b = ((blended[2] / a).clamp(0.0, 1.0) * 255.0).round() as u8;
+
+            let final_alpha = a * eff_opacity * (f64::from(cov) / 16.0);
+            surface.blend_straight(px as u32, py as u32, [r, g, b], final_alpha);
+        }
+    }
+}
+
 fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>, RenderError> {
     match kind {
         ObjectKind::Rect(r) => {
@@ -363,6 +473,13 @@ fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>
                 .bounds()
                 .unwrap_or_else(|| Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get()).unwrap_or_default());
             Ok(Some((path, bbox)))
+        }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            let bbox = Rect::new(0.0, 0.0, w, h)?;
+            let p = RectSpec::sharp(bbox).to_path()?;
+            Ok(Some((p, bbox)))
         }
         ObjectKind::Group { .. } | ObjectKind::Unsupported(_) => Ok(None),
     }
@@ -636,5 +753,45 @@ mod tests {
         let obj1_pos = pdf_bytes.windows(8).position(|w| w == b"1 0 obj\n").unwrap();
         let expected_xref_entry = format!("{obj1_pos:010} 00000 n \n");
         assert!(pdf_str.contains(&expected_xref_entry));
+    }
+
+    #[test]
+    fn bitmap_raster_rendering_and_svg_pdf_export() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(100.0, 100.0).unwrap();
+
+        // 2x2 RGBA checkerboard: Top-left Red, Top-right Green, Bottom-left Blue, Bottom-right Yellow
+        #[rustfmt::skip]
+        let rgba = vec![
+            255, 0, 0, 255,     0, 255, 0, 255,
+            0, 0, 255, 255,     255, 255, 0, 255,
+        ];
+
+        let bmp_node = ObjectNode::new(
+            ObjectId(99),
+            Some("Checker Bitmap".to_owned()),
+            ObjectKind::Bitmap { pixel_width: 2, pixel_height: 2, dpi_x: F64::new(72.0).unwrap(), dpi_y: F64::new(72.0).unwrap(), rgba_pixels: rgba },
+            None,
+            None,
+        );
+        doc.pages[0].layers[0].objects.push(bmp_node);
+
+        // 1. Render raster surface at 1.0 scale
+        let render_out = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        let p00 = render_out.surface.get_straight_rgba(0, 0);
+        assert_eq!(p00[0], 255);
+        assert_eq!(render_out.surface.get_straight_rgba(50, 50), [0, 0, 0, 0]);
+
+        // 2. Export SVG and verify <image> element
+        let svg = export_svg(&doc, 0).unwrap();
+        assert!(svg.contains("<image id=\"obj-99\""));
+        assert!(svg.contains("href=\"data:image/png;base64,"));
+        assert!(svg.contains("preserveAspectRatio=\"none\""));
+
+        // 3. Export PDF and verify inline image BI ... ID ... EI
+        let pdf_bytes = export_pdf(&doc).unwrap();
+        let pdf_str = String::from_utf8_lossy(&pdf_bytes);
+        assert!(pdf_str.contains("BI\n/W 2\n/H 2\n/CS /DeviceRGB\n/BPC 8\n/F /AHx\nID\n"));
+        assert!(pdf_str.contains("EI"));
     }
 }

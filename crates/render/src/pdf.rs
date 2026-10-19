@@ -382,6 +382,35 @@ fn emit_pdf_node(s: &mut String, node: &ObjectNode) -> Result<(), RenderError> {
             s.push_str("Q\n");
             return Ok(());
         }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            s.push_str("q\n");
+            let _ = writeln!(s, "{} 0 0 {} 0 {} cm", fmt_num(w), fmt_num(-h), fmt_num(h));
+            s.push_str("BI\n");
+            let _ = writeln!(s, "/W {pixel_width}\n/H {pixel_height}\n/CS /DeviceRGB\n/BPC 8\n/F /AHx\nID");
+            let total_pixels = (*pixel_width as usize) * (*pixel_height as usize);
+            let mut hex = String::with_capacity(total_pixels * 6 + total_pixels / 16);
+            for i in 0..total_pixels {
+                let off = i * 4;
+                if off + 3 <= rgba_pixels.len() {
+                    let r = rgba_pixels[off];
+                    let g = rgba_pixels[off + 1];
+                    let b = rgba_pixels[off + 2];
+                    let _ = write!(hex, "{r:02X}{g:02X}{b:02X}");
+                } else {
+                    hex.push_str("000000");
+                }
+                if i % 16 == 15 {
+                    hex.push('\n');
+                }
+            }
+            hex.push('>');
+            s.push_str(&hex);
+            s.push_str("\nEI\nQ\n");
+            s.push_str("Q\n");
+            return Ok(());
+        }
         ObjectKind::Unsupported(u) => {
             if let Some(bbox) = u.fallback_bounds {
                 let path = RectSpec::sharp(bbox).to_path()?;

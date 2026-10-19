@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use coralcraft_color::{Color, Palette};
-use coralcraft_geom::{Affine2, BBox, EllipseSpec, F64, Path, Point, PolygonSpec, RectSpec, Size, Unit};
+use coralcraft_geom::{Affine2, BBox, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
 
 use crate::style::{ChunkTag, FillStyle, OutlineStyle, RawPayload, Residual};
 
@@ -154,8 +154,45 @@ pub enum ObjectKind {
         /// Ordered child nodes (`0` = bottom, `len - 1` = top).
         children: Vec<ObjectNode>,
     },
+    /// Embedded raster bitmap image (`bmp ` / `CDIB`).
+    Bitmap {
+        /// Width in physical image pixels.
+        pixel_width: u32,
+        /// Height in physical image pixels.
+        pixel_height: u32,
+        /// Horizontal resolution in dots-per-inch (DPI).
+        dpi_x: F64,
+        /// Vertical resolution in dots-per-inch (DPI).
+        dpi_y: F64,
+        /// Raw RGBA8 pixel data (length == pixel_width * pixel_height * 4).
+        rgba_pixels: Vec<u8>,
+    },
     /// First-class passthrough node for unsupported CDR records.
     Unsupported(UnsupportedObject),
+}
+
+impl ObjectKind {
+    /// Returns the local-space bounding box for parametric shapes, paths, text, or bitmaps.
+    #[must_use]
+    pub fn local_bounds(&self) -> Option<Rect> {
+        match self {
+            Self::Rect(r) => Some(r.rect),
+            Self::Ellipse(e) => Some(e.rect),
+            Self::Polygon(p) => p.to_path().ok().and_then(|path| path.bounds()),
+            Self::Path(p) => p.bounds(),
+            Self::ArtisticText { text, size_pt, position, .. } => {
+                let w = (text.len() as f64) * size_pt.get() * 0.6;
+                let h = size_pt.get();
+                Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get()).ok()
+            }
+            Self::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
+                let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+                let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+                Rect::new(0.0, 0.0, w, h).ok()
+            }
+            Self::Group { .. } | Self::Unsupported(_) => None,
+        }
+    }
 }
 
 /// Non-destructive vector effect applied to an [`ObjectNode`].

@@ -290,6 +290,7 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
                 "[Eff]" => [0x20, 0x70, 0x30, 0xFF],
                 "[Cur]" => [0x10, 0x60, 0x70, 0xFF],
                 "[Txt]" => [0x20, 0x30, 0x80, 0xFF],
+                "[Bmp]" => [0x10, 0x80, 0x80, 0xFF],
                 _ => [0x40, 0x50, 0x70, 0xFF],
             };
             fill_rect(&mut surface, dx0 + 8, ry + 2, 28, 14, badge_bg);

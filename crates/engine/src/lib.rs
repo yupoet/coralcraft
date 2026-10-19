@@ -245,6 +245,7 @@ impl EditorEngine {
                 ObjectKind::Path(_) => "Curve on Layer".to_owned(),
                 ObjectKind::ArtisticText { .. } => "Artistic Text".to_owned(),
                 ObjectKind::Group { children } => format!("Group of {} objects", children.len()),
+                ObjectKind::Bitmap { pixel_width, pixel_height, .. } => format!("Bitmap ({pixel_width}x{pixel_height}) on Layer"),
                 ObjectKind::Unsupported(_) => "Unsupported CDR Object".to_owned(),
             },
             many => format!("{} objects selected", many.len()),

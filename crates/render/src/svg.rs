@@ -279,6 +279,21 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             );
             return Ok(());
         }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            let png_bytes = crate::png::encode_raw_png_rgba(*pixel_width, *pixel_height, rgba_pixels)?;
+            let b64 = crate::png::base64_encode(&png_bytes);
+            let _ = writeln!(
+                body,
+                "{indent}<image id=\"obj-{}\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"{transform_attr}{opacity_attr}/>",
+                node.id.0,
+                fmt_num(w),
+                fmt_num(h),
+                b64
+            );
+            return Ok(());
+        }
         ObjectKind::Unsupported(u) => {
             if let Some(bbox) = u.fallback_bounds {
                 let path = RectSpec::sharp(bbox).to_path()?;
@@ -411,6 +426,13 @@ pub(crate) fn extract_shape_path_and_bbox(kind: &ObjectKind) -> Result<Option<(P
             let x0 = position.x.get();
             let y0 = position.y.get() - h;
             let bbox = Rect::new(x0, y0, x0 + w, position.y.get())?;
+            let path = RectSpec::sharp(bbox).to_path()?;
+            Ok(Some((path, bbox)))
+        }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            let bbox = Rect::new(0.0, 0.0, w, h)?;
             let path = RectSpec::sharp(bbox).to_path()?;
             Ok(Some((path, bbox)))
         }

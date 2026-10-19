@@ -518,6 +518,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut fill: Option<FillStyle> = None;
     let mut outline: Option<OutlineStyle> = None;
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
+    let mut bmp_payload: Option<&[u8]> = None;
     let mut residual = Residual::default();
 
     for (slot_idx, ch) in flat_children.iter().enumerate() {
@@ -538,6 +539,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
             b"outl" => {
                 if let Some((_id, o)) = decode_outl(&ch.payload, ctx.endian, ctx.version, warnings) {
                     outline = Some(o);
+                }
+            }
+            b"bmp " | b"CDIB" => {
+                if bmp_payload.is_none() && !ch.payload.is_empty() {
+                    bmp_payload = Some(&ch.payload);
                 }
             }
             b"loda" | b"lobj" => {
@@ -573,7 +579,24 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         outline = Some(first_outl.clone());
     }
 
-    let kind = if let Some((payload, tag)) = loda_payload {
+    let kind = if let Some(bmp_data) = bmp_payload {
+        if let Some(bmp) = decode_bmp_or_cdib_chunk(bmp_data, ctx.endian) {
+            bmp
+        } else if let Some((payload, tag)) = loda_payload {
+            decode_loda_geometry(payload, tag, ctx.endian, ctx.version, page_size, bbox_rect, warnings)
+        } else {
+            let fallback = bbox_rect.or_else(|| Rect::new(36.0, 36.0, 136.0, 136.0).ok());
+            ObjectKind::Unsupported(UnsupportedObject {
+                tag: ChunkTag(*b"CDIB"),
+                class_hint: Some("CorruptBitmap".to_owned()),
+                payload: RawPayload(bmp_data.iter().copied().take(512).collect()),
+                fallback_bounds: fallback,
+                absolute_geometry: false,
+                children: Vec::new(),
+                residual: Residual::default(),
+            })
+        }
+    } else if let Some((payload, tag)) = loda_payload {
         decode_loda_geometry(payload, tag, ctx.endian, ctx.version, page_size, bbox_rect, warnings)
     } else if let Some(b) = bbox_rect {
         ObjectKind::Rect(RectSpec::sharp(b))
@@ -591,7 +614,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         })
     };
 
-    if fill.is_none() && outline.is_none() {
+    if fill.is_none() && outline.is_none() && !matches!(kind, ObjectKind::Bitmap { .. }) {
         outline = Some(OutlineStyle::hairline(Color::BLACK));
     }
 
@@ -842,6 +865,12 @@ fn decode_loda_geometry(
                     return art_text;
                 }
             }
+            6 => {
+                // Bitmap
+                if let Some(bmp) = decode_loda_bitmap(payload.get(4..).unwrap_or(&[]), endian, version, page_size, bbox_rect) {
+                    return bmp;
+                }
+            }
             _ => {}
         }
     }
@@ -901,6 +930,96 @@ fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_si
     let position = Point::new(rect.x0.get(), rect.y0.get()).ok()?;
     let size_pt = F64::new(rect.height().clamp(6.0, 288.0)).ok()?;
     Some(ObjectKind::ArtisticText { text: "Text".to_owned(), font_family: "Sans".to_owned(), size_pt, position })
+}
+
+fn decode_loda_bitmap(slice: &[u8], endian: Endian, _version: u16, _page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
+    let dpi_fallback = F64::new(72.0).unwrap_or(F64::ONE);
+    if slice.len() >= 24 && slice.get(0..4) == Some(b"BMP ") {
+        let pixel_width = read_u32(endian, slice, 4)?;
+        let pixel_height = read_u32(endian, slice, 8)?;
+        let dpi_x_raw = read_u32(endian, slice, 12)?;
+        let dpi_y_raw = read_u32(endian, slice, 16)?;
+        let dpi_x = F64::new(f64::from(f32::from_bits(dpi_x_raw))).unwrap_or(dpi_fallback);
+        let dpi_y = F64::new(f64::from(f32::from_bits(dpi_y_raw))).unwrap_or(dpi_fallback);
+        let byte_len = read_u32(endian, slice, 20)? as usize;
+        let expected = (pixel_width as usize) * (pixel_height as usize) * 4;
+        let pixel_bytes = slice.get(24..24 + byte_len)?;
+        let rgba_pixels = if pixel_bytes.len() == expected {
+            pixel_bytes.to_vec()
+        } else {
+            let mut v = pixel_bytes.to_vec();
+            v.resize(expected, 0xFF);
+            v
+        };
+        Some(ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels })
+    } else if let Some(rect) = bbox_rect {
+        let pixel_width = (rect.width().round() as u32).clamp(1, 4096);
+        let pixel_height = (rect.height().round() as u32).clamp(1, 4096);
+        let total = (pixel_width as usize) * (pixel_height as usize) * 4;
+        Some(ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x: dpi_fallback, dpi_y: dpi_fallback, rgba_pixels: vec![0xCC; total] })
+    } else {
+        None
+    }
+}
+
+fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind> {
+    if payload.len() < 24 {
+        return None;
+    }
+    if payload.get(0..4) == Some(b"BMP ") {
+        return decode_loda_bitmap(payload, endian, 1400, Size::default(), None);
+    }
+    // Check BITMAPINFOHEADER (biSize = 40)
+    let bi_size = read_u32(Endian::Little, payload, 0)?;
+    if bi_size == 40 && payload.len() >= 40 {
+        let w = read_i32(Endian::Little, payload, 4)?.unsigned_abs();
+        let h = read_i32(Endian::Little, payload, 8)?.unsigned_abs();
+        let bpp = read_u16(Endian::Little, payload, 14)?;
+        let xpels = read_i32(Endian::Little, payload, 24).unwrap_or(0);
+        let ypels = read_i32(Endian::Little, payload, 28).unwrap_or(0);
+        let dpi_x = if xpels > 0 { (xpels as f64 * 0.0254).max(1.0) } else { 72.0 };
+        let dpi_y = if ypels > 0 { (ypels as f64 * 0.0254).max(1.0) } else { 72.0 };
+
+        if w == 0 || h == 0 || w > 16384 || h > 16384 {
+            return None;
+        }
+
+        let raw_pixels = payload.get(40..)?;
+        let mut rgba = Vec::with_capacity((w as usize) * (h as usize) * 4);
+        if bpp == 32 {
+            for chunk in raw_pixels.chunks_exact(4).take((w as usize) * (h as usize)) {
+                rgba.push(chunk[2]);
+                rgba.push(chunk[1]);
+                rgba.push(chunk[0]);
+                rgba.push(chunk[3]);
+            }
+        } else if bpp == 24 {
+            let row_stride = (w as usize * 3).div_ceil(4) * 4;
+            for row in 0..h as usize {
+                let row_start = row * row_stride;
+                if row_start + (w as usize) * 3 <= raw_pixels.len() {
+                    for x in 0..w as usize {
+                        let px = row_start + x * 3;
+                        rgba.push(raw_pixels[px + 2]);
+                        rgba.push(raw_pixels[px + 1]);
+                        rgba.push(raw_pixels[px]);
+                        rgba.push(255);
+                    }
+                }
+            }
+        }
+        if rgba.len() == (w as usize) * (h as usize) * 4 {
+            let dpi_fallback = F64::new(72.0).unwrap_or(F64::ONE);
+            return Some(ObjectKind::Bitmap {
+                pixel_width: w,
+                pixel_height: h,
+                dpi_x: F64::new(dpi_x).unwrap_or(dpi_fallback),
+                dpi_y: F64::new(dpi_y).unwrap_or(dpi_fallback),
+                rgba_pixels: rgba,
+            });
+        }
+    }
+    None
 }
 
 fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<Path> {
@@ -1210,6 +1329,16 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
             loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
             loda.extend_from_slice(txt_bytes);
         }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
+            loda.extend_from_slice(&6u32.to_le_bytes());
+            loda.extend_from_slice(b"BMP ");
+            loda.extend_from_slice(&pixel_width.to_le_bytes());
+            loda.extend_from_slice(&pixel_height.to_le_bytes());
+            loda.extend_from_slice(&(dpi_x.get() as f32).to_le_bytes());
+            loda.extend_from_slice(&(dpi_y.get() as f32).to_le_bytes());
+            loda.extend_from_slice(&(rgba_pixels.len() as u32).to_le_bytes());
+            loda.extend_from_slice(rgba_pixels);
+        }
         ObjectKind::Group { .. } => {}
         ObjectKind::Unsupported(u) => {
             loda.extend_from_slice(&0x99u32.to_le_bytes());
@@ -1291,6 +1420,11 @@ fn node_bbox_for_export(node: &ObjectNode) -> Rect {
             let w = (text.chars().count().max(1) as f64) * size_pt.get() * 0.6;
             let h = size_pt.get().max(8.0);
             Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or(default_rect)
+        }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
+            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            Rect::new(0.0, 0.0, w, h).unwrap_or(default_rect)
         }
         ObjectKind::Group { .. } => default_rect,
         ObjectKind::Unsupported(u) => u.fallback_bounds.unwrap_or(default_rect),

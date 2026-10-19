@@ -402,6 +402,7 @@ impl DesktopWorkspace {
                             coralcraft_doc::ObjectKind::Path(_) => "Curve",
                             coralcraft_doc::ObjectKind::ArtisticText { .. } => "Artistic Text",
                             coralcraft_doc::ObjectKind::Group { .. } => "Group",
+                            coralcraft_doc::ObjectKind::Bitmap { .. } => "Bitmap",
                             coralcraft_doc::ObjectKind::Unsupported(_) => "Unsupported Object",
                         }
                         .to_owned()
@@ -419,6 +420,7 @@ impl DesktopWorkspace {
                             coralcraft_doc::ObjectKind::Path(_) => "[Cur]",
                             coralcraft_doc::ObjectKind::ArtisticText { .. } => "[Txt]",
                             coralcraft_doc::ObjectKind::Group { .. } => "[Grp]",
+                            coralcraft_doc::ObjectKind::Bitmap { .. } => "[Bmp]",
                             coralcraft_doc::ObjectKind::Unsupported(_) => "[Unk]",
                         }
                     }

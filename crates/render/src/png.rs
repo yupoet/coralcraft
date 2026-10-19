@@ -52,6 +52,72 @@ pub fn encode_png(surface: &Surface) -> Result<Vec<u8>, RenderError> {
     Ok(out)
 }
 
+/// Encodes raw RGBA8 pixels into a deterministic 8-bit truecolor-with-alpha PNG byte stream.
+pub fn encode_raw_png_rgba(w: u32, h: u32, rgba_pixels: &[u8]) -> Result<Vec<u8>, RenderError> {
+    let row_len = (w as usize).checked_mul(4).and_then(|n| n.checked_add(1)).ok_or(RenderError::PngTooLarge)?;
+    let raw_len = row_len.checked_mul(h as usize).ok_or(RenderError::PngTooLarge)?;
+    if raw_len > (u32::MAX as usize) / 2 || rgba_pixels.len() < (w as usize) * (h as usize) * 4 {
+        return Err(RenderError::PngTooLarge);
+    }
+
+    let mut raw_scanlines = Vec::with_capacity(raw_len);
+    for y in 0..h {
+        raw_scanlines.push(0_u8); // Filter type 0 (None)
+        let row_start = (y as usize) * (w as usize) * 4;
+        let row_end = row_start + (w as usize) * 4;
+        raw_scanlines.extend_from_slice(&rgba_pixels[row_start..row_end]);
+    }
+
+    let zlib_data = wrap_zlib_stored(&raw_scanlines)?;
+
+    let mut out = Vec::with_capacity(64 + zlib_data.len());
+    out.extend_from_slice(&PNG_SIGNATURE);
+
+    let mut ihdr = [0_u8; 13];
+    ihdr[0..4].copy_from_slice(&w.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&h.to_be_bytes());
+    ihdr[8] = 8;
+    ihdr[9] = 6;
+    ihdr[10] = 0;
+    ihdr[11] = 0;
+    ihdr[12] = 0;
+    write_png_chunk(&mut out, *b"IHDR", &ihdr)?;
+    write_png_chunk(&mut out, *b"IDAT", &zlib_data)?;
+    write_png_chunk(&mut out, *b"IEND", &[])?;
+
+    Ok(out)
+}
+
+/// Standard RFC 4648 Base64 encoder for embedding binary assets (e.g. data URIs in SVG).
+#[must_use]
+pub fn base64_encode(data: &[u8]) -> String {
+    const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    let mut chunks = data.chunks_exact(3);
+    for chunk in &mut chunks {
+        let b = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+        out.push(B64_CHARS[((b >> 18) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((b >> 12) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((b >> 6) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[(b & 0x3F) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    if rem.len() == 1 {
+        let b = u32::from(rem[0]) << 16;
+        out.push(B64_CHARS[((b >> 18) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((b >> 12) & 0x3F) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem.len() == 2 {
+        let b = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
+        out.push(B64_CHARS[((b >> 18) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((b >> 12) & 0x3F) as usize] as char);
+        out.push(B64_CHARS[((b >> 6) & 0x3F) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
 fn write_png_chunk(out: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) -> Result<(), RenderError> {
     let Ok(len_u32) = u32::try_from(data.len()) else {
         return Err(RenderError::PngTooLarge);
