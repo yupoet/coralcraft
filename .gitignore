@@ -13,5 +13,8 @@
 # Distribution artifacts
 /dist/
 
+# Local Telegram bridge memory directory
+/okf_memory/
+
 # OS metadata
 .DS_Store
