@@ -8,6 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+coralcraft-color = { workspace = true }
+coralcraft-doc = { workspace = true }
+coralcraft-geom = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

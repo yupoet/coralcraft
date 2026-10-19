@@ -3,19 +3,20 @@
 //! Exit code convention:
 //! - `0`: Success
 //! - `2`: CLI argument usage error (`clap` default)
-//! - `3`: Not a CDR/CMX file (`NotCdr` / `TooShort`) or unrecognized input format
+//! - `3`: Not a CDR/CMX file (`NotCdr` / `TooShort`) or unrecognized input/output format
 //! - `4`: File I/O error or file size exceeds safety limit
 //! - `5`: Corrupted/truncated container or format parse error
-//! - `6`: Rendering or domain pipeline failure
+//! - `6`: Rendering or vector export pipeline failure
 
 use std::fs;
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport};
+use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport, parse_document};
 use coralcraft_color::{ColorError, load_palette_bytes};
-use coralcraft_doc::load_bytes;
-use coralcraft_render::{RenderOpts, render_page};
+use coralcraft_doc::{DocError, Document, load_bytes, save_json, save_zip};
+use coralcraft_render::{RenderOpts, export_pdf, export_svg, render_page};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -35,9 +36,9 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Render a `.coralcraft` document page to a deterministic PNG file
+    /// Render a `.coralcraft` or `.cdr` document page to a deterministic PNG file
     Render {
-        /// Path to the input `.coralcraft` file (JSON or ZIP container)
+        /// Path to the input `.coralcraft` or `.cdr` file
         input: String,
         /// Output PNG file path
         #[arg(short = 'o', long = "output")]
@@ -51,6 +52,23 @@ enum Command {
         /// Render with a transparent background instead of paper white
         #[arg(long)]
         transparent: bool,
+        /// Emit structured JSON summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export a `.cdr` or `.coralcraft` document to `.svg`, `.pdf`, `.png`, or `.coralcraft`
+    Export {
+        /// Path to the input `.cdr` or `.coralcraft` file
+        input: String,
+        /// Output file path (`.svg`, `.pdf`, `.png`, `.coralcraft`, or `.json`)
+        #[arg(short = 'o', long = "output")]
+        output: String,
+        /// 1-based page number for single-page formats (`svg`, `png`) (default: 1)
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Rasterization DPI for `.png` output (default: 96.0)
+        #[arg(long, default_value_t = 96.0)]
+        dpi: f64,
         /// Emit structured JSON summary
         #[arg(long)]
         json: bool,
@@ -127,6 +145,26 @@ fn read_bounded_file(subcmd: &str, file: &str) -> Result<Vec<u8>, ExitCode> {
     })
 }
 
+/// Loads either a native `.coralcraft` document or a `.cdr`/`.cmx` document.
+fn load_any_document(subcmd: &str, input: &str, bytes: &[u8]) -> Result<(Document, Vec<String>), ExitCode> {
+    match load_bytes(bytes) {
+        Ok(doc) => return Ok((doc, Vec::new())),
+        Err(DocError::BadMagic | DocError::InvalidZipContainer(_)) => {}
+        Err(e) => {
+            eprintln!("coralcraft-cli {subcmd}: failed to load .coralcraft document '{input}': {e}");
+            return Err(ExitCode::from(5));
+        }
+    }
+
+    match parse_document(bytes) {
+        Ok(outcome) => Ok((outcome.document, outcome.parse_warnings)),
+        Err(e) => {
+            eprintln!("coralcraft-cli {subcmd}: failed to load or parse '{input}': {e}");
+            Err(ExitCode::from(5))
+        }
+    }
+}
+
 fn run_probe(file: &str, json: bool) -> ExitCode {
     let bytes = match read_bounded_file("probe", file) {
         Ok(b) => b,
@@ -182,12 +220,9 @@ fn run_render(input: &str, output: &str, page_1based: usize, scale: f64, transpa
         Err(code) => return code,
     };
 
-    let doc = match load_bytes(&bytes) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("coralcraft-cli render: failed to load document '{input}': {e}");
-            return ExitCode::from(5);
-        }
+    let (doc, _parse_warnings) = match load_any_document("render", input, &bytes) {
+        Ok(pair) => pair,
+        Err(code) => return code,
     };
 
     let opts = RenderOpts { scale, transparent_background: transparent, export_mode: true };
@@ -229,6 +264,123 @@ fn run_render(input: &str, output: &str, page_1based: usize, scale: f64, transpa
             rendered.surface.height,
             rendered.png_bytes.len(),
             rendered.warnings.len()
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+#[derive(Serialize)]
+struct ExportSummaryJson {
+    schema_version: u32,
+    input: String,
+    output: String,
+    format: String,
+    page: usize,
+    page_count: usize,
+    output_bytes: usize,
+    parse_warnings: Vec<String>,
+}
+
+fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: bool) -> ExitCode {
+    if page_1based == 0 {
+        eprintln!("coralcraft-cli export: --page is 1-based and must be >= 1");
+        return ExitCode::from(2);
+    }
+    if !dpi.is_finite() || dpi <= 0.0 || dpi > 4800.0 {
+        eprintln!("coralcraft-cli export: --dpi must be in (0.0, 4800.0]");
+        return ExitCode::from(2);
+    }
+
+    let bytes = match read_bounded_file("export", input) {
+        Ok(b) => b,
+        Err(code) => return code,
+    };
+
+    let (doc, parse_warnings) = match load_any_document("export", input, &bytes) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+
+    for w in &parse_warnings {
+        eprintln!("[warn] {w}");
+    }
+
+    let ext = Path::new(output).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+
+    let (format_name, out_bytes) = match ext.as_str() {
+        "svg" => match export_svg(&doc, page_1based - 1) {
+            Ok(svg) => ("svg", svg.into_bytes()),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: SVG export failed for '{input}': {e}");
+                return ExitCode::from(6);
+            }
+        },
+        "pdf" => match export_pdf(&doc) {
+            Ok(pdf) => ("pdf", pdf),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: PDF export failed for '{input}': {e}");
+                return ExitCode::from(6);
+            }
+        },
+        "png" => {
+            let opts = RenderOpts { scale: dpi / 72.0, transparent_background: false, export_mode: true };
+            match render_page(&doc, page_1based - 1, &opts) {
+                Ok(r) => ("png", r.png_bytes),
+                Err(e) => {
+                    eprintln!("coralcraft-cli export: PNG export failed for '{input}': {e}");
+                    return ExitCode::from(6);
+                }
+            }
+        }
+        "coralcraft" => match save_zip(&doc) {
+            Ok(z) => ("coralcraft", z),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: .coralcraft ZIP save failed: {e}");
+                return ExitCode::from(6);
+            }
+        },
+        "json" => match save_json(&doc) {
+            Ok(j) => ("json", j),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: .coralcraft JSON save failed: {e}");
+                return ExitCode::from(6);
+            }
+        },
+        other => {
+            eprintln!("coralcraft-cli export: unsupported output extension '.{other}' (expected .svg, .pdf, .png, .coralcraft, or .json)");
+            return ExitCode::from(3);
+        }
+    };
+
+    if let Err(e) = fs::write(output, &out_bytes) {
+        eprintln!("coralcraft-cli export: failed to write '{output}': {e}");
+        return ExitCode::from(4);
+    }
+
+    if json {
+        let summary = ExportSummaryJson {
+            schema_version: 2,
+            input: input.to_owned(),
+            output: output.to_owned(),
+            format: format_name.to_owned(),
+            page: page_1based,
+            page_count: doc.pages.len(),
+            output_bytes: out_bytes.len(),
+            parse_warnings,
+        };
+        if let Ok(s) = serde_json::to_string_pretty(&summary) {
+            println!("{s}");
+        }
+    } else {
+        println!(
+            "exported '{}' -> '{}' (format={}, pages={}, {} bytes, {} warnings)",
+            input,
+            output,
+            format_name,
+            doc.pages.len(),
+            out_bytes.len(),
+            parse_warnings.len()
         );
     }
 
@@ -284,13 +436,13 @@ fn run_inspect_palette(file: &str, json: bool) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(err) => {
-            let code = match err {
-                ColorError::UnknownPaletteFormat => 3,
-                _ => 5,
-            };
-            eprintln!("coralcraft-cli inspect-palette: failed to parse '{file}': {err}");
-            ExitCode::from(code)
+        Err(ColorError::UnsupportedBinaryCpl) => {
+            eprintln!("coralcraft-cli inspect-palette: binary .cpl palette header detected (body decoding scheduled for M4)");
+            ExitCode::from(3)
+        }
+        Err(e) => {
+            eprintln!("coralcraft-cli inspect-palette: failed to parse palette '{file}': {e}");
+            ExitCode::from(5)
         }
     }
 }
@@ -300,6 +452,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Probe { file, json } => run_probe(&file, json),
         Command::Render { input, output, page, scale, transparent, json } => run_render(&input, &output, page, scale, transparent, json),
+        Command::Export { input, output, page, dpi, json } => run_export(&input, &output, page, dpi, json),
         Command::InspectPalette { file, json } => run_inspect_palette(&file, json),
     }
 }

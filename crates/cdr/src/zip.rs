@@ -233,6 +233,91 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
     Ok(ZipInspection { primary_entry: entry.name, role, has_data_file_list, entry_count: total_entries, inner_riff, warnings })
 }
 
+/// Extracts and decompresses the primary RIFF payload (`content/riffData.cdr` or `content/root.dat`)
+/// from a ZIP-wrapped `.cdr` archive, supporting both `Stored` (`0`) and `Deflate` (`8`) entries.
+pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> Result<(ZipCdrRole, Vec<u8>), ProbeError> {
+    let eocd_pos = find_eocd_offset(bytes).ok_or(ProbeError::Truncated { offset: bytes.len() as u64, needed: 22, available: 0 })?;
+    let total_entries = usize::from(read_u16_le(bytes, eocd_pos + 10).unwrap_or(0));
+    if total_entries > MAX_ZIP_ENTRIES {
+        return Err(ProbeError::LimitExceeded { limit: "max_zip_entries".to_string(), max: MAX_ZIP_ENTRIES });
+    }
+    let cd_size = read_u32_le(bytes, eocd_pos + 12).unwrap_or(0) as usize;
+    let cd_offset = read_u32_le(bytes, eocd_pos + 16).unwrap_or(0) as usize;
+    let cd_end = cd_offset.saturating_add(cd_size).min(eocd_pos);
+
+    let mut cursor = cd_offset;
+    let mut primary: Option<(ZipCdrRole, CdEntry)> = None;
+
+    for _ in 0..total_entries {
+        if cursor + 46 > cd_end || bytes.get(cursor..cursor + 4) != Some(b"PK\x01\x02") {
+            break;
+        }
+        let flags = read_u16_le(bytes, cursor + 8).unwrap_or(0);
+        let method = read_u16_le(bytes, cursor + 10).unwrap_or(0);
+        let compressed_size = read_u32_le(bytes, cursor + 20).unwrap_or(0);
+        let uncompressed_size = read_u32_le(bytes, cursor + 24).unwrap_or(0);
+        let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
+        let extra_len = usize::from(read_u16_le(bytes, cursor + 30).unwrap_or(0));
+        let comment_len = usize::from(read_u16_le(bytes, cursor + 32).unwrap_or(0));
+        let local_header_offset = read_u32_le(bytes, cursor + 42).unwrap_or(0);
+
+        let name_start = cursor + 46;
+        let Some(name_end) = name_start.checked_add(name_len) else { break };
+        let Some(next_cursor) = name_end.checked_add(extra_len).and_then(|v| v.checked_add(comment_len)) else { break };
+        if next_cursor > cd_end {
+            break;
+        }
+        let name = String::from_utf8_lossy(bytes.get(name_start..name_end).unwrap_or(&[])).into_owned();
+        if name.eq_ignore_ascii_case("content/riffData.cdr") {
+            primary = Some((ZipCdrRole::RiffDataCdr, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+        } else if name.eq_ignore_ascii_case("content/root.dat") && primary.is_none() {
+            primary = Some((ZipCdrRole::RootDat, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+        }
+        cursor = next_cursor;
+    }
+
+    let Some((role, entry)) = primary else {
+        return Err(ProbeError::NotCdr { reason: "ZIP archive does not contain content/riffData.cdr or content/root.dat".to_string() });
+    };
+    if (entry.flags & 1) != 0 {
+        return Err(ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: format!("ZIP entry {} is encrypted", entry.name) });
+    }
+    if (entry.uncompressed_size as usize) > max_decompressed_bytes {
+        return Err(ProbeError::LimitExceeded { limit: "max_decompressed_bytes".to_string(), max: max_decompressed_bytes });
+    }
+
+    let lfh_offset = entry.local_header_offset as usize;
+    if lfh_offset.checked_add(30).is_none_or(|end| end > bytes.len()) || bytes.get(lfh_offset..lfh_offset + 4) != Some(b"PK\x03\x04") {
+        return Err(ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "invalid Local File Header".to_string() });
+    }
+    let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset + 26).unwrap_or(0));
+    let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset + 28).unwrap_or(0));
+    let data_start = lfh_offset
+        .checked_add(30)
+        .and_then(|v| v.checked_add(lfh_name_len))
+        .and_then(|v| v.checked_add(lfh_extra_len))
+        .ok_or(ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "Local File Header offset overflow".to_string() })?;
+    let data_end = data_start
+        .checked_add(entry.compressed_size as usize)
+        .ok_or(ProbeError::Invalid { offset: data_start as u64, reason: "compressed data length overflow".to_string() })?;
+    let raw_slice = bytes.get(data_start..data_end).ok_or(ProbeError::Truncated {
+        offset: data_start as u64,
+        needed: u64::from(entry.compressed_size),
+        available: bytes.len().saturating_sub(data_start) as u64,
+    })?;
+
+    match entry.method {
+        0 => Ok((role, raw_slice.to_vec())),
+        8 => {
+            let decompressed = crate::inflate::inflate_raw(raw_slice, max_decompressed_bytes)?;
+            Ok((role, decompressed))
+        }
+        other => {
+            Err(ProbeError::Invalid { offset: data_start as u64, reason: format!("unsupported ZIP compression method {other} for {}", entry.name) })
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

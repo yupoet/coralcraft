@@ -132,3 +132,33 @@ fn cli_render_and_inspect_palette_subcommands() {
     assert_eq!(p_json["swatch_count"], 1);
     assert_eq!(p_json["swatches"][0]["srgb_hex"], "#ff0000");
 }
+
+#[test]
+fn cli_export_cdr_to_svg_pdf_png_and_coralcraft() {
+    let cdr_file = TempFixture::new("input.cdr", &synth_riff_cdr7_with_vrsn());
+    let out_svg = std::env::temp_dir().join(format!("coralcraft_cli_export_{}.svg", std::process::id()));
+    let out_pdf = std::env::temp_dir().join(format!("coralcraft_cli_export_{}.pdf", std::process::id()));
+    let out_cc = std::env::temp_dir().join(format!("coralcraft_cli_export_{}.coralcraft", std::process::id()));
+
+    // 1. Export .cdr -> .svg
+    let res_svg = Command::new(cli_bin()).args(["export", "--json", "-o"]).arg(&out_svg).arg(&cdr_file.path).output().unwrap();
+    assert_eq!(res_svg.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&res_svg.stderr));
+    let svg_text = fs::read_to_string(&out_svg).unwrap();
+    assert!(svg_text.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+    let _ = fs::remove_file(&out_svg);
+
+    // 2. Export .cdr -> .pdf
+    let res_pdf = Command::new(cli_bin()).args(["export", "-o"]).arg(&out_pdf).arg(&cdr_file.path).output().unwrap();
+    assert_eq!(res_pdf.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&res_pdf.stderr));
+    let pdf_bytes = fs::read(&out_pdf).unwrap();
+    assert!(pdf_bytes.starts_with(b"%PDF-1.4\n"));
+    let _ = fs::remove_file(&out_pdf);
+
+    // 3. Export .cdr -> .coralcraft and reload
+    let res_cc = Command::new(cli_bin()).args(["export", "-o"]).arg(&out_cc).arg(&cdr_file.path).output().unwrap();
+    assert_eq!(res_cc.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&res_cc.stderr));
+    let cc_bytes = fs::read(&out_cc).unwrap();
+    let loaded = coralcraft_doc::load_bytes(&cc_bytes).expect("saved .coralcraft must load cleanly");
+    assert_eq!(loaded.pages.len(), 1);
+    let _ = fs::remove_file(&out_cc);
+}

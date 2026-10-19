@@ -14,14 +14,18 @@
 //!   <https://wiki.documentfoundation.org/DLP/Libraries/libcdr>
 
 pub mod error;
+pub mod inflate;
+pub mod parse;
 pub mod riff;
 pub mod zip;
 
 use serde::{Deserialize, Serialize};
 
 pub use crate::error::{ProbeError, ProbeWarning};
+pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_raw, inflate_zlib};
+pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document};
 pub use crate::riff::{ChunkSummary, Endian, RiffInspection};
-pub use crate::zip::{ZipCdrRole, ZipInspection};
+pub use crate::zip::{ZipCdrRole, ZipInspection, extract_zip_primary_riff};
 
 /// Current JSON schema version for [`ProbeReport`].
 pub const PROBE_SCHEMA_VERSION: u32 = 1;
@@ -383,6 +387,164 @@ mod tests {
                 }
             }
             let _ = probe(&mutated);
+            let _ = parse_document(&mutated);
         }
+    }
+
+    fn zlib_stored_wrap(raw: &[u8]) -> Vec<u8> {
+        let mut out = b"CPng\x01\x00\x04\x00".to_vec();
+        out.extend_from_slice(&[0x78, 0x01, 0x01]);
+        let len = raw.len() as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(raw);
+        out
+    }
+
+    #[test]
+    fn parses_compressed_cmpr_page_layer_and_objects_with_styles_and_fallback() {
+        // Construct an inner chunk stream (`Part1`) where chunk sizes are indices into `Part2`:
+        // Chunk 0 (`fild`, size index 0 -> 12 bytes): fill_id=1, fill_type=1 (Uniform), model=1 (RGB), Red (255, 0, 0)
+        let mut fild_payload = Vec::new();
+        fild_payload.extend_from_slice(&1u32.to_le_bytes()); // fill_id = 1
+        fild_payload.extend_from_slice(&1u16.to_le_bytes()); // fill_type = 1 (Uniform)
+        fild_payload.extend_from_slice(&1u16.to_le_bytes()); // model = 1 (RGB)
+        fild_payload.extend_from_slice(&[255, 0, 0, 0]); // R=255, G=0, B=0
+
+        // Chunk 1 (`outl`, size index 1 -> 18 bytes): outl_id=2, flags=0x03 (behind_fill + scale_with_object), width=254000 (72pt), RGB Blue
+        let mut outl_payload = Vec::new();
+        outl_payload.extend_from_slice(&2u32.to_le_bytes()); // outl_id = 2
+        outl_payload.extend_from_slice(&3u32.to_le_bytes()); // flags = behind_fill | scale_with_object
+        outl_payload.extend_from_slice(&254_000i32.to_le_bytes()); // 1 inch = 72 pt
+        outl_payload.extend_from_slice(&1u16.to_le_bytes()); // model = 1 (RGB)
+        outl_payload.extend_from_slice(&[0, 0, 255, 0]);
+
+        // Inside `LIST page` -> `LIST layr` -> `LIST obj `:
+        // `bbox` (size index 2 -> 16 bytes): (-127000, 127000) to (127000, -127000)
+        let mut bbox_payload = Vec::new();
+        bbox_payload.extend_from_slice(&(-127_000i32).to_le_bytes());
+        bbox_payload.extend_from_slice(&127_000i32.to_le_bytes());
+        bbox_payload.extend_from_slice(&127_000i32.to_le_bytes());
+        bbox_payload.extend_from_slice(&(-127_000i32).to_le_bytes());
+
+        // `loda` (size index 3 -> 24 bytes): shape_code=1 (Rectangle) + fill_id=1 + outl_id=2
+        let mut loda_payload = Vec::new();
+        loda_payload.extend_from_slice(&1u32.to_le_bytes()); // Rectangle
+        loda_payload.extend_from_slice(&1u32.to_le_bytes()); // references fill_id=1
+        loda_payload.extend_from_slice(&2u32.to_le_bytes()); // references outl_id=2
+        loda_payload.extend_from_slice(&[0u8; 12]);
+
+        // Build `LIST obj ` body (index 4)
+        let mut obj_body = Vec::new();
+        obj_body.extend_from_slice(b"obj ");
+        obj_body.extend_from_slice(b"bbox");
+        obj_body.extend_from_slice(&2u32.to_le_bytes()); // block_sizes[2] = 16
+        obj_body.extend_from_slice(&bbox_payload);
+        obj_body.extend_from_slice(b"loda");
+        obj_body.extend_from_slice(&3u32.to_le_bytes()); // block_sizes[3] = 24
+        obj_body.extend_from_slice(&loda_payload);
+
+        // Build `LIST layr` body (index 5)
+        let mut layr_body = Vec::new();
+        layr_body.extend_from_slice(b"layr");
+        layr_body.extend_from_slice(b"LIST");
+        layr_body.extend_from_slice(&4u32.to_le_bytes()); // block_sizes[4]
+        layr_body.extend_from_slice(&obj_body);
+
+        // Build `LIST page` body (index 6)
+        let mut page_body = Vec::new();
+        page_body.extend_from_slice(b"page");
+        page_body.extend_from_slice(b"LIST");
+        page_body.extend_from_slice(&5u32.to_le_bytes()); // block_sizes[5]
+        page_body.extend_from_slice(&layr_body);
+
+        // Build `Part1` stream
+        let mut part1_raw = Vec::new();
+        part1_raw.extend_from_slice(b"fild");
+        part1_raw.extend_from_slice(&0u32.to_le_bytes()); // block_sizes[0]
+        part1_raw.extend_from_slice(&fild_payload);
+        part1_raw.extend_from_slice(b"outl");
+        part1_raw.extend_from_slice(&1u32.to_le_bytes()); // block_sizes[1]
+        part1_raw.extend_from_slice(&outl_payload);
+        part1_raw.extend_from_slice(b"LIST");
+        part1_raw.extend_from_slice(&6u32.to_le_bytes()); // block_sizes[6]
+        part1_raw.extend_from_slice(&page_body);
+
+        let block_sizes: [u32; 7] = [
+            fild_payload.len() as u32,
+            outl_payload.len() as u32,
+            bbox_payload.len() as u32,
+            loda_payload.len() as u32,
+            obj_body.len() as u32,
+            layr_body.len() as u32,
+            page_body.len() as u32,
+        ];
+        let mut part2_raw = Vec::new();
+        for sz in block_sizes {
+            part2_raw.extend_from_slice(&sz.to_le_bytes());
+        }
+
+        let cpng1 = zlib_stored_wrap(&part1_raw);
+        let cpng2 = zlib_stored_wrap(&part2_raw);
+
+        let mut cmpr_payload = Vec::new();
+        cmpr_payload.extend_from_slice(b"cmpr");
+        cmpr_payload.extend_from_slice(&(cpng1.len() as u32).to_le_bytes());
+        cmpr_payload.extend_from_slice(&(part1_raw.len() as u32).to_le_bytes());
+        cmpr_payload.extend_from_slice(&(cpng2.len() as u32).to_le_bytes());
+        cmpr_payload.extend_from_slice(&(part2_raw.len() as u32).to_le_bytes());
+        cmpr_payload.extend_from_slice(&cpng1);
+        cmpr_payload.extend_from_slice(&cpng2);
+
+        let mut riff = Vec::new();
+        let riff_size = 4 + 8 + (cmpr_payload.len() as u32) + ((cmpr_payload.len() & 1) as u32);
+        riff.extend_from_slice(b"RIFF");
+        riff.extend_from_slice(&riff_size.to_le_bytes());
+        riff.extend_from_slice(b"CDRD"); // X3 (v1300)
+        riff.extend_from_slice(b"LIST");
+        riff.extend_from_slice(&(cmpr_payload.len() as u32).to_le_bytes());
+        riff.extend_from_slice(&cmpr_payload);
+        if cmpr_payload.len() & 1 == 1 {
+            riff.push(0);
+        }
+
+        let outcome = parse_document(&riff).expect("should parse LIST cmpr CDR document");
+        assert_eq!(outcome.document.pages.len(), 1);
+        assert_eq!(outcome.document.pages[0].layers.len(), 1);
+        assert_eq!(outcome.document.pages[0].layers[0].objects.len(), 1);
+        let obj = &outcome.document.pages[0].layers[0].objects[0];
+        assert!(matches!(obj.kind, coralcraft_doc::ObjectKind::Rect(_)));
+        assert_eq!(obj.fill, Some(coralcraft_doc::FillStyle::uniform(coralcraft_color::Color::rgb8(255, 0, 0))));
+        let outl = obj.outline.as_ref().expect("should have outline");
+        assert!(outl.behind_fill);
+        assert!(outl.scale_with_object);
+    }
+
+    #[test]
+    fn parses_all_real_world_cdr_samples_when_present() {
+        let samples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../refs/cdr-samples");
+        if !samples_dir.is_dir() {
+            return;
+        }
+        let mut stack = vec![samples_dir];
+        let mut count = 0usize;
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|s| s.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("cdr")) {
+                    let bytes = std::fs::read(&path).expect("read sample");
+                    if probe(&bytes).is_err() {
+                        continue;
+                    }
+                    let outcome = parse_document(&bytes).unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()));
+                    assert!(!outcome.document.pages.is_empty(), "parsed document for {} must have >= 1 page", path.display());
+                    count += 1;
+                }
+            }
+        }
+        assert!(count >= 64, "expected at least 64 real-world .cdr samples, parsed {count}");
     }
 }
