@@ -160,5 +160,19 @@ fn cli_export_cdr_to_svg_pdf_png_and_coralcraft() {
     let cc_bytes = fs::read(&out_cc).unwrap();
     let loaded = coralcraft_doc::load_bytes(&cc_bytes).expect("saved .coralcraft must load cleanly");
     assert_eq!(loaded.pages.len(), 1);
+
+    // 4. Export .coralcraft -> .cmx and render workspace-preview PNG
+    let out_cmx = std::env::temp_dir().join(format!("coralcraft_cli_export_{}.cmx", std::process::id()));
+    let out_ws_png = std::env::temp_dir().join(format!("coralcraft_cli_ws_{}.png", std::process::id()));
+    let res_cmx = Command::new(cli_bin()).args(["export", "-o"]).arg(&out_cmx).arg(&out_cc).output().unwrap();
+    assert_eq!(res_cmx.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&res_cmx.stderr));
+
+    let res_ws = Command::new(cli_bin()).args(["workspace-preview", "--json", "-o"]).arg(&out_ws_png).arg(&out_cmx).output().unwrap();
+    assert_eq!(res_ws.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&res_ws.stderr));
+    let ws_png = fs::read(&out_ws_png).unwrap();
+    assert!(ws_png.starts_with(b"\x89PNG\r\n\x1a\n"));
+
     let _ = fs::remove_file(&out_cc);
+    let _ = fs::remove_file(&out_cmx);
+    let _ = fs::remove_file(&out_ws_png);
 }

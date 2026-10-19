@@ -134,8 +134,10 @@ dependencies = [
  "coralcraft-cdr",
  "coralcraft-color",
  "coralcraft-doc",
+ "coralcraft-engine",
  "coralcraft-geom",
  "coralcraft-render",
+ "coralcraft-ui-egui",
  "serde",
  "serde_json",
 ]

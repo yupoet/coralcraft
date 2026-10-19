@@ -16,12 +16,14 @@
 //! +--------------------------------------------------------------------------+
 //! ```
 
+pub mod workspace_render;
+
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, LayerRole, ObjectId};
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel, StatusBarSnapshot};
 use coralcraft_geom::{CornerKind, EllipseMode, F64, Point, Rect, Unit};
 use coralcraft_render::{RenderError, RenderOpts, RenderOutput, render_page};
-use coralcraft_tools::{KeyShortcut, PolygonSubMode, PropertyBarSchema, ToolKind, combined_selection_bounds};
+use coralcraft_tools::{AlignMode, KeyShortcut, PolygonSubMode, PropertyBarSchema, ToolKind, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
 
 /// Top Menu Bar items in classic CorelDRAW order.
@@ -238,6 +240,22 @@ pub enum UiAction {
     Redo,
     /// Deletes the current selection (`Delete` / `Backspace`).
     DeleteSelection,
+    /// Groups `>= 2` selected objects (`Ctrl+G`).
+    GroupSelection,
+    /// Ungroups selected `Group` nodes (`Ctrl+U`).
+    UngroupSelection,
+    /// Converts selected parametric shapes to Bezier curves (`Ctrl+Q`).
+    ConvertToCurves,
+    /// Reorders selected objects (`Shift+PageUp`, `Shift+PageDown`, `PageUp`, `PageDown`).
+    ReorderSelection { op: ZOrderOp },
+    /// Aligns selected objects (`L`, `R`, `T`, `B`, `C`, `E`, `P`).
+    AlignSelection { mode: AlignMode },
+    /// Places selected objects inside `container_id` as PowerClip children.
+    PlaceInsidePowerClip { container_id: ObjectId },
+    /// Extracts PowerClip children from `container_id`.
+    ExtractPowerClip { container_id: ObjectId },
+    /// Moves a single Bezier anchor node (`F10` Shape Tool).
+    MoveBezierNode { object_id: ObjectId, element_index: usize, new_pt: Point },
 }
 
 /// Stateful desktop workspace controller (`coralcraft-ui-egui`, L6) wrapping [`EditorEngine`].
@@ -495,6 +513,30 @@ impl DesktopWorkspace {
             UiAction::DeleteSelection => {
                 self.engine.execute(EngineCommand::DeleteSelection);
             }
+            UiAction::GroupSelection => {
+                self.engine.execute(EngineCommand::GroupSelection);
+            }
+            UiAction::UngroupSelection => {
+                self.engine.execute(EngineCommand::UngroupSelection);
+            }
+            UiAction::ConvertToCurves => {
+                self.engine.execute(EngineCommand::ConvertToCurves);
+            }
+            UiAction::ReorderSelection { op } => {
+                self.engine.execute(EngineCommand::ReorderSelection { op });
+            }
+            UiAction::AlignSelection { mode } => {
+                self.engine.execute(EngineCommand::AlignSelection { mode });
+            }
+            UiAction::PlaceInsidePowerClip { container_id } => {
+                self.engine.execute(EngineCommand::PlaceInsidePowerClip { container_id });
+            }
+            UiAction::ExtractPowerClip { container_id } => {
+                self.engine.execute(EngineCommand::ExtractPowerClip { container_id });
+            }
+            UiAction::MoveBezierNode { object_id, element_index, new_pt } => {
+                self.engine.execute(EngineCommand::MoveBezierNode { object_id, element_index, new_pt });
+            }
         }
     }
 
@@ -505,6 +547,12 @@ impl DesktopWorkspace {
             self.engine.current_page_index(),
             &RenderOpts { scale: dpi / 72.0, transparent_background: false, export_mode: false },
         )
+    }
+
+    /// Renders the complete 7-panel classic CorelDRAW desktop workspace at `(window_width, window_height)`
+    /// into a deterministic [`RenderOutput`] (premultiplied RGBA8 surface + PNG bytes).
+    pub fn render_workspace_png(&self) -> Result<RenderOutput, RenderError> {
+        workspace_render::render_workspace_frame(self)
     }
 
     fn palette_color_at(&self, cell_index: usize) -> Option<Option<Color>> {
@@ -575,5 +623,33 @@ mod tests {
         let rendered = ws.render_active_page(72.0).unwrap();
         assert!(rendered.surface.width > 0 && rendered.surface.height > 0);
         assert!(!rendered.png_bytes.is_empty());
+    }
+
+    #[test]
+    fn render_workspace_png_pixel_probes_and_determinism() {
+        let mut ws = DesktopWorkspace::default();
+        ws.dispatch(UiAction::Shortcut(KeyShortcut::F6));
+        ws.dispatch(UiAction::CanvasPointerDown { pt: Point::new(60.0, 80.0).unwrap(), shift: false, alt: false });
+        ws.dispatch(UiAction::CanvasPointerUp { pt: Point::new(220.0, 180.0).unwrap(), shift: false, alt: false });
+        ws.dispatch(UiAction::PaletteLeftClick { cell_index: 2 });
+
+        let out1 = ws.render_workspace_png().unwrap();
+        let out2 = ws.render_workspace_png().unwrap();
+        assert_eq!(out1.surface.width, 1440);
+        assert_eq!(out1.surface.height, 900);
+        assert_eq!(out1.png_bytes, out2.png_bytes);
+        assert!(out1.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        // Probe Menu Bar background (`#D4D0C8`) at (2, 2)
+        let menu_px = out1.surface.pixels[2 * 1440 + 2];
+        assert_eq!(menu_px, [0xD4, 0xD0, 0xC8, 0xFF]);
+
+        // Probe Central Pasteboard (`#808080`) just inside canvas rulers at (64, 115)
+        let pb_px = out1.surface.pixels[115 * 1440 + 64];
+        assert_eq!(pb_px, [0x80, 0x80, 0x80, 0xFF]);
+
+        // Probe Docker selected row (`#316AC5`) in right `Objects` Docker
+        let docker_sel_px = out1.surface.pixels[122 * 1440 + 1185];
+        assert_eq!(docker_sel_px, [0x31, 0x6A, 0xC5, 0xFF]);
     }
 }

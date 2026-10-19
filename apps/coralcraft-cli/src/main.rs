@@ -16,7 +16,9 @@ use clap::{Parser, Subcommand};
 use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport, parse_document};
 use coralcraft_color::{ColorError, load_palette_bytes};
 use coralcraft_doc::{DocError, Document, load_bytes, save_json, save_zip};
+use coralcraft_engine::ActivePageTarget;
 use coralcraft_render::{RenderOpts, export_pdf, export_svg, render_page};
+use coralcraft_ui_egui::DesktopWorkspace;
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -56,11 +58,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Export a `.cdr` or `.coralcraft` document to `.svg`, `.pdf`, `.png`, or `.coralcraft`
+    /// Export a `.cdr` or `.coralcraft` document to `.svg`, `.pdf`, `.png`, `.cdr`, `.cmx`, or `.coralcraft`
     Export {
         /// Path to the input `.cdr` or `.coralcraft` file
         input: String,
-        /// Output file path (`.svg`, `.pdf`, `.png`, `.coralcraft`, or `.json`)
+        /// Output file path (`.svg`, `.pdf`, `.png`, `.cdr`, `.cmx`, `.coralcraft`, or `.json`)
         #[arg(short = 'o', long = "output")]
         output: String,
         /// 1-based page number for single-page formats (`svg`, `png`) (default: 1)
@@ -69,6 +71,26 @@ enum Command {
         /// Rasterization DPI for `.png` output (default: 96.0)
         #[arg(long, default_value_t = 96.0)]
         dpi: f64,
+        /// Emit structured JSON summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render the complete 7-panel classic CorelDRAW desktop workspace to a PNG screenshot
+    WorkspacePreview {
+        /// Path to the input `.cdr`, `.cmx`, or `.coralcraft` file
+        input: String,
+        /// Output PNG file path
+        #[arg(short = 'o', long = "output")]
+        output: String,
+        /// 1-based page number to display (default: 1)
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Window width in pixels (default: 1440)
+        #[arg(long, default_value_t = 1440)]
+        width: u32,
+        /// Window height in pixels (default: 900)
+        #[arg(long, default_value_t = 900)]
+        height: u32,
         /// Emit structured JSON summary
         #[arg(long)]
         json: bool,
@@ -463,12 +485,84 @@ fn run_inspect_palette(file: &str, json: bool) -> ExitCode {
     }
 }
 
+fn run_workspace_preview(input: &str, output: &str, page_1based: usize, width: u32, height: u32, json: bool) -> ExitCode {
+    if page_1based == 0 {
+        eprintln!("coralcraft-cli workspace-preview: --page is 1-based and must be >= 1");
+        return ExitCode::from(2);
+    }
+    let bytes = match read_bounded_file("workspace-preview", input) {
+        Ok(b) => b,
+        Err(code) => return code,
+    };
+    let (doc, _parse_warnings) = match load_any_document("workspace-preview", input, &bytes) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+
+    let page_idx = page_1based - 1;
+    if page_idx >= doc.pages.len() {
+        eprintln!("coralcraft-cli workspace-preview: page {} out of range (document has {} pages)", page_1based, doc.pages.len());
+        return ExitCode::from(6);
+    }
+
+    let mut ws = DesktopWorkspace::new(doc);
+    ws.window_width = width.max(640);
+    ws.window_height = height.max(480);
+    ws.engine.set_active_target(ActivePageTarget::Page(page_idx));
+    if let Some(first_obj) = ws.engine.document.pages[page_idx].layers.iter().flat_map(|l| &l.objects).next() {
+        let id = first_obj.id;
+        ws.engine.set_selection(vec![id]);
+    }
+
+    let rendered = match ws.render_workspace_png() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("coralcraft-cli workspace-preview: workspace render failed for '{input}': {e}");
+            return ExitCode::from(6);
+        }
+    };
+
+    if let Err(e) = fs::write(output, &rendered.png_bytes) {
+        eprintln!("coralcraft-cli workspace-preview: failed to write PNG '{output}': {e}");
+        return ExitCode::from(4);
+    }
+
+    if json {
+        let summary = RenderSummaryJson {
+            schema_version: 2,
+            input: input.to_owned(),
+            output: output.to_owned(),
+            page: page_1based,
+            width: rendered.surface.width,
+            height: rendered.surface.height,
+            png_bytes: rendered.png_bytes.len(),
+            warnings: rendered.warnings,
+        };
+        if let Ok(s) = serde_json::to_string_pretty(&summary) {
+            println!("{s}");
+        }
+    } else {
+        println!(
+            "rendered workspace preview page {} of '{}' -> '{}' ({}x{} px, {} bytes)",
+            page_1based,
+            input,
+            output,
+            rendered.surface.width,
+            rendered.surface.height,
+            rendered.png_bytes.len()
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Probe { file, json } => run_probe(&file, json),
         Command::Render { input, output, page, scale, transparent, json } => run_render(&input, &output, page, scale, transparent, json),
         Command::Export { input, output, page, dpi, json } => run_export(&input, &output, page, dpi, json),
+        Command::WorkspacePreview { input, output, page, width, height, json } => run_workspace_preview(&input, &output, page, width, height, json),
         Command::InspectPalette { file, json } => run_inspect_palette(&file, json),
     }
 }
