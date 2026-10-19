@@ -8,6 +8,16 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+coralcraft-cdr = { path = "../../crates/cdr" }
+coralcraft-color = { path = "../../crates/color" }
+coralcraft-doc = { path = "../../crates/doc" }
+coralcraft-engine = { path = "../../crates/engine" }
+coralcraft-geom = { path = "../../crates/geom" }
+coralcraft-mcp = { path = "../../crates/mcp" }
+coralcraft-render = { path = "../../crates/render" }
+coralcraft-tools = { path = "../../crates/tools" }
+coralcraft-ui-egui = { path = "../../crates/ui-egui" }
+serde_json.workspace = true
 
 [lints]
 workspace = true

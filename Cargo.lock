@@ -101,11 +101,26 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 [[package]]
 name = "coralcraft"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-cdr",
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-engine",
+ "coralcraft-geom",
+ "coralcraft-mcp",
+ "coralcraft-render",
+ "coralcraft-tools",
+ "coralcraft-ui-egui",
+ "serde_json",
+]
 
 [[package]]
 name = "coralcraft-cdr"
 version = "0.0.1"
 dependencies = [
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-geom",
  "serde",
  "serde_json",
  "thiserror",
@@ -117,20 +132,46 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "coralcraft-cdr",
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-geom",
+ "coralcraft-render",
+ "serde",
  "serde_json",
 ]
 
 [[package]]
 name = "coralcraft-color"
 version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "coralcraft-doc"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-color",
+ "coralcraft-geom",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
 
 [[package]]
 name = "coralcraft-engine"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-cdr",
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-geom",
+ "coralcraft-render",
+ "coralcraft-tools",
+ "serde",
+]
 
 [[package]]
 name = "coralcraft-geom"
@@ -144,18 +185,51 @@ dependencies = [
 [[package]]
 name = "coralcraft-mcp"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-cdr",
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-engine",
+ "coralcraft-geom",
+ "coralcraft-render",
+ "coralcraft-tools",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "coralcraft-render"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-geom",
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "coralcraft-tools"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-geom",
+ "serde",
+]
 
 [[package]]
 name = "coralcraft-ui-egui"
 version = "0.0.1"
+dependencies = [
+ "coralcraft-color",
+ "coralcraft-doc",
+ "coralcraft-engine",
+ "coralcraft-geom",
+ "coralcraft-render",
+ "coralcraft-tools",
+ "serde",
+]
 
 [[package]]
 name = "heck"
