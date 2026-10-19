@@ -3,15 +3,20 @@
 //! Exit code convention:
 //! - `0`: Success
 //! - `2`: CLI argument usage error (`clap` default)
-//! - `3`: Not a CDR/CMX file (`NotCdr` / `TooShort`)
+//! - `3`: Not a CDR/CMX file (`NotCdr` / `TooShort`) or unrecognized input format
 //! - `4`: File I/O error or file size exceeds safety limit
-//! - `5`: Corrupted/truncated container or safety limit exceeded (`Truncated` / `Invalid` / `LimitExceeded`)
+//! - `5`: Corrupted/truncated container or format parse error
+//! - `6`: Rendering or domain pipeline failure
 
 use std::fs;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport};
+use coralcraft_color::{ColorError, load_palette_bytes};
+use coralcraft_doc::load_bytes;
+use coralcraft_render::{RenderOpts, render_page};
+use serde::Serialize;
 
 #[derive(Parser)]
 #[command(name = "coralcraft-cli", version, about = "CoralCraft command-line utility")]
@@ -27,6 +32,34 @@ enum Command {
         /// Path to the file to inspect
         file: String,
         /// Emit structured JSON output (`schema_version = 1`)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render a `.coralcraft` document page to a deterministic PNG file
+    Render {
+        /// Path to the input `.coralcraft` file (JSON or ZIP container)
+        input: String,
+        /// Output PNG file path
+        #[arg(short = 'o', long = "output")]
+        output: String,
+        /// 1-based page number to render (default: 1)
+        #[arg(long, default_value_t = 1)]
+        page: usize,
+        /// Scale factor in pixels per point (default: 1.0 = 72 DPI)
+        #[arg(long, default_value_t = 1.0)]
+        scale: f64,
+        /// Render with a transparent background instead of paper white
+        #[arg(long)]
+        transparent: bool,
+        /// Emit structured JSON summary
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect a `.xml` or `.cpl` color palette file
+    InspectPalette {
+        /// Path to the palette file (`.xml` or `.cpl`)
+        file: String,
+        /// Emit structured JSON output (`schema_version = 2`)
         #[arg(long)]
         json: bool,
     },
@@ -73,28 +106,31 @@ fn print_human_report(file: &str, report: &ProbeReport) {
     }
 }
 
-/// Maximum file size read into memory at once by the CLI probe (512 MiB) to prevent OOM on hostile inputs.
-const MAX_PROBE_FILE_BYTES: u64 = 512 * 1024 * 1024;
+/// Maximum file size read into memory at once by the CLI (512 MiB) to prevent OOM on hostile inputs.
+const MAX_CLI_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
-fn run_probe(file: &str, json: bool) -> ExitCode {
+fn read_bounded_file(subcmd: &str, file: &str) -> Result<Vec<u8>, ExitCode> {
     let meta = match fs::metadata(file) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("coralcraft-cli probe: failed to read file metadata '{file}': {e}");
-            return ExitCode::from(4);
+            eprintln!("coralcraft-cli {subcmd}: failed to read file metadata '{file}': {e}");
+            return Err(ExitCode::from(4));
         }
     };
-    if meta.len() > MAX_PROBE_FILE_BYTES {
-        eprintln!("coralcraft-cli probe: file '{file}' size ({} bytes) exceeds maximum probe limit ({} bytes)", meta.len(), MAX_PROBE_FILE_BYTES);
-        return ExitCode::from(4);
+    if meta.len() > MAX_CLI_FILE_BYTES {
+        eprintln!("coralcraft-cli {subcmd}: file '{file}' size ({} bytes) exceeds maximum limit ({} bytes)", meta.len(), MAX_CLI_FILE_BYTES);
+        return Err(ExitCode::from(4));
     }
+    fs::read(file).map_err(|e| {
+        eprintln!("coralcraft-cli {subcmd}: failed to read file '{file}': {e}");
+        ExitCode::from(4)
+    })
+}
 
-    let bytes = match fs::read(file) {
+fn run_probe(file: &str, json: bool) -> ExitCode {
+    let bytes = match read_bounded_file("probe", file) {
         Ok(b) => b,
-        Err(e) => {
-            eprintln!("coralcraft-cli probe: failed to read file '{file}': {e}");
-            return ExitCode::from(4);
-        }
+        Err(code) => return code,
     };
 
     match coralcraft_cdr::probe(&bytes) {
@@ -124,9 +160,146 @@ fn run_probe(file: &str, json: bool) -> ExitCode {
     }
 }
 
+#[derive(Serialize)]
+struct RenderSummaryJson {
+    schema_version: u32,
+    input: String,
+    output: String,
+    page: usize,
+    width: u32,
+    height: u32,
+    png_bytes: usize,
+    warnings: Vec<coralcraft_render::RenderWarning>,
+}
+
+fn run_render(input: &str, output: &str, page_1based: usize, scale: f64, transparent: bool, json: bool) -> ExitCode {
+    if page_1based == 0 {
+        eprintln!("coralcraft-cli render: --page is 1-based and must be >= 1");
+        return ExitCode::from(2);
+    }
+    let bytes = match read_bounded_file("render", input) {
+        Ok(b) => b,
+        Err(code) => return code,
+    };
+
+    let doc = match load_bytes(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("coralcraft-cli render: failed to load document '{input}': {e}");
+            return ExitCode::from(5);
+        }
+    };
+
+    let opts = RenderOpts { scale, transparent_background: transparent, export_mode: true };
+
+    let rendered = match render_page(&doc, page_1based - 1, &opts) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("coralcraft-cli render: render pipeline failed for '{input}': {e}");
+            return ExitCode::from(6);
+        }
+    };
+
+    if let Err(e) = fs::write(output, &rendered.png_bytes) {
+        eprintln!("coralcraft-cli render: failed to write PNG '{output}': {e}");
+        return ExitCode::from(4);
+    }
+
+    if json {
+        let summary = RenderSummaryJson {
+            schema_version: 2,
+            input: input.to_owned(),
+            output: output.to_owned(),
+            page: page_1based,
+            width: rendered.surface.width,
+            height: rendered.surface.height,
+            png_bytes: rendered.png_bytes.len(),
+            warnings: rendered.warnings,
+        };
+        if let Ok(s) = serde_json::to_string_pretty(&summary) {
+            println!("{s}");
+        }
+    } else {
+        println!(
+            "rendered page {} of '{}' -> '{}' ({}x{} px, {} bytes, {} warnings)",
+            page_1based,
+            input,
+            output,
+            rendered.surface.width,
+            rendered.surface.height,
+            rendered.png_bytes.len(),
+            rendered.warnings.len()
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+#[derive(Serialize)]
+struct PaletteSummaryJson {
+    schema_version: u32,
+    name: String,
+    guid: Option<String>,
+    swatch_count: usize,
+    swatches: Vec<SwatchEntryJson>,
+}
+
+#[derive(Serialize)]
+struct SwatchEntryJson {
+    index: usize,
+    name: String,
+    srgb_hex: String,
+    color: coralcraft_color::Color,
+}
+
+fn run_inspect_palette(file: &str, json: bool) -> ExitCode {
+    let bytes = match read_bounded_file("inspect-palette", file) {
+        Ok(b) => b,
+        Err(code) => return code,
+    };
+
+    match load_palette_bytes(&bytes) {
+        Ok(pal) => {
+            if json {
+                let summary = PaletteSummaryJson {
+                    schema_version: 2,
+                    name: pal.name.clone(),
+                    guid: pal.guid.clone(),
+                    swatch_count: pal.swatches.len(),
+                    swatches: pal
+                        .swatches
+                        .iter()
+                        .enumerate()
+                        .map(|(i, sw)| SwatchEntryJson { index: i, name: sw.name.clone(), srgb_hex: sw.color.to_hex(), color: sw.color.clone() })
+                        .collect(),
+                };
+                if let Ok(s) = serde_json::to_string_pretty(&summary) {
+                    println!("{s}");
+                }
+            } else {
+                println!("palette: {} ({} swatches)", pal.name, pal.swatches.len());
+                for (i, sw) in pal.swatches.iter().enumerate() {
+                    println!("  [{i}] {} -> {}", sw.name, sw.color.to_hex());
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            let code = match err {
+                ColorError::UnknownPaletteFormat => 3,
+                _ => 5,
+            };
+            eprintln!("coralcraft-cli inspect-palette: failed to parse '{file}': {err}");
+            ExitCode::from(code)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Probe { file, json } => run_probe(&file, json),
+        Command::Render { input, output, page, scale, transparent, json } => run_render(&input, &output, page, scale, transparent, json),
+        Command::InspectPalette { file, json } => run_inspect_palette(&file, json),
     }
 }

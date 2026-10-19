@@ -96,3 +96,39 @@ fn cli_probe_truncated_exits_with_code_5() {
     let out = Command::new(cli_bin()).arg("probe").arg(&f.path).output().expect("failed to run coralcraft-cli");
     assert_eq!(out.status.code(), Some(5), "truncated/corrupted container should exit with code 5");
 }
+
+#[test]
+fn cli_render_and_inspect_palette_subcommands() {
+    let mut doc = coralcraft_doc::Document::new_a4_portrait();
+    doc.pages[0].size = coralcraft_geom::Size::new(32.0, 24.0).unwrap();
+    let zip_bytes = coralcraft_doc::save_zip(&doc).unwrap();
+    let in_doc = TempFixture::new("sample.coralcraft", &zip_bytes);
+    let out_png = TempFixture::new("rendered.png", b"");
+
+    let render_out = Command::new(cli_bin())
+        .args(["render", "--json", "-o"])
+        .arg(&out_png.path)
+        .arg(&in_doc.path)
+        .output()
+        .expect("failed to run coralcraft-cli render");
+    assert_eq!(render_out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&render_out.stderr));
+    let r_json: serde_json::Value = serde_json::from_slice(&render_out.stdout).unwrap();
+    assert_eq!(r_json["width"], 32);
+    assert_eq!(r_json["height"], 24);
+    let png_on_disk = fs::read(&out_png.path).unwrap();
+    assert!(png_on_disk.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+    // Test inspect-palette --json
+    let xml_pal = b"<palette name=\"CLI Test\"><colors><cs type=\"1\" name=\"Red\" r=\"255\" g=\"0\" b=\"0\"/></colors></palette>";
+    let pal_file = TempFixture::new("pal.xml", xml_pal);
+    let pal_out = Command::new(cli_bin())
+        .args(["inspect-palette", "--json"])
+        .arg(&pal_file.path)
+        .output()
+        .expect("failed to run coralcraft-cli inspect-palette");
+    assert_eq!(pal_out.status.code(), Some(0));
+    let p_json: serde_json::Value = serde_json::from_slice(&pal_out.stdout).unwrap();
+    assert_eq!(p_json["name"], "CLI Test");
+    assert_eq!(p_json["swatch_count"], 1);
+    assert_eq!(p_json["swatches"][0]["srgb_hex"], "#ff0000");
+}

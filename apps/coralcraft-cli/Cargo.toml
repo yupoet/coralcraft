@@ -10,6 +10,11 @@ repository.workspace = true
 [dependencies]
 clap = { workspace = true }
 coralcraft-cdr = { workspace = true }
+coralcraft-color = { workspace = true }
+coralcraft-doc = { workspace = true }
+coralcraft-geom = { workspace = true }
+coralcraft-render = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]
