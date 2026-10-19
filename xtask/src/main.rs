@@ -84,7 +84,8 @@ fn cleanroom(root: &Path) -> Result<(), String> {
             if name == "target" || name == "refs" || name == ".git" || name == "plan" {
                 continue;
             }
-            if path.is_dir() {
+            let is_real_dir = entry.file_type().is_ok_and(|ft| ft.is_dir() && !ft.is_symlink());
+            if is_real_dir {
                 stack.push(path);
                 continue;
             }
@@ -276,7 +277,8 @@ fn walk_rs(dir: &Path, c: &mut Counts) {
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        if p.is_dir() {
+        let is_real_dir = e.file_type().is_ok_and(|ft| ft.is_dir() && !ft.is_symlink());
+        if is_real_dir {
             if name != "target" && name != "fuzz" && !name.starts_with('.') {
                 walk_rs(&p, c);
             }
@@ -341,9 +343,10 @@ fn collect_files(dir: &Path, f: &mut impl FnMut(&PathBuf)) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        let is_real_dir = entry.file_type().is_ok_and(|ft| ft.is_dir() && !ft.is_symlink());
+        if is_real_dir {
             collect_files(&path, f);
-        } else {
+        } else if entry.file_type().is_ok_and(|ft| ft.is_file()) {
             f(&path);
         }
     }
@@ -354,8 +357,30 @@ fn repo_root() -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("coralcraft_xtask_{tag}_{}_{n}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("create temp root");
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn repo_root_exists() {
@@ -371,5 +396,47 @@ mod tests {
     #[test]
     fn workspace_layers_pass() {
         assert!(layers(&repo_root()).is_ok());
+    }
+
+    #[test]
+    fn cleanroom_passes_on_clean_tree_and_fails_on_forbidden_string_or_cdr_fixture() {
+        let tmp = TempRoot::new("cleanroom");
+        let crates_dir = tmp.0.join("crates/foo/src");
+        let docs_dir = tmp.0.join("docs");
+        fs::create_dir_all(&crates_dir).expect("mkdir crates");
+        fs::create_dir_all(&docs_dir).expect("mkdir docs");
+        fs::write(crates_dir.join("lib.rs"), "// clean rust file\n").expect("write clean file");
+
+        assert!(cleanroom(&tmp.0).is_ok());
+
+        // Construct the forbidden string at runtime so source remains clean.
+        let forbidden = format!("{} (c) {}", "Copyright", "Corel");
+        fs::write(docs_dir.join("bad.md"), format!("bad line: {forbidden}\n")).expect("write bad doc");
+        let err = cleanroom(&tmp.0).expect_err("must reject forbidden string");
+        assert!(err.contains("1 处违规"));
+
+        // Remove bad doc, add a .cdr fixture inside crates/
+        fs::remove_file(docs_dir.join("bad.md")).expect("rm bad doc");
+        fs::write(crates_dir.join("sample.cdr"), b"RIFF\x04\x00\x00\x00CDRD").expect("write .cdr fixture");
+        let err2 = cleanroom(&tmp.0).expect_err("must reject .cdr fixture");
+        assert!(err2.contains("1 处违规"));
+    }
+
+    #[test]
+    fn assets_gate_catches_unregistered_file_and_passes_when_registered() {
+        let tmp = TempRoot::new("assets");
+        // No assets/ dir -> passes
+        assert!(assets(&tmp.0).is_ok());
+
+        let icons_dir = tmp.0.join("assets/icons");
+        fs::create_dir_all(&icons_dir).expect("mkdir assets/icons");
+        fs::write(icons_dir.join("pen.svg"), "<svg/>").expect("write pen.svg");
+        fs::write(tmp.0.join("ASSETS.md"), "# Assets\n").expect("write empty ASSETS.md");
+
+        let err = assets(&tmp.0).expect_err("unregistered asset must fail");
+        assert!(err.contains("1 个未登记文件"));
+
+        fs::write(tmp.0.join("ASSETS.md"), "# Assets\n\n| assets/icons/pen.svg | Author | URL | MIT | Icon |\n").expect("register asset");
+        assert!(assets(&tmp.0).is_ok());
     }
 }
