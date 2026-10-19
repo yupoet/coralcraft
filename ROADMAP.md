@@ -1,6 +1,6 @@
 # CoralCraft Roadmap
 
-> Baseline stage: **pre-alpha (M2 delivered)** · Established: 2026-10-19 · Updated: 2026-10-19
+> Baseline stage: **pre-alpha (M3 delivered)** · Established: 2026-10-19 · Updated: 2026-10-19
 > Methodology: Dual-track clean-room public specification & format reverse engineering (see [`AGENTS.md`](AGENTS.md)).
 > Self-scoring follows `vectorcraft`'s `target-app-parity` convention: 0–100% per dimension, updated on every completed task; see [`docs/target-app-parity.md`](docs/target-app-parity.md) and [`docs/file-format-parity.md`](docs/file-format-parity.md).
 
@@ -8,16 +8,16 @@
 | --- | ---: | ---: |
 | Workspace & engineering gates (`workspace`/`xtask`/CI/cleanroom) | 100% | Maintain |
 | CDR format: `probe` (container/version/chunk walk) | **100%** (WL / RIFF+RIFX / X4+ ZIP+RIFF, CLI `probe`, 64/64 real-world samples passing) | M1: 100% (achieved) |
-| CDR format: `parse` (object tree -> document model) | 0% | M3: modern RIFF baseline |
+| CDR format: `parse` (object tree -> document model) | **75%** (RFC 1951/1950 `inflate`, `LIST cmpr` + ZIP Deflate, `mcfg`/`page`/`layr`/`obj `/`bbox`/`trfd`/`loda`/`fild`/`outl` -> `Document` with `ObjectKind::Unsupported` fallback, **64/64 real-world `.cdr` samples parsed**) | M3: modern RIFF baseline (achieved) |
 | CDR format: `write` | 0% | Long-term campaign (M5+) |
 | Multi-page document model & native `.coralcraft` round-trip | **100%** (`coralcraft-geom` + `coralcraft-color` + `coralcraft-doc`, dual JSON/ZIP `.coralcraft` container, 100-iteration random property tests green) | M2: 100% (achieved) |
-| Rendering (first frame -> interactive frame rate) | **50%** (`coralcraft-render` software rasterizer with 4×4 MSAA, Linear/Radial Fountain, PowerClip mask stack, `behind_fill`, `scale_with_object`, Hairline, CLI `render`) | M2 first frame (achieved) / M4 interactive |
+| Rendering & Vector Export (PNG / SVG 1.1 / PDF 1.4) | **75%** (`coralcraft-render` 4×4 MSAA PNG rasterizer, clean-room SVG 1.1 `export_svg`, ISO 32000-1 PDF 1.4 `export_pdf` with `/MediaBox`/`/TrimBox`/`/BleedBox` & CMYK `k`/`K`, `coralcraft-cli render` & `export`) | M2/M3 achieved / M4 interactive |
 | Tools, panels & UI vertical slice | 0% | M4: Pick/Shape/Pen/Text/Pages/Palette |
-| Print & prepress production (bleed/imposition/spot/PDF-X) | **15%** (CMYK/Spot/Registration/CIE Lab D50<->D65 Bradford CAT, `.xml`/`.cpl` palette parser, per-page bleed) | M5+ |
-| MCP / agent-driven illustration | 0% | M5 |
-| CorelDRAW workflow parity | **20%** (multi-page + Master All/Odd/Even + Desktop layer z-order, 9-point Object Origin, parametric shapes, PowerClip, Fountain fill) | M4 interactive desktop slice |
+| Print & prepress production (bleed/imposition/spot/PDF-X) | **35%** (CMYK/Spot/Registration/CIE Lab D50<->D65 Bradford CAT, `.xml`/`.cpl` palette parser, per-page bleed, PDF `/MediaBox`+`/TrimBox`+`/BleedBox` & native CMYK `k`/`K`) | M5+ |
+| MCP / agent-driven illustration | 0% | M4/M5 |
+| CorelDRAW workflow parity | **35%** (multi-page + Master All/Odd/Even + Desktop layer z-order, 9-point Object Origin, parametric shapes, PowerClip, Fountain fill, CDR -> SVG/PDF/PNG/`.coralcraft` conversion pipeline) | M4 interactive desktop slice |
 
-## Completed (M0–M2)
+## Completed (M0–M3)
 
 1. **M0 Workspace Skeleton**: 12-crate layered workspace (`L0..L7`), `xtask` (`ci`, `cleanroom`, `assets`, `layers`, `stats`), and 11 pinned reference repositories in `refs/`.
 2. **M1 CDR/CMX Format Probe Vertical Slice**:
@@ -28,19 +28,20 @@
    - `coralcraft-color` (L0): `Rgb`/`Cmyk`/`Hsb`/`Gray`/`LabD50`/`LabD65`/`Spot`/`Registration` color spaces, Bradford D50<->D65 chromatic adaptation ($\Delta E < 0.01$), Linear/Radial/Conical/Square Fountain stops with midpoint skew and rainbow HSB blending, and clean-room `.xml`/`.cpl` palette parser/serializer.
    - `coralcraft-doc` (L1): Multi-page `Document` / `Page` / document-level `Layer` (`Normal`, `MasterAllPages`, `MasterOddPages`, `MasterEvenPages`, `Desktop`, `Guides`, `Grid`), `ObjectNode` (`powerclip_children`, `residual`), `ObjectKind::Unsupported` lossless passthrough, and dual-mode `.coralcraft` container (`save_json` + deterministic Stored ZIP `save_zip` with `manifest.json`, `document.json`, and content-addressed `blobs/<sha256>.bin`), verified by 100-iteration random document round-trip property tests and tamper-detection tests.
    - `coralcraft-render` (L3) & `coralcraft-cli`: Premultiplied RGBA8 software rasterizer with 4×4 supersampled scanline fill, stroke expander (`behind_fill`, `scale_with_object`, Hairline `width_pt == 0.0`), Linear/Radial Fountain shader, recursive PowerClip mask stack (`MAX_CLIP_DEPTH = 8`), clean-room PNG encoder/decoder, and `coralcraft-cli render` / `inspect-palette`.
+4. **M3 CDR Decompression, Object-Tree Parser (`parse_document`) & SVG 1.1 / PDF 1.4 Vector Export**:
+   - `coralcraft-cdr`: Clean-room dependency-free RFC 1951 (`inflate_raw`) and RFC 1950 (`inflate_zlib`, including `"CPng\x01\x00\x04\x00"` headers) decompressor with `MAX_DECOMPRESSED_BYTES = 64 MiB` guard; ZIP Deflate (`method = 8`) inner RIFF extraction; `parse_document(&[u8]) -> Result<ParseOutcome, ProbeError>` decoding `LIST cmpr`, `mcfg`, `LIST page`, `LIST layr`, `LIST obj ` (`bbox`, `trfd`, `loda`, `fild`, `outl`) with lossless `ObjectKind::Unsupported` fallback, passing **64/64 real-world `.cdr` samples**.
+   - `coralcraft-render::svg` & `coralcraft-render::pdf`: Clean-room SVG 1.1 (`export_svg`) and ISO 32000-1 PDF 1.4 (`export_pdf`) vector exporters supporting multi-page `/MediaBox`/`/TrimBox`/`/BleedBox`, native CMYK (`k`/`K`) and RGB (`rg`/`RG`) operators, cubic Bézier curves, Fountain gradients, PowerClip clipping, `behind_fill`, `scale_with_object`, and Hairline strokes.
+   - `coralcraft-cli export`: Direct `.cdr` / `.coralcraft` conversion to `.svg`, `.pdf`, `.png`, and `.coralcraft` (`--page`, `--dpi`, `--json`).
 
-## Next Up (M3: CDR Object-Tree Parser + SVG/PDF Vector Export)
+## Next Up (M4: CorelDRAW-Style Desktop Workspace + Interactive Tool Slice + MCP Server)
 
-1. `coralcraft-cdr`: Clean-room RFC 1951/1950 inflate (`LIST cmpr` dual-stream decompression + ZIP Deflate inner entries with `MAX_DECOMPRESSED_BYTES` guard) and `parse_document()` (`page`/`layr`/`obj `/`loda`/`trfd`/`outl`/`fild`/`LIST stlt` -> `coralcraft_doc::Document` with `ObjectKind::Unsupported` fallback).
-2. Vector Export (`SVG` & `PDF`): Clean-room SVG 1.1 and ISO 32000-1 PDF 1.4 multi-page export (`export_svg`, `export_pdf`) + `coralcraft-cli export`.
-
-## Mid-Term (M4–M5)
-
-- M4: CorelDRAW-style `egui` desktop workspace (`coralcraft-tools` + `coralcraft-engine` + `coralcraft-ui-egui` + `coralcraft-desktop`: Menu Bar, Standard Toolbar, context-sensitive Property Bar, left Toolbox, central multi-page Pasteboard, right vertical Color Palette Bar with Left-Click Fill / Right-Click Outline, bottom Page Navigator Tabs, Status Bar, and Object/Property Dockers).
-- M5+: MCP server, CMX import/export, broader CDR version bands, CDR writer campaign, prepress production, and scripting engine.
+1. `coralcraft-tools` (L4): Classic CorelDRAW tool suite (`Pick`, `Shape F10`, `Crop`, `Zoom Z`, `Freehand/Bezier F5`, `Rectangle F6`, `Ellipse F7`, `Polygon/Star Y`, `Artistic Text F8`, `Interactive Fill G`), shortcut mapping, gesture state machine, and context-sensitive `PropertyBarSchema`.
+2. `coralcraft-engine` (L5): `EditorEngine` owning `Document`, `ActivePageTarget` (`Page`, `MasterPage`, `Desktop`), `Selection`, default `FillStyle`/`OutlineStyle`, `Command` execution, deterministic `undo()`/`redo()` stack, and page hit-testing.
+3. `coralcraft-ui-egui` (L6), `coralcraft-desktop` (`apps/coralcraft`, L7), and `coralcraft-mcp` (L6): Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox`, central `PasteboardCanvas`, right vertical `ColorPaletteBar` with Left-Click Fill / Right-Click Outline, bottom `PageNavigatorBar`, `StatusBar`, and `Objects`/`Properties` Dockers) + MCP server.
 
 ## Changelog
 
+- 2026-10-19: M3 delivered (`coralcraft-cdr` RFC 1951/1950 `inflate`, `LIST cmpr` + ZIP Deflate decompression, `parse_document` passing 64/64 real-world `.cdr` samples, clean-room SVG 1.1 `export_svg` & ISO 32000-1 PDF 1.4 `export_pdf`, `coralcraft-cli export`, reverse log `REV-0002`).
 - 2026-10-19: M2 delivered (`coralcraft-geom`, `coralcraft-color`, `coralcraft-doc` with JSON/ZIP `.coralcraft` container & property tests, `coralcraft-render` PNG rasterizer, `coralcraft-cli render` & `inspect-palette`).
 - 2026-10-19: M1 delivered (`coralcraft-cdr` 3-generation container walker, `coralcraft-cli probe`, `xtask` gate unit tests, format & workflow parity baseline docs, first reverse log entry `REV-0001`); reviewed across 5 independent models (GLM-5.3, Kimi K3, Grok 4.6, DeepSeek V4.1 Flash, Claude Opus 5.5).
 - 2026-10-19: Repository initialized; M0 skeleton (Tasks 1–8) and M1 red-light anchors delivered.
