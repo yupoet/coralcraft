@@ -1,0 +1,15 @@
+[package]
+name = "coralcraft-cli"
+description = "CoralCraft 命令行：probe / headless 导出（M2+）/ MCP server（M5+）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+coralcraft-cdr = { workspace = true }
+
+[lints]
+workspace = true

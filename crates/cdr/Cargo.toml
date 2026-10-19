@@ -1,0 +1,17 @@
+[package]
+name = "coralcraft-cdr"
+description = "CoralCraft 的 CDR/CMX 文件格式层（净室实现：probe → parse → build）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

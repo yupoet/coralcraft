@@ -1,0 +1,11 @@
+[package]
+name = "coralcraft-tools"
+description = "工具与面板语义：选择/形状/钢笔/文本（M4 实装）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

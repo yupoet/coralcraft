@@ -1,0 +1,10 @@
+# NOTICE
+
+CoralCraft — CorelDRAW 级矢量与排版能力的开源净室重实现。
+
+- 代码与原创资产：MIT OR Apache-2.0（见 LICENSE-MIT / LICENSE-APACHE）。
+- CoralCraft 与 Corel 公司无关联；CorelDRAW 是 Corel 公司的商标。
+  本项目不含任何 Corel 代码、资产或文档。
+- `refs/` 目录（git-ignored）持有第三方参考仓库，各自适用其原许可，
+  永不提交进本仓；用途与许可边界见 `refs/REFS.md`。
+- 第一个第三方资产入库前，在 `ASSETS.md` 逐行登记（路径/作者/来源/许可）。

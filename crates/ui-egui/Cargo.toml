@@ -1,0 +1,11 @@
+[package]
+name = "coralcraft-ui-egui"
+description = "egui 前端（独立 crate，可整体替换，M4 实装）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

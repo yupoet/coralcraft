@@ -1,0 +1,11 @@
+[package]
+name = "coralcraft-doc"
+description = "多页文档模型（借鉴 refs/designcraft 页模型；区别于 vectorcraft 的画板模型）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

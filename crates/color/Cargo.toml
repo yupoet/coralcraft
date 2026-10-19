@@ -1,0 +1,11 @@
+[package]
+name = "coralcraft-color"
+description = "色彩：CMYK/专色/色板文件 .cpl/.xml（Corel 印刷现场刚需，M2 实装）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

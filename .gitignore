@@ -1,0 +1,17 @@
+# 第三方参考仓库：永不提交（许可与净室边界，见 AGENTS.md / refs/REFS.md）
+# 例外：清单本身入库（迁移到新机时按它重建，见 scripts/bootstrap-refs.sh）
+/refs/*
+!/refs/REFS.md
+
+# 本地会话笔记（vectorcraft 同款约定）
+/plan/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# 产物
+/dist/
+
+# 系统
+.DS_Store
