@@ -5,7 +5,7 @@ use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, ObjectId, ObjectKind};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
-use coralcraft_geom::{CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
+use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
 use coralcraft_render::{export_pdf, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
 use serde::{Deserialize, Serialize};
@@ -190,6 +190,36 @@ impl McpServer {
                         {
                             "name": "redo",
                             "description": "Redoes the most recently undone editor command.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "boolean_selection",
+                            "description": "Executes a CorelDRAW Boolean operation on selected objects (weld, trim, intersect, front_minus_back, back_minus_front).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "apply_contour",
+                            "description": "Applies a non-destructive Contour vector effect (steps, offset_pt, inside).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_drop_shadow",
+                            "description": "Applies a non-destructive Drop Shadow vector effect (offset_x, offset_y, opacity, r, g, b).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_extrude",
+                            "description": "Applies a non-destructive Extrude 3D block vector effect (depth_pt, angle_deg).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "create_blend",
+                            "description": "Creates a non-destructive Blend progression between start_id and end_id (steps).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "expand_effects",
+                            "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -413,7 +443,72 @@ impl McpServer {
             }
             "undo" => Ok(json!({ "undone": self.engine.undo() })),
             "redo" => Ok(json!({ "redone": self.engine.redo() })),
+            "boolean_selection" => {
+                self.apply_optional_selection(args);
+                let op_str = args.get("op").and_then(Value::as_str).unwrap_or("weld");
+                let op = match op_str {
+                    "weld" => BooleanOp::Weld,
+                    "trim" => BooleanOp::Trim,
+                    "intersect" => BooleanOp::Intersect,
+                    "front_minus_back" => BooleanOp::FrontMinusBack,
+                    "back_minus_front" => BooleanOp::BackMinusFront,
+                    other => return Err(format!("Unsupported boolean op: {other}")),
+                };
+                let ok = self.engine.execute(EngineCommand::BooleanSelection { op });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "boolean_executed": ok, "result_selection": ids }))
+            }
+            "apply_contour" => {
+                let target = self.resolve_target_id(args)?;
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(1) as u32;
+                let offset_raw = args.get("offset_pt").and_then(Value::as_f64).unwrap_or(4.0);
+                let offset_pt = F64::new(offset_raw).map_err(|e| e.to_string())?;
+                let inside = args.get("inside").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::ApplyContour { object_id: target, steps, offset_pt, inside });
+                Ok(json!({ "contour_applied": ok, "object_id": target.0 }))
+            }
+            "add_drop_shadow" => {
+                let target = self.resolve_target_id(args)?;
+                let ox = F64::new(args.get("offset_x").and_then(Value::as_f64).unwrap_or(5.0)).map_err(|e| e.to_string())?;
+                let oy = F64::new(args.get("offset_y").and_then(Value::as_f64).unwrap_or(5.0)).map_err(|e| e.to_string())?;
+                let opacity = F64::new(args.get("opacity").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                let r = args.get("r").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let g = args.get("g").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let b = args.get("b").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let color = Color::rgb8(r, g, b);
+                let ok = self.engine.execute(EngineCommand::AddDropShadow { object_id: target, offset_x: ox, offset_y: oy, opacity, color });
+                Ok(json!({ "shadow_added": ok, "object_id": target.0 }))
+            }
+            "add_extrude" => {
+                let target = self.resolve_target_id(args)?;
+                let depth_pt = F64::new(args.get("depth_pt").and_then(Value::as_f64).unwrap_or(20.0)).map_err(|e| e.to_string())?;
+                let angle_deg = F64::new(args.get("angle_deg").and_then(Value::as_f64).unwrap_or(45.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::AddExtrude { object_id: target, depth_pt, angle_deg });
+                Ok(json!({ "extrude_added": ok, "object_id": target.0 }))
+            }
+            "create_blend" => {
+                let start_raw = args.get("start_id").and_then(Value::as_u64).ok_or_else(|| "Missing start_id".to_owned())?;
+                let end_raw = args.get("end_id").and_then(Value::as_u64).ok_or_else(|| "Missing end_id".to_owned())?;
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(5) as u32;
+                let ok = self.engine.execute(EngineCommand::CreateBlend { start_id: ObjectId(start_raw), end_id: ObjectId(end_raw), steps });
+                Ok(json!({ "blend_created": ok, "start_id": start_raw, "end_id": end_raw }))
+            }
+            "expand_effects" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
+                Ok(json!({ "effects_expanded": ok, "object_id": target.0 }))
+            }
             other => Err(format!("Unknown tool: {other}")),
+        }
+    }
+
+    fn resolve_target_id(&self, args: &Value) -> Result<ObjectId, String> {
+        if let Some(id_raw) = args.get("object_id").and_then(Value::as_u64) {
+            Ok(ObjectId(id_raw))
+        } else if let Some(first) = self.engine.selection.first() {
+            Ok(*first)
+        } else {
+            Err("No object_id specified and selection is empty".to_owned())
         }
     }
 }
@@ -432,7 +527,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 20);
+        assert_eq!(tools, 26);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -455,27 +550,32 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"set_style_rgb","arguments":{"channel":"fill","r":220,"g":40,"b":50}}}"#,
         );
 
-        let group_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
-            r#"{{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{{"name":"group_selection","arguments":{{"selection":[{id1},{id2}]}}}}}}"#
-        )))
-        .unwrap();
-        assert!(group_resp.result.unwrap()["structuredContent"]["grouped"].as_bool().unwrap());
+        // Apply Contour and Drop Shadow via MCP
+        let contour_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{{"name":"apply_contour","arguments":{{"object_id":{id1},"steps":2,"offset_pt":3.0}}}}}}"#
+        ))).unwrap();
+        assert!(contour_resp.result.unwrap()["structuredContent"]["contour_applied"].as_bool().unwrap());
 
-        let ungroup_resp: JsonRpcResponse = serde_json::from_str(
-            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ungroup_selection","arguments":{}}}"#),
-        )
-        .unwrap();
-        assert!(ungroup_resp.result.unwrap()["structuredContent"]["ungrouped"].as_bool().unwrap());
+        let shadow_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"add_drop_shadow","arguments":{{"object_id":{id1},"offset_x":4.0,"offset_y":4.0,"opacity":0.5}}}}}}"#
+        ))).unwrap();
+        assert!(shadow_resp.result.unwrap()["structuredContent"]["shadow_added"].as_bool().unwrap());
+
+        // Boolean Weld via MCP
+        let weld_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"boolean_selection","arguments":{{"op":"weld","selection":[{id1},{id2}]}}}}}}"#
+        ))).unwrap();
+        assert!(weld_resp.result.unwrap()["structuredContent"]["boolean_executed"].as_bool().unwrap());
 
         let cdr_resp: JsonRpcResponse = serde_json::from_str(
-            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"export_cdr7_byte_len","arguments":{}}}"#),
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"export_cdr7_byte_len","arguments":{}}}"#),
         )
         .unwrap();
         let cdr_len = cdr_resp.result.unwrap()["structuredContent"]["cdr7_bytes"].as_u64().unwrap();
         assert!(cdr_len > 60);
 
         let svg_resp: JsonRpcResponse = serde_json::from_str(
-            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"export_svg","arguments":{"page_index":0}}}"#),
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"export_svg","arguments":{"page_index":0}}}"#),
         )
         .unwrap();
         let svg = svg_resp.result.unwrap()["structuredContent"]["svg"].as_str().unwrap().to_owned();
@@ -483,7 +583,7 @@ mod tests {
         assert!(svg.contains("<path"));
 
         let pdf_resp: JsonRpcResponse = serde_json::from_str(
-            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"export_pdf_byte_len","arguments":{}}}"#),
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"export_pdf_byte_len","arguments":{}}}"#),
         )
         .unwrap();
         let pdf_len = pdf_resp.result.unwrap()["structuredContent"]["pdf_bytes"].as_u64().unwrap();

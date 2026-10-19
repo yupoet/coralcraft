@@ -244,6 +244,12 @@ impl Rect {
         px >= self.x0.get() && px <= self.x1.get() && py >= self.y0.get() && py <= self.y1.get()
     }
 
+    /// Returns `true` if `self` and `other` overlap.
+    #[must_use]
+    pub fn intersects(self, other: Self) -> bool {
+        self.x0.get() <= other.x1.get() && self.x1.get() >= other.x0.get() && self.y0.get() <= other.y1.get() && self.y1.get() >= other.y0.get()
+    }
+
     /// Returns the smallest rectangle containing both `self` and `other`.
     pub fn union(self, other: Self) -> Result<Self, GeomError> {
         Self::new(

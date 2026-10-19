@@ -8,8 +8,8 @@ pub mod surface;
 pub mod svg;
 
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle};
-use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Rect, RectSpec, flatten_path};
+use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, VectorEffect};
+use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use pdf::export_pdf;
 pub use png::{adler32, decode_stored_png_rgba, encode_png};
@@ -167,6 +167,65 @@ fn paint_geometry_and_powerclip(
 
     let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
 
+    // 0. Paint DropShadow and Extrude vector effects behind the object
+    for effect in &node.effects {
+        match effect {
+            VectorEffect::DropShadow { offset_x, offset_y, opacity, color } => {
+                let dx = offset_x.get() * page_scale;
+                let dy = offset_y.get() * page_scale;
+                let mut shadow_polys = dev_polys.clone();
+                for poly in &mut shadow_polys {
+                    for pt in &mut poly.points {
+                        if let Ok(shifted) = Point::new(pt.x.get() + dx, pt.y.get() + dy) {
+                            *pt = shifted;
+                        }
+                    }
+                }
+                let shadow_cov = rasterize_coverage(&shadow_polys, fill_rule, surface.width, surface.height);
+                let shadow_rgb = color.to_srgb8();
+                let shadow_a = eff_opacity * opacity.get().clamp(0.0, 1.0);
+                let w = surface.width as usize;
+                let h = surface.height as usize;
+                for py in 0..h {
+                    for px in 0..w {
+                        let cov = shadow_cov[py * w + px];
+                        if cov > 0 {
+                            let a = shadow_a * (f64::from(cov) / 16.0);
+                            surface.blend_straight(px as u32, py as u32, shadow_rgb, a);
+                        }
+                    }
+                }
+            }
+            VectorEffect::Extrude { depth_pt, angle_deg } => {
+                let rad = angle_deg.get().to_radians();
+                let dx = depth_pt.get() * page_scale * rad.cos();
+                let dy = depth_pt.get() * page_scale * rad.sin();
+                let mut extrude_polys = dev_polys.clone();
+                for poly in &mut extrude_polys {
+                    for pt in &mut poly.points {
+                        if let Ok(shifted) = Point::new(pt.x.get() + dx, pt.y.get() + dy) {
+                            *pt = shifted;
+                        }
+                    }
+                }
+                let ext_cov = rasterize_coverage(&extrude_polys, fill_rule, surface.width, surface.height);
+                let ext_rgb = [100, 100, 100];
+                let w = surface.width as usize;
+                let h = surface.height as usize;
+                for py in 0..h {
+                    for px in 0..w {
+                        let cov = ext_cov[py * w + px];
+                        if cov > 0 {
+                            let a = eff_opacity * 0.7 * (f64::from(cov) / 16.0);
+                            surface.blend_straight(px as u32, py as u32, ext_rgb, a);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     // 1. If CorelDRAW `behind_fill == true`, draw outline BEFORE fill
     if behind_fill && let Some(outline) = &node.outline {
         paint_outline(surface, &dev_polys, outline, node.transform, page_scale, eff_opacity)?;
@@ -198,6 +257,32 @@ fn paint_geometry_and_powerclip(
     // 4. If `behind_fill == false` (default), draw outline AFTER fill and PowerClip contents
     if !behind_fill && let Some(outline) = &node.outline {
         paint_outline(surface, &dev_polys, outline, node.transform, page_scale, eff_opacity)?;
+    }
+
+    // 5. Paint Contour vector effect around the object
+    for effect in &node.effects {
+        if let VectorEffect::Contour { steps, offset_pt, inside } = effect {
+            let step_count = (*steps).min(20);
+            for s in 1..=step_count {
+                let dist = offset_pt.get() * (s as f64) * page_scale;
+                let width_dev = dist * 2.0;
+                let stroke_polys =
+                    expand_stroke_polylines(&dev_polys, 0.5 * width_dev, coralcraft_doc::LineCap::Round, coralcraft_doc::LineJoin::Round, 4.0)?;
+                let cov = rasterize_coverage(&stroke_polys, FillRule::NonZero, surface.width, surface.height);
+                let w = surface.width as usize;
+                let h = surface.height as usize;
+                let rgb = if *inside { [80, 80, 80] } else { [180, 180, 180] };
+                for py in 0..h {
+                    for px in 0..w {
+                        let c = cov[py * w + px];
+                        if c > 0 {
+                            let a = eff_opacity * 0.4 * (f64::from(c) / 16.0);
+                            surface.blend_straight(px as u32, py as u32, rgb, a);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -267,17 +352,16 @@ fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>
             };
             Ok(Some((p.clone(), bbox)))
         }
-        ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
             if text.is_empty() {
                 return Ok(None);
             }
-            // M2 clean-room vector glyph-box representation before external font repository injection
+            let path = artistic_text_to_path(text, font_family, size_pt.get(), *position);
             let h = size_pt.get().max(4.0);
             let w = (text.chars().count() as f64) * h * 0.6;
-            let x0 = position.x.get();
-            let y0 = position.y.get() - h;
-            let bbox = Rect::new(x0, y0, x0 + w, position.y.get())?;
-            let path = RectSpec::sharp(bbox).to_path()?;
+            let bbox = path
+                .bounds()
+                .unwrap_or_else(|| Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get()).unwrap_or_default());
             Ok(Some((path, bbox)))
         }
         ObjectKind::Group { .. } | ObjectKind::Unsupported(_) => Ok(None),

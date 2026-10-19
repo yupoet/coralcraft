@@ -2,8 +2,10 @@
 //! tool gestures, undo/redo command history, hit-testing, and Property Bar snapshots (L5).
 
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual};
-use coralcraft_geom::{Affine2, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit};
+use coralcraft_doc::{
+    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual, VectorEffect,
+};
+use coralcraft_geom::{Affine2, BooleanOp, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths};
 use coralcraft_tools::{
     AlignMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp, build_property_bar_schema,
     combined_selection_bounds, object_local_bounds,
@@ -87,6 +89,18 @@ pub enum EngineCommand {
     ExtractPowerClip { container_id: ObjectId },
     /// Moves a single on-curve anchor point of an `ObjectKind::Path` (`F10` Shape Tool).
     MoveBezierNode { object_id: ObjectId, element_index: usize, new_pt: Point },
+    /// Executes a Boolean operation between selected objects (Weld, Trim, Intersect, FrontMinusBack, BackMinusFront).
+    BooleanSelection { op: BooleanOp },
+    /// Applies a non-destructive Contour vector effect to the specified object.
+    ApplyContour { object_id: ObjectId, steps: u32, offset_pt: F64, inside: bool },
+    /// Applies a non-destructive Drop Shadow vector effect to the specified object.
+    AddDropShadow { object_id: ObjectId, offset_x: F64, offset_y: F64, opacity: F64, color: Color },
+    /// Applies a non-destructive Extrude vector effect to the specified object.
+    AddExtrude { object_id: ObjectId, depth_pt: F64, angle_deg: F64 },
+    /// Creates a non-destructive Blend vector effect between two objects.
+    CreateBlend { start_id: ObjectId, end_id: ObjectId, steps: u32 },
+    /// Bakes (expands) all live vector effects on the specified object into static geometry.
+    ExpandEffects { object_id: ObjectId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,11 +410,33 @@ impl EditorEngine {
                 }
             }
             EngineCommand::ConvertToCurves => {
-                let has_convertible = self
-                    .selected_nodes()
-                    .into_iter()
-                    .any(|o| !o.locked && matches!(o.kind, ObjectKind::Rect(_) | ObjectKind::Ellipse(_) | ObjectKind::Polygon(_)));
+                let has_convertible = self.selected_nodes().into_iter().any(|o| {
+                    !o.locked
+                        && matches!(o.kind, ObjectKind::Rect(_) | ObjectKind::Ellipse(_) | ObjectKind::Polygon(_) | ObjectKind::ArtisticText { .. })
+                });
                 if !has_convertible {
+                    return false;
+                }
+            }
+            EngineCommand::BooleanSelection { .. } => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::ApplyContour { object_id, .. }
+            | EngineCommand::AddDropShadow { object_id, .. }
+            | EngineCommand::AddExtrude { object_id, .. }
+            | EngineCommand::ExpandEffects { object_id } => {
+                if self.selected_or_all_node(*object_id).is_none_or(|o| o.locked) {
+                    return false;
+                }
+            }
+            EngineCommand::CreateBlend { start_id, end_id, .. } => {
+                let has_start = self.selected_or_all_node(*start_id).is_some_and(|o| !o.locked);
+                let has_end = self.selected_or_all_node(*end_id).is_some_and(|o| !o.locked);
+                if !has_start || !has_end || start_id == end_id {
                     return false;
                 }
             }
@@ -680,13 +716,7 @@ impl EditorEngine {
                     if obj.locked {
                         return;
                     }
-                    let maybe_path = match &obj.kind {
-                        ObjectKind::Rect(r) => r.to_path().ok(),
-                        ObjectKind::Ellipse(e) => e.to_path().ok(),
-                        ObjectKind::Polygon(p) => p.to_path().ok(),
-                        _ => None,
-                    };
-                    if let Some(path) = maybe_path {
+                    if let Some(path) = object_to_path(obj) {
                         obj.kind = ObjectKind::Path(path);
                     }
                 });
@@ -867,6 +897,111 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::BooleanSelection { op } => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut sel_indices: Vec<usize> = Vec::new();
+                for (idx, obj) in layer.objects.iter().enumerate() {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        sel_indices.push(idx);
+                    }
+                }
+                if sel_indices.len() < 2 {
+                    return false;
+                }
+
+                let first_idx = sel_indices[0];
+                let anchor_idx = *sel_indices.last().unwrap_or(&first_idx);
+                let anchor_style_fill = layer.objects[anchor_idx].fill.clone();
+                let anchor_style_outline = layer.objects[anchor_idx].outline.clone();
+
+                let mut combined_path = match object_to_path(&layer.objects[first_idx]) {
+                    Some(p) => p,
+                    None => return false,
+                };
+
+                for &idx in &sel_indices[1..] {
+                    if let Some(p) = object_to_path(&layer.objects[idx])
+                        && let Ok(merged) = boolean_paths(&combined_path, &p, op)
+                    {
+                        combined_path = merged;
+                    }
+                }
+
+                let new_node = ObjectNode::new(
+                    new_id,
+                    Some(format!("{:?} Result", op)),
+                    ObjectKind::Path(combined_path),
+                    anchor_style_fill,
+                    anchor_style_outline,
+                );
+
+                match op {
+                    BooleanOp::Trim => {
+                        layer.objects[anchor_idx] = new_node;
+                        self.selection = vec![new_id];
+                    }
+                    _ => {
+                        let mut remaining = Vec::with_capacity(layer.objects.len());
+                        let mut inserted = false;
+                        for (idx, obj) in layer.objects.drain(..).enumerate() {
+                            if sel_indices.contains(&idx) {
+                                if !inserted {
+                                    remaining.push(new_node.clone());
+                                    inserted = true;
+                                }
+                            } else {
+                                remaining.push(obj);
+                            }
+                        }
+                        layer.objects = remaining;
+                        self.selection = vec![new_id];
+                    }
+                }
+            }
+            EngineCommand::ApplyContour { object_id, steps, offset_pt, inside } => {
+                let effect = VectorEffect::Contour { steps, offset_pt, inside };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AddDropShadow { object_id, offset_x, offset_y, opacity, color } => {
+                let effect = VectorEffect::DropShadow { offset_x, offset_y, opacity, color };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AddExtrude { object_id, depth_pt, angle_deg } => {
+                let effect = VectorEffect::Extrude { depth_pt, angle_deg };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::CreateBlend { start_id, end_id, steps } => {
+                let effect = VectorEffect::Blend { target_id: end_id, steps };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == start_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::ExpandEffects { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked && !obj.effects.is_empty() {
+                        if let Some(base_path) = object_to_path(obj) {
+                            obj.kind = ObjectKind::Path(base_path);
+                        }
+                        obj.effects.clear();
+                    }
+                });
+            }
         }
         true
     }
@@ -1044,6 +1179,17 @@ impl EditorEngine {
 
 fn powerclip_subtree_depth(node: &ObjectNode) -> usize {
     node.powerclip_children.iter().map(|c| 1 + powerclip_subtree_depth(c)).max().unwrap_or(0)
+}
+
+fn object_to_path(obj: &ObjectNode) -> Option<coralcraft_geom::Path> {
+    match &obj.kind {
+        ObjectKind::Rect(r) => r.to_path().ok(),
+        ObjectKind::Ellipse(e) => e.to_path().ok(),
+        ObjectKind::Polygon(p) => p.to_path().ok(),
+        ObjectKind::Path(p) => Some(p.clone()),
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } => Some(artistic_text_to_path(text, font_family, size_pt.get(), *position)),
+        _ => None,
+    }
 }
 
 fn reallocate_object_ids_recursive(node: &mut ObjectNode, doc: &mut Document) {
@@ -1231,5 +1377,76 @@ mod tests {
         } else {
             panic!("expected Path after ConvertToCurves");
         }
+    }
+
+    #[test]
+    fn boolean_selection_and_vector_effects_with_undo() {
+        let mut engine = EditorEngine::default();
+
+        // 1. Create two overlapping rectangles
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(0.0, 0.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(60.0, 60.0).unwrap(), false, false);
+        let id1 = engine.selection[0];
+
+        engine.pointer_down(Point::new(40.0, 0.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(100.0, 60.0).unwrap(), false, false);
+        let id2 = engine.selection[0];
+
+        // 2. Boolean Weld
+        engine.set_selection(vec![id1, id2]);
+        assert!(engine.execute(EngineCommand::BooleanSelection { op: BooleanOp::Weld }));
+        assert_eq!(engine.selection.len(), 1);
+        let welded_id = engine.selection[0];
+        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Path(_)));
+
+        // 3. Undo Weld restores both original rectangles
+        assert!(engine.undo());
+        assert_eq!(engine.current_target_objects().len(), 2);
+        assert!(engine.redo());
+        assert_eq!(engine.current_target_objects().len(), 1);
+
+        // 4. Non-destructive Contour effect on the welded object
+        assert!(engine.execute(EngineCommand::ApplyContour { object_id: welded_id, steps: 3, offset_pt: F64::new(4.0).unwrap(), inside: false }));
+        let obj = engine.selected_or_all_node(welded_id).unwrap();
+        assert_eq!(obj.effects.len(), 1);
+        assert!(matches!(obj.effects[0], VectorEffect::Contour { steps: 3, .. }));
+
+        // 5. Non-destructive DropShadow effect
+        assert!(engine.execute(EngineCommand::AddDropShadow {
+            object_id: welded_id,
+            offset_x: F64::new(5.0).unwrap(),
+            offset_y: F64::new(5.0).unwrap(),
+            opacity: F64::new(0.6).unwrap(),
+            color: Color::BLACK,
+        }));
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
+
+        // 6. ExpandEffects bakes effects into static geometry and clears live effect stack
+        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
+        assert!(engine.selected_or_all_node(welded_id).unwrap().effects.is_empty());
+
+        // 7. Undo restores both live effects
+        assert!(engine.undo());
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
+
+        // 8. Convert ArtisticText to curves
+        let text_id = engine.document.allocate_object_id();
+        let text_node = ObjectNode::new(
+            text_id,
+            Some("Text".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CORAL".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(24.0).unwrap(),
+                position: Point::new(10.0, 100.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        );
+        engine.target_layer_mut().objects.push(text_node);
+        engine.set_selection(vec![text_id]);
+        assert!(engine.execute(EngineCommand::ConvertToCurves));
+        assert!(matches!(engine.selected_or_all_node(text_id).unwrap().kind, ObjectKind::Path(_)));
     }
 }

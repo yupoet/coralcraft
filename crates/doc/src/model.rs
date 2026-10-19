@@ -158,6 +158,46 @@ pub enum ObjectKind {
     Unsupported(UnsupportedObject),
 }
 
+/// Non-destructive vector effect applied to an [`ObjectNode`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum VectorEffect {
+    /// Contour effect: concentric offset contours expanding inside or outside the object.
+    Contour {
+        /// Number of concentric contour steps.
+        steps: u32,
+        /// Offset distance per step in typographic points.
+        offset_pt: F64,
+        /// When `true`, contours expand inward toward center; when `false`, outward.
+        inside: bool,
+    },
+    /// Drop shadow effect: directional blurred/stepped vector shadow.
+    DropShadow {
+        /// Horizontal offset in typographic points.
+        offset_x: F64,
+        /// Vertical offset in typographic points.
+        offset_y: F64,
+        /// Shadow opacity (`0.0..=1.0`).
+        opacity: F64,
+        /// Shadow tint color.
+        color: Color,
+    },
+    /// Extrude (3D block) effect: projection of nodes along a depth vector.
+    Extrude {
+        /// Depth in typographic points.
+        depth_pt: F64,
+        /// Projection angle in degrees (`0..=360`).
+        angle_deg: F64,
+    },
+    /// Blend effect: dynamic linear progression toward a target object.
+    Blend {
+        /// Target object identifier to blend with.
+        target_id: ObjectId,
+        /// Number of intermediate blend steps.
+        steps: u32,
+    },
+}
+
 /// A scene-graph object on a [`Layer`] or inside a `Group` / `PowerClip` container.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectNode {
@@ -177,6 +217,9 @@ pub struct ObjectNode {
     pub fill: Option<FillStyle>,
     /// Outline Pen style (`None` = no outline).
     pub outline: Option<OutlineStyle>,
+    /// Non-destructive vector effect stack applied to this object.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<VectorEffect>,
     /// Objects clipped inside this object via CorelDRAW **PowerClip** (`Object -> PowerClip -> Place Inside Frame`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub powerclip_children: Vec<ObjectNode>,
@@ -203,6 +246,7 @@ impl ObjectNode {
             opacity: F64::ONE,
             fill,
             outline,
+            effects: Vec::new(),
             powerclip_children: Vec::new(),
             kind,
             residual: Residual::default(),
