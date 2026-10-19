@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::error::{ProbeError, ProbeWarning};
 pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_raw, inflate_zlib};
-pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cmx1};
+pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cdrx_zip, write_cmx1};
 pub use crate::riff::{ChunkSummary, Endian, RiffInspection};
-pub use crate::zip::{ZipCdrRole, ZipInspection, extract_zip_primary_riff};
+pub use crate::zip::{ZipCdrRole, ZipInspection, build_stored_zip, crc32_ieee, extract_zip_primary_riff};
 
 /// Current JSON schema version for [`ProbeReport`].
 pub const PROBE_SCHEMA_VERSION: u32 = 1;

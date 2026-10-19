@@ -318,6 +318,85 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
     }
 }
 
+/// Computes the standard IEEE 802.3 CRC-32 checksum used by PKWARE ZIP headers.
+pub fn crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Builds a clean-room Stored (`method = 0`) ZIP archive in memory from `(entry_name, data)` pairs,
+/// populating Local File Headers, Central Directory headers, IEEE 802.3 CRC-32 checksums, and EOCD.
+pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut offsets = Vec::with_capacity(entries.len());
+    let mut crcs = Vec::with_capacity(entries.len());
+
+    for &(name, data) in entries {
+        offsets.push(buf.len() as u32);
+        let crc = crc32_ieee(data);
+        crcs.push(crc);
+        let name_bytes = name.as_bytes();
+        let len = data.len() as u32;
+        buf.extend_from_slice(b"PK\x03\x04");
+        buf.extend_from_slice(&20u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // Stored (0)
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(name_bytes);
+        buf.extend_from_slice(data);
+    }
+
+    let cd_offset = buf.len() as u32;
+    for (idx, &(name, data)) in entries.iter().enumerate() {
+        let name_bytes = name.as_bytes();
+        let len = data.len() as u32;
+        let crc = crcs[idx];
+        buf.extend_from_slice(b"PK\x01\x02");
+        buf.extend_from_slice(&20u16.to_le_bytes());
+        buf.extend_from_slice(&20u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes()); // Stored (0)
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&crc.to_le_bytes());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        buf.extend_from_slice(&offsets[idx].to_le_bytes());
+        buf.extend_from_slice(name_bytes);
+    }
+
+    let cd_size = (buf.len() as u32) - cd_offset;
+    let count = entries.len() as u16;
+    buf.extend_from_slice(b"PK\x05\x06");
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&count.to_le_bytes());
+    buf.extend_from_slice(&count.to_le_bytes());
+    buf.extend_from_slice(&cd_size.to_le_bytes());
+    buf.extend_from_slice(&cd_offset.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -334,13 +413,14 @@ pub(crate) mod tests {
             offsets.push(buf.len() as u32);
             let name_bytes = name.as_bytes();
             let len = data.len() as u32;
+            let crc = crc32_ieee(data);
             buf.extend_from_slice(b"PK\x03\x04");
             buf.extend_from_slice(&20u16.to_le_bytes()); // version needed
             buf.extend_from_slice(&0u16.to_le_bytes()); // flags
             buf.extend_from_slice(&method.to_le_bytes()); // compression method (0=stored, 8=deflate)
             buf.extend_from_slice(&0u16.to_le_bytes()); // mod time
             buf.extend_from_slice(&0u16.to_le_bytes()); // mod date
-            buf.extend_from_slice(&0u32.to_le_bytes()); // crc32 (not enforced during structural probe)
+            buf.extend_from_slice(&crc.to_le_bytes()); // crc32
             buf.extend_from_slice(&len.to_le_bytes()); // compressed size
             buf.extend_from_slice(&len.to_le_bytes()); // uncompressed size
             buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes()); // file name len
@@ -355,6 +435,7 @@ pub(crate) mod tests {
         for (idx, &(name, method, data)) in entries.iter().enumerate() {
             let name_bytes = name.as_bytes();
             let len = data.len() as u32;
+            let crc = crc32_ieee(data);
             buf.extend_from_slice(b"PK\x01\x02");
             buf.extend_from_slice(&20u16.to_le_bytes()); // version made by
             buf.extend_from_slice(&20u16.to_le_bytes()); // version needed
@@ -362,7 +443,7 @@ pub(crate) mod tests {
             buf.extend_from_slice(&method.to_le_bytes()); // compression method
             buf.extend_from_slice(&0u16.to_le_bytes()); // mod time
             buf.extend_from_slice(&0u16.to_le_bytes()); // mod date
-            buf.extend_from_slice(&0u32.to_le_bytes()); // crc32
+            buf.extend_from_slice(&crc.to_le_bytes()); // crc32
             buf.extend_from_slice(&len.to_le_bytes()); // compressed size
             buf.extend_from_slice(&len.to_le_bytes()); // uncompressed size
             buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes()); // file name len

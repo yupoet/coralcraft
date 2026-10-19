@@ -102,7 +102,7 @@ pub fn detect_cpl(bytes: &[u8]) -> CplDetection {
     }
 
     let magic = u16::from_le_bytes([bytes[0], bytes[1]]);
-    let known_magics: &[u16] = &[0xCDCD, 0xDCDC, 0xCC80, 0xCC90, 0xCDD0, 0xCD01];
+    let known_magics: &[u16] = &[0xCDCD, 0xDCDC, 0xCDDC, 0xCCDC, 0xCC80, 0xCC90, 0xCDD0, 0xCD01];
     if known_magics.contains(&magic) {
         let count = u16::from_le_bytes([bytes[2], bytes[3]]);
         if count <= 4096 {
@@ -113,16 +113,127 @@ pub fn detect_cpl(bytes: &[u8]) -> CplDetection {
     CplDetection::NotCpl
 }
 
-/// Loads a palette from raw bytes, automatically dispatching XML palettes vs binary `.cpl` headers.
+/// Loads a palette from raw bytes, automatically dispatching XML palettes vs binary `.cpl` files.
 pub fn load_palette_bytes(bytes: &[u8]) -> Result<Palette, ColorError> {
     if let CplDetection::Cpl { .. } = detect_cpl(bytes) {
-        return Err(ColorError::UnsupportedBinaryCpl);
+        return parse_binary_cpl(bytes);
     }
     let text = std::str::from_utf8(strip_bom_and_ascii_ws(bytes)).map_err(|_| ColorError::UnknownPaletteFormat)?;
     if !text.starts_with('<') {
         return Err(ColorError::UnknownPaletteFormat);
     }
     parse_xml_palette(text)
+}
+
+/// Parses a binary CorelDRAW `.cpl` palette (`0xCDDC` / `0xCCDC` / `0xCDCD` header + Pascal palette name +
+/// `color_count` records of `[model: u16 LE, pad: u16, c0: u8, c1: u8, c2: u8, c3: u8, name_len: u8, name_bytes...]`).
+///
+/// Returns [`ColorError::UnsupportedBinaryCpl`] when the binary payload is truncated or uses an unknown sub-layout.
+pub fn parse_binary_cpl(bytes: &[u8]) -> Result<Palette, ColorError> {
+    let CplDetection::Cpl { color_count, .. } = detect_cpl(bytes) else {
+        return Err(ColorError::UnknownPaletteFormat);
+    };
+    let count = usize::from(color_count);
+    if count > MAX_PALETTE_SWATCHES || bytes.len() < 9 {
+        return Err(ColorError::UnsupportedBinaryCpl);
+    }
+    let mut pos = 4usize;
+    let pal_name_len = usize::from(bytes[pos]);
+    pos += 1;
+    if pos + pal_name_len > bytes.len() {
+        return Err(ColorError::UnsupportedBinaryCpl);
+    }
+    let pal_name_raw = std::str::from_utf8(&bytes[pos..pos + pal_name_len]).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
+    let palette_name = if pal_name_raw.is_empty() { "Binary CPL Palette".to_owned() } else { pal_name_raw.to_owned() };
+    pos += pal_name_len;
+
+    if count > 0 && pos >= bytes.len() {
+        return Err(ColorError::UnsupportedBinaryCpl);
+    }
+
+    let mut swatches = Vec::with_capacity(count);
+    for idx in 0..count {
+        if pos + 9 > bytes.len() {
+            return Err(ColorError::UnsupportedBinaryCpl);
+        }
+        let model = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+        let c0 = bytes[pos + 4];
+        let c1 = bytes[pos + 5];
+        let c2 = bytes[pos + 6];
+        let c3 = bytes[pos + 7];
+        let name_len = usize::from(bytes[pos + 8]);
+        pos += 9;
+        if pos + name_len > bytes.len() {
+            return Err(ColorError::UnsupportedBinaryCpl);
+        }
+        let name_str = std::str::from_utf8(&bytes[pos..pos + name_len]).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
+        pos += name_len;
+        let name = if name_str.is_empty() { format!("Swatch {}", idx + 1) } else { name_str.to_owned() };
+
+        let color = match model {
+            1 | 5 => Color::rgb8(c0, c1, c2),
+            2..=4 => Color::cmyk(
+                (f64::from(c0) / 100.0).clamp(0.0, 1.0),
+                (f64::from(c1) / 100.0).clamp(0.0, 1.0),
+                (f64::from(c2) / 100.0).clamp(0.0, 1.0),
+                (f64::from(c3) / 100.0).clamp(0.0, 1.0),
+            )?,
+            6 => Color::Registration,
+            _ => return Err(ColorError::UnsupportedBinaryCpl),
+        };
+        swatches.push(PaletteSwatch { name, color });
+    }
+
+    Ok(Palette { name: palette_name, guid: None, swatches })
+}
+
+/// Serializes a [`Palette`] into a clean-room binary `.cpl` palette (`0xCDDC` magic).
+#[must_use]
+pub fn serialize_binary_cpl(palette: &Palette) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0xCDDCu16.to_le_bytes());
+    let count = u16::try_from(palette.swatches.len()).unwrap_or(u16::MAX);
+    out.extend_from_slice(&count.to_le_bytes());
+    let pal_name_bytes = palette.name.as_bytes();
+    let pal_name_len = pal_name_bytes.len().min(255);
+    out.push(pal_name_len as u8);
+    out.extend_from_slice(&pal_name_bytes[..pal_name_len]);
+
+    for sw in palette.swatches.iter().take(usize::from(count)) {
+        match &sw.color {
+            Color::Rgb { r, g, b } => {
+                out.extend_from_slice(&5u16.to_le_bytes());
+                out.extend_from_slice(&0u16.to_le_bytes());
+                out.extend_from_slice(&[*r, *g, *b, 0]);
+            }
+            Color::Cmyk { c, m, y, k } => {
+                out.extend_from_slice(&2u16.to_le_bytes());
+                out.extend_from_slice(&0u16.to_le_bytes());
+                out.extend_from_slice(&[
+                    (c.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+                    (m.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+                    (y.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+                    (k.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+                ]);
+            }
+            Color::Registration => {
+                out.extend_from_slice(&6u16.to_le_bytes());
+                out.extend_from_slice(&0u16.to_le_bytes());
+                out.extend_from_slice(&[100, 100, 100, 100]);
+            }
+            other => {
+                let [r, g, b] = other.to_srgb8();
+                out.extend_from_slice(&5u16.to_le_bytes());
+                out.extend_from_slice(&0u16.to_le_bytes());
+                out.extend_from_slice(&[r, g, b, 0]);
+            }
+        }
+        let sw_name = sw.name.as_bytes();
+        let sw_len = sw_name.len().min(255);
+        out.push(sw_len as u8);
+        out.extend_from_slice(&sw_name[..sw_len]);
+    }
+    out
 }
 
 fn strip_bom_and_ascii_ws(bytes: &[u8]) -> &[u8] {

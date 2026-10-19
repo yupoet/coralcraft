@@ -1007,6 +1007,22 @@ pub fn write_cmx1(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     write_riff_document(doc, *b"CMX1", 700)
 }
 
+/// Writes a [`Document`] into a clean-room X4+ ZIP-wrapped `.cdr` container (`PK\x03\x04` containing
+/// `mimetype`, `content/riffData.cdr` with `RIFF....CDRE` v1400, and `META-INF/metadata.xml`).
+///
+/// The emitted container satisfies `probe(&bytes)` (`CdrContainer::Zip`, `ZipCdrRole::RiffDataCdr`,
+/// `effective_version = Some(1400)`) and round-trips through `parse_document(&bytes)`.
+pub fn write_cdrx_zip(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    let inner_riff = write_riff_document(doc, *b"CDRE", 1400)?;
+    let mimetype = b"application/x-vnd.corel.zcf.draw.document+zip";
+    let metadata = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<metadata title=\"{}\" pages=\"{}\"/>\n",
+        doc.title.replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;"),
+        doc.pages.len()
+    );
+    Ok(crate::zip::build_stored_zip(&[("mimetype", mimetype), ("content/riffData.cdr", &inner_riff), ("META-INF/metadata.xml", metadata.as_bytes())]))
+}
+
 fn pt_to_cdr_i32(pt: f64) -> i32 {
     let cdr = coralcraft_geom::Pt::new(pt).and_then(coralcraft_geom::Pt::try_to_cdr_ticks).map(|u| u.0).unwrap_or(0);
     cdr.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
@@ -1285,13 +1301,13 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     let mut body = Vec::new();
     append_riff_chunk(&mut body, *b"vrsn", &version.to_le_bytes());
 
+    let mcfg_off = if version >= 1300 { 12usize } else { 4usize };
     let mut next_style_id = 1u32;
     for page in &doc.pages {
         let mut page_children = Vec::new();
-        // `mcfg` for version 700 places `(w_cdr, h_cdr)` at byte offset 4
-        let mut mcfg = vec![0u8; 12];
-        mcfg[4..8].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
-        mcfg[8..12].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        let mut mcfg = vec![0u8; mcfg_off + 8];
+        mcfg[mcfg_off..mcfg_off + 4].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg[mcfg_off + 4..mcfg_off + 8].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
         append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
 
         for layer in &page.layers {

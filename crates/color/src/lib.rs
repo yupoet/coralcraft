@@ -7,7 +7,8 @@ pub mod spaces;
 
 pub use fountain::{FountainBlendMode, FountainStop, interpolate_stops};
 pub use palette::{
-    CplDetection, MAX_PALETTE_SWATCHES, Palette, PaletteSwatch, detect_cpl, load_palette_bytes, parse_xml_palette, serialize_xml_palette,
+    CplDetection, MAX_PALETTE_SWATCHES, Palette, PaletteSwatch, detect_cpl, load_palette_bytes, parse_binary_cpl, parse_xml_palette,
+    serialize_binary_cpl, serialize_xml_palette,
 };
 pub use spaces::{
     CVal, Color, ColorError, SpotBlend, bradford_adapt_xyz, cmyk_to_srgb8, hsb_to_srgb8, lab_d50_to_d65, lab_d50_to_srgb8, lab_d65_to_d50,
@@ -129,5 +130,12 @@ mod tests {
         let cpl_bytes = [0xCD, 0xCD, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(detect_cpl(&cpl_bytes), CplDetection::Cpl { version: 0xCDCD, color_count: 12 });
         assert_eq!(load_palette_bytes(&cpl_bytes), Err(ColorError::UnsupportedBinaryCpl));
+
+        // Full binary .cpl round-trip (`0xCDDC` magic)
+        let default_pal = Palette::default_workspace_palette();
+        let bin_cpl = serialize_binary_cpl(&default_pal);
+        assert_eq!(detect_cpl(&bin_cpl), CplDetection::Cpl { version: 0xCDDC, color_count: default_pal.swatches.len() as u16 });
+        let decoded_cpl = load_palette_bytes(&bin_cpl).unwrap();
+        assert_eq!(decoded_cpl, default_pal);
     }
 }
