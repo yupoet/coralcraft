@@ -11,7 +11,7 @@ use coralcraft_color::Color;
 use coralcraft_render::{RenderError, RenderOpts, RenderOutput, Surface, encode_png, premul_to_straight, render_page, straight_to_premul};
 use coralcraft_tools::ToolKind;
 
-use crate::{DesktopWorkspace, DockerTab, PaletteCell};
+use crate::{DesktopWorkspace, DockerTab, PaletteCell, StandardToolbarControl};
 
 const CHROME_BG: [u8; 4] = [0xD4, 0xD0, 0xC8, 0xFF];
 const BEVEL_LIGHT: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
@@ -22,6 +22,11 @@ const ACTIVE_TOOL_BG: [u8; 4] = [0xCC, 0xE4, 0xF7, 0xFF];
 const DOCKER_SEL_BG: [u8; 4] = [0x31, 0x6A, 0xC5, 0xFF];
 const SLASH_RED: [u8; 4] = [0xFF, 0x00, 0x00, 0xFF];
 const PAPER_WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+const GUIDELINE_BLUE: [u8; 4] = [0x00, 0x55, 0xE5, 0xFF];
+const FOLDER_YELLOW: [u8; 4] = [0xD8, 0xB0, 0x40, 0xFF];
+const FLOPPY_BLUE: [u8; 4] = [0x28, 0x48, 0x88, 0xFF];
+const ICON_GREEN: [u8; 4] = [0x20, 0x88, 0x30, 0xFF];
+const STAR_GOLD: [u8; 4] = [0xF8, 0xC8, 0x20, 0xFF];
 
 /// Renders the entire [`DesktopWorkspace`] window at its configured `(window_width, window_height)`
 /// into a deterministic [`RenderOutput`] (premultiplied RGBA8 [`Surface`] + PNG bytes).
@@ -71,6 +76,22 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
     blit_surface(&mut surface, &page_out.surface, page_x0, page_y0);
     // 1 px `#000000` crisp page border
     stroke_rect(&mut surface, page_x0, page_y0, pw, ph, TEXT_BLACK);
+
+    // 2b. Dashed #0055E5 Corel Blue Ruler Guidelines across pasteboard & page
+    for gy_pt in &snap.horizontal_guidelines {
+        let gy = page_y0 + (gy_pt.get() * fit_scale).round() as i32;
+        if gy >= pb_y0 && gy < cy1 {
+            draw_dashed_hline(&mut surface, pb_x0, cx1 - 1, gy, 4, GUIDELINE_BLUE);
+            fill_rect(&mut surface, cx0 + ruler_thick - 5, gy - 1, 5, 3, GUIDELINE_BLUE);
+        }
+    }
+    for gx_pt in &snap.vertical_guidelines {
+        let gx = page_x0 + (gx_pt.get() * fit_scale).round() as i32;
+        if gx >= pb_x0 && gx < cx1 {
+            draw_dashed_vline(&mut surface, gx, pb_y0, cy1 - 1, 4, GUIDELINE_BLUE);
+            fill_rect(&mut surface, gx - 1, cy0 + ruler_thick - 5, 3, 5, GUIDELINE_BLUE);
+        }
+    }
 
     // 3. 8 solid `6×6` `#000000` Selection Handles + Center `X` marker
     if let Some(sel_bounds) = snap.selection_bounds {
@@ -145,11 +166,11 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
     }
 
     // Standard Toolbar 14 buttons (`24×24` at `x=4+28*i, y=28`)
-    for i in 0..14 {
-        let bx = 4 + i * 28;
+    for (i, ctrl) in StandardToolbarControl::ALL.iter().enumerate() {
+        let bx = 4 + (i as i32) * 28;
         let by = 28;
         draw_bevel_box(&mut surface, bx, by, 24, 24, CHROME_BG);
-        stroke_rect(&mut surface, bx + 5, by + 5, 14, 14, TEXT_BLACK);
+        draw_toolbar_icon(&mut surface, *ctrl, bx, by);
     }
 
     // Context-Sensitive Property Bar (`y=56..90`)
@@ -180,18 +201,18 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
     draw_line(&mut surface, ltx0 + ltw - 1, lty0, ltx0 + ltw - 1, lty0 + lth - 1, BEVEL_DARK);
 
     let tools = [
-        (ToolKind::Pick, "P"),
-        (ToolKind::Shape, "S"),
-        (ToolKind::Crop, "C"),
-        (ToolKind::Zoom, "Z"),
-        (ToolKind::FreehandBezier, "F5"),
-        (ToolKind::Rectangle, "F6"),
-        (ToolKind::Ellipse, "F7"),
-        (ToolKind::PolygonStar, "Y"),
-        (ToolKind::ArtisticText, "F8"),
-        (ToolKind::InteractiveFill, "G"),
+        ToolKind::Pick,
+        ToolKind::Shape,
+        ToolKind::Crop,
+        ToolKind::Zoom,
+        ToolKind::FreehandBezier,
+        ToolKind::Rectangle,
+        ToolKind::Ellipse,
+        ToolKind::PolygonStar,
+        ToolKind::ArtisticText,
+        ToolKind::InteractiveFill,
     ];
-    for (idx, (tk, glyph)) in tools.iter().enumerate() {
+    for (idx, tk) in tools.iter().enumerate() {
         let bx = ltx0 + 4;
         let by = lty0 + 4 + (idx as i32) * 32;
         if *tk == snap.active_tool {
@@ -200,7 +221,7 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
         } else {
             draw_bevel_box(&mut surface, bx, by, 30, 30, CHROME_BG);
         }
-        draw_text(&mut surface, bx + 6, by + 11, glyph, TEXT_BLACK);
+        draw_toolbox_glyph(&mut surface, *tk, bx, by, *tk == snap.active_tool);
     }
 
     // 7. Right Vertical Color Palette Bar (`24 px` wide, cell 0 = `[X]` No-Color with red slash)
@@ -261,8 +282,35 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
             }
             let (row_bg, fg) = if entry.selected { (DOCKER_SEL_BG, PAPER_WHITE) } else { (PAPER_WHITE, TEXT_BLACK) };
             fill_rect(&mut surface, dx0 + 2, ry, dw - 4, 18, row_bg);
-            let label = format!("{} - {}", entry.layer_name, entry.object_label);
-            draw_text(&mut surface, dx0 + 12, ry + 5, &label, fg);
+
+            // Badge pill: [Grp], [Pwr], [Eff], [Rec], [Elp], etc.
+            let badge_bg = match entry.type_badge.as_str() {
+                "[Grp]" => [0x90, 0x60, 0x10, 0xFF],
+                "[Pwr]" => [0x88, 0x20, 0x88, 0xFF],
+                "[Eff]" => [0x20, 0x70, 0x30, 0xFF],
+                "[Cur]" => [0x10, 0x60, 0x70, 0xFF],
+                "[Txt]" => [0x20, 0x30, 0x80, 0xFF],
+                _ => [0x40, 0x50, 0x70, 0xFF],
+            };
+            fill_rect(&mut surface, dx0 + 8, ry + 2, 28, 14, badge_bg);
+            draw_text(&mut surface, dx0 + 10, ry + 5, &entry.type_badge, PAPER_WHITE);
+
+            let prefix = if entry.is_master {
+                "[M] "
+            } else if entry.is_desktop {
+                "[D] "
+            } else {
+                ""
+            };
+            let label = format!("{}{}: {}", prefix, entry.layer_name, entry.object_label);
+            draw_text(&mut surface, dx0 + 40, ry + 5, &label, fg);
+
+            let eye_x = dx0 + dw - 24;
+            if entry.visible {
+                draw_text(&mut surface, eye_x, ry + 5, "[o]", fg);
+            } else {
+                draw_text(&mut surface, eye_x, ry + 5, "[-]", fg);
+            }
         }
     }
 
@@ -478,5 +526,261 @@ const fn glyph_5x7(ch: char) -> [u8; 7] {
         ')' => [0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000],
         ' ' => [0; 7],
         _ => [0b11111, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11111],
+    }
+}
+
+fn draw_dashed_hline(surface: &mut Surface, x0: i32, x1: i32, y: i32, dash_len: i32, rgba: [u8; 4]) {
+    let mut x = x0;
+    while x <= x1 {
+        let seg_end = (x + dash_len).min(x1 + 1);
+        for px in x..seg_end {
+            put_pixel(surface, px, y, rgba);
+        }
+        x += dash_len * 2;
+    }
+}
+
+fn draw_dashed_vline(surface: &mut Surface, x: i32, y0: i32, y1: i32, dash_len: i32, rgba: [u8; 4]) {
+    let mut y = y0;
+    while y <= y1 {
+        let seg_end = (y + dash_len).min(y1 + 1);
+        for py in y..seg_end {
+            put_pixel(surface, x, py, rgba);
+        }
+        y += dash_len * 2;
+    }
+}
+
+fn draw_toolbox_glyph(surface: &mut Surface, tool: ToolKind, bx: i32, by: i32, _active: bool) {
+    // 1. Draw CorelDRAW tool-flyout black triangle at bottom-right corner
+    for dy in 0..4 {
+        for dx in (3 - dy)..4 {
+            put_pixel(surface, bx + 24 + dx, by + 24 + dy, TEXT_BLACK);
+        }
+    }
+
+    match tool {
+        ToolKind::Pick => {
+            // Classic NW pointer cursor arrow
+            let pts = [
+                (bx + 9, by + 7),
+                (bx + 9, by + 21),
+                (bx + 13, by + 17),
+                (bx + 17, by + 22),
+                (bx + 19, by + 20),
+                (bx + 15, by + 15),
+                (bx + 19, by + 15),
+            ];
+            for i in 0..pts.len() {
+                let next = (i + 1) % pts.len();
+                draw_line(surface, pts[i].0, pts[i].1, pts[next].0, pts[next].1, TEXT_BLACK);
+            }
+            fill_rect(surface, bx + 10, by + 10, 3, 5, PAPER_WHITE);
+            fill_rect(surface, bx + 11, by + 15, 2, 2, PAPER_WHITE);
+        }
+        ToolKind::Shape => {
+            // Node-editing curved path with handles
+            draw_line(surface, bx + 8, by + 21, bx + 13, by + 12, TEXT_BLACK);
+            draw_line(surface, bx + 13, by + 12, bx + 21, by + 13, TEXT_BLACK);
+            // End node 1
+            fill_rect(surface, bx + 6, by + 19, 4, 4, PAPER_WHITE);
+            stroke_rect(surface, bx + 6, by + 19, 4, 4, TEXT_BLACK);
+            // End node 2
+            fill_rect(surface, bx + 19, by + 11, 4, 4, GUIDELINE_BLUE);
+            stroke_rect(surface, bx + 19, by + 11, 4, 4, TEXT_BLACK);
+            // Pointer touching node
+            draw_line(surface, bx + 14, by + 7, bx + 14, by + 14, TEXT_BLACK);
+            draw_line(surface, bx + 14, by + 14, bx + 18, by + 10, TEXT_BLACK);
+        }
+        ToolKind::Crop => {
+            // Overlapping L-brackets
+            draw_line(surface, bx + 7, by + 9, bx + 16, by + 9, TEXT_BLACK);
+            draw_line(surface, bx + 9, by + 7, bx + 9, by + 16, TEXT_BLACK);
+            draw_line(surface, bx + 12, by + 20, bx + 21, by + 20, TEXT_BLACK);
+            draw_line(surface, bx + 19, by + 12, bx + 19, by + 21, TEXT_BLACK);
+            stroke_rect(surface, bx + 11, by + 11, 7, 7, BEVEL_DARK);
+        }
+        ToolKind::Zoom => {
+            // Magnifying glass with + inside
+            stroke_rect(surface, bx + 8, by + 8, 10, 10, TEXT_BLACK);
+            draw_line(surface, bx + 16, by + 16, bx + 22, by + 22, TEXT_BLACK);
+            draw_line(surface, bx + 17, by + 16, bx + 22, by + 21, TEXT_BLACK);
+            // Plus
+            draw_line(surface, bx + 10, by + 13, bx + 15, by + 13, TEXT_BLACK);
+            draw_line(surface, bx + 13, by + 10, bx + 13, by + 15, TEXT_BLACK);
+        }
+        ToolKind::FreehandBezier => {
+            // Smooth freehand S-curve with node markers
+            draw_line(surface, bx + 8, by + 20, bx + 11, by + 13, TEXT_BLACK);
+            draw_line(surface, bx + 11, by + 13, bx + 16, by + 16, TEXT_BLACK);
+            draw_line(surface, bx + 16, by + 16, bx + 21, by + 8, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 19, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 20, by + 7, 3, 3, TEXT_BLACK);
+        }
+        ToolKind::Rectangle => {
+            // Rectangle outline with 4 solid corner handles
+            stroke_rect(surface, bx + 8, by + 10, 14, 10, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 9, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 20, by + 9, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 18, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 20, by + 18, 3, 3, TEXT_BLACK);
+        }
+        ToolKind::Ellipse => {
+            // Ellipse outline with 4 cardinal node handles
+            stroke_rect(surface, bx + 8, by + 10, 14, 10, TEXT_BLACK);
+            put_pixel(surface, bx + 8, by + 10, CHROME_BG);
+            put_pixel(surface, bx + 21, by + 10, CHROME_BG);
+            put_pixel(surface, bx + 8, by + 19, CHROME_BG);
+            put_pixel(surface, bx + 21, by + 19, CHROME_BG);
+            // 4 cardinal handles
+            fill_rect(surface, bx + 14, by + 9, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 14, by + 18, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 14, 3, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 20, by + 14, 3, 3, TEXT_BLACK);
+        }
+        ToolKind::PolygonStar => {
+            // 5-point star filled with gold
+            let pts = [(bx + 15, by + 7), (bx + 22, by + 12), (bx + 19, by + 21), (bx + 11, by + 21), (bx + 8, by + 12)];
+            draw_line(surface, pts[0].0, pts[0].1, pts[2].0, pts[2].1, TEXT_BLACK);
+            draw_line(surface, pts[2].0, pts[2].1, pts[4].0, pts[4].1, TEXT_BLACK);
+            draw_line(surface, pts[4].0, pts[4].1, pts[1].0, pts[1].1, TEXT_BLACK);
+            draw_line(surface, pts[1].0, pts[1].1, pts[3].0, pts[3].1, TEXT_BLACK);
+            draw_line(surface, pts[3].0, pts[3].1, pts[0].0, pts[0].1, TEXT_BLACK);
+            fill_rect(surface, bx + 13, by + 13, 4, 4, STAR_GOLD);
+        }
+        ToolKind::ArtisticText => {
+            // Bold serif 'A' with baseline
+            draw_line(surface, bx + 14, by + 8, bx + 9, by + 20, TEXT_BLACK);
+            draw_line(surface, bx + 15, by + 8, bx + 10, by + 20, TEXT_BLACK);
+            draw_line(surface, bx + 15, by + 8, bx + 20, by + 20, TEXT_BLACK);
+            draw_line(surface, bx + 12, by + 16, bx + 18, by + 16, TEXT_BLACK);
+            // Serifs
+            draw_line(surface, bx + 8, by + 20, bx + 12, by + 20, TEXT_BLACK);
+            draw_line(surface, bx + 18, by + 20, bx + 22, by + 20, TEXT_BLACK);
+        }
+        ToolKind::InteractiveFill => {
+            // Tilted paint bucket spilling paint drop
+            fill_rect(surface, bx + 9, by + 11, 7, 7, [0x30, 0x90, 0xD0, 0xFF]);
+            stroke_rect(surface, bx + 9, by + 11, 7, 7, TEXT_BLACK);
+            draw_line(surface, bx + 15, by + 15, bx + 20, by + 20, [0x30, 0x90, 0xD0, 0xFF]);
+            fill_rect(surface, bx + 19, by + 19, 3, 3, [0x30, 0x90, 0xD0, 0xFF]);
+        }
+    }
+}
+
+fn draw_toolbar_icon(surface: &mut Surface, ctrl: StandardToolbarControl, bx: i32, by: i32) {
+    match ctrl {
+        StandardToolbarControl::New => {
+            fill_rect(surface, bx + 6, by + 4, 11, 15, PAPER_WHITE);
+            stroke_rect(surface, bx + 6, by + 4, 11, 15, TEXT_BLACK);
+            // Dog ear
+            put_pixel(surface, bx + 15, by + 4, CHROME_BG);
+            put_pixel(surface, bx + 16, by + 4, CHROME_BG);
+            put_pixel(surface, bx + 16, by + 5, CHROME_BG);
+            draw_line(surface, bx + 14, by + 4, bx + 16, by + 6, TEXT_BLACK);
+            // Text lines
+            draw_line(surface, bx + 8, by + 9, bx + 14, by + 9, BEVEL_DARK);
+            draw_line(surface, bx + 8, by + 12, bx + 14, by + 12, BEVEL_DARK);
+            draw_line(surface, bx + 8, by + 15, bx + 12, by + 15, BEVEL_DARK);
+        }
+        StandardToolbarControl::Open => {
+            // Yellow folder
+            fill_rect(surface, bx + 5, by + 6, 6, 3, FOLDER_YELLOW);
+            stroke_rect(surface, bx + 5, by + 6, 6, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 4, by + 8, 15, 11, FOLDER_YELLOW);
+            stroke_rect(surface, bx + 4, by + 8, 15, 11, TEXT_BLACK);
+            draw_line(surface, bx + 4, by + 13, bx + 18, by + 13, [0xC0, 0x98, 0x20, 0xFF]);
+        }
+        StandardToolbarControl::Save => {
+            // Blue 3.5" floppy disk
+            fill_rect(surface, bx + 5, by + 5, 14, 14, FLOPPY_BLUE);
+            stroke_rect(surface, bx + 5, by + 5, 14, 14, TEXT_BLACK);
+            fill_rect(surface, bx + 8, by + 5, 7, 5, CHROME_BG);
+            stroke_rect(surface, bx + 8, by + 5, 7, 5, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 12, 10, 6, PAPER_WHITE);
+        }
+        StandardToolbarControl::Print => {
+            // Desktop printer
+            fill_rect(surface, bx + 5, by + 10, 14, 8, CHROME_BG);
+            stroke_rect(surface, bx + 5, by + 10, 14, 8, TEXT_BLACK);
+            fill_rect(surface, bx + 8, by + 6, 8, 5, PAPER_WHITE);
+            stroke_rect(surface, bx + 8, by + 6, 8, 5, TEXT_BLACK);
+            fill_rect(surface, bx + 8, by + 14, 8, 4, PAPER_WHITE);
+            stroke_rect(surface, bx + 8, by + 14, 8, 4, TEXT_BLACK);
+            put_pixel(surface, bx + 16, by + 12, ICON_GREEN);
+        }
+        StandardToolbarControl::Cut => {
+            // Scissors
+            draw_line(surface, bx + 6, by + 6, bx + 16, by + 15, TEXT_BLACK);
+            draw_line(surface, bx + 16, by + 6, bx + 6, by + 15, TEXT_BLACK);
+            stroke_rect(surface, bx + 5, by + 14, 4, 4, TEXT_BLACK);
+            stroke_rect(surface, bx + 14, by + 14, 4, 4, TEXT_BLACK);
+        }
+        StandardToolbarControl::Copy => {
+            // Two overlapping sheets
+            fill_rect(surface, bx + 9, by + 5, 9, 12, PAPER_WHITE);
+            stroke_rect(surface, bx + 9, by + 5, 9, 12, TEXT_BLACK);
+            fill_rect(surface, bx + 6, by + 8, 9, 12, PAPER_WHITE);
+            stroke_rect(surface, bx + 6, by + 8, 9, 12, TEXT_BLACK);
+        }
+        StandardToolbarControl::Paste => {
+            // Clipboard
+            fill_rect(surface, bx + 5, by + 6, 13, 13, [0xA0, 0x70, 0x30, 0xFF]);
+            stroke_rect(surface, bx + 5, by + 6, 13, 13, TEXT_BLACK);
+            fill_rect(surface, bx + 8, by + 4, 7, 3, CHROME_BG);
+            stroke_rect(surface, bx + 8, by + 4, 7, 3, TEXT_BLACK);
+            fill_rect(surface, bx + 7, by + 8, 9, 10, PAPER_WHITE);
+            stroke_rect(surface, bx + 7, by + 8, 9, 10, TEXT_BLACK);
+        }
+        StandardToolbarControl::Undo => {
+            // Curved left blue arrow
+            draw_line(surface, bx + 16, by + 16, bx + 12, by + 9, GUIDELINE_BLUE);
+            draw_line(surface, bx + 12, by + 9, bx + 7, by + 11, GUIDELINE_BLUE);
+            draw_line(surface, bx + 7, by + 11, bx + 10, by + 8, GUIDELINE_BLUE);
+            draw_line(surface, bx + 7, by + 11, bx + 10, by + 14, GUIDELINE_BLUE);
+        }
+        StandardToolbarControl::Redo => {
+            // Curved right blue arrow
+            draw_line(surface, bx + 7, by + 16, bx + 11, by + 9, GUIDELINE_BLUE);
+            draw_line(surface, bx + 11, by + 9, bx + 16, by + 11, GUIDELINE_BLUE);
+            draw_line(surface, bx + 16, by + 11, bx + 13, by + 8, GUIDELINE_BLUE);
+            draw_line(surface, bx + 16, by + 11, bx + 13, by + 14, GUIDELINE_BLUE);
+        }
+        StandardToolbarControl::Import => {
+            // Document with green arrow pointing in
+            fill_rect(surface, bx + 5, by + 6, 9, 12, PAPER_WHITE);
+            stroke_rect(surface, bx + 5, by + 6, 9, 12, TEXT_BLACK);
+            draw_line(surface, bx + 17, by + 6, bx + 11, by + 12, ICON_GREEN);
+            draw_line(surface, bx + 11, by + 12, bx + 14, by + 12, ICON_GREEN);
+            draw_line(surface, bx + 11, by + 12, bx + 11, by + 9, ICON_GREEN);
+        }
+        StandardToolbarControl::Export => {
+            // Document with blue arrow pointing out
+            fill_rect(surface, bx + 5, by + 6, 9, 12, PAPER_WHITE);
+            stroke_rect(surface, bx + 5, by + 6, 9, 12, TEXT_BLACK);
+            draw_line(surface, bx + 11, by + 12, bx + 17, by + 6, GUIDELINE_BLUE);
+            draw_line(surface, bx + 17, by + 6, bx + 14, by + 6, GUIDELINE_BLUE);
+            draw_line(surface, bx + 17, by + 6, bx + 17, by + 9, GUIDELINE_BLUE);
+        }
+        StandardToolbarControl::ZoomPercent => {
+            // Magnifier + %
+            stroke_rect(surface, bx + 5, by + 8, 8, 8, TEXT_BLACK);
+            draw_line(surface, bx + 11, by + 14, bx + 14, by + 17, TEXT_BLACK);
+            draw_text(surface, bx + 14, by + 8, "%", TEXT_BLACK);
+        }
+        StandardToolbarControl::SnapToObjects => {
+            // Magnet icon (red & blue poles)
+            fill_rect(surface, bx + 6, by + 6, 4, 8, [0xE0, 0x20, 0x20, 0xFF]);
+            fill_rect(surface, bx + 13, by + 6, 4, 8, GUIDELINE_BLUE);
+            draw_line(surface, bx + 6, by + 14, bx + 17, by + 14, BEVEL_DARK);
+            fill_rect(surface, bx + 6, by + 5, 4, 2, CHROME_BG);
+            fill_rect(surface, bx + 13, by + 5, 4, 2, CHROME_BG);
+        }
+        StandardToolbarControl::SnapToPage => {
+            // Page with snap crosshairs
+            stroke_rect(surface, bx + 7, by + 6, 10, 12, TEXT_BLACK);
+            draw_line(surface, bx + 5, by + 12, bx + 19, by + 12, GUIDELINE_BLUE);
+            draw_line(surface, bx + 12, by + 4, bx + 12, by + 20, GUIDELINE_BLUE);
+        }
     }
 }

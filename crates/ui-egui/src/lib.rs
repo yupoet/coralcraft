@@ -152,6 +152,7 @@ pub struct ObjectTreeEntry {
     pub is_desktop: bool,
     pub object_id: ObjectId,
     pub object_label: String,
+    pub type_badge: String,
     pub selected: bool,
     pub visible: bool,
     pub locked: bool,
@@ -189,6 +190,8 @@ pub struct WorkspaceFrameSnapshot {
     pub active_docker_tab: DockerTab,
     pub object_tree: Vec<ObjectTreeEntry>,
     pub selection_bounds: Option<Rect>,
+    pub horizontal_guidelines: Vec<F64>,
+    pub vertical_guidelines: Vec<F64>,
 }
 
 /// User interface action emitted by widgets and routed by [`DesktopWorkspace::dispatch`].
@@ -256,6 +259,12 @@ pub enum UiAction {
     ExtractPowerClip { container_id: ObjectId },
     /// Moves a single Bezier anchor node (`F10` Shape Tool).
     MoveBezierNode { object_id: ObjectId, element_index: usize, new_pt: Point },
+    /// Adds a horizontal ruler guideline at page Y (in typographic points).
+    AddHorizontalGuideline(F64),
+    /// Adds a vertical ruler guideline at page X (in typographic points).
+    AddVerticalGuideline(F64),
+    /// Clears all ruler guidelines.
+    ClearGuidelines,
 }
 
 /// Stateful desktop workspace controller (`coralcraft-ui-egui`, L6) wrapping [`EditorEngine`].
@@ -267,6 +276,8 @@ pub struct DesktopWorkspace {
     pub docker_open: bool,
     pub active_docker_tab: DockerTab,
     pub palette_scroll_px: i32,
+    pub horizontal_guidelines: Vec<F64>,
+    pub vertical_guidelines: Vec<F64>,
 }
 
 impl Default for DesktopWorkspace {
@@ -286,6 +297,8 @@ impl DesktopWorkspace {
             docker_open: true,
             active_docker_tab: DockerTab::Objects,
             palette_scroll_px: 0,
+            horizontal_guidelines: Vec::new(),
+            vertical_guidelines: Vec::new(),
         }
     }
 
@@ -393,12 +406,30 @@ impl DesktopWorkspace {
                         }
                         .to_owned()
                     });
+                    let type_badge = if !obj.powerclip_children.is_empty() {
+                        "[Pwr]"
+                    } else if !obj.effects.is_empty() {
+                        "[Eff]"
+                    } else {
+                        match &obj.kind {
+                            coralcraft_doc::ObjectKind::Rect(_) => "[Rec]",
+                            coralcraft_doc::ObjectKind::Ellipse(_) => "[Elp]",
+                            coralcraft_doc::ObjectKind::Polygon(p) if p.inner_radius.is_some() => "[Str]",
+                            coralcraft_doc::ObjectKind::Polygon(_) => "[Pol]",
+                            coralcraft_doc::ObjectKind::Path(_) => "[Cur]",
+                            coralcraft_doc::ObjectKind::ArtisticText { .. } => "[Txt]",
+                            coralcraft_doc::ObjectKind::Group { .. } => "[Grp]",
+                            coralcraft_doc::ObjectKind::Unsupported(_) => "[Unk]",
+                        }
+                    }
+                    .to_owned();
                     object_tree.push(ObjectTreeEntry {
                         layer_name: layer.name.clone(),
                         is_master,
                         is_desktop,
                         object_id: obj.id,
                         object_label,
+                        type_badge,
                         selected: self.engine.selection.contains(&obj.id),
                         visible: obj.visible,
                         locked: obj.locked,
@@ -424,6 +455,8 @@ impl DesktopWorkspace {
             active_docker_tab: self.active_docker_tab,
             object_tree,
             selection_bounds,
+            horizontal_guidelines: self.horizontal_guidelines.clone(),
+            vertical_guidelines: self.vertical_guidelines.clone(),
         }
     }
 
@@ -537,6 +570,20 @@ impl DesktopWorkspace {
             UiAction::MoveBezierNode { object_id, element_index, new_pt } => {
                 self.engine.execute(EngineCommand::MoveBezierNode { object_id, element_index, new_pt });
             }
+            UiAction::AddHorizontalGuideline(y) => {
+                if !self.horizontal_guidelines.contains(&y) {
+                    self.horizontal_guidelines.push(y);
+                }
+            }
+            UiAction::AddVerticalGuideline(x) => {
+                if !self.vertical_guidelines.contains(&x) {
+                    self.vertical_guidelines.push(x);
+                }
+            }
+            UiAction::ClearGuidelines => {
+                self.horizontal_guidelines.clear();
+                self.vertical_guidelines.clear();
+            }
         }
     }
 
@@ -602,6 +649,7 @@ mod tests {
         let snap1 = ws.snapshot();
         assert_eq!(snap1.object_tree.len(), 1);
         assert!(snap1.object_tree[0].selected);
+        assert_eq!(snap1.object_tree[0].type_badge, "[Rec]");
         assert_eq!(snap1.status_bar.selection_summary, "Rectangle on Layer");
 
         // Left-click swatch #1 sets Fill; right-click swatch #2 sets Outline; left-click #0 `[X]` clears Fill
@@ -651,5 +699,28 @@ mod tests {
         // Probe Docker selected row (`#316AC5`) in right `Objects` Docker
         let docker_sel_px = out1.surface.pixels[122 * 1440 + 1185];
         assert_eq!(docker_sel_px, [0x31, 0x6A, 0xC5, 0xFF]);
+    }
+
+    #[test]
+    fn workspace_guidelines_and_object_badges_acceptance() {
+        let mut ws = DesktopWorkspace::default();
+        ws.dispatch(UiAction::AddHorizontalGuideline(F64::new(100.0).unwrap()));
+        ws.dispatch(UiAction::AddVerticalGuideline(F64::new(150.0).unwrap()));
+
+        let snap = ws.snapshot();
+        assert_eq!(snap.horizontal_guidelines.len(), 1);
+        assert_eq!(snap.vertical_guidelines.len(), 1);
+
+        // Render workspace with guidelines and verify output
+        let out = ws.render_workspace_png().unwrap();
+        assert_eq!(out.surface.width, 1440);
+        assert_eq!(out.surface.height, 900);
+        assert!(out.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+
+        // Clear guidelines
+        ws.dispatch(UiAction::ClearGuidelines);
+        let snap_cleared = ws.snapshot();
+        assert!(snap_cleared.horizontal_guidelines.is_empty());
+        assert!(snap_cleared.vertical_guidelines.is_empty());
     }
 }
