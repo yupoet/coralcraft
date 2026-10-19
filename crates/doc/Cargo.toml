@@ -7,5 +7,12 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[dependencies]
+coralcraft-geom = { workspace = true }
+coralcraft-color = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
 [lints]
 workspace = true

@@ -1,9 +1,260 @@
-//! `coralcraft-doc`: Multi-page document model (spreads, pages, document-level layers, desktop layer; lands in M2).
+//! `coralcraft-doc`: Multi-page CorelDRAW document model (`Document`, `Page`, `Layer`, `ObjectNode`,
+//! `ObjectKind::Unsupported`) and dual-mode `.coralcraft` container (`save_json`, `save_zip`, `load_bytes`).
+
+pub mod container;
+pub mod model;
+pub mod style;
+
+pub use container::{BLOB_THRESHOLD, crc32, list_zip_blobs, load_bytes, save_json, save_zip, sha256_hex};
+pub use model::{
+    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, SchemaVersion, UnsupportedObject,
+};
+pub use style::{ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+    use coralcraft_geom::{CornerKind, F64, Rect, RectSpec, Size};
+
+    use super::*;
+
+    fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
     #[test]
-    fn crate_links() {
-        assert_eq!(env!("CARGO_PKG_NAME"), "coralcraft-doc");
+    fn sha256_matches_nist_fips_180_4_vectors() {
+        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn document_dual_mode_json_and_zip_roundtrip_equality() {
+        let mut doc = Document::new_a4_portrait();
+        let rect_id = doc.allocate_object_id();
+        let rect = RectSpec::uniform(Rect::new(20.0, 30.0, 220.0, 150.0).unwrap(), 8.0, CornerKind::Round).unwrap();
+        let node = ObjectNode::new(
+            rect_id,
+            Some("Hero Card".to_owned()),
+            ObjectKind::Rect(rect),
+            Some(FillStyle::Fountain {
+                geometry: FountainGeometry::Linear { angle_deg: F64::new(45.0).unwrap(), edge_pad: F64::ZERO },
+                blend_mode: FountainBlendMode::Direct,
+                stops: vec![FountainStop::new(0.0, Color::rgb8(255, 0, 0)).unwrap(), FountainStop::new(1.0, Color::rgb8(0, 0, 255)).unwrap()],
+            }),
+            Some(OutlineStyle::hairline(Color::BLACK)),
+        );
+        doc.pages[0].layers[0].objects.push(node);
+
+        let json_bytes = save_json(&doc).unwrap();
+        let zip_bytes = save_zip(&doc).unwrap();
+
+        let from_json = load_bytes(&json_bytes).unwrap();
+        let from_zip = load_bytes(&zip_bytes).unwrap();
+        assert_eq!(from_json, doc);
+        assert_eq!(from_zip, doc);
+        assert_eq!(from_zip, from_json);
+
+        // Byte idempotence of save_zip
+        let zip_bytes_2 = save_zip(&from_zip).unwrap();
+        assert_eq!(zip_bytes_2, zip_bytes);
+    }
+
+    #[test]
+    fn unsupported_objects_blob_threshold_dedupe_and_tamper_detection() {
+        let mut doc = Document::new_a4_portrait();
+
+        // Payload sizes at boundary: 0, 1, 63 (inline hex in ZIP), 64, 65 (externalized to blobs/ in ZIP)
+        let payload_63 = vec![0xAA_u8; 63];
+        let payload_64 = (0..64_u8).collect::<Vec<u8>>();
+        let payload_65 = (0..65_u8).collect::<Vec<u8>>();
+
+        for (i, payload) in [
+            Vec::new(),
+            vec![0x42],
+            payload_63,
+            payload_64.clone(),
+            payload_64.clone(), // duplicate 64-byte payload must deduplicate to 1 blob entry!
+            payload_65,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = doc.allocate_object_id();
+            let u = UnsupportedObject {
+                tag: ChunkTag(*b"lens"),
+                class_hint: Some(format!("Lens #{i}")),
+                payload: RawPayload(payload),
+                fallback_bounds: Some(Rect::new(0.0, 0.0, 50.0, 50.0).unwrap()),
+                absolute_geometry: i % 2 == 0,
+                children: Vec::new(),
+                residual: Residual {
+                    chunks: vec![RawChunk {
+                        tag: ChunkTag(*b"unkn"),
+                        flags: 0x0001,
+                        slot: 0,
+                        payload: RawPayload(vec![1, 2, 3, 4]),
+                        src_offset: 128,
+                    }],
+                },
+            };
+            doc.pages[0].layers[0].objects.push(ObjectNode::new(id, Some(format!("Unsupported {i}")), ObjectKind::Unsupported(u), None, None));
+        }
+
+        let json_bytes = save_json(&doc).unwrap();
+        let zip_bytes = save_zip(&doc).unwrap();
+
+        // Only payload_64 (deduped) and payload_65 are >= 64 bytes -> exactly 2 blobs in ZIP!
+        let blobs = list_zip_blobs(&zip_bytes).unwrap();
+        assert_eq!(blobs.len(), 2);
+
+        // Both modes round-trip to the exact same Document with all 6 Unsupported nodes intact
+        assert_eq!(load_bytes(&json_bytes).unwrap(), doc);
+        assert_eq!(load_bytes(&zip_bytes).unwrap(), doc);
+
+        // Tampering a byte inside a blob payload in the ZIP archive must return Err(DocError::CorruptBlob)
+        let mut corrupted = zip_bytes.clone();
+        // Flip the last byte before the Central Directory (which lies inside the last blob's data)
+        let needle = (0..65_u8).collect::<Vec<u8>>();
+        let pos = corrupted.windows(needle.len()).position(|w| w == needle.as_slice()).unwrap();
+        corrupted[pos + 10] ^= 0xFF;
+        assert!(matches!(load_bytes(&corrupted), Err(DocError::CorruptBlob { .. })));
+    }
+
+    #[test]
+    fn property_random_documents_roundtrip_json_and_zip_identically() {
+        let mut seed = 0xC0DE_CAFE_2026_0003_u64;
+        for case_idx in 0..100 {
+            let mut doc = Document::new_a4_portrait();
+            doc.title = format!("PropDoc-{case_idx}-🦀");
+            let page_count = (splitmix64(&mut seed) % 3) as usize + 1;
+            while doc.pages.len() < page_count {
+                let pid = PageId(doc.allocate_object_id().0);
+                let lid = LayerId(doc.allocate_object_id().0);
+                doc.pages.push(Page {
+                    id: pid,
+                    name: format!("Page {}", doc.pages.len() + 1),
+                    size: Size::new(400.0 + (case_idx as f64), 600.0).unwrap(),
+                    bleed: F64::new(9.0).unwrap(),
+                    background: None,
+                    layers: vec![Layer::new_normal(lid, "Layer 1")],
+                    residual: Residual::default(),
+                    extra: BTreeMap::new(),
+                });
+            }
+
+            for p in 0..doc.pages.len() {
+                let obj_count = (splitmix64(&mut seed) % 4) as usize + 1;
+                for j in 0..obj_count {
+                    let oid = doc.allocate_object_id();
+                    let len_choices = [0_usize, 1, 63, 64, 65, 128];
+                    let plen = len_choices[(splitmix64(&mut seed) as usize) % len_choices.len()];
+                    let mut bytes = vec![0_u8; plen];
+                    for b in &mut bytes {
+                        *b = (splitmix64(&mut seed) & 0xFF) as u8;
+                    }
+                    let u = UnsupportedObject {
+                        tag: ChunkTag(*b"test"),
+                        class_hint: Some(format!("p{p}_o{j}")),
+                        payload: RawPayload(bytes),
+                        fallback_bounds: Some(Rect::new(0.0, 0.0, 10.0, 10.0).unwrap()),
+                        absolute_geometry: false,
+                        children: Vec::new(),
+                        residual: Residual::default(),
+                    };
+                    doc.pages[p].layers[0].objects.push(ObjectNode::new(oid, None, ObjectKind::Unsupported(u), None, None));
+                }
+            }
+
+            let j = save_json(&doc).unwrap();
+            let z = save_zip(&doc).unwrap();
+            let dj = load_bytes(&j).unwrap();
+            let dz = load_bytes(&z).unwrap();
+            assert_eq!(dj, doc);
+            assert_eq!(dz, doc);
+            assert_eq!(save_zip(&dz).unwrap(), z);
+        }
+    }
+
+    #[test]
+    fn multipage_master_and_desktop_layer_z_order_semantics() {
+        let mut doc = Document::new_a4_portrait();
+        // Add Page 2
+        doc.pages.push(Page {
+            id: PageId(10),
+            name: "Page 2".to_owned(),
+            size: doc.pages[0].size,
+            bleed: F64::ZERO,
+            background: None,
+            layers: vec![Layer::new_normal(LayerId(11), "P2 Layer 1")],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        });
+
+        // Add Master Odd (behind), Master Even (behind), Master All (in front)
+        doc.master_layers.insert(
+            0,
+            Layer {
+                id: LayerId(20),
+                name: "Master Odd BG".to_owned(),
+                role: LayerRole::MasterOddPages,
+                visible: true,
+                printable: true,
+                locked: false,
+                master_in_front: false,
+                opacity: F64::ONE,
+                objects: Vec::new(),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            },
+        );
+        doc.master_layers.insert(
+            1,
+            Layer {
+                id: LayerId(21),
+                name: "Master Even BG".to_owned(),
+                role: LayerRole::MasterEvenPages,
+                visible: true,
+                printable: true,
+                locked: false,
+                master_in_front: false,
+                opacity: F64::ONE,
+                objects: Vec::new(),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            },
+        );
+        doc.master_layers.insert(
+            2,
+            Layer {
+                id: LayerId(22),
+                name: "Master All FG".to_owned(),
+                role: LayerRole::MasterAllPages,
+                visible: true,
+                printable: true,
+                locked: false,
+                master_in_front: true,
+                opacity: F64::ONE,
+                objects: Vec::new(),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            },
+        );
+
+        // Page 1 (odd, index 0) screen view: Master Odd BG -> Layer 1 -> Master All FG -> Desktop
+        let p1_screen: Vec<&str> = doc.effective_layers_for_page(0, false).unwrap().into_iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(p1_screen, vec!["Master Odd BG", "Layer 1", "Master All FG", "Desktop"]);
+
+        // Page 2 (even, index 1) print/export view (Desktop has printable == false):
+        // Master Even BG -> P2 Layer 1 -> Master All FG
+        let p2_export: Vec<&str> = doc.effective_layers_for_page(1, true).unwrap().into_iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(p2_export, vec!["Master Even BG", "P2 Layer 1", "Master All FG"]);
     }
 }
