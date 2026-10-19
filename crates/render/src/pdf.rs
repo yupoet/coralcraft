@@ -12,9 +12,27 @@ use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpe
 
 use crate::surface::RenderError;
 use crate::svg::{extract_shape_path_and_bbox, fmt_num};
+use coralcraft_geom::F64;
+use serde::{Deserialize, Serialize};
+
+/// Prepress printer's marks options for print-ready PDF 1.4 and SVG 1.1 export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrepressOptions {
+    /// Emit corner crop marks indicating the page trim boundary.
+    pub crop_marks: bool,
+    /// Emit registration bullseye targets in Registration color (`CMYK 100/100/100/100`).
+    pub registration_marks: bool,
+    /// Optional bleed override in typographic points (`0.0` = use `page.bleed`).
+    pub bleed_pt: F64,
+}
 
 /// Exports all pages of `doc` into a self-contained ISO 32000-1 PDF 1.4 byte vector.
 pub fn export_pdf(doc: &Document) -> Result<Vec<u8>, RenderError> {
+    export_pdf_with_prepress(doc, &PrepressOptions::default())
+}
+
+/// Exports all pages of `doc` into an ISO 32000-1 PDF 1.4 byte vector with optional prepress marks.
+pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> Result<Vec<u8>, RenderError> {
     if doc.pages.is_empty() {
         return Err(RenderError::Doc(coralcraft_doc::DocError::PageOutOfRange { index: 0, count: 0 }));
     }
@@ -49,7 +67,8 @@ pub fn export_pdf(doc: &Document) -> Result<Vec<u8>, RenderError> {
         let page = &doc.pages[page_idx];
         let w = page.size.width.get();
         let h = page.size.height.get();
-        let bleed = page.bleed.get().max(0.0);
+        let raw_bleed = if prepress.bleed_pt.get() > 0.0 { prepress.bleed_pt.get() } else { page.bleed.get().max(0.0) };
+        let bleed = if (prepress.crop_marks || prepress.registration_marks) && raw_bleed < 18.0 { 18.0 } else { raw_bleed };
         let media_w = w + 2.0 * bleed;
         let media_h = h + 2.0 * bleed;
 
@@ -71,7 +90,7 @@ pub fn export_pdf(doc: &Document) -> Result<Vec<u8>, RenderError> {
         objects.push(page_dict.into_bytes());
 
         // Build content stream for `page_idx`
-        let stream_text = build_page_content_stream(doc, page_idx, w, h, bleed)?;
+        let stream_text = build_page_content_stream(doc, page_idx, w, h, bleed, prepress)?;
         let stream_bytes = stream_text.as_bytes();
         let mut content_obj = format!("<< /Length {} >>\nstream\n", stream_bytes.len()).into_bytes();
         content_obj.extend_from_slice(stream_bytes);
@@ -111,7 +130,14 @@ pub fn export_pdf(doc: &Document) -> Result<Vec<u8>, RenderError> {
     Ok(out)
 }
 
-fn build_page_content_stream(doc: &Document, page_index: usize, w: f64, h: f64, bleed: f64) -> Result<String, RenderError> {
+fn build_page_content_stream(
+    doc: &Document,
+    page_index: usize,
+    w: f64,
+    h: f64,
+    bleed: f64,
+    prepress: &PrepressOptions,
+) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
     let page = &doc.pages[page_index];
     let media_h = h + 2.0 * bleed;
@@ -138,6 +164,74 @@ fn build_page_content_stream(doc: &Document, page_index: usize, w: f64, h: f64, 
         for node in &layer.objects {
             emit_pdf_node(&mut s, node)?;
         }
+    }
+
+    if prepress.crop_marks || prepress.registration_marks {
+        s.push_str("q\n1 1 1 1 K\n0.25 w\n");
+        if prepress.crop_marks {
+            let off = 3.0;
+            let len = 12.0;
+            // Top-left corner
+            let _ = writeln!(s, "{} 0 m {} 0 l 0 {} m 0 {} l S", fmt_num(-len), fmt_num(-off), fmt_num(-len), fmt_num(-off));
+            // Top-right corner
+            let _ = writeln!(
+                s,
+                "{} 0 m {} 0 l {} {} m {} {} l S",
+                fmt_num(w + off),
+                fmt_num(w + len),
+                fmt_num(w),
+                fmt_num(-len),
+                fmt_num(w),
+                fmt_num(-off)
+            );
+            // Bottom-left corner
+            let _ = writeln!(
+                s,
+                "{} {} m {} {} l 0 {} m 0 {} l S",
+                fmt_num(-len),
+                fmt_num(h),
+                fmt_num(-off),
+                fmt_num(h),
+                fmt_num(h + off),
+                fmt_num(h + len)
+            );
+            // Bottom-right corner
+            let _ = writeln!(
+                s,
+                "{} {} m {} {} l {} {} m {} {} l S",
+                fmt_num(w + off),
+                fmt_num(h),
+                fmt_num(w + len),
+                fmt_num(h),
+                fmt_num(w),
+                fmt_num(h + off),
+                fmt_num(w),
+                fmt_num(h + len)
+            );
+        }
+        if prepress.registration_marks {
+            let targets = [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)];
+            for (tx, ty) in targets {
+                let r = 3.5;
+                let _ = writeln!(
+                    s,
+                    "{} {} m {} {} l {} {} m {} {} l {} {} {} {} re S",
+                    fmt_num(tx - 5.0),
+                    fmt_num(ty),
+                    fmt_num(tx + 5.0),
+                    fmt_num(ty),
+                    fmt_num(tx),
+                    fmt_num(ty - 5.0),
+                    fmt_num(tx),
+                    fmt_num(ty + 5.0),
+                    fmt_num(tx - r),
+                    fmt_num(ty - r),
+                    fmt_num(2.0 * r),
+                    fmt_num(2.0 * r)
+                );
+            }
+        }
+        s.push_str("Q\n");
     }
 
     s.push_str("Q\n");

@@ -235,12 +235,15 @@ pub enum VectorEffect {
         /// Projection angle in degrees (`0..=360`).
         angle_deg: F64,
     },
-    /// Blend effect: dynamic linear progression toward a target object.
+    /// Blend effect: dynamic progression toward a target object, optionally along a custom spine path.
     Blend {
         /// Target object identifier to blend with.
         target_id: ObjectId,
         /// Number of intermediate blend steps.
         steps: u32,
+        /// Optional custom Bézier spine path (`Object -> Blend -> Path Properties -> New Path`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spine: Option<Path>,
     },
 }
 

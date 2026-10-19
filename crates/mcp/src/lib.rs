@@ -223,6 +223,11 @@ impl McpServer {
                             "inputSchema": { "type": "object" }
                         },
                         {
+                            "name": "attach_blend_spine",
+                            "description": "Attaches a custom Bezier spine object (spine_object_id) to a Blend effect on blend_object_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
                             "name": "expand_effects",
                             "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
                             "inputSchema": { "type": "object" }
@@ -527,6 +532,14 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::CreateBlend { start_id: ObjectId(start_raw), end_id: ObjectId(end_raw), steps });
                 Ok(json!({ "blend_created": ok, "start_id": start_raw, "end_id": end_raw }))
             }
+            "attach_blend_spine" => {
+                let blend_raw = args.get("blend_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing blend_object_id".to_owned())?;
+                let spine_raw = args.get("spine_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing spine_object_id".to_owned())?;
+                let ok = self
+                    .engine
+                    .execute(EngineCommand::AttachBlendSpine { blend_object_id: ObjectId(blend_raw), spine_object_id: ObjectId(spine_raw) });
+                Ok(json!({ "spine_attached": ok, "blend_object_id": blend_raw, "spine_object_id": spine_raw }))
+            }
             "expand_effects" => {
                 let target = self.resolve_target_id(args)?;
                 let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
@@ -579,7 +592,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 28);
+        assert_eq!(tools, 29);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

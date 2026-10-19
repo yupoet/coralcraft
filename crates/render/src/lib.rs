@@ -11,14 +11,14 @@ use coralcraft_color::{Color, interpolate_stops};
 use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle, VectorEffect};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
-pub use pdf::export_pdf;
+pub use pdf::{PrepressOptions, export_pdf, export_pdf_with_prepress};
 pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
     MAX_CLIP_DEPTH, MAX_SURFACE_PIXELS, MAX_SURFACE_SIDE, RenderError, RenderWarning, Surface, premul_to_straight, src_over_premul,
     straight_to_premul,
 };
-pub use svg::{export_svg, path_to_svg_d};
+pub use svg::{export_svg, export_svg_with_prepress, path_to_svg_d};
 
 /// Options controlling document page rasterization.
 #[derive(Clone, Debug, PartialEq)]
@@ -88,11 +88,71 @@ pub fn render_page(doc: &Document, page_index: usize, opts: &RenderOpts) -> Resu
         }
         for obj in &layer.objects {
             render_object_node(&mut surface, obj, page_to_dev, opts.scale, layer_opacity, 0, &mut warnings)?;
+            for effect in &obj.effects {
+                if let VectorEffect::Blend { target_id, steps, spine } = effect
+                    && *steps > 0
+                    && let Some(target_obj) = layer.objects.iter().find(|o| o.id == *target_id)
+                {
+                    render_blend_steps(&mut surface, obj, target_obj, *steps, spine.as_ref(), page_to_dev, opts.scale, layer_opacity, &mut warnings)?;
+                }
+            }
         }
     }
 
     let png_bytes = encode_png(&surface)?;
     Ok(RenderOutput { surface, png_bytes, warnings })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_blend_steps(
+    surface: &mut Surface,
+    start_obj: &ObjectNode,
+    end_obj: &ObjectNode,
+    steps: u32,
+    spine: Option<&Path>,
+    page_to_dev: Affine2,
+    page_scale: f64,
+    layer_opacity: f64,
+    warnings: &mut Vec<RenderWarning>,
+) -> Result<(), RenderError> {
+    let Some((_, b0)) = extract_local_path_and_bbox(&start_obj.kind)? else {
+        return Ok(());
+    };
+    let Some((_, b1)) = extract_local_path_and_bbox(&end_obj.kind)? else {
+        return Ok(());
+    };
+    let c0 = start_obj.transform.apply_point(b0.center()?)?;
+    let c1 = end_obj.transform.apply_point(b1.center()?)?;
+    let spine_lut = spine.and_then(|sp| coralcraft_geom::ArcLengthTable::from_path(sp).ok()).filter(|lut| lut.total_length() > 1e-6);
+
+    let clamped_steps = steps.min(64);
+    for k in 1..=clamped_steps {
+        let u = f64::from(k) / f64::from(clamped_steps + 1);
+        let target_center = if let Some(lut) = &spine_lut
+            && let Some(sample) = lut.sample_normalized(u)
+        {
+            sample.point
+        } else {
+            let x = c0.x.get() + u * (c1.x.get() - c0.x.get());
+            let y = c0.y.get() + u * (c1.y.get() - c0.y.get());
+            Point::new(x, y)?
+        };
+        let dx = target_center.x.get() - c0.x.get();
+        let dy = target_center.y.get() - c0.y.get();
+        let mut step_node = start_obj.clone();
+        step_node.effects.clear();
+        step_node.transform = start_obj.transform.then(Affine2::translation(dx, dy)?)?;
+        if let (Some(FillStyle::Uniform { color: col0 }), Some(FillStyle::Uniform { color: col1 })) = (&start_obj.fill, &end_obj.fill) {
+            let rgb0 = col0.to_srgb8();
+            let rgb1 = col1.to_srgb8();
+            let r = (f64::from(rgb0[0]) + u * (f64::from(rgb1[0]) - f64::from(rgb0[0]))).round() as u8;
+            let g = (f64::from(rgb0[1]) + u * (f64::from(rgb1[1]) - f64::from(rgb0[1]))).round() as u8;
+            let b = (f64::from(rgb0[2]) + u * (f64::from(rgb1[2]) - f64::from(rgb0[2]))).round() as u8;
+            step_node.fill = Some(FillStyle::uniform(Color::rgb8(r, g, b)));
+        }
+        render_object_node(surface, &step_node, page_to_dev, page_scale, layer_opacity, 0, warnings)?;
+    }
+    Ok(())
 }
 
 fn render_object_node(
@@ -925,5 +985,54 @@ mod tests {
         let pdf_str = String::from_utf8_lossy(&pdf_bytes);
         assert!(pdf_str.contains("Tw 1 0 0 -1"));
         assert!(pdf_str.contains("Tj ET"));
+    }
+
+    #[test]
+    fn blend_spine_and_prepress_marks_pdf_svg_export() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(200.0, 200.0).unwrap();
+
+        // Start object at (10, 10..30, 30), End object at (170, 170..190, 190)
+        // Custom L-shaped spine going through (100, 20)
+        let mut spine = Path::new();
+        spine.move_to(Point::new(20.0, 20.0).unwrap()).unwrap();
+        spine.line_to(Point::new(100.0, 20.0).unwrap()).unwrap();
+        spine.line_to(Point::new(100.0, 100.0).unwrap()).unwrap();
+
+        let mut start_node = ObjectNode::new(
+            ObjectId(201),
+            Some("Blend Start".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 10.0, 30.0, 30.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(255, 0, 0))),
+            None,
+        );
+        start_node.effects.push(VectorEffect::Blend { target_id: ObjectId(202), steps: 1, spine: Some(spine) });
+        let end_node = ObjectNode::new(
+            ObjectId(202),
+            Some("Blend End".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(90.0, 90.0, 110.0, 110.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(0, 0, 255))),
+            None,
+        );
+        doc.pages[0].layers[0].objects.push(start_node);
+        doc.pages[0].layers[0].objects.push(end_node);
+
+        // At u = 0.5 along the L-shaped spine (20,20)->(100,20)->(100,100), the midpoint is at (100, 20)!
+        let out = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        let mid_px = out.surface.get_straight_rgba(100, 20);
+        assert!(mid_px[3] > 200, "intermediate blend step along spine at (100, 20) should be painted: {mid_px:?}");
+
+        // Prepress marks export
+        let prepress = PrepressOptions { crop_marks: true, registration_marks: true, bleed_pt: F64::new(9.0).unwrap() };
+        let svg_prepress = export_svg_with_prepress(&doc, 0, &prepress).unwrap();
+        assert!(svg_prepress.contains("<g id=\"prepress-marks\""));
+        assert!(svg_prepress.contains("class=\"crop-marks\""));
+        assert!(svg_prepress.contains("class=\"registration-target\""));
+
+        let pdf_prepress = export_pdf_with_prepress(&doc, &prepress).unwrap();
+        let pdf_str = String::from_utf8_lossy(&pdf_prepress);
+        assert!(pdf_str.contains("1 1 1 1 K"));
+        assert!(pdf_str.contains("/TrimBox"));
+        assert!(pdf_str.contains("/BleedBox"));
     }
 }

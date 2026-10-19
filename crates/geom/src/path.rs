@@ -184,3 +184,107 @@ impl Path {
         Ok(Self { elements: out, fill_rule: self.fill_rule })
     }
 }
+
+/// Sampled position and normalized tangent along a [`Path`] at a cumulative arc length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathSample {
+    /// Sampled point in path coordinates.
+    pub point: Point,
+    /// Unit tangent vector `(dx, dy)` along the path direction.
+    pub tangent: (f64, f64),
+    /// Tangent angle in degrees (`atan2(dy, dx).to_degrees()`).
+    pub angle_deg: f64,
+    /// Cumulative arc length in points from the start of the path.
+    pub s_pt: f64,
+}
+
+/// Cumulative arc-length lookup table (LUT) for uniform arc-length parameterization of a [`Path`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArcLengthTable {
+    samples: Vec<PathSample>,
+    total_length: f64,
+}
+
+impl ArcLengthTable {
+    /// Builds a cumulative arc-length lookup table from a [`Path`] using adaptive flattening.
+    pub fn from_path(path: &Path) -> Result<Self, GeomError> {
+        let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+        let mut samples = Vec::new();
+        let mut cumulative = 0.0;
+
+        for poly in &polys {
+            if poly.points.is_empty() {
+                continue;
+            }
+            let mut prev = poly.points[0];
+            if samples.is_empty() {
+                let first_tan = if poly.points.len() >= 2 {
+                    let dx = poly.points[1].x.get() - prev.x.get();
+                    let dy = poly.points[1].y.get() - prev.y.get();
+                    let d = dx.hypot(dy);
+                    if d > 1e-9 { (dx / d, dy / d) } else { (1.0, 0.0) }
+                } else {
+                    (1.0, 0.0)
+                };
+                samples.push(PathSample { point: prev, tangent: first_tan, angle_deg: first_tan.1.atan2(first_tan.0).to_degrees(), s_pt: 0.0 });
+            }
+            for &pt in &poly.points[1..] {
+                let dx = pt.x.get() - prev.x.get();
+                let dy = pt.y.get() - prev.y.get();
+                let ds = dx.hypot(dy);
+                if ds > 1e-9 {
+                    cumulative += ds;
+                    let tan = (dx / ds, dy / ds);
+                    samples.push(PathSample { point: pt, tangent: tan, angle_deg: tan.1.atan2(tan.0).to_degrees(), s_pt: cumulative });
+                    prev = pt;
+                }
+            }
+            if poly.closed && poly.points.len() >= 2 {
+                let first = poly.points[0];
+                let dx = first.x.get() - prev.x.get();
+                let dy = first.y.get() - prev.y.get();
+                let ds = dx.hypot(dy);
+                if ds > 1e-9 {
+                    cumulative += ds;
+                    let tan = (dx / ds, dy / ds);
+                    samples.push(PathSample { point: first, tangent: tan, angle_deg: tan.1.atan2(tan.0).to_degrees(), s_pt: cumulative });
+                }
+            }
+        }
+
+        Ok(Self { samples, total_length: cumulative })
+    }
+
+    /// Returns the total arc length of the path in typographic points.
+    #[must_use]
+    pub fn total_length(&self) -> f64 {
+        self.total_length
+    }
+
+    /// Samples a point and tangent at normalized arc-length parameter `u in 0.0..=1.0`.
+    #[must_use]
+    pub fn sample_normalized(&self, u: f64) -> Option<PathSample> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        if self.total_length <= 1e-9 || self.samples.len() == 1 {
+            return self.samples.first().copied();
+        }
+        let target_s = u.clamp(0.0, 1.0) * self.total_length;
+        let idx = self.samples.partition_point(|s| s.s_pt < target_s);
+        if idx == 0 {
+            return self.samples.first().copied();
+        }
+        if idx >= self.samples.len() {
+            return self.samples.last().copied();
+        }
+        let s0 = self.samples[idx - 1];
+        let s1 = self.samples[idx];
+        let span = (s1.s_pt - s0.s_pt).max(1e-9);
+        let alpha = ((target_s - s0.s_pt) / span).clamp(0.0, 1.0);
+        let x = s0.point.x.get() + alpha * (s1.point.x.get() - s0.point.x.get());
+        let y = s0.point.y.get() + alpha * (s1.point.y.get() - s0.point.y.get());
+        let point = Point::new(x, y).unwrap_or(s1.point);
+        Some(PathSample { point, tangent: s1.tangent, angle_deg: s1.angle_deg, s_pt: target_s })
+    }
+}

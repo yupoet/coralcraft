@@ -78,6 +78,11 @@ pub fn path_to_svg_d(path: &Path) -> String {
 
 /// Exports `page_index` (0-based) of `doc` as a self-contained SVG 1.1 document string.
 pub fn export_svg(doc: &Document, page_index: usize) -> Result<String, RenderError> {
+    export_svg_with_prepress(doc, page_index, &crate::pdf::PrepressOptions::default())
+}
+
+/// Exports `page_index` (0-based) of `doc` as an SVG 1.1 document string with optional prepress marks.
+pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &crate::pdf::PrepressOptions) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
     let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
     let w = page.size.width.get();
@@ -106,6 +111,63 @@ pub fn export_svg(doc: &Document, page_index: usize) -> Result<String, RenderErr
         let _ = writeln!(body, "  <g id=\"layer-{}\" data-name=\"{}\"{opacity_attr}>", layer.id.0, escape_xml(&layer.name));
         for node in &layer.objects {
             emit_svg_node(&mut defs, &mut body, node, 2)?;
+        }
+        body.push_str("  </g>\n");
+    }
+
+    if prepress.crop_marks || prepress.registration_marks {
+        body.push_str(
+            "  <g id=\"prepress-marks\" fill=\"none\" stroke=\"#000000\" stroke-width=\"0.25\" data-color=\"Registration(CMYK 100,100,100,100)\">\n",
+        );
+        if prepress.crop_marks {
+            let off = 3.0;
+            let len = 12.0;
+            let _ = writeln!(
+                body,
+                "    <path class=\"crop-marks\" d=\"M {} 0 L {} 0 M 0 {} L 0 {} M {} 0 L {} 0 M {} {} L {} {} M {} {} L {} {} M 0 {} L 0 {} M {} {} L {} {} M {} {} L {} {}\"/>",
+                fmt_num(-len),
+                fmt_num(-off),
+                fmt_num(-len),
+                fmt_num(-off),
+                fmt_num(w + off),
+                fmt_num(w + len),
+                fmt_num(w),
+                fmt_num(-len),
+                fmt_num(w),
+                fmt_num(-off),
+                fmt_num(-len),
+                fmt_num(h),
+                fmt_num(-off),
+                fmt_num(h),
+                fmt_num(h + off),
+                fmt_num(h + len),
+                fmt_num(w + off),
+                fmt_num(h),
+                fmt_num(w + len),
+                fmt_num(h),
+                fmt_num(w),
+                fmt_num(h + off),
+                fmt_num(w),
+                fmt_num(h + len)
+            );
+        }
+        if prepress.registration_marks {
+            let targets = [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)];
+            for (tx, ty) in targets {
+                let _ = writeln!(body, "    <circle class=\"registration-target\" cx=\"{}\" cy=\"{}\" r=\"3.5\"/>", fmt_num(tx), fmt_num(ty));
+                let _ = writeln!(
+                    body,
+                    "    <path class=\"registration-crosshair\" d=\"M {} {} L {} {} M {} {} L {} {}\"/>",
+                    fmt_num(tx - 5.0),
+                    fmt_num(ty),
+                    fmt_num(tx + 5.0),
+                    fmt_num(ty),
+                    fmt_num(tx),
+                    fmt_num(ty - 5.0),
+                    fmt_num(tx),
+                    fmt_num(ty + 5.0)
+                );
+            }
         }
         body.push_str("  </g>\n");
     }

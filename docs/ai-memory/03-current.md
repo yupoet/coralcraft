@@ -4,29 +4,28 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M8 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M9 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
-  1. **M7: Boolean Path Operations, Live Vector Effects, CDRX ZIP Writer, Binary `.cpl` Palettes & Workspace Enhancements (`commit 6616608`, `f17fd6a`, `7763e2c`)**:
-     - `coralcraft-color`: Clean-room binary `.cpl` palette body parser & serializer (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot/Pantone).
-     - `coralcraft-cdr`: Modern X4+ ZIP container writer `write_cdrx_zip` with IEEE 802.3 CRC-32 and stored Deflate archives (`mimetype`, `content/riffData.cdr` `RIFF....CDRE` v1400, `META-INF/metadata.xml`).
-     - `coralcraft-geom`: 2D Boolean path operations (`Weld`, `Trim`, `Intersect`, `FrontMinusBack`, `BackMinusFront`) and resolution-independent `artistic_text_to_path` enabling `ConvertToCurves` (`Ctrl+Q`) on `ArtisticText`.
-     - `coralcraft-doc`: Non-destructive vector effect stack on `ObjectNode` (`VectorEffect::{Contour, DropShadow, Extrude, Blend}`).
-  2. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, and M8 Slice 3)**:
+  1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**:
      - `coralcraft-doc`: Added `ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels }` and `TransparencyStyle::{Uniform, Fountain}` on `ObjectNode`.
-     - `coralcraft-cdr`: Added `decode_loda_bitmap` (shape_code=6), `decode_bmp_or_cdib_chunk` (Windows `BITMAPINFOHEADER` 24-bit BGR / 32-bit BGRA bottom-up scanlines and `BMP ` container), and `write_cdr7` bitmap serialization with round-trip verification.
+     - `coralcraft-cdr`: Added `decode_loda_bitmap` (shape_code=6), `decode_bmp_or_cdib_chunk`, and `write_cdr7` bitmap serialization with round-trip verification.
      - `coralcraft-render`: Added bilinear transformed bitmap blitter (`paint_bitmap`), SVG 1.1 `<image href="data:image/png;base64,...">`, PDF 1.4 Inline Image (`BI ... ID ... EI` with `/AHx`), offscreen premultiplied alpha compositing for `TransparencyStyle::Fountain`, and SVG `<mask>` export.
-     - `coralcraft-engine`, `coralcraft-mcp`, `coralcraft-ui-egui`: Added `EngineCommand::SetTransparency`, `set_transparency` MCP tool (27 tools total), `ToolKind::InteractiveFill` (`G`) drag-to-angle vector editing, and on-canvas vector handles (Start color swatch, Corel blue vector line, Midpoint slider, End color swatch).
+  2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584` and M9 Slice 2/3)**:
+     - `coralcraft-doc`: Added `ObjectKind::ParagraphText(Box<ParagraphTextSpec>)`, `TextAlignment` (`Left`, `Center`, `Right`, `Justify`), and `layout_paragraph_text` multi-column word-wrapping and overflow detection.
+     - `coralcraft-cdr`: Added `txtd`/`txts` text chunk decoding (ASCII/UTF-8/UTF-16LE) and `loda` `shape_code=7` (`PTXT`) round-trip in `write_cdr7`.
+     - `coralcraft-geom`, `coralcraft-engine`, `coralcraft-mcp`: Added `ArcLengthTable` cumulative arc-length LUT (`from_path`, `sample_normalized`), `VectorEffect::Blend { target_id, steps, spine: Option<Path> }`, `EngineCommand::AttachBlendSpine`, and 29 MCP tools (`add_paragraph_text`, `attach_blend_spine`).
+     - `coralcraft-render`: Added raster/SVG `<tspan>`/PDF `Tw` word-spacing rendering for `ParagraphText`, live intermediate Blend step rendering along custom spine paths, and `PrepressOptions` (`export_pdf_with_prepress`, `export_svg_with_prepress`) with corner crop marks and Registration `CMYK 100/100/100/100` (`1 1 1 1 K`) bullseye targets.
 
-## 2. Multi-Model Cross-Validation Consensus (M8 -> M9)
+## 2. Multi-Model Cross-Validation Consensus (M9 -> M10)
 
-- **GLM-5.2 (`zcode`)**: Validated CDR7 `bmp ` / `CDIB` chunk alignment and `loda` shape_code=6 descriptor layout. Recommends M9 focus on `txtd`/`txts` paragraph text frames and multi-column typography flow.
-- **Qwen 3.8 Max (`kimi`)**: Verified bilinear edge anti-aliasing with transparent border clamping and Fountain Transparency luminance-to-alpha mapping `α(t) = 1.0 - T(u)` matching SVG `<mask>`.
-- **DeepSeek V4.1 Flash (`codebuddy`)**: Confirmed PDF inline image CTM `w 0 0 -h 0 h cm` under flipped page coordinates and designed `BlendSpine` arc-length LUT parameterization for M9.
-- **Grok 4.6 (`grok`)**: Verified CorelDRAW Interactive Fill (`G`) on-canvas handle styling and prioritized Paragraph Text Frames (`F8` drag frame), custom Blend Spines, and prepress marks for M9.
+- **GLM-5.2 (`zcode`)**: Specified `txtd` encoding flags (`0x00` ASCII, `0x01` UTF-8, `0x02` UTF-16LE), `BlendSpine` cumulative arc-length LUT, and Registration `1 1 1 1 K` prepress mark geometry.
+- **Qwen 3.8 Max (`kimi`)**: Provided multi-column word-wrapping and justification formulas ($\delta = (W_c - W_L) / (N_w - 1)$) and binary-search inverse arc-length parameterization.
+- **DeepSeek V4.1 Flash (`codebuddy`)**: Designed `ArcLengthTable` over `flatten_path` in `coralcraft-geom` and `PrepressOptions` preserving byte-identical output for default options.
+- **Grok 4.6 (`grok`)**: Prioritized M10: Envelope / Perspective 4-corner distortion (`VectorEffect::Envelope`), Artistic Media / Calligraphic brush strokes, and Paragraph Text dashed frame + red overflow indicator on canvas.
 
-## 3. Next Up (M9: Paragraph Text Frames, Custom Blend Spines & Prepress Marks)
+## 3. Next Up (M10: Envelope / Perspective Distortion, Calligraphic Brush Strokes & Canvas Paragraph Frame Overlay)
 
-1. **Paragraph Text Frames (`ObjectKind::ParagraphText`) & CDR `txtd`/`txts` Extraction**: Word-wrapped text boxes, alignment (`Left`, `Center`, `Right`, `Justify`), multi-column flow, and CDR text chunk decoding.
-2. **Custom Path Spine for Blend (`BlendSpine`)**: Cumulative arc-length LUT, tangent/normal frame calculation along a custom `BezierPath` spine, and MCP/engine integration.
-3. **Prepress Marks in PDF/SVG Export**: Crop marks, registration targets, and bleed box rendering in `coralcraft-render`.
+1. **Envelope & Perspective 4-Corner Cage Distortion (`VectorEffect::Envelope`)**: Bilinear/Coons patch warp of vector paths in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
+2. **Calligraphic & Artistic Media Brush Stroke Profiles**: Variable-width stroke outlines along `Path` spines in `coralcraft-geom` and `coralcraft-render`.
+3. **Paragraph Text Frame Canvas Overlay & Red Overflow Indicator**: Dashed frame outline and bottom-center overflow handle in `coralcraft-ui-egui`.
 

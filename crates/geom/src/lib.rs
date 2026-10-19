@@ -21,7 +21,7 @@ pub use f64_canon::{BBox, EPS, F64, GeomError, Point, Rect, Size, constrain_angl
 pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
-pub use path::{FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement};
+pub use path::{ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample};
 pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec};
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 
@@ -219,5 +219,26 @@ mod tests {
 
         let (cx, cy) = constrain_angle(10.0, 0.5, 15.0);
         assert!(cy.abs() < 1e-9 && (cx - 10.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn arc_length_table_uniform_sampling_and_tangent_angles() {
+        let mut path = Path::new();
+        path.move_to(Point::new(0.0, 0.0).unwrap()).unwrap();
+        path.line_to(Point::new(100.0, 0.0).unwrap()).unwrap();
+        path.line_to(Point::new(100.0, 100.0).unwrap()).unwrap();
+
+        let lut = ArcLengthTable::from_path(&path).unwrap();
+        assert!((lut.total_length() - 200.0).abs() < 1e-6);
+
+        let s_quarter = lut.sample_normalized(0.25).unwrap();
+        assert!((s_quarter.point.x.get() - 50.0).abs() < 1e-4);
+        assert!((s_quarter.point.y.get() - 0.0).abs() < 1e-4);
+        assert!((s_quarter.angle_deg - 0.0).abs() < 1e-4);
+
+        let s_three_quarters = lut.sample_normalized(0.75).unwrap();
+        assert!((s_three_quarters.point.x.get() - 100.0).abs() < 1e-4);
+        assert!((s_three_quarters.point.y.get() - 50.0).abs() < 1e-4);
+        assert!((s_three_quarters.angle_deg - 90.0).abs() < 1e-4);
     }
 }

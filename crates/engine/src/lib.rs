@@ -100,6 +100,8 @@ pub enum EngineCommand {
     AddExtrude { object_id: ObjectId, depth_pt: F64, angle_deg: F64 },
     /// Creates a non-destructive Blend vector effect between two objects.
     CreateBlend { start_id: ObjectId, end_id: ObjectId, steps: u32 },
+    /// Attaches a custom Bézier path spine object (`New Path`) to an existing Blend effect.
+    AttachBlendSpine { blend_object_id: ObjectId, spine_object_id: ObjectId },
     /// Bakes (expands) all live vector effects on the specified object into static geometry.
     ExpandEffects { object_id: ObjectId },
     /// Sets or removes object-level transparency on selected objects.
@@ -488,6 +490,15 @@ impl EditorEngine {
                 let has_start = self.selected_or_all_node(*start_id).is_some_and(|o| !o.locked);
                 let has_end = self.selected_or_all_node(*end_id).is_some_and(|o| !o.locked);
                 if !has_start || !has_end || start_id == end_id {
+                    return false;
+                }
+            }
+            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
+                let has_blend = self
+                    .selected_or_all_node(*blend_object_id)
+                    .is_some_and(|o| !o.locked && o.effects.iter().any(|e| matches!(e, VectorEffect::Blend { .. })));
+                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
+                if !has_blend || !has_spine || blend_object_id == spine_object_id {
                     return false;
                 }
             }
@@ -1036,10 +1047,26 @@ impl EditorEngine {
                 });
             }
             EngineCommand::CreateBlend { start_id, end_id, steps } => {
-                let effect = VectorEffect::Blend { target_id: end_id, steps };
+                let effect = VectorEffect::Blend { target_id: end_id, steps, spine: None };
                 self.for_each_node_mut(|obj| {
                     if obj.id == start_id && !obj.locked {
                         obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
+                let Some(spine_path) =
+                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                else {
+                    return false;
+                };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == blend_object_id && !obj.locked {
+                        for effect in &mut obj.effects {
+                            if let VectorEffect::Blend { spine, .. } = effect {
+                                *spine = Some(spine_path.clone());
+                            }
+                        }
                     }
                 });
             }
