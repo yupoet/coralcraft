@@ -1,0 +1,421 @@
+//! Clean-room SVG 1.1 vector exporter (`export_svg`) for `coralcraft-render`.
+
+use std::fmt::Write as _;
+
+use coralcraft_color::Color;
+use coralcraft_doc::{Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle};
+use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpec};
+
+use crate::surface::RenderError;
+
+/// Formats a floating-point coordinate/number cleanly (up to 3 decimal places, trimming trailing zeros, `-0` -> `0`).
+pub(crate) fn fmt_num(v: f64) -> String {
+    let v = if v.abs() < 1e-9 { 0.0 } else { v };
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-0" { "0".to_owned() } else { s.to_owned() }
+}
+
+/// Escapes special XML characters (`&`, `<`, `>`, `"`, `'`).
+fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Formats a [`Color`] as `#rrggbb`.
+fn svg_hex_color(color: &Color) -> String {
+    let [r, g, b] = color.to_srgb8();
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Serializes a [`Path`] into an SVG `d="..."` path data string.
+pub fn path_to_svg_d(path: &Path) -> String {
+    let mut d = String::new();
+    for el in &path.elements {
+        if !d.is_empty() {
+            d.push(' ');
+        }
+        match *el {
+            PathElement::MoveTo(p) => {
+                let _ = write!(d, "M {} {}", fmt_num(p.x.get()), fmt_num(p.y.get()));
+            }
+            PathElement::LineTo(p) => {
+                let _ = write!(d, "L {} {}", fmt_num(p.x.get()), fmt_num(p.y.get()));
+            }
+            PathElement::QuadTo { ctrl, end } => {
+                let _ = write!(d, "Q {} {} {} {}", fmt_num(ctrl.x.get()), fmt_num(ctrl.y.get()), fmt_num(end.x.get()), fmt_num(end.y.get()));
+            }
+            PathElement::CubicTo { c1, c2, end } => {
+                let _ = write!(
+                    d,
+                    "C {} {} {} {} {} {}",
+                    fmt_num(c1.x.get()),
+                    fmt_num(c1.y.get()),
+                    fmt_num(c2.x.get()),
+                    fmt_num(c2.y.get()),
+                    fmt_num(end.x.get()),
+                    fmt_num(end.y.get())
+                );
+            }
+            PathElement::Close => {
+                d.push('Z');
+            }
+        }
+    }
+    d
+}
+
+/// Exports `page_index` (0-based) of `doc` as a self-contained SVG 1.1 document string.
+pub fn export_svg(doc: &Document, page_index: usize) -> Result<String, RenderError> {
+    let layers = doc.effective_layers_for_page(page_index, true)?;
+    let page = &doc.pages[page_index];
+    let w = page.size.width.get();
+    let h = page.size.height.get();
+
+    let mut defs = String::new();
+    let mut body = String::new();
+
+    // Optional page background
+    let bg_fill_attr = match &page.background {
+        Some(FillStyle::Uniform { color }) => svg_hex_color(color),
+        Some(fill @ FillStyle::Fountain { .. }) => {
+            let page_bbox = Rect::new(0.0, 0.0, w, h)?;
+            emit_fountain_def(&mut defs, "page-bg", fill, page_bbox);
+            "url(#grad-page-bg)".to_owned()
+        }
+        Some(FillStyle::Unknown { .. }) | None => "#ffffff".to_owned(),
+    };
+
+    for layer in layers {
+        let layer_opacity = layer.opacity.get().clamp(0.0, 1.0);
+        if layer_opacity <= 0.0 {
+            continue;
+        }
+        let opacity_attr = if (layer_opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(layer_opacity)) } else { String::new() };
+        let _ = writeln!(body, "  <g id=\"layer-{}\" data-name=\"{}\"{opacity_attr}>", layer.id.0, escape_xml(&layer.name));
+        for node in &layer.objects {
+            emit_svg_node(&mut defs, &mut body, node, 2)?;
+        }
+        body.push_str("  </g>\n");
+    }
+
+    let mut svg = String::new();
+    let _ = writeln!(
+        svg,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"{}pt\" height=\"{}pt\" viewBox=\"0 0 {} {}\">",
+        fmt_num(w),
+        fmt_num(h),
+        fmt_num(w),
+        fmt_num(h)
+    );
+    if !defs.is_empty() {
+        svg.push_str("  <defs>\n");
+        svg.push_str(&defs);
+        svg.push_str("  </defs>\n");
+    }
+    let _ = writeln!(svg, "  <rect x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"/>", fmt_num(w), fmt_num(h));
+    svg.push_str(&body);
+    svg.push_str("</svg>\n");
+
+    Ok(svg)
+}
+
+fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox: Rect) {
+    let FillStyle::Fountain { geometry, stops, .. } = fill else {
+        return;
+    };
+    let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
+    let cy = 0.5 * (bbox.y0.get() + bbox.y1.get());
+    let bw = bbox.width().max(1e-6);
+    let bh = bbox.height().max(1e-6);
+    let hw = 0.5 * bw;
+    let hh = 0.5 * bh;
+
+    match *geometry {
+        FountainGeometry::Linear { angle_deg, .. } => {
+            let rad = angle_deg.get().to_radians();
+            let (sin_a, cos_a) = rad.sin_cos();
+            let half_span = (hw * cos_a.abs() + hh * sin_a.abs()).max(1e-6);
+            let x1 = cx - cos_a * half_span;
+            let y1 = cy - sin_a * half_span;
+            let x2 = cx + cos_a * half_span;
+            let y2 = cy + sin_a * half_span;
+            let _ = writeln!(
+                defs,
+                "    <linearGradient id=\"grad-{id_suffix}\" gradientUnits=\"userSpaceOnUse\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">",
+                fmt_num(x1),
+                fmt_num(y1),
+                fmt_num(x2),
+                fmt_num(y2)
+            );
+            for stop in stops {
+                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+            }
+            defs.push_str("    </linearGradient>\n");
+        }
+        FountainGeometry::Radial { center_x, center_y, radius, focal_x, focal_y } => {
+            let rcx = bbox.x0.get() + center_x.get() * bw;
+            let rcy = bbox.y0.get() + center_y.get() * bh;
+            let rfx = bbox.x0.get() + focal_x.get() * bw;
+            let rfy = bbox.y0.get() + focal_y.get() * bh;
+            let r = (radius.get() * bw.hypot(bh)).max(1e-6);
+            let _ = writeln!(
+                defs,
+                "    <radialGradient id=\"grad-{id_suffix}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\" fx=\"{}\" fy=\"{}\">",
+                fmt_num(rcx),
+                fmt_num(rcy),
+                fmt_num(r),
+                fmt_num(rfx),
+                fmt_num(rfy)
+            );
+            for stop in stops {
+                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+            }
+            defs.push_str("    </radialGradient>\n");
+        }
+    }
+}
+
+fn format_transform_attr(t: Affine2) -> String {
+    if t == Affine2::IDENTITY {
+        String::new()
+    } else {
+        format!(
+            " transform=\"matrix({} {} {} {} {} {})\"",
+            fmt_num(t.a.get()),
+            fmt_num(t.b.get()),
+            fmt_num(t.c.get()),
+            fmt_num(t.d.get()),
+            fmt_num(t.tx.get()),
+            fmt_num(t.ty.get())
+        )
+    }
+}
+
+fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String {
+    let mut w = if outline.is_hairline() { 0.25 } else { outline.width_pt.get() };
+    if !outline.scale_with_object {
+        let scale = obj_transform.determinant().abs().sqrt();
+        if scale > 1e-6 {
+            w /= scale;
+        }
+    }
+    let cap = match outline.cap {
+        LineCap::Butt => "butt",
+        LineCap::Round => "round",
+        LineCap::Square => "square",
+    };
+    let join = match outline.join {
+        LineJoin::Miter => "miter",
+        LineJoin::Round => "round",
+        LineJoin::Bevel => "bevel",
+    };
+    format!(
+        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"",
+        svg_hex_color(&outline.color),
+        fmt_num(w),
+        fmt_num(outline.miter_limit.get())
+    )
+}
+
+fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent_level: usize) -> Result<(), RenderError> {
+    if !node.visible {
+        return Ok(());
+    }
+    let opacity = node.opacity.get().clamp(0.0, 1.0);
+    if opacity <= 0.0 {
+        return Ok(());
+    }
+    let indent = "  ".repeat(indent_level);
+    let transform_attr = format_transform_attr(node.transform);
+    let opacity_attr = if (opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(opacity)) } else { String::new() };
+
+    match &node.kind {
+        ObjectKind::Group { children } => {
+            let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}>", node.id.0);
+            for ch in children {
+                emit_svg_node(defs, body, ch, indent_level + 1)?;
+            }
+            let _ = writeln!(body, "{indent}</g>");
+            return Ok(());
+        }
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+            if text.is_empty() {
+                return Ok(());
+            }
+            let fill_str = match &node.fill {
+                Some(FillStyle::Uniform { color }) => svg_hex_color(color),
+                Some(fill @ FillStyle::Fountain { .. }) => {
+                    let h = size_pt.get().max(4.0);
+                    let w = (text.chars().count() as f64) * h * 0.6;
+                    let bbox = Rect::new(position.x.get(), position.y.get() - h, position.x.get() + w, position.y.get())?;
+                    let grad_id = format!("obj-{}", node.id.0);
+                    emit_fountain_def(defs, &grad_id, fill, bbox);
+                    format!("url(#grad-{grad_id})")
+                }
+                Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
+            };
+            let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
+            let _ = writeln!(
+                body,
+                "{indent}<text id=\"obj-{}\" x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">{}</text>",
+                node.id.0,
+                fmt_num(position.x.get()),
+                fmt_num(position.y.get()),
+                escape_xml(font_family),
+                fmt_num(size_pt.get()),
+                escape_xml(text)
+            );
+            return Ok(());
+        }
+        ObjectKind::Unsupported(u) => {
+            if let Some(bbox) = u.fallback_bounds {
+                let path = RectSpec::sharp(bbox).to_path()?;
+                emit_path_node(defs, body, node, &path, bbox, indent_level)?;
+            }
+            for ch in &u.children {
+                emit_svg_node(defs, body, ch, indent_level)?;
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let Some((local_path, local_bbox)) = extract_shape_path_and_bbox(&node.kind)? else {
+        return Ok(());
+    };
+    emit_path_node(defs, body, node, &local_path, local_bbox, indent_level)
+}
+
+fn emit_path_node(
+    defs: &mut String,
+    body: &mut String,
+    node: &ObjectNode,
+    local_path: &Path,
+    local_bbox: Rect,
+    indent_level: usize,
+) -> Result<(), RenderError> {
+    let indent = "  ".repeat(indent_level);
+    let d = path_to_svg_d(local_path);
+    if d.is_empty() {
+        return Ok(());
+    }
+
+    let fill_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
+    let fill_attr = match &node.fill {
+        Some(FillStyle::Uniform { color }) => svg_hex_color(color),
+        Some(fill @ FillStyle::Fountain { .. }) => {
+            let grad_id = format!("obj-{}", node.id.0);
+            emit_fountain_def(defs, &grad_id, fill, local_bbox);
+            format!("url(#grad-{grad_id})")
+        }
+        Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
+    };
+
+    let has_powerclip = !node.powerclip_children.is_empty();
+    let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
+    let transform_attr = format_transform_attr(node.transform);
+    let opacity = node.opacity.get().clamp(0.0, 1.0);
+    let opacity_attr = if (opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(opacity)) } else { String::new() };
+
+    if has_powerclip {
+        let clip_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " clip-rule=\"evenodd\"" } else { "" };
+        let _ = writeln!(defs, "    <clipPath id=\"clip-{}\" clipPathUnits=\"userSpaceOnUse\">", node.id.0);
+        let _ = writeln!(defs, "      <path d=\"{d}\"{clip_rule_attr}/>");
+        defs.push_str("    </clipPath>\n");
+    }
+
+    let needs_wrapper = has_powerclip || behind_fill || !transform_attr.is_empty() || !opacity_attr.is_empty();
+    if needs_wrapper {
+        let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}>", node.id.0);
+        let child_indent = "  ".repeat(indent_level + 1);
+
+        // 1. Outline behind fill
+        if behind_fill && let Some(outline) = &node.outline {
+            let stroke_attrs = format_stroke_attrs(outline, node.transform);
+            let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+        }
+
+        // 2. Fill
+        if node.fill.is_some() {
+            if !behind_fill
+                && !has_powerclip
+                && let Some(outline) = &node.outline
+            {
+                let stroke_attrs = format_stroke_attrs(outline, node.transform);
+                let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr} {stroke_attrs}/>");
+            } else {
+                let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}/>");
+            }
+        }
+
+        // 3. PowerClip children clipped by container path
+        if has_powerclip {
+            let _ = writeln!(body, "{child_indent}<g clip-path=\"url(#clip-{})\">", node.id.0);
+            for pc in &node.powerclip_children {
+                emit_svg_node(defs, body, pc, indent_level + 2)?;
+            }
+            let _ = writeln!(body, "{child_indent}</g>");
+        }
+
+        // 4. Outline in front of fill/PowerClip
+        if !behind_fill
+            && (has_powerclip || node.fill.is_none())
+            && let Some(outline) = &node.outline
+        {
+            let stroke_attrs = format_stroke_attrs(outline, node.transform);
+            let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+        }
+
+        let _ = writeln!(body, "{indent}</g>");
+    } else {
+        let stroke_part = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
+        let _ = writeln!(body, "{indent}<path id=\"obj-{}\" d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}{stroke_part}/>", node.id.0);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn extract_shape_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>, RenderError> {
+    match kind {
+        ObjectKind::Rect(r) => Ok(Some((r.to_path()?, r.rect))),
+        ObjectKind::Ellipse(e) => Ok(Some((e.to_path()?, e.rect))),
+        ObjectKind::Polygon(poly) => {
+            let p = poly.to_path()?;
+            let bbox = p.bounds().unwrap_or_else(|| Rect::new(0.0, 0.0, 1.0, 1.0).unwrap_or_default());
+            Ok(Some((p, bbox)))
+        }
+        ObjectKind::Path(p) => {
+            let Some(bbox) = p.bounds() else {
+                return Ok(None);
+            };
+            Ok(Some((p.clone(), bbox)))
+        }
+        ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let h = size_pt.get().max(4.0);
+            let w = (text.chars().count() as f64) * h * 0.6;
+            let x0 = position.x.get();
+            let y0 = position.y.get() - h;
+            let bbox = Rect::new(x0, y0, x0 + w, position.y.get())?;
+            let path = RectSpec::sharp(bbox).to_path()?;
+            Ok(Some((path, bbox)))
+        }
+        ObjectKind::Group { .. } | ObjectKind::Unsupported(_) => Ok(None),
+    }
+}
+
+#[allow(dead_code)]
+fn _keep_point(_p: Point) {}

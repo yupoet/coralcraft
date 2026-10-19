@@ -1,20 +1,24 @@
 //! `coralcraft-render`: Clean-room 4x4 supersampled software rasterizer, Fountain Fill shader,
 //! PowerClip mask compositor, and ISO/IEC 15948 PNG encoder for CoralCraft.
 
+pub mod pdf;
 pub mod png;
 pub mod raster;
 pub mod surface;
+pub mod svg;
 
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Rect, RectSpec, flatten_path};
 
+pub use pdf::export_pdf;
 pub use png::{adler32, decode_stored_png_rgba, encode_png};
 pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
     MAX_CLIP_DEPTH, MAX_SURFACE_PIXELS, MAX_SURFACE_SIDE, RenderError, RenderWarning, Surface, premul_to_straight, src_over_premul,
     straight_to_premul,
 };
+pub use svg::{export_svg, path_to_svg_d};
 
 /// Options controlling document page rasterization.
 #[derive(Clone, Debug, PartialEq)]
@@ -486,5 +490,67 @@ mod tests {
         assert!(out_u.warnings.iter().any(|w| matches!(w, RenderWarning::UnsupportedObjectFallback { .. })));
         let _ = PathElement::Close;
         let _ = CornerKind::Round;
+    }
+
+    #[test]
+    fn export_svg_and_pdf_preserve_fountain_powerclip_cmyk_and_exact_xref() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(200.0, 100.0).unwrap();
+        doc.pages[0].bleed = F64::new(9.0).unwrap();
+
+        let rect = RectSpec::sharp(Rect::new(10.0, 10.0, 100.0, 80.0).unwrap());
+        let mut outline = OutlineStyle::with_width(Color::cmyk(1.0, 0.0, 0.5, 0.0).unwrap(), F64::new(4.0).unwrap());
+        outline.behind_fill = true;
+
+        let mut container = ObjectNode::new(
+            ObjectId(50),
+            Some("Fountain Frame".to_owned()),
+            ObjectKind::Rect(rect),
+            Some(FillStyle::Fountain {
+                geometry: FountainGeometry::Linear { angle_deg: F64::new(45.0).unwrap(), edge_pad: F64::ZERO },
+                blend_mode: FountainBlendMode::Direct,
+                stops: vec![FountainStop::new(0.0, Color::rgb8(255, 0, 0)).unwrap(), FountainStop::new(1.0, Color::rgb8(0, 0, 255)).unwrap()],
+            }),
+            Some(outline),
+        );
+        container.powerclip_children.push(ObjectNode::new(
+            ObjectId(51),
+            Some("Inner Text".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CoralCraft & <SVG>".to_owned(),
+                font_family: "Arial".to_owned(),
+                size_pt: F64::new(14.0).unwrap(),
+                position: Point::new(20.0, 40.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::cmyk(0.0, 1.0, 1.0, 0.0).unwrap())),
+            None,
+        ));
+        doc.pages[0].layers[0].objects.push(container);
+
+        // 1. SVG 1.1 export check
+        let svg = export_svg(&doc, 0).unwrap();
+        assert!(
+            svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" width=\"200pt\" height=\"100pt\" viewBox=\"0 0 200 100\">")
+        );
+        assert!(svg.contains("<linearGradient id=\"grad-obj-50\""));
+        assert!(svg.contains("<clipPath id=\"clip-50\""));
+        assert!(svg.contains("clip-path=\"url(#clip-50)\""));
+        assert!(svg.contains("CoralCraft &amp; &lt;SVG&gt;"));
+
+        // 2. ISO 32000-1 PDF 1.4 export check
+        let pdf_bytes = export_pdf(&doc).unwrap();
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4\n"));
+        assert!(pdf_bytes.ends_with(b"%%EOF\n"));
+        let pdf_str = String::from_utf8_lossy(&pdf_bytes);
+        assert!(pdf_str.contains("/MediaBox [0 0 218 118]"));
+        assert!(pdf_str.contains("/TrimBox [9 9 209 109]"));
+        assert!(pdf_str.contains("/BleedBox [0 0 218 118]"));
+        // Verify native CMYK stroke (`K`) and fill (`k`) operators in content stream
+        assert!(pdf_str.contains("1 0 0.5 0 K"));
+        assert!(pdf_str.contains("0 1 1 0 k"));
+        // Verify exact byte offset of `1 0 obj` in the xref table
+        let obj1_pos = pdf_bytes.windows(8).position(|w| w == b"1 0 obj\n").unwrap();
+        let expected_xref_entry = format!("{obj1_pos:010} 00000 n \n");
+        assert!(pdf_str.contains(&expected_xref_entry));
     }
 }
