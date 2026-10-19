@@ -637,6 +637,69 @@ pub fn object_local_bounds(kind: &ObjectKind) -> Rect {
     }
 }
 
+/// Z-order stacking operation (`Shift+PageUp`, `Shift+PageDown`, `PageUp`, `PageDown`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZOrderOp {
+    /// Moves selected objects to the top of their layer (`Shift+PageUp`).
+    ToFront,
+    /// Moves selected objects to the bottom of their layer (`Shift+PageDown`).
+    ToBack,
+    /// Moves selected objects one step forward (`PageUp`).
+    ForwardOne,
+    /// Moves selected objects one step backward (`PageDown`).
+    BackwardOne,
+}
+
+/// Classic CorelDRAW single-key alignment mode (`L`, `R`, `T`, `B`, `C`, `E`, `P`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlignMode {
+    /// Align left edges (`L`) to the anchor object (last selected).
+    Left,
+    /// Align right edges (`R`) to the anchor object (last selected).
+    Right,
+    /// Align top edges (`T`) to the anchor object (last selected).
+    Top,
+    /// Align bottom edges (`B`) to the anchor object (last selected).
+    Bottom,
+    /// Align horizontal centers (`C`) to the anchor object (last selected).
+    CenterHorizontal,
+    /// Align vertical centers (`E`) to the anchor object (last selected).
+    CenterVertical,
+    /// Center selection to the active page (`P`).
+    CenterToPage,
+}
+
+/// Hit-tests the on-curve anchor points of a [`coralcraft_geom::Path`] in world space for the
+/// `F10` Shape Tool (`ToolKind::Shape`). Returns the index in `path.elements` of the nearest
+/// anchor within `tolerance_pt` (default `6.0` pt).
+#[must_use]
+pub fn hit_test_path_node(path: &coralcraft_geom::Path, transform: coralcraft_geom::Affine2, target_pt: Point, tolerance_pt: f64) -> Option<usize> {
+    let tol2 = tolerance_pt * tolerance_pt;
+    let mut best: Option<(usize, f64)> = None;
+    for (idx, el) in path.elements.iter().enumerate() {
+        let anchor = match *el {
+            coralcraft_geom::PathElement::MoveTo(pt)
+            | coralcraft_geom::PathElement::LineTo(pt)
+            | coralcraft_geom::PathElement::QuadTo { end: pt, .. }
+            | coralcraft_geom::PathElement::CubicTo { end: pt, .. } => Some(pt),
+            coralcraft_geom::PathElement::Close => None,
+        };
+        if let Some(local_pt) = anchor
+            && let Ok(world_pt) = transform.apply_point(local_pt)
+        {
+            let dx = world_pt.x.get() - target_pt.x.get();
+            let dy = world_pt.y.get() - target_pt.y.get();
+            let d2 = dx * dx + dy * dy;
+            if d2 <= tol2 && best.is_none_or(|(_, best_d2)| d2 < best_d2) {
+                best = Some((idx, d2));
+            }
+        }
+    }
+    best.map(|(idx, _)| idx)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {

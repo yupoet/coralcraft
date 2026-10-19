@@ -5,8 +5,8 @@ use coralcraft_color::Color;
 use coralcraft_doc::{Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual};
 use coralcraft_geom::{Affine2, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit};
 use coralcraft_tools::{
-    KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, build_property_bar_schema, combined_selection_bounds,
-    object_local_bounds,
+    AlignMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp, build_property_bar_schema,
+    combined_selection_bounds, object_local_bounds,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -71,6 +71,22 @@ pub enum EngineCommand {
     RenamePage { page_index: usize, name: String },
     /// Deletes the specified 0-based page when `document.pages.len() > 1`.
     DeletePage { page_index: usize },
+    /// Groups `>= 2` unlocked selected objects on the active layer (`Ctrl+G`).
+    GroupSelection,
+    /// Ungroups selected `ObjectKind::Group` nodes one level back into the active layer (`Ctrl+U`).
+    UngroupSelection,
+    /// Converts selected parametric shapes (`Rect`, `Ellipse`, `Polygon`) into editable Bezier paths (`Ctrl+Q`).
+    ConvertToCurves,
+    /// Reorders selected objects within their layer (`Shift+PageUp`, `Shift+PageDown`, `PageUp`, `PageDown`).
+    ReorderSelection { op: ZOrderOp },
+    /// Aligns selected objects relative to the anchor object (last selected) or the active page (`L/R/T/B/C/E/P`).
+    AlignSelection { mode: AlignMode },
+    /// Places selected unlocked objects inside `container_id` as PowerClip children (up to nesting depth 3).
+    PlaceInsidePowerClip { container_id: ObjectId },
+    /// Extracts all PowerClip children from `container_id` back into the parent layer above `container_id`.
+    ExtractPowerClip { container_id: ObjectId },
+    /// Moves a single on-curve anchor point of an `ObjectKind::Path` (`F10` Shape Tool).
+    MoveBezierNode { object_id: ObjectId, element_index: usize, new_pt: Point },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +380,78 @@ impl EditorEngine {
             EngineCommand::SetPageSetup { width_pt, height_pt, .. } if Size::new(width_pt.get(), height_pt.get()).is_err() => {
                 return false;
             }
+            EngineCommand::GroupSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::UngroupSelection => {
+                let sel = &self.selection;
+                let has_group =
+                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
+                if !has_group {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertToCurves => {
+                let has_convertible = self
+                    .selected_nodes()
+                    .into_iter()
+                    .any(|o| !o.locked && matches!(o.kind, ObjectKind::Rect(_) | ObjectKind::Ellipse(_) | ObjectKind::Polygon(_)));
+                if !has_convertible {
+                    return false;
+                }
+            }
+            EngineCommand::ReorderSelection { .. } if self.selection.is_empty() => {
+                return false;
+            }
+            EngineCommand::AlignSelection { mode } => {
+                let min_required = if *mode == AlignMode::CenterToPage { 1 } else { 2 };
+                if self.selection.len() < min_required {
+                    return false;
+                }
+            }
+            EngineCommand::PlaceInsidePowerClip { container_id } => {
+                let sel = &self.selection;
+                let objs = self.current_target_objects();
+                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
+                    return false;
+                };
+                let candidates: Vec<&ObjectNode> = objs.iter().filter(|o| !o.locked && o.id != *container_id && sel.contains(&o.id)).collect();
+                if candidates.is_empty() {
+                    return false;
+                }
+                for c in candidates {
+                    if powerclip_subtree_depth(container).max(powerclip_subtree_depth(c) + 1) > 3 {
+                        return false;
+                    }
+                }
+            }
+            EngineCommand::ExtractPowerClip { container_id } => {
+                let objs = self.current_target_objects();
+                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
+                    return false;
+                };
+                if container.powerclip_children.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::MoveBezierNode { object_id, element_index, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && match &o.kind {
+                            ObjectKind::Path(p) => {
+                                p.elements.get(*element_index).is_some_and(|el| !matches!(el, coralcraft_geom::PathElement::Close))
+                            }
+                            _ => false,
+                        }
+                });
+                if !valid {
+                    return false;
+                }
+            }
             _ => {}
         }
 
@@ -541,8 +629,251 @@ impl EditorEngine {
                     self.selection.clear();
                 }
             }
+            EngineCommand::GroupSelection => {
+                let sel = self.selection.clone();
+                let group_id = self.document.allocate_object_id();
+                let layer = self.target_layer_mut();
+                let mut children = Vec::new();
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                let mut insert_idx = 0usize;
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        insert_idx = remaining.len();
+                        children.push(obj);
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                let group_node = ObjectNode::new(group_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                remaining.insert(insert_idx.min(remaining.len()), group_node);
+                layer.objects = remaining;
+                self.selection = vec![group_id];
+            }
+            EngineCommand::UngroupSelection => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut new_selection = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        if let ObjectKind::Group { children } = obj.kind {
+                            let group_tf = obj.transform;
+                            for mut child in children {
+                                if let Ok(composed) = child.transform.then(group_tf) {
+                                    child.transform = composed;
+                                }
+                                new_selection.push(child.id);
+                                new_objects.push(child);
+                            }
+                        } else {
+                            new_objects.push(obj);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = new_selection;
+            }
+            EngineCommand::ConvertToCurves => {
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    let maybe_path = match &obj.kind {
+                        ObjectKind::Rect(r) => r.to_path().ok(),
+                        ObjectKind::Ellipse(e) => e.to_path().ok(),
+                        ObjectKind::Polygon(p) => p.to_path().ok(),
+                        _ => None,
+                    };
+                    if let Some(path) = maybe_path {
+                        obj.kind = ObjectKind::Path(path);
+                    }
+                });
+            }
+            EngineCommand::ReorderSelection { op } => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                match op {
+                    ZOrderOp::ToFront => {
+                        let mut unselected = Vec::with_capacity(layer.objects.len());
+                        let mut selected = Vec::new();
+                        for obj in layer.objects.drain(..) {
+                            if !obj.locked && sel.contains(&obj.id) {
+                                selected.push(obj);
+                            } else {
+                                unselected.push(obj);
+                            }
+                        }
+                        unselected.extend(selected);
+                        layer.objects = unselected;
+                    }
+                    ZOrderOp::ToBack => {
+                        let mut selected = Vec::new();
+                        let mut unselected = Vec::with_capacity(layer.objects.len());
+                        for obj in layer.objects.drain(..) {
+                            if !obj.locked && sel.contains(&obj.id) {
+                                selected.push(obj);
+                            } else {
+                                unselected.push(obj);
+                            }
+                        }
+                        selected.extend(unselected);
+                        layer.objects = selected;
+                    }
+                    ZOrderOp::ForwardOne => {
+                        let len = layer.objects.len();
+                        if len >= 2 {
+                            for i in (0..len - 1).rev() {
+                                let is_sel = !layer.objects[i].locked && sel.contains(&layer.objects[i].id);
+                                let next_sel = sel.contains(&layer.objects[i + 1].id);
+                                if is_sel && !next_sel {
+                                    layer.objects.swap(i, i + 1);
+                                }
+                            }
+                        }
+                    }
+                    ZOrderOp::BackwardOne => {
+                        let len = layer.objects.len();
+                        if len >= 2 {
+                            for i in 1..len {
+                                let is_sel = !layer.objects[i].locked && sel.contains(&layer.objects[i].id);
+                                let prev_sel = sel.contains(&layer.objects[i - 1].id);
+                                if is_sel && !prev_sel {
+                                    layer.objects.swap(i - 1, i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EngineCommand::AlignSelection { mode } => {
+                if mode == AlignMode::CenterToPage {
+                    let ps = self.current_page().size;
+                    let nodes = self.selected_nodes();
+                    let sb = combined_selection_bounds(&nodes);
+                    let dx = ps.width.get() * 0.5 - (sb.x0.get() + sb.x1.get()) * 0.5;
+                    let dy = ps.height.get() * 0.5 - (sb.y0.get() + sb.y1.get()) * 0.5;
+                    if let Ok(t) = Affine2::translation(dx, dy) {
+                        self.for_each_selected_mut(|obj| {
+                            if !obj.locked
+                                && let Ok(composed) = obj.transform.then(t)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                } else if let Some(&anchor_id) = self.selection.last()
+                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
+                {
+                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                    let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
+                    let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
+                    self.for_each_selected_mut(|obj| {
+                        if obj.locked || obj.id == anchor_id {
+                            return;
+                        }
+                        let bbox = combined_selection_bounds(&[obj]);
+                        let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
+                        let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
+                        let (dx, dy) = match mode {
+                            AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
+                            AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
+                            AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
+                            AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
+                            AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
+                            AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
+                            AlignMode::CenterToPage => (0.0, 0.0),
+                        };
+                        if let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::PlaceInsidePowerClip { container_id } => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut extracted = Vec::new();
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && obj.id != container_id && sel.contains(&obj.id) {
+                        extracted.push(obj);
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                if let Some(container) = remaining.iter_mut().find(|o| o.id == container_id) {
+                    container.powerclip_children.extend(extracted);
+                }
+                layer.objects = remaining;
+                self.selection = vec![container_id];
+            }
+            EngineCommand::ExtractPowerClip { container_id } => {
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut extracted_ids = Vec::new();
+                for mut obj in layer.objects.drain(..) {
+                    if obj.id == container_id && !obj.locked {
+                        let children: Vec<ObjectNode> = obj.powerclip_children.drain(..).collect();
+                        new_objects.push(obj);
+                        for child in children {
+                            extracted_ids.push(child.id);
+                            new_objects.push(child);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = extracted_ids;
+            }
+            EngineCommand::MoveBezierNode { object_id, element_index, new_pt } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    let inv = obj.transform.invert().unwrap_or(Affine2::IDENTITY);
+                    let Ok(local_pt) = inv.apply_point(new_pt) else {
+                        return;
+                    };
+                    if let ObjectKind::Path(path) = &mut obj.kind
+                        && let Some(el) = path.elements.get_mut(element_index)
+                    {
+                        match el {
+                            coralcraft_geom::PathElement::MoveTo(pt) | coralcraft_geom::PathElement::LineTo(pt) => {
+                                *pt = local_pt;
+                            }
+                            coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
+                                let dx = local_pt.x.get() - end.x.get();
+                                let dy = local_pt.y.get() - end.y.get();
+                                if let Ok(new_ctrl) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
+                                    *ctrl = new_ctrl;
+                                }
+                                *end = local_pt;
+                            }
+                            coralcraft_geom::PathElement::CubicTo { c2, end, .. } => {
+                                let dx = local_pt.x.get() - end.x.get();
+                                let dy = local_pt.y.get() - end.y.get();
+                                if let Ok(new_c2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
+                                    *c2 = new_c2;
+                                }
+                                *end = local_pt;
+                            }
+                            coralcraft_geom::PathElement::Close => {}
+                        }
+                    }
+                });
+            }
         }
         true
+    }
+
+    /// Replaces the current selection list.
+    pub fn set_selection(&mut self, selection: Vec<ObjectId>) {
+        self.selection = selection;
     }
 
     /// Returns `true` if at least one command can be undone.
@@ -618,6 +949,41 @@ impl EditorEngine {
         self.default_outline = entry.default_outline;
     }
 
+    fn current_target_objects(&self) -> &[ObjectNode] {
+        match self.active_target {
+            ActivePageTarget::Page(idx) => {
+                let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
+                self.document.pages[page_idx].layers.last().map_or(&[], |l| l.objects.as_slice())
+            }
+            ActivePageTarget::MasterPage => {
+                self.document.master_layers.iter().find(|l| l.role == LayerRole::MasterAllPages).map_or(&[], |l| l.objects.as_slice())
+            }
+            ActivePageTarget::Desktop => {
+                self.document.master_layers.iter().find(|l| l.role == LayerRole::Desktop).map_or(&[], |l| l.objects.as_slice())
+            }
+        }
+    }
+
+    fn selected_or_all_node(&self, id: ObjectId) -> Option<&ObjectNode> {
+        for page in &self.document.pages {
+            for layer in &page.layers {
+                for obj in &layer.objects {
+                    if obj.id == id {
+                        return Some(obj);
+                    }
+                }
+            }
+        }
+        for layer in &self.document.master_layers {
+            for obj in &layer.objects {
+                if obj.id == id {
+                    return Some(obj);
+                }
+            }
+        }
+        None
+    }
+
     fn target_layer_mut(&mut self) -> &mut Layer {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
@@ -653,23 +1019,31 @@ impl EditorEngine {
 
     fn for_each_selected_mut(&mut self, mut f: impl FnMut(&mut ObjectNode)) {
         let sel = self.selection.clone();
+        self.for_each_node_mut(|obj| {
+            if sel.contains(&obj.id) {
+                f(obj);
+            }
+        });
+    }
+
+    fn for_each_node_mut(&mut self, mut f: impl FnMut(&mut ObjectNode)) {
         for page in &mut self.document.pages {
             for layer in &mut page.layers {
                 for obj in &mut layer.objects {
-                    if sel.contains(&obj.id) {
-                        f(obj);
-                    }
+                    f(obj);
                 }
             }
         }
         for layer in &mut self.document.master_layers {
             for obj in &mut layer.objects {
-                if sel.contains(&obj.id) {
-                    f(obj);
-                }
+                f(obj);
             }
         }
     }
+}
+
+fn powerclip_subtree_depth(node: &ObjectNode) -> usize {
+    node.powerclip_children.iter().map(|c| 1 + powerclip_subtree_depth(c)).max().unwrap_or(0)
 }
 
 fn reallocate_object_ids_recursive(node: &mut ObjectNode, doc: &mut Document) {
@@ -797,5 +1171,65 @@ mod tests {
         let restored = engine.selected_nodes()[0];
         assert!((restored.transform.tx.get()).abs() < 1e-9);
         assert!((restored.transform.ty.get()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn group_ungroup_convert_to_curves_zorder_align_powerclip_and_node_edit() {
+        let mut engine = EditorEngine::default();
+
+        // Create two rectangles A and B
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(10.0, 20.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(50.0, 60.0).unwrap(), false, false);
+        let id_a = engine.selection[0];
+
+        engine.pointer_down(Point::new(100.0, 120.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(160.0, 180.0).unwrap(), false, false);
+        let id_b = engine.selection[0];
+
+        // 1. Align A's left edge to B (anchor = last selected = id_b)
+        engine.set_selection(vec![id_a, id_b]);
+        assert!(engine.execute(EngineCommand::AlignSelection { mode: AlignMode::Left }));
+        let node_a = engine.selected_or_all_node(id_a).unwrap();
+        assert!((node_a.transform.tx.get() - 90.0).abs() < 1e-9);
+
+        // 2. Group A and B -> single Group node, then translate group by (+10, +5), then Ungroup
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        assert_eq!(engine.selection.len(), 1);
+        let group_id = engine.selection[0];
+        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Group { .. }));
+        assert!(engine.execute(EngineCommand::TranslateSelection { dx_pt: F64::new(10.0).unwrap(), dy_pt: F64::new(5.0).unwrap() }));
+        assert_ne!(group_id, id_a);
+        assert!(engine.execute(EngineCommand::UngroupSelection));
+        assert_eq!(engine.selection, vec![id_a, id_b]);
+        let node_a_after = engine.selected_or_all_node(id_a).unwrap();
+        assert!((node_a_after.transform.tx.get() - 100.0).abs() < 1e-9);
+        assert!((node_a_after.transform.ty.get() - 5.0).abs() < 1e-9);
+
+        // 3. Reorder selection: move id_b to back, then id_b to front
+        engine.set_selection(vec![id_b]);
+        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToBack }));
+        assert_eq!(engine.document.pages[0].layers[0].objects[0].id, id_b);
+        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToFront }));
+        assert_eq!(engine.document.pages[0].layers[0].objects[1].id, id_b);
+
+        // 4. PowerClip: place id_a inside container id_b, then extract
+        engine.set_selection(vec![id_a]);
+        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: id_b }));
+        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 1);
+        assert_eq!(engine.document.pages[0].layers[0].objects[0].powerclip_children.len(), 1);
+        assert!(engine.execute(EngineCommand::ExtractPowerClip { container_id: id_b }));
+        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 2);
+        assert_eq!(engine.selection, vec![id_a]);
+
+        // 5. ConvertToCurves (`Ctrl+Q`) on id_a and MoveBezierNode (`F10` Shape Tool)
+        assert!(engine.execute(EngineCommand::ConvertToCurves));
+        assert!(matches!(engine.selected_or_all_node(id_a).unwrap().kind, ObjectKind::Path(_)));
+        assert!(engine.execute(EngineCommand::MoveBezierNode { object_id: id_a, element_index: 0, new_pt: Point::new(125.0, 35.0).unwrap() }));
+        if let ObjectKind::Path(p) = &engine.selected_or_all_node(id_a).unwrap().kind {
+            assert_eq!(p.elements[0], coralcraft_geom::PathElement::MoveTo(Point::new(25.0, 30.0).unwrap()));
+        } else {
+            panic!("expected Path after ConvertToCurves");
+        }
     }
 }
