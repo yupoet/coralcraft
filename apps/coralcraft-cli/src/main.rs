@@ -347,8 +347,24 @@ fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: boo
                 return ExitCode::from(6);
             }
         },
+        "cdr" => match coralcraft_cdr::write_cdr7(&doc) {
+            Ok(c) => ("cdr", c),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: CDR7 export failed: {e}");
+                return ExitCode::from(6);
+            }
+        },
+        "cmx" => match coralcraft_cdr::write_cmx1(&doc) {
+            Ok(c) => ("cmx", c),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: CMX1 export failed: {e}");
+                return ExitCode::from(6);
+            }
+        },
         other => {
-            eprintln!("coralcraft-cli export: unsupported output extension '.{other}' (expected .svg, .pdf, .png, .coralcraft, or .json)");
+            eprintln!(
+                "coralcraft-cli export: unsupported output extension '.{other}' (expected .svg, .pdf, .png, .cdr, .cmx, .coralcraft, or .json)"
+            );
             return ExitCode::from(3);
         }
     };

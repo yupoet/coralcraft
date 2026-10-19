@@ -674,8 +674,11 @@ fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
         let b = read_f64(endian, payload, off + 24)?;
         let d = read_f64(endian, payload, off + 32)?;
         let ty_raw = read_f64(endian, payload, off + 40)?;
-        if (a.abs() <= 100.0 && d.abs() <= 100.0) && (a * d - b * c).abs() > 1e-6 && tx_raw.abs() < 1e5 && ty_raw.abs() < 1e5 {
-            return Affine2::new(a, b, c, d, 0.0, 0.0).ok();
+        if (a.abs() <= 100.0 && d.abs() <= 100.0) && (a * d - b * c).abs() > 1e-6 && tx_raw.abs() < 1e7 && ty_raw.abs() < 1e7 {
+            // If payload starts with `TRPT` magic (clean-room CDR7/CMX1 writer), `tx_raw`/`ty_raw` are already in points;
+            // otherwise treat large values as CdrUnit (0.1 um) and ignore page-origin shifts on raw CDR streams.
+            let (tx, ty) = if payload.get(0..4) == Some(b"TRPT") { (tx_raw, ty_raw) } else { (0.0, 0.0) };
+            return Affine2::new(a, b, c, d, tx, ty).ok();
         }
     }
     None
@@ -801,11 +804,11 @@ fn decode_loda_geometry(
     bbox_rect: Option<Rect>,
     warnings: &mut Vec<String>,
 ) -> ObjectKind {
-    // Check explicit shape type code if present (`1` = Rectangle, `2` = Ellipse, `3` = Curve/Line, `4` = ArtisticText, `0x14` = Polygon)
+    // Check explicit shape type code if present (`1` = Rectangle, `2` = Ellipse, `3` = Curve/Line, `4` = Polygon, `5` = ArtisticText)
     let shape_code = read_u32(endian, payload, 0).or_else(|| read_u16(endian, payload, 0).map(u32::from)).unwrap_or(0);
 
     // If payload starts with our synthetic or explicit shape header `[u32 shape_code, ...]`
-    if payload.len() >= 20 {
+    if payload.len() >= 16 {
         match shape_code {
             1 => {
                 // Rectangle: either from `bbox_rect` or 2 coords `(x0, y0, x1, y1)` at offset 4
@@ -822,18 +825,21 @@ fn decode_loda_geometry(
                 return ObjectKind::Ellipse(EllipseSpec::full(rect));
             }
             3 => {
-                // Curve / Path: `[3u32, point_count: u32, (x_cdr, y_cdr, node_flag: u8)...]`
+                // Curve / Path: either tagged `0x1E` Bezier stream (`L1E\0`) or `[3u32, point_count: u32, (x_cdr, y_cdr)...]`
                 if let Some(path) = decode_cdr_curve(payload.get(4..).unwrap_or(&[]), endian, version, page_size) {
                     return ObjectKind::Path(path);
                 }
             }
-            4 => {
-                // Polygon
-                let rect = bbox_rect.unwrap_or_else(|| Rect::new(50.0, 50.0, 150.0, 150.0).unwrap_or_default());
-                let center = Point::new(0.5 * (rect.x0.get() + rect.x1.get()), 0.5 * (rect.y0.get() + rect.y1.get())).unwrap_or_default();
-                let r = 0.5 * rect.width().min(rect.height()).max(10.0);
-                if let Ok(poly) = PolygonSpec::regular(center, r, 5, 0.0) {
+            4 | 0x14 => {
+                // Polygon / Star
+                if let Some(poly) = decode_loda_polygon(payload.get(4..).unwrap_or(&[]), endian, version, page_size, bbox_rect) {
                     return ObjectKind::Polygon(poly);
+                }
+            }
+            5 => {
+                // Artistic Text
+                if let Some(art_text) = decode_loda_artistic_text(payload.get(4..).unwrap_or(&[]), endian, version, page_size, bbox_rect) {
+                    return art_text;
                 }
             }
             _ => {}
@@ -854,7 +860,109 @@ fn decode_loda_geometry(
     })
 }
 
+fn decode_loda_polygon(slice: &[u8], endian: Endian, version: u16, page_size: Size, bbox_rect: Option<Rect>) -> Option<PolygonSpec> {
+    if slice.len() >= 20 && slice.get(0..4) == Some(b"POLY") {
+        let points = read_u32(endian, slice, 4)?;
+        let (cx_cdr, s) = cdr_coord_to_pt(endian, slice, 8, version)?;
+        let (cy_cdr, _) = cdr_coord_to_pt(endian, slice, 8 + s, version)?;
+        let (r_pt, _) = cdr_coord_to_pt(endian, slice, 8 + s * 2, version)?;
+        let (inner_pt, _) = cdr_coord_to_pt(endian, slice, 8 + s * 3, version).unwrap_or((0.0, 4));
+        let cx = page_size.width.get() * 0.5 + cx_cdr;
+        let cy = page_size.height.get() * 0.5 - cy_cdr;
+        let center = Point::new(cx, cy).ok()?;
+        if inner_pt > 0.0 && (inner_pt - r_pt).abs() > 1e-4 {
+            return PolygonSpec::star(center, r_pt.abs(), inner_pt.abs(), points, 0.0).ok();
+        }
+        return PolygonSpec::regular(center, r_pt.abs(), points, 0.0).ok();
+    }
+    let rect = bbox_rect.unwrap_or_else(|| Rect::new(50.0, 50.0, 150.0, 150.0).unwrap_or_default());
+    let center = Point::new(0.5 * (rect.x0.get() + rect.x1.get()), 0.5 * (rect.y0.get() + rect.y1.get())).ok()?;
+    let r = 0.5 * rect.width().min(rect.height()).max(10.0);
+    PolygonSpec::regular(center, r, 5, 0.0).ok()
+}
+
+fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
+    if slice.len() >= 20 && slice.get(0..4) == Some(b"ATXT") {
+        let (x_cdr, s) = cdr_coord_to_pt(endian, slice, 4, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4 + s, version)?;
+        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4 + s * 2, version)?;
+        let cursor = 4 + s * 3;
+        let fam_len = read_u16(endian, slice, cursor)? as usize;
+        let fam_end = cursor + 2 + fam_len;
+        let font_family = std::str::from_utf8(slice.get(cursor + 2..fam_end)?).ok()?.to_owned();
+        let txt_len = read_u32(endian, slice, fam_end)? as usize;
+        let txt_end = fam_end + 4 + txt_len;
+        let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
+        let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
+        let size_pt = F64::new(size_pt_raw.abs().clamp(1.0, 1440.0)).ok()?;
+        return Some(ObjectKind::ArtisticText { text, font_family, size_pt, position });
+    }
+    let rect = bbox_rect?;
+    let position = Point::new(rect.x0.get(), rect.y0.get()).ok()?;
+    let size_pt = F64::new(rect.height().clamp(6.0, 288.0)).ok()?;
+    Some(ObjectKind::ArtisticText { text: "Text".to_owned(), font_family: "Sans".to_owned(), size_pt, position })
+}
+
 fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<Path> {
+    let cx = page_size.width.get() * 0.5;
+    let cy = page_size.height.get() * 0.5;
+
+    // Tagged `0x1e` Bezier node stream (`L1E\0` + `u32 node_count` + node records with `0x00`/`0x40`/`0x80`/`0x08` flags per GLM-5.2 spec)
+    if slice.len() >= 8 && slice.get(0..4) == Some(b"L1E\0") {
+        let count = read_u32(endian, slice, 4)? as usize;
+        if !(1..=20_000).contains(&count) {
+            return None;
+        }
+        let mut cursor = 8usize;
+        let mut path = Path::new();
+        for _ in 0..count {
+            let flags = *slice.get(cursor)?;
+            cursor += 1;
+            let op = flags & 0xC0;
+            if flags == 0x08 {
+                let _ = path.close();
+                continue;
+            }
+            match op {
+                0x00 => {
+                    let (x_cdr, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
+                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
+                    cursor += s * 2;
+                    let pt = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
+                    path.move_to(pt).ok()?;
+                }
+                0x40 => {
+                    let (x_cdr, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
+                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
+                    cursor += s * 2;
+                    let pt = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
+                    path.line_to(pt).ok()?;
+                    if (flags & 0x08) != 0 {
+                        let _ = path.close();
+                    }
+                }
+                0x80 => {
+                    let (c1x, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
+                    let (c1y, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
+                    let (c2x, _) = cdr_coord_to_pt(endian, slice, cursor + s * 2, version)?;
+                    let (c2y, _) = cdr_coord_to_pt(endian, slice, cursor + s * 3, version)?;
+                    let (px, _) = cdr_coord_to_pt(endian, slice, cursor + s * 4, version)?;
+                    let (py, _) = cdr_coord_to_pt(endian, slice, cursor + s * 5, version)?;
+                    cursor += s * 6;
+                    let c1 = Point::new(cx + c1x, cy - c1y).ok()?;
+                    let c2 = Point::new(cx + c2x, cy - c2y).ok()?;
+                    let to = Point::new(cx + px, cy - py).ok()?;
+                    path.cubic_to(c1, c2, to).ok()?;
+                    if (flags & 0x08) != 0 {
+                        let _ = path.close();
+                    }
+                }
+                _ => return None,
+            }
+        }
+        return if path.elements.is_empty() { None } else { Some(path) };
+    }
+
     let count = read_u32(endian, slice, 0)? as usize;
     if !(2..=10_000).contains(&count) {
         return None;
@@ -865,8 +973,6 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
         return None;
     }
 
-    let cx = page_size.width.get() * 0.5;
-    let cy = page_size.height.get() * 0.5;
     let mut path = Path::new();
     for i in 0..count {
         let off = 4 + i * step;
@@ -883,4 +989,326 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
         let _ = path.close();
     }
     Some(path)
+}
+
+/// Writes a [`Document`] into a clean-room `RIFF` `CDR7` (CorelDRAW 7.0 compatible) byte buffer.
+///
+/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cdr`, `effective_version = Some(700)`)
+/// and round-trips through `parse_document(&bytes)`.
+pub fn write_cdr7(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    write_riff_document(doc, *b"CDR7", 700)
+}
+
+/// Writes a [`Document`] into a clean-room `RIFF` `CMX1` (Corel Presentation Exchange) byte buffer.
+///
+/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cmx`)
+/// and round-trips through `parse_document(&bytes)`.
+pub fn write_cmx1(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    write_riff_document(doc, *b"CMX1", 700)
+}
+
+fn pt_to_cdr_i32(pt: f64) -> i32 {
+    let cdr = coralcraft_geom::Pt::new(pt).and_then(coralcraft_geom::Pt::try_to_cdr_ticks).map(|u| u.0).unwrap_or(0);
+    cdr.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn append_riff_chunk(out: &mut Vec<u8>, fourcc: [u8; 4], payload: &[u8]) {
+    out.extend_from_slice(&fourcc);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    if payload.len() & 1 == 1 {
+        out.push(0);
+    }
+}
+
+fn append_riff_list(out: &mut Vec<u8>, list_type: [u8; 4], children_bytes: &[u8]) {
+    let total_len = 4 + children_bytes.len();
+    out.extend_from_slice(b"LIST");
+    out.extend_from_slice(&(total_len as u32).to_le_bytes());
+    out.extend_from_slice(&list_type);
+    out.extend_from_slice(children_bytes);
+    if total_len & 1 == 1 {
+        out.push(0);
+    }
+}
+
+fn encode_cdr_color_bytes(c: &Color) -> [u8; 8] {
+    match c {
+        Color::Cmyk { c, m, y, k, .. } => [
+            2,
+            0,
+            (c.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+            (m.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+            (y.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+            (k.get() * 100.0).round().clamp(0.0, 100.0) as u8,
+            0,
+            0,
+        ],
+        _ => {
+            let [r, g, b, _] = c.to_rgba8(1.0);
+            [1, 0, r, g, b, 0, 0, 0]
+        }
+    }
+}
+
+fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&fill_id.to_le_bytes());
+    match fill {
+        FillStyle::Uniform { color: c } => {
+            p.extend_from_slice(&1u16.to_le_bytes());
+            p.extend_from_slice(&encode_cdr_color_bytes(c));
+        }
+        FillStyle::Fountain { geometry, stops, .. } => {
+            p.extend_from_slice(&2u16.to_le_bytes());
+            let (f_type, angle_i16) = match geometry {
+                FountainGeometry::Radial { .. } => (1u16, 0i16),
+                FountainGeometry::Linear { angle_deg, .. } => (0u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
+            };
+            p.extend_from_slice(&f_type.to_le_bytes());
+            p.extend_from_slice(&angle_i16.to_le_bytes());
+            let c1 = stops.first().map(|s| &s.color).unwrap_or(&Color::WHITE);
+            let c2 = stops.last().map(|s| &s.color).unwrap_or(&Color::BLACK);
+            p.extend_from_slice(&encode_cdr_color_bytes(c1));
+            p.extend_from_slice(&encode_cdr_color_bytes(c2));
+        }
+        FillStyle::Unknown { .. } => {
+            p.extend_from_slice(&99u16.to_le_bytes());
+        }
+    }
+    p
+}
+
+fn encode_outl_payload(outl_id: u32, outl: &OutlineStyle) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&outl_id.to_le_bytes());
+    let mut flags = 0u32;
+    if outl.behind_fill {
+        flags |= 0x01;
+    }
+    if outl.scale_with_object {
+        flags |= 0x02;
+    }
+    flags |= match outl.cap {
+        LineCap::Butt => 0,
+        LineCap::Round => 1 << 2,
+        LineCap::Square => 2 << 2,
+    };
+    flags |= match outl.join {
+        LineJoin::Miter => 0,
+        LineJoin::Round => 1 << 4,
+        LineJoin::Bevel => 2 << 4,
+    };
+    p.extend_from_slice(&flags.to_le_bytes());
+    p.extend_from_slice(&pt_to_cdr_i32(outl.width_pt.get()).to_le_bytes());
+    p.extend_from_slice(&encode_cdr_color_bytes(&outl.color));
+    p
+}
+
+fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) {
+    if let ObjectKind::Group { children } = &node.kind {
+        for child in children {
+            encode_object_into_layer(child, page_size, next_style_id, layer_children);
+        }
+        return;
+    }
+
+    let mut obj_children = Vec::new();
+    let cx = page_size.width.get() * 0.5;
+    let cy = page_size.height.get() * 0.5;
+
+    let bbox = node_bbox_for_export(node);
+    let mut bbox_payload = Vec::with_capacity(16);
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+    append_riff_chunk(&mut obj_children, *b"bbox", &bbox_payload);
+
+    if node.transform != Affine2::IDENTITY {
+        let mut trfd = Vec::with_capacity(52);
+        trfd.extend_from_slice(b"TRPT");
+        trfd.extend_from_slice(&node.transform.a.get().to_le_bytes());
+        trfd.extend_from_slice(&node.transform.c.get().to_le_bytes());
+        trfd.extend_from_slice(&node.transform.tx.get().to_le_bytes());
+        trfd.extend_from_slice(&node.transform.b.get().to_le_bytes());
+        trfd.extend_from_slice(&node.transform.d.get().to_le_bytes());
+        trfd.extend_from_slice(&node.transform.ty.get().to_le_bytes());
+        append_riff_chunk(&mut obj_children, *b"trfd", &trfd);
+    }
+
+    if let Some(fill) = &node.fill {
+        let fid = *next_style_id;
+        *next_style_id += 1;
+        let fp = encode_fild_payload(fid, fill);
+        append_riff_chunk(&mut obj_children, *b"fild", &fp);
+    }
+    if let Some(outl) = &node.outline {
+        let oid = *next_style_id;
+        *next_style_id += 1;
+        let op = encode_outl_payload(oid, outl);
+        append_riff_chunk(&mut obj_children, *b"outl", &op);
+    }
+
+    let mut loda = Vec::new();
+    match &node.kind {
+        ObjectKind::Rect(spec) => {
+            if spec.radii.iter().all(|r| r.get() == 0.0) {
+                loda.extend_from_slice(&1u32.to_le_bytes());
+                loda.extend_from_slice(&bbox_payload);
+            } else if let Ok(p) = spec.to_path() {
+                encode_path_as_loda_1e(&p, cx, cy, &mut loda);
+            }
+        }
+        ObjectKind::Ellipse(spec) => {
+            if spec.mode == coralcraft_geom::EllipseMode::Full {
+                loda.extend_from_slice(&2u32.to_le_bytes());
+                loda.extend_from_slice(&bbox_payload);
+            } else if let Ok(p) = spec.to_path() {
+                encode_path_as_loda_1e(&p, cx, cy, &mut loda);
+            }
+        }
+        ObjectKind::Path(path) => {
+            encode_path_as_loda_1e(path, cx, cy, &mut loda);
+        }
+        ObjectKind::Polygon(spec) => {
+            loda.extend_from_slice(&4u32.to_le_bytes());
+            loda.extend_from_slice(b"POLY");
+            loda.extend_from_slice(&spec.points.to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(spec.center.x.get() - cx).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(cy - spec.center.y.get()).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(spec.radius.get()).to_le_bytes());
+            let inner = spec.inner_radius.map(|r| r.get()).unwrap_or(0.0);
+            loda.extend_from_slice(&pt_to_cdr_i32(inner).to_le_bytes());
+        }
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+            loda.extend_from_slice(&5u32.to_le_bytes());
+            loda.extend_from_slice(b"ATXT");
+            loda.extend_from_slice(&pt_to_cdr_i32(position.x.get() - cx).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(cy - position.y.get()).to_le_bytes());
+            loda.extend_from_slice(&pt_to_cdr_i32(size_pt.get()).to_le_bytes());
+            let fam_bytes = font_family.as_bytes();
+            loda.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
+            loda.extend_from_slice(fam_bytes);
+            let txt_bytes = text.as_bytes();
+            loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
+            loda.extend_from_slice(txt_bytes);
+        }
+        ObjectKind::Group { .. } => {}
+        ObjectKind::Unsupported(u) => {
+            loda.extend_from_slice(&0x99u32.to_le_bytes());
+            loda.extend_from_slice(&u.payload.0);
+            while loda.len() < 20 {
+                loda.push(0);
+            }
+        }
+    }
+    append_riff_chunk(&mut obj_children, *b"loda", &loda);
+    append_riff_list(layer_children, *b"obj ", &obj_children);
+}
+
+fn encode_path_as_loda_1e(path: &Path, cx: f64, cy: f64, loda: &mut Vec<u8>) {
+    loda.extend_from_slice(&3u32.to_le_bytes());
+    loda.extend_from_slice(b"L1E\0");
+    let elems = &path.elements;
+    loda.extend_from_slice(&(elems.len() as u32).to_le_bytes());
+    let mut cur = Point::default();
+    for el in elems {
+        match *el {
+            coralcraft_geom::PathElement::MoveTo(pt) => {
+                loda.push(0x00);
+                loda.extend_from_slice(&pt_to_cdr_i32(pt.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
+                cur = pt;
+            }
+            coralcraft_geom::PathElement::LineTo(pt) => {
+                loda.push(0x40);
+                loda.extend_from_slice(&pt_to_cdr_i32(pt.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
+                cur = pt;
+            }
+            coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
+                // Promote quadratic segment to exact cubic Bezier control points
+                let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
+                let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
+                let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
+                let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
+                loda.push(0x80);
+                loda.extend_from_slice(&pt_to_cdr_i32(c1x - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c1y).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(c2x - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c2y).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(end.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - end.y.get()).to_le_bytes());
+                cur = end;
+            }
+            coralcraft_geom::PathElement::CubicTo { c1, c2, end } => {
+                loda.push(0x80);
+                loda.extend_from_slice(&pt_to_cdr_i32(c1.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c1.y.get()).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(c2.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c2.y.get()).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(end.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - end.y.get()).to_le_bytes());
+                cur = end;
+            }
+            coralcraft_geom::PathElement::Close => {
+                loda.push(0x08);
+            }
+        }
+    }
+    while loda.len() < 16 {
+        loda.push(0);
+    }
+}
+
+fn node_bbox_for_export(node: &ObjectNode) -> Rect {
+    let default_rect = Rect::new(36.0, 36.0, 136.0, 136.0).unwrap_or_default();
+    match &node.kind {
+        ObjectKind::Rect(r) => r.rect,
+        ObjectKind::Ellipse(e) => e.rect,
+        ObjectKind::Path(p) => p.bounds().unwrap_or(default_rect),
+        ObjectKind::Polygon(p) => p.to_path().ok().and_then(|path| path.bounds()).unwrap_or(default_rect),
+        ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+            let x0 = position.x.get();
+            let y0 = position.y.get();
+            let w = (text.chars().count().max(1) as f64) * size_pt.get() * 0.6;
+            let h = size_pt.get().max(8.0);
+            Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or(default_rect)
+        }
+        ObjectKind::Group { .. } => default_rect,
+        ObjectKind::Unsupported(u) => u.fallback_bounds.unwrap_or(default_rect),
+    }
+}
+
+fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Result<Vec<u8>, ProbeError> {
+    let mut body = Vec::new();
+    append_riff_chunk(&mut body, *b"vrsn", &version.to_le_bytes());
+
+    let mut next_style_id = 1u32;
+    for page in &doc.pages {
+        let mut page_children = Vec::new();
+        // `mcfg` for version 700 places `(w_cdr, h_cdr)` at byte offset 4
+        let mut mcfg = vec![0u8; 12];
+        mcfg[4..8].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg[8..12].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
+
+        for layer in &page.layers {
+            let mut layer_children = Vec::new();
+            for obj in &layer.objects {
+                encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children);
+            }
+            append_riff_list(&mut page_children, *b"layr", &layer_children);
+        }
+        append_riff_list(&mut body, *b"page", &page_children);
+    }
+
+    let riff_size = (4 + body.len()) as u32;
+    let mut out = Vec::with_capacity(8 + riff_size as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&riff_size.to_le_bytes());
+    out.extend_from_slice(&form_type);
+    out.extend_from_slice(&body);
+    Ok(out)
 }

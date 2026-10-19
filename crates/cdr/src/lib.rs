@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::error::{ProbeError, ProbeWarning};
 pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_raw, inflate_zlib};
-pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document};
+pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cmx1};
 pub use crate::riff::{ChunkSummary, Endian, RiffInspection};
 pub use crate::zip::{ZipCdrRole, ZipInspection, extract_zip_primary_riff};
 
@@ -583,5 +583,99 @@ mod tests {
             }
             let _ = parse_document(&mutated);
         }
+    }
+
+    #[test]
+    fn write_cdr7_and_write_cmx1_roundtrip_all_primitives_and_transforms() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle};
+        use coralcraft_geom::{Affine2, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let layer = &mut doc.pages[0].layers[0];
+
+        // 1. Sharp Rectangle with translated Affine2
+        let mut rect_node = ObjectNode::new(
+            ObjectId(10),
+            Some("Rect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 50.0, 160.0, 130.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(220, 40, 40))),
+            Some(OutlineStyle::with_width(Color::BLACK, F64::new(2.0).unwrap())),
+        );
+        rect_node.transform = Affine2::translation(12.0, -8.0).unwrap();
+        layer.objects.push(rect_node);
+
+        // 2. Full Ellipse with CMYK fill
+        layer.objects.push(ObjectNode::new(
+            ObjectId(11),
+            Some("Ellipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(200.0, 60.0, 300.0, 160.0).unwrap())),
+            Some(FillStyle::uniform(Color::cmyk(0.8, 0.2, 0.0, 0.1).unwrap())),
+            None,
+        ));
+
+        // 3. Cubic Bezier Path (`L1E\0` 0x1e stream)
+        let mut path = Path::new();
+        path.move_to(Point::new(50.0, 200.0).unwrap()).unwrap();
+        path.line_to(Point::new(150.0, 200.0).unwrap()).unwrap();
+        path.cubic_to(Point::new(180.0, 230.0).unwrap(), Point::new(120.0, 280.0).unwrap(), Point::new(60.0, 260.0).unwrap()).unwrap();
+        path.close().unwrap();
+        layer.objects.push(ObjectNode::new(
+            ObjectId(12),
+            Some("Curve".to_owned()),
+            ObjectKind::Path(path),
+            None,
+            Some(OutlineStyle::hairline(Color::rgb8(0, 100, 200))),
+        ));
+
+        // 4. Star Polygon
+        let star = PolygonSpec::star(Point::new(260.0, 260.0).unwrap(), 50.0, 22.0, 5, 0.0).unwrap();
+        layer.objects.push(ObjectNode::new(
+            ObjectId(13),
+            Some("Star".to_owned()),
+            ObjectKind::Polygon(star),
+            Some(FillStyle::uniform(Color::rgb8(250, 200, 20))),
+            None,
+        ));
+
+        // 5. Artistic Text
+        layer.objects.push(ObjectNode::new(
+            ObjectId(14),
+            Some("Title".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CoralCraft M6".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(24.0).unwrap(),
+                position: Point::new(72.0, 360.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        ));
+
+        // Test CDR7 round-trip
+        let cdr_bytes = write_cdr7(&doc).expect("write_cdr7");
+        let cdr_probe = probe(&cdr_bytes).expect("probe cdr7");
+        assert!(matches!(cdr_probe.container, CdrContainer::Riff { kind: CdrKind::Cdr, .. }));
+        let cdr_parsed = parse_document(&cdr_bytes).expect("parse cdr7");
+        assert_eq!(cdr_parsed.document.pages.len(), 1);
+        let objs = &cdr_parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 5);
+        assert!(matches!(objs[0].kind, ObjectKind::Rect(_)));
+        assert!((objs[0].transform.tx.get() - 12.0).abs() < 1e-6);
+        assert!(matches!(objs[1].kind, ObjectKind::Ellipse(_)));
+        assert!(matches!(objs[2].kind, ObjectKind::Path(_)));
+        assert!(matches!(objs[3].kind, ObjectKind::Polygon(_)));
+        if let ObjectKind::ArtisticText { text, .. } = &objs[4].kind {
+            assert_eq!(text, "CoralCraft M6");
+        } else {
+            panic!("expected ArtisticText, got {:?}", objs[4].kind);
+        }
+
+        // Test CMX1 round-trip
+        let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
+        let cmx_probe = probe(&cmx_bytes).expect("probe cmx1");
+        assert!(matches!(cmx_probe.container, CdrContainer::Riff { kind: CdrKind::Cmx, .. }));
+        let cmx_parsed = parse_document(&cmx_bytes).expect("parse cmx1");
+        assert_eq!(cmx_parsed.document.pages[0].layers[0].objects.len(), 5);
     }
 }
