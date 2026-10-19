@@ -78,6 +78,7 @@ struct UndoEntry {
     document: Document,
     active_target: ActivePageTarget,
     selection: Vec<ObjectId>,
+    tool_state: ToolState,
     default_fill: Option<FillStyle>,
     default_outline: Option<OutlineStyle>,
 }
@@ -343,11 +344,27 @@ impl EditorEngine {
 
     /// Executes an atomic [`EngineCommand`] and pushes the previous state onto the undo stack.
     pub fn execute(&mut self, cmd: EngineCommand) -> bool {
-        if matches!(cmd, EngineCommand::DeletePage { .. }) && self.document.pages.len() <= 1 {
-            return false;
-        }
-        if matches!(cmd, EngineCommand::DeleteSelection) && self.selection.is_empty() {
-            return false;
+        match &cmd {
+            EngineCommand::DeletePage { page_index } if self.document.pages.len() <= 1 || *page_index >= self.document.pages.len() => {
+                return false;
+            }
+            EngineCommand::RenamePage { page_index, .. } | EngineCommand::DuplicatePage { page_index }
+                if *page_index >= self.document.pages.len() =>
+            {
+                return false;
+            }
+            EngineCommand::DeleteSelection if self.selection.is_empty() => {
+                return false;
+            }
+            EngineCommand::TranslateSelection { dx_pt, dy_pt }
+                if self.selection.is_empty() || Affine2::translation(dx_pt.get(), dy_pt.get()).is_err() =>
+            {
+                return false;
+            }
+            EngineCommand::SetPageSetup { width_pt, height_pt, .. } if Size::new(width_pt.get(), height_pt.get()).is_err() => {
+                return false;
+            }
+            _ => {}
         }
 
         self.push_undo_snapshot();
@@ -363,11 +380,15 @@ impl EditorEngine {
                 let sel = self.selection.clone();
                 for page in &mut self.document.pages {
                     for layer in &mut page.layers {
-                        layer.objects.retain(|o| !sel.contains(&o.id));
+                        if !layer.locked {
+                            layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
+                        }
                     }
                 }
                 for layer in &mut self.document.master_layers {
-                    layer.objects.retain(|o| !sel.contains(&o.id));
+                    if !layer.locked {
+                        layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
+                    }
                 }
                 self.selection.clear();
             }
@@ -499,7 +520,7 @@ impl EditorEngine {
                 for layer in &mut cloned.layers {
                     layer.id = LayerId(self.document.allocate_object_id().0);
                     for obj in &mut layer.objects {
-                        obj.id = self.document.allocate_object_id();
+                        reallocate_object_ids_recursive(obj, &mut self.document);
                     }
                 }
                 let new_idx = idx + 1;
@@ -576,6 +597,7 @@ impl EditorEngine {
             document: self.document.clone(),
             active_target: self.active_target,
             selection: self.selection.clone(),
+            tool_state: self.tool_state.clone(),
             default_fill: self.default_fill.clone(),
             default_outline: self.default_outline.clone(),
         }
@@ -591,6 +613,7 @@ impl EditorEngine {
         self.document = entry.document;
         self.active_target = entry.active_target;
         self.selection = entry.selection;
+        self.tool_state = entry.tool_state;
         self.default_fill = entry.default_fill;
         self.default_outline = entry.default_outline;
     }
@@ -646,6 +669,26 @@ impl EditorEngine {
                 }
             }
         }
+    }
+}
+
+fn reallocate_object_ids_recursive(node: &mut ObjectNode, doc: &mut Document) {
+    node.id = doc.allocate_object_id();
+    for child in &mut node.powerclip_children {
+        reallocate_object_ids_recursive(child, doc);
+    }
+    match &mut node.kind {
+        ObjectKind::Group { children } => {
+            for child in children {
+                reallocate_object_ids_recursive(child, doc);
+            }
+        }
+        ObjectKind::Unsupported(u) => {
+            for child in &mut u.children {
+                reallocate_object_ids_recursive(child, doc);
+            }
+        }
+        _ => {}
     }
 }
 

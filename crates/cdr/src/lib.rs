@@ -547,4 +547,41 @@ mod tests {
         }
         assert!(count >= 64, "expected at least 64 real-world .cdr samples, parsed {count}");
     }
+
+    #[test]
+    fn parse_document_never_panics_on_tiny_declared_size_or_hostile_mutations() {
+        // Regression test for GLM-5.2 finding: declared_size in 0..4 where 8 + declared_size < 12
+        for declared in 0u32..8 {
+            let mut buf = Vec::new();
+            buf.extend_from_slice(b"RIFF");
+            buf.extend_from_slice(&declared.to_le_bytes());
+            buf.extend_from_slice(b"CDR7");
+            buf.extend_from_slice(b"vrsn\x02\x00\x00\x00\xdc\x02");
+            let _ = parse_document(&buf);
+        }
+
+        let mut seed_riff = Vec::new();
+        seed_riff.extend_from_slice(b"RIFF\x38\x00\x00\x00CDR7");
+        seed_riff.extend_from_slice(b"vrsn\x02\x00\x00\x00\xdc\x02");
+        seed_riff.extend_from_slice(b"LIST\x24\x00\x00\x00pageLIST\x18\x00\x00\x00layrLIST\x0c\x00\x00\x00obj bbox\x00\x00\x00\x00");
+        let mut rng: u64 = 0xC0DE_2026_1019_9999;
+        let mut next_u64 = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+
+        for _ in 0..2_000 {
+            let mut mutated = seed_riff.clone();
+            let mutations = (next_u64() % 6) + 1;
+            for _ in 0..mutations {
+                if !mutated.is_empty() {
+                    let idx = (next_u64() as usize) % mutated.len();
+                    mutated[idx] = (next_u64() & 0xFF) as u8;
+                }
+            }
+            let _ = parse_document(&mutated);
+        }
+    }
 }

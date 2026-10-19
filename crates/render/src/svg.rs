@@ -10,13 +10,13 @@ use crate::surface::RenderError;
 
 /// Formats a floating-point coordinate/number cleanly (up to 3 decimal places, trimming trailing zeros, `-0` -> `0`).
 pub(crate) fn fmt_num(v: f64) -> String {
-    let v = if v.abs() < 1e-9 { 0.0 } else { v };
+    let v = if !v.is_finite() || v.abs() < 1e-9 { 0.0 } else { v };
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() || s == "-0" { "0".to_owned() } else { s.to_owned() }
 }
 
-/// Escapes special XML characters (`&`, `<`, `>`, `"`, `'`).
+/// Escapes special XML characters (`&`, `<`, `>`, `"`, `'`) and strips illegal XML 1.0 C0 control characters.
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -26,6 +26,7 @@ fn escape_xml(s: &str) -> String {
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
+            c if (c < '\x20' && c != '\t' && c != '\n' && c != '\r') => {}
             _ => out.push(ch),
         }
     }
@@ -78,7 +79,7 @@ pub fn path_to_svg_d(path: &Path) -> String {
 /// Exports `page_index` (0-based) of `doc` as a self-contained SVG 1.1 document string.
 pub fn export_svg(doc: &Document, page_index: usize) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
-    let page = &doc.pages[page_index];
+    let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
     let w = page.size.width.get();
     let h = page.size.height.get();
 

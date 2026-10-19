@@ -12,5 +12,5 @@
 - [x] 7. **[M2] Native `.coralcraft` Format**: Deterministic Stored ZIP (`manifest.json` + `document.json` + `blobs/<sha256>.bin`) and single-file JSON, schema versioning, tamper detection, and 100-iteration random document round-trip property tests.
 - [x] 8. **[M2] First Rendered Frame (`coralcraft-render`)**: Clean-room software rasterizer (4×4 MSAA, Linear/Radial Fountain, PowerClip mask stack, `behind_fill`, `scale_with_object`, Hairline) producing static page PNGs + `coralcraft-cli render` & `inspect-palette`.
 - [x] 9. **[M3] CDR Parser (Modern RIFF Band) & Vector Export**: `LIST cmpr` + ZIP Deflate decompression, `page`/`layr`/`obj ` parsing with `ObjectKind::Unsupported` fallback (64/64 real-world `.cdr` samples passing), and clean-room SVG 1.1 / PDF 1.4 export (`coralcraft-cli export`).
-- [ ] 10. **[M4] `egui` Desktop Shell + Interactive Tool Slice**: Classic CorelDRAW workspace layout (`coralcraft-tools`, `coralcraft-engine`, `coralcraft-ui-egui`, `coralcraft-desktop`).
-- [ ] 11. **[M5] MCP Server + CMX + CDR Writer Evaluation**.
+- [x] 10. **[M4] `egui` Desktop Shell + Interactive Tool Slice**: Classic CorelDRAW workspace layout (`coralcraft-tools`, `coralcraft-engine`, `coralcraft-ui-egui`, `coralcraft-desktop`).
+- [x] 11. **[M5] MCP Server + CMX + CDR Writer Evaluation**: `coralcraft-mcp` JSON-RPC 2.0 server (`initialize`, `tools/list`, `tools/call` with 12 vector authoring & export tools) + `coralcraft --mcp`.

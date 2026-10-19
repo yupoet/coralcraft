@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `pre-alpha` (**M0, M1, M2, and M3 are 100% delivered and passing all CI gates**; advancing into **M4** and **M5**).
+- **Stage**: `alpha baseline` (**M0, M1, M2, M3, M4, and M5 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M1: CDR/CMX Format Probe Vertical Slice (Tasks 9–13 Green)**:
      - `coralcraft-cdr::probe()` covering Legacy `WL`, bare `RIFF`/`RIFX`, and modern `ZIP+RIFF` containers; 22 unit tests green including a 10,000-iteration deterministic hostile mutation test (`hostile_random_mutations_never_panic`).
@@ -18,12 +18,15 @@
      - [`crates/render/src/svg.rs`](../../crates/render/src/svg.rs) & [`crates/render/src/pdf.rs`](../../crates/render/src/pdf.rs) (`commit 1799e81`): Clean-room SVG 1.1 (`export_svg`) and ISO 32000-1 PDF 1.4 (`export_pdf`, multi-page `/MediaBox`/`/TrimBox`/`/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`, cubic Bézier paths, Fountain gradients, PowerClip clipping).
      - [`crates/cdr/src/inflate.rs`](../../crates/cdr/src/inflate.rs) & [`crates/cdr/src/parse.rs`](../../crates/cdr/src/parse.rs) (`commit 5c7cc70`): Dependency-free RFC 1951/1950 inflate (`MAX_DECOMPRESSED_BYTES = 64 MiB`), ZIP Deflate inner RIFF extraction, and `parse_document(&[u8])` (`LIST cmpr`, `mcfg`, `LIST page`, `LIST layr`, `LIST obj ` with `bbox`/`trfd`/`loda`/`fild`/`outl` and `ObjectKind::Unsupported` fallback), passing **64/64 real-world `.cdr` samples**.
      - [`apps/coralcraft-cli/src/main.rs`](../../apps/coralcraft-cli/src/main.rs) (`commit 5c7cc70`): `coralcraft-cli export <input> -o <output.{svg,pdf,png,coralcraft,json}> [--page <1-based>] [--dpi <f64>] [--json]`.
+  4. **M4 & M5: Classic CorelDRAW Desktop Workspace, Interactive Tools & MCP Server (`commit 9f10a27`)**:
+     - [`crates/tools/src/lib.rs`](../../crates/tools/src/lib.rs) (L4): Classic 10-tool CorelDRAW Toolbox (`Pick`, `Shape F10`, `Crop`, `Zoom Z`, `Freehand/Bezier F5`, `Rectangle F6`, `Ellipse F7`, `Polygon/Star Y`, `Artistic Text F8`, `Interactive Fill G`), shortcut bindings, constrained drag gestures, and context-sensitive `PropertyBarSchema`.
+     - [`crates/engine/src/lib.rs`](../../crates/engine/src/lib.rs) (L5): `EditorEngine` with `ActivePageTarget` (`Page(usize)`, `MasterPage`, `Desktop`), `PaletteChannel` (`Fill` on Left-Click, `Outline` on Right-Click, `[X]` No-Color clear), `EngineCommand`, deterministic `undo()` / `redo()` stack, and hit-testing.
+     - [`crates/ui-egui/src/lib.rs`](../../crates/ui-egui/src/lib.rs) (L6) & [`apps/coralcraft/src/main.rs`](../../apps/coralcraft/src/main.rs) (L7): Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox`, central `PasteboardCanvas`, right vertical `ColorPaletteBar`, bottom `PageNavigatorBar`, `StatusBar`, and collapsible `Objects`/`Properties` Dockers).
+     - [`crates/mcp/src/lib.rs`](../../crates/mcp/src/lib.rs) (L6): JSON-RPC 2.0 Model Context Protocol (`MCP`) server with 12 authoring and export tools.
 
-## 2. Next Up (M4: CorelDRAW-Style `egui` Desktop Shell + Interactive Tool Slice & M5: MCP Server)
+## 2. Next Up (M6+: Extended CDR Version Bands, `LIST stlt` Style Resolution & Live Vector Effects)
 
-1. **`coralcraft-tools` (L4)**:
-   - Classic CorelDRAW tool suite (`Pick`, `Shape F10`, `Crop`, `Zoom Z`, `Freehand/Bezier F5`, `Rectangle F6`, `Ellipse F7`, `Polygon/Star Y`, `Artistic Text F8`, `Interactive Fill G`), shortcut mapping (`tool_for_shortcut`), in-progress `GestureState`, and context-sensitive `PropertyBarSchema`.
-2. **`coralcraft-engine` (L5)**:
-   - `EditorEngine` owning `Document`, `ActivePageTarget` (`Page(usize)`, `MasterPage`, `Desktop`), `Selection`, default `FillStyle`/`OutlineStyle`, `Command` execution, deterministic `undo()`/`redo()` stack, and page hit-testing (`hit_test_page`).
-3. **`coralcraft-ui-egui` (L6), `coralcraft-desktop` (`apps/coralcraft`, L7), and `coralcraft-mcp` (L6)**:
-   - Classic CorelDRAW desktop workspace layout (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox`, central `PasteboardCanvas`, right vertical `ColorPaletteBar` with Left-Click Fill / Right-Click Outline, bottom `PageNavigatorBar`, `StatusBar`, and `Objects`/`Properties` Dockers) + `coralcraft-mcp` JSON-RPC tool server.
+1. **`LIST stlt` Shared Style Table & `txsm` Text Decoding**:
+   - Resolve object style references into `LIST stlt` sub-chunks (`fild`, `outl`, `font`, `align`) for CDR X4–2025+ files.
+2. **Live CorelDRAW Vector Effects**:
+   - Interactive `Contour`, `Blend`, `Envelope`, and `Extrude` operators.

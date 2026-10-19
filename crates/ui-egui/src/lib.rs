@@ -429,12 +429,14 @@ impl DesktopWorkspace {
                 self.engine.pointer_up(pt, shift, alt);
             }
             UiAction::PaletteLeftClick { cell_index } => {
-                let color = self.palette_color_at(cell_index);
-                self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color });
+                if let Some(color) = self.palette_color_at(cell_index) {
+                    self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color });
+                }
             }
             UiAction::PaletteRightClick { cell_index } => {
-                let color = self.palette_color_at(cell_index);
-                self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Outline, color });
+                if let Some(color) = self.palette_color_at(cell_index) {
+                    self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Outline, color });
+                }
             }
             UiAction::ActivatePageTarget(target) => {
                 self.engine.set_active_target(target);
@@ -505,8 +507,8 @@ impl DesktopWorkspace {
         )
     }
 
-    fn palette_color_at(&self, cell_index: usize) -> Option<Color> {
-        if cell_index == 0 { None } else { self.engine.document.palette.swatches.get(cell_index - 1).map(|s| s.color.clone()) }
+    fn palette_color_at(&self, cell_index: usize) -> Option<Option<Color>> {
+        if cell_index == 0 { Some(None) } else { self.engine.document.palette.swatches.get(cell_index - 1).map(|s| Some(s.color.clone())) }
     }
 }
 

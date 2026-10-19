@@ -149,6 +149,10 @@ impl HuffmanTable {
     }
 
     fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, ProbeError> {
+        if self.symbols.len() == 1 && self.counts[1] == 1 {
+            let _ = reader.read_bits(1)?;
+            return Ok(self.symbols[0]);
+        }
         let mut code = 0i32;
         let mut first = 0i32;
         let mut index = 0usize;

@@ -171,11 +171,13 @@ fn emit_pdf_color(s: &mut String, color: &Color, is_stroke: bool) {
 
 fn emit_pdf_path_ops(s: &mut String, path: &Path) {
     let mut cur = Point::default();
+    let mut subpath_start = Point::default();
     for el in &path.elements {
         match *el {
             PathElement::MoveTo(p) => {
                 let _ = writeln!(s, "{} {} m", fmt_num(p.x.get()), fmt_num(p.y.get()));
                 cur = p;
+                subpath_start = p;
             }
             PathElement::LineTo(p) => {
                 let _ = writeln!(s, "{} {} l", fmt_num(p.x.get()), fmt_num(p.y.get()));
@@ -214,6 +216,7 @@ fn emit_pdf_path_ops(s: &mut String, path: &Path) {
             }
             PathElement::Close => {
                 s.push_str("h\n");
+                cur = subpath_start;
             }
         }
     }

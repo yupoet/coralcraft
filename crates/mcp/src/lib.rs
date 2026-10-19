@@ -92,51 +92,63 @@ impl McpServer {
                     "tools": [
                         {
                             "name": "new_document",
-                            "description": "Resets the workspace to a fresh A4 Portrait multi-page document."
+                            "description": "Resets the workspace to a fresh A4 Portrait multi-page document.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "document_summary",
-                            "description": "Returns page count, active page, selection summary, and object counts."
+                            "description": "Returns page count, active page, selection summary, and object counts.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "add_rectangle",
-                            "description": "Adds a parametric CorelDRAW rectangle (x, y, width, height, radius, corner_kind)."
+                            "description": "Adds a parametric CorelDRAW rectangle (x, y, width, height, radius, corner_kind).",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "add_ellipse",
-                            "description": "Adds a parametric CorelDRAW ellipse (x, y, width, height, mode, start_deg, end_deg)."
+                            "description": "Adds a parametric CorelDRAW ellipse (x, y, width, height, mode, start_deg, end_deg).",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "add_polygon",
-                            "description": "Adds a regular polygon or star (cx, cy, radius, inner_radius, points)."
+                            "description": "Adds a regular polygon or star (cx, cy, radius, inner_radius, points).",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "add_artistic_text",
-                            "description": "Adds a CorelDRAW Artistic Text object (x, y, text, font_family, size_pt)."
+                            "description": "Adds a CorelDRAW Artistic Text object (x, y, text, font_family, size_pt).",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "set_style_rgb",
-                            "description": "Sets RGB fill or outline color on the current selection (or creation defaults)."
+                            "description": "Sets RGB fill or outline color on the current selection (or creation defaults).",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "add_page",
-                            "description": "Inserts a new page after the active page and activates it."
+                            "description": "Inserts a new page after the active page and activates it.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "export_svg",
-                            "description": "Exports the specified 0-based page as clean-room SVG 1.1 markup."
+                            "description": "Exports the specified 0-based page as clean-room SVG 1.1 markup.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "export_pdf_byte_len",
-                            "description": "Exports the multi-page document to ISO 32000-1 PDF 1.4 and returns its byte length."
+                            "description": "Exports the multi-page document to ISO 32000-1 PDF 1.4 and returns its byte length.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "undo",
-                            "description": "Undoes the most recent editor command."
+                            "description": "Undoes the most recent editor command.",
+                            "inputSchema": { "type": "object" }
                         },
                         {
                             "name": "redo",
-                            "description": "Redoes the most recently undone editor command."
+                            "description": "Redoes the most recently undone editor command.",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -267,9 +279,12 @@ impl McpServer {
                 let color = if clear {
                     None
                 } else {
-                    let r = args.get("r").and_then(Value::as_u64).unwrap_or(0) as u8;
-                    let g = args.get("g").and_then(Value::as_u64).unwrap_or(0) as u8;
-                    let b = args.get("b").and_then(Value::as_u64).unwrap_or(0) as u8;
+                    let r_u64 = args.get("r").and_then(Value::as_u64).unwrap_or(0);
+                    let g_u64 = args.get("g").and_then(Value::as_u64).unwrap_or(0);
+                    let b_u64 = args.get("b").and_then(Value::as_u64).unwrap_or(0);
+                    let r = u8::try_from(r_u64).map_err(|_| format!("RGB r={r_u64} out of range 0..=255"))?;
+                    let g = u8::try_from(g_u64).map_err(|_| format!("RGB g={g_u64} out of range 0..=255"))?;
+                    let b = u8::try_from(b_u64).map_err(|_| format!("RGB b={b_u64} out of range 0..=255"))?;
                     Some(Color::rgb8(r, g, b))
                 };
                 self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color });

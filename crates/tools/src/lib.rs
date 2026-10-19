@@ -213,7 +213,9 @@ impl GestureState {
             let ry = dy.abs();
             Rect::new(start.x.get() - rx, start.y.get() - ry, start.x.get() + rx, start.y.get() + ry).ok()
         } else {
-            Rect::new(start.x.get(), start.y.get(), start.x.get() + dx, start.y.get() + dy).ok()
+            let end_x = start.x.get() + dx;
+            let end_y = start.y.get() + dy;
+            Rect::new(start.x.get().min(end_x), start.y.get().min(end_y), start.x.get().max(end_x), start.y.get().max(end_y)).ok()
         }
     }
 }
@@ -308,6 +310,9 @@ impl ToolState {
     /// Finishes a shape-creation drag gesture and returns the constructed [`ObjectKind`]
     /// if the dragged rectangle has non-zero area.
     pub fn finish_create_shape(&mut self) -> Option<ObjectKind> {
+        if !matches!(self.gesture, Some(GestureState::DragCreateShape { .. })) {
+            return None;
+        }
         let gesture = self.gesture.take()?;
         let GestureState::DragCreateShape { tool, start, current, shift_constrain, alt_from_center } = gesture else {
             return None;
@@ -431,10 +436,11 @@ pub fn build_property_bar_schema(selection: &[&ObjectNode], page: &Page, units: 
 
     let first = selection[0];
     let bbox = combined_selection_bounds(selection);
+    let ref_pt = coralcraft_geom::reference_point(bbox, usize::from(tool_state.origin_point.as_index())).unwrap_or(Point { x: bbox.x0, y: bbox.y0 });
     let origin_ctrl = PropertyControl::OriginSelector { active: tool_state.origin_point };
     let transform_ctrl = PropertyControl::TransformBox {
-        x_pt: bbox.x0,
-        y_pt: bbox.y0,
+        x_pt: ref_pt.x,
+        y_pt: ref_pt.y,
         width_pt: F64::new(bbox.width()).unwrap_or(F64::ZERO),
         height_pt: F64::new(bbox.height()).unwrap_or(F64::ZERO),
         rotation_deg: F64::ZERO,

@@ -4,15 +4,15 @@ CoralCraft is a clean-room, open-source vector illustration and multi-page layou
 
 ## Summary Matrix
 
-| Workflow Domain | Current Status (M1) | Target Milestone | Notes |
+| Workflow Domain | Current Status (M4/M5) | Target Milestone | Notes |
 | --- | --- | --- | --- |
-| **Document Model & Multi-Page** | 0% (planned) | M2 / M6 | Multi-page spreads, Master Pages, Desktop layer (`ObjectId` + `Object::Unsupported` lossless passthrough) |
-| **Objects & Geometry** | 0% (planned) | M2 | Parametric Rectangle, Ellipse, Polygon/Star, Spiral, Bezier/B-Spline Curve, Artistic & Paragraph Text, Groups |
-| **Fills, Outlines & Palette** | 0% (planned) | M2 / M3 | Uniform, Fountain (Linear/Radial/Conical/Square, Direct + Rainbow CW/CCW), Pattern, Calligraphic Outlines, Spot/Palette colors (`.cpl` / `.xml` import) |
-| **CorelDRAW Signature Effects** | 0% (planned) | M3 / M7 | PowerClip (`container_id`), Contour, Blend, Envelope, Extrude, Perspective, Lens |
-| **Interactive Tools & Node Editing** | 0% (planned) | M5 | Pick, Shape (`F10`), Pen/Bezier, Rectangle (`F6`), Ellipse (`F7`), Polygon (`Y`), Artistic/Paragraph Text (`F8`), Interactive Fill (`G`) |
-| **Prepress, Print & Imposition** | 0% (planned) | M8 | Trim/Bleed/Slug boxes, Crop/Registration marks, Color-managed PDF/X export, Hairline check |
-| **Automation & Agentic MCP** | 0% (planned) | M9 | `coralcraft-mcp` JSON-RPC server + Rhai/Lua scripting engine |
+| **Document Model & Multi-Page** | **100%** (delivered) | M2 (Delivered) | Multi-page spreads, Master Pages (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`), Desktop pasteboard (`ObjectId` + `ObjectKind::Unsupported` lossless passthrough) |
+| **Objects & Geometry** | **85%** (delivered) | M2 (Delivered) | Parametric Rectangle (`Round`/`Scalloped`/`Chamfered`), Ellipse (`Full`/`Pie`/`Arc`), Polygon/Star, Cubic/Quadratic Bézier Curve, Artistic Text, Groups |
+| **Fills, Outlines & Palette** | **80%** (delivered) | M2 / M3 (Delivered) | Uniform, Fountain (`Linear`/`Radial`/`Conical`/`Square`, Direct + Rainbow CW/CCW), Outline (`behind_fill`, `scale_with_object`, Hairline), Spot/Registration/Lab colors, `.cpl` / `.xml` palette import |
+| **CorelDRAW Signature Effects** | **40%** (PowerClip delivered) | M3 / M7 | Recursive PowerClip (`powerclip_children`, `MAX_CLIP_DEPTH = 8`) in PNG, SVG 1.1, and PDF 1.4 |
+| **Interactive Tools & Classic Workspace** | **75%** (delivered) | M4 (Delivered) | Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox` (`Pick`, `Shape F10`, `Crop`, `Zoom Z`, `Freehand/Bezier F5`, `Rectangle F6`, `Ellipse F7`, `Polygon/Star Y`, `Artistic Text F8`, `Interactive Fill G`), right `ColorPaletteBar` (`[X]` No-Color, Left-Click Fill / Right-Click Outline), bottom `PageNavigatorBar`, `StatusBar`, `Objects`/`Properties` Dockers) |
+| **Prepress, Print & Imposition** | **45%** (delivered) | M3 / M8 | ISO 32000-1 PDF 1.4 `/MediaBox` + `/TrimBox` + `/BleedBox`, native CMYK (`k`/`K`), Spot/Registration/CIE Lab D50<->D65 Bradford CAT |
+| **Automation & Agentic MCP** | **75%** (MCP server delivered) | M5 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (`12` authoring & export tools) + `coralcraft --mcp` |
 
 ## 1. Document & Multi-Page Architecture
 
@@ -20,17 +20,13 @@ Unlike single-canvas or artboard-only vector editors, CorelDRAW documents combin
 
 - **Pages & Facing Spreads**: Per-page dimensions, orientation, and bleed next to a document-wide default page size.
 - **Document-Level Layer Stack**: Layers (Normal, Master, Guides, Desktop, Grid) are defined at the document level, while object instances bind to `(Page | Master | Desktop, LayerId)`.
-- **Desktop Layer**: Objects dragged outside a page boundary automatically migrate to the shared `Desktop` layer and remain visible across page switches.
-- **Units & Coordinate Precision**: Internal CDR coordinates use `1 / 254,000 inch` (`0.1 μm` = `1 / 10,000 mm`) signed 32-bit integers with a center-origin (`(0, 0)` at page center, `+Y` up); CoralCraft's `coralcraft-doc` normalizes coordinates to `Pt` (`1/72 inch`, `f64`) while preserving exact unit conversion helpers.
+- **Desktop Layer**: Objects placed on the `Desktop` pasteboard remain visible across page switches on screen while staying non-printing by default during export.
+- **Units & Coordinate Precision**: Internal CDR coordinates use `1 / 254,000 inch` (`0.1 μm` = `1 / 10,000 mm`) signed integers; `coralcraft-geom` provides exact `CdrUnit(i64)` <-> `Pt(F64)` conversion (`31_750 / 9` rational).
 
-## 2. Objects, Fills & Outlines
+## 2. Classic CorelDRAW Workspace & Interactive Tool Architecture
 
-- **Parametric Primitives**: Rectangles (per-corner radius and corner type: Round / Scalloped / Chamfered), Ellipses (Pie / Arc angles), Polygons & Stars, Spirals.
-- **Curves**: Cubic Bezier and B-Spline subpaths with per-node Cusp / Smooth / Symmetrical continuity flags.
-- **Outlines**: Width (`0.0` = Hairline), Calligraphic nib angle and stretch, line caps/joins, dash patterns, start/end arrowheads, and **Behind Fill** / **Scale with Object** flags.
-- **Fills**: Uniform, Fountain (Linear, Radial, Conical, Square; Direct RGB/CMYK/Lab and HSB Rainbow CW/CCW interpolation), Pattern, Texture, and PostScript fills.
-
-## 3. CorelDRAW Signature Effects
-
-- **PowerClip**: Any closed curve or parametric shape can act as a clipping container (`powerclip_container_id` / `powerclip_children`) with "Auto-center new content" and "Lock contents to PowerClip" semantics.
-- **Live Vector Effects (with Pre-baked Fallback)**: CDR files store both live effect parameters (`Blend`, `Contour`, `Envelope`, `Extrude`) and pre-baked display geometry. M3 imports pre-baked geometry alongside structured effect metadata; M7 provides interactive live editing.
+- **Top Chrome**: Fixed 11-category Menu Bar (`File`, `Edit`, `View`, `Layout`, `Object`, `Effects`, `Bitmaps`, `Text`, `Tools`, `Window`, `Help`), Standard Toolbar, and context-sensitive Property Bar driven by `coralcraft_tools::build_property_bar_schema`.
+- **Left Vertical Toolbox**: Single-column tool bar with CorelDRAW shortcuts (`F10` Shape, `Z` Zoom, `F5` Freehand/Bezier, `F6` Rectangle, `F7` Ellipse, `Y` Polygon/Star, `F8` Artistic Text, `G` Interactive Fill, `Escape` Pick).
+- **Right Vertical Color Palette Bar**: Top `[X]` No-Color cell followed by scrollable swatches; Left-Click sets Fill, Right-Click sets Outline (updating selection or next-object creation defaults).
+- **Bottom Page Navigator & Status Bar**: `+`, `Page 1..N` (Rename, Duplicate, Delete), `Master Page`, and `Desktop` tabs above the Status Bar (`x, y`, selection summary, Fill chip, Outline chip).
+- **Right Collapsible Dockers**: Tabbed `Objects` (Object Manager tree) and `Properties` inspector.

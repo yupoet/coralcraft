@@ -256,6 +256,10 @@ fn parse_riff_stream(bytes: &[u8], endian: Endian, version: u16, doc: &mut Docum
     }
     let declared_size = read_u32(endian, bytes, 4).unwrap_or(0) as usize;
     let end = (8usize.saturating_add(declared_size)).min(bytes.len());
+    if end < 12 {
+        warnings.push(format!("W-TRUNCATED-RIFF: declared RIFF payload size {declared_size} is smaller than 4-byte form tag"));
+        return;
+    }
 
     let mut ctx = ParserCtx {
         endian,
@@ -299,7 +303,16 @@ fn walk_chunk_sequence(
         };
         let raw_size_field = read_u32(ctx.endian, slice, cursor + 4).unwrap_or(0);
         let chunk_size = if let Some(bs) = block_sizes {
-            if let Some(&mapped) = bs.get(raw_size_field as usize) { mapped as usize } else { raw_size_field as usize }
+            let Some(&mapped) = bs.get(raw_size_field as usize) else {
+                warnings.push(format!(
+                    "W-CMPR-BLOCK-INDEX: chunk {} block index {} out of range (table len {})",
+                    format_fourcc(fourcc),
+                    raw_size_field,
+                    bs.len()
+                ));
+                break;
+            };
+            mapped as usize
         } else {
             raw_size_field as usize
         };
@@ -549,13 +562,13 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     // Also check if `loda` references a `fild` or `outl` ID in the document table
     if fill.is_none()
         && let Some((&first_id, first_fill)) = ctx.fills.iter().next()
-        && loda_payload.is_some_and(|(p, _)| contains_u32_le(p, first_id))
+        && loda_payload.is_some_and(|(p, _)| contains_u32(p, first_id, ctx.endian))
     {
         fill = Some(first_fill.clone());
     }
     if outline.is_none()
         && let Some((&first_id, first_outl)) = ctx.outlines.iter().next()
-        && loda_payload.is_some_and(|(p, _)| contains_u32_le(p, first_id))
+        && loda_payload.is_some_and(|(p, _)| contains_u32(p, first_id, ctx.endian))
     {
         outline = Some(first_outl.clone());
     }
@@ -588,8 +601,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     Some(node)
 }
 
-fn contains_u32_le(haystack: &[u8], needle: u32) -> bool {
-    let target = needle.to_le_bytes();
+fn contains_u32(haystack: &[u8], needle: u32, endian: Endian) -> bool {
+    let target = match endian {
+        Endian::Little => needle.to_le_bytes(),
+        Endian::Big => needle.to_be_bytes(),
+    };
     haystack.windows(4).any(|w| w == target)
 }
 
