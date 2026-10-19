@@ -1,12 +1,12 @@
-//! cargo xtask：CoralCraft 质量门与工程工具（对齐 vectorcraft xtask 约定）。
+//! `cargo xtask`: CoralCraft quality gates and developer tooling (aligned with `vectorcraft` conventions).
 //!
 //! - `ci`        = fmt --check + clippy -D warnings + test + cleanroom + assets + layers
-//! - `cleanroom` = 扫描 Corel 版权样串与 `.cdr`/`.cmx` fixture（净室铁律的机器门）
-//! - `assets`    = 校验 assets/ 内文件都在 ASSETS.md 登记（当前无资产目录，恒过）
-//! - `layers`    = 校验 workspace crate 分层依赖规则（L0→L7，L6 以下禁止依赖 UI 库）
-//! - `stats`     = 统计各 crate 的 Rust 文件数、代码行数与 `#[test]` 数量
+//! - `cleanroom` = scan for prohibited Corel copyright strings and binary `.cdr`/`.cmx` fixtures
+//! - `assets`    = verify every file under `assets/` is attributed in `ASSETS.md`
+//! - `layers`    = enforce workspace crate dependency layering (`L0..L7`; no UI dependencies below `L6`)
+//! - `stats`     = count Rust source files, lines of code, and `#[test]` attributes per crate
 //!
-//! 有意只用标准库：质量门自身不引第三方依赖（对齐家族惯例）。
+//! Intentionally uses only the Rust standard library so quality gates have zero third-party dependencies.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ fn main() -> ExitCode {
             print!("{USAGE}");
             Ok(())
         }
-        Some(other) => Err(format!("未知子命令 `{other}`\n\n{USAGE}")),
+        Some(other) => Err(format!("unknown subcommand `{other}`\n\n{USAGE}")),
     };
     match res {
         Ok(()) => ExitCode::SUCCESS,
@@ -48,9 +48,9 @@ fn main() -> ExitCode {
 
 fn run(label: &str, cmd: &mut Command) -> Result<(), String> {
     print!("== {label} … ");
-    let status = cmd.status().map_err(|e| format!("{label} 启动失败: {e}"))?;
+    let status = cmd.status().map_err(|e| format!("failed to launch {label}: {e}"))?;
     if !status.success() {
-        return Err(format!("{label} 失败（{status}）"));
+        return Err(format!("{label} failed ({status})"));
     }
     println!("ok");
     Ok(())
@@ -67,9 +67,9 @@ fn ci() -> Result<(), String> {
     Ok(())
 }
 
-/// 净室扫描：Corel 版权样串 + Corel 软件生成的 fixture（.cdr/.cmx 二进制）。
-/// 只扫本仓源码树；refs/（第三方参考，git-ignored）、target/ 与 xtask 自身
-/// （扫描器源码天然含有样串定义）不在辖内。
+/// Clean-room gate: scans for prohibited Corel copyright markers and binary `.cdr`/`.cmx` fixtures.
+/// Scans `crates/`, `apps/`, and `docs/`; `refs/` (git-ignored external references), `target/`,
+/// and `xtask` itself (which defines the needle patterns) are excluded.
 fn cleanroom(root: &Path) -> Result<(), String> {
     let mut offenders: Vec<String> = Vec::new();
 
@@ -90,13 +90,13 @@ fn cleanroom(root: &Path) -> Result<(), String> {
                 continue;
             }
             if name.ends_with(".cdr") || name.ends_with(".cmx") {
-                offenders.push(format!("fixture 疑似 Corel 文件: {}", path.display()));
+                offenders.push(format!("prohibited .cdr/.cmx fixture in repository: {}", path.display()));
                 continue;
             }
             if let Ok(text) = fs::read_to_string(&path) {
                 for needle in ["Copyright (c) Corel", "Corel Corporation", "© Corel"] {
                     if text.contains(needle) {
-                        offenders.push(format!("Corel 版权样串: {} （命中 {needle:?}）", path.display()));
+                        offenders.push(format!("prohibited Corel copyright marker in {} (matched {needle:?})", path.display()));
                     }
                 }
             }
@@ -104,20 +104,20 @@ fn cleanroom(root: &Path) -> Result<(), String> {
     }
 
     if offenders.is_empty() {
-        println!("cleanroom: 通过（无 Corel 版权样串、无 .cdr/.cmx fixture）");
+        println!("cleanroom: ok (no prohibited Corel copyright markers or .cdr/.cmx fixtures)");
         Ok(())
     } else {
         for o in &offenders {
-            eprintln!("cleanroom 违规: {o}");
+            eprintln!("cleanroom violation: {o}");
         }
-        Err(format!("cleanroom 检出 {} 处违规", offenders.len()))
+        Err(format!("cleanroom found {} violation(s)", offenders.len()))
     }
 }
 
 fn assets(root: &Path) -> Result<(), String> {
     let dir = root.join("assets");
     if !dir.exists() {
-        println!("assets: 无 assets/ 目录，通过（首个资产落地时建目录并逐行登记 ASSETS.md）");
+        println!("assets: ok (no assets/ directory present)");
         return Ok(());
     }
     let manifest = fs::read_to_string(root.join("ASSETS.md")).unwrap_or_default();
@@ -130,17 +130,17 @@ fn assets(root: &Path) -> Result<(), String> {
         }
     });
     if missing.is_empty() {
-        println!("assets: 通过");
+        println!("assets: ok");
         Ok(())
     } else {
         for m in &missing {
-            eprintln!("assets 未登记: {m}");
+            eprintln!("assets unattributed file: {m}");
         }
-        Err(format!("assets 检出 {} 个未登记文件", missing.len()))
+        Err(format!("assets found {} unattributed file(s)", missing.len()))
     }
 }
 
-/// 分层表（对齐 vectorcraft L0–L7 架构）。
+/// Workspace crate layer table (aligned with `vectorcraft` L0–L7 architecture).
 const LAYER_TABLE: &[(&str, u8)] = &[
     ("coralcraft-geom", 0),
     ("coralcraft-color", 0),
@@ -172,29 +172,29 @@ fn layers(root: &Path) -> Result<(), String> {
         let layer_s = layer.map_or_else(|| "?".to_string(), |l| format!("L{l}"));
         println!("{pkg:<24} {layer_s:<8} {}", deps.join(", "));
         let Some(from_l) = *layer else {
-            violations.push(format!("{pkg}: 未在 LAYER_TABLE 登记"));
+            violations.push(format!("{pkg}: not registered in LAYER_TABLE"));
             continue;
         };
         for dep in deps {
             if from_l < UI_MIN_LAYER && UI_CRATES.iter().any(|u| dep == u || dep.starts_with("egui_")) {
-                violations.push(format!("{pkg} (L{from_l}) 禁止依赖 UI 库 `{dep}`（仅 L{UI_MIN_LAYER}+ 允许）"));
+                violations.push(format!("{pkg} (L{from_l}) must not depend on UI crate `{dep}` (only L{UI_MIN_LAYER}+ allowed)"));
             }
             if let Some(to_l) = layer_of(dep)
                 && from_l < 7
                 && to_l >= from_l
             {
-                violations.push(format!("{pkg} (L{from_l}) 不可依赖同层或高层 crate `{dep}` (L{to_l})"));
+                violations.push(format!("{pkg} (L{from_l}) must not depend on same-or-higher layer crate `{dep}` (L{to_l})"));
             }
         }
     }
     if violations.is_empty() {
-        println!("\nlayers: 通过（{} 个 crate，无分层违规）", manifests.len());
+        println!("\nlayers: ok ({} crates, no layer violations)", manifests.len());
         Ok(())
     } else {
         for v in &violations {
-            eprintln!("layers 违规: {v}");
+            eprintln!("layers violation: {v}");
         }
-        Err(format!("layers 检出 {} 处违规", violations.len()))
+        Err(format!("layers found {} violation(s)", violations.len()))
     }
 }
 
@@ -413,13 +413,13 @@ mod tests {
         let forbidden = format!("{} (c) {}", "Copyright", "Corel");
         fs::write(docs_dir.join("bad.md"), format!("bad line: {forbidden}\n")).expect("write bad doc");
         let err = cleanroom(&tmp.0).expect_err("must reject forbidden string");
-        assert!(err.contains("1 处违规"));
+        assert!(err.contains("1 violation(s)"));
 
         // Remove bad doc, add a .cdr fixture inside crates/
         fs::remove_file(docs_dir.join("bad.md")).expect("rm bad doc");
         fs::write(crates_dir.join("sample.cdr"), b"RIFF\x04\x00\x00\x00CDRD").expect("write .cdr fixture");
         let err2 = cleanroom(&tmp.0).expect_err("must reject .cdr fixture");
-        assert!(err2.contains("1 处违规"));
+        assert!(err2.contains("1 violation(s)"));
     }
 
     #[test]
@@ -434,7 +434,7 @@ mod tests {
         fs::write(tmp.0.join("ASSETS.md"), "# Assets\n").expect("write empty ASSETS.md");
 
         let err = assets(&tmp.0).expect_err("unregistered asset must fail");
-        assert!(err.contains("1 个未登记文件"));
+        assert!(err.contains("1 unattributed file(s)"));
 
         fs::write(tmp.0.join("ASSETS.md"), "# Assets\n\n| assets/icons/pen.svg | Author | URL | MIT | Icon |\n").expect("register asset");
         assert!(assets(&tmp.0).is_ok());

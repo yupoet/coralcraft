@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft-mcp"
-description = "MCP server：agent 驱动绘图（M5 实装，对齐家族 agent-native 约定）"
+description = "Model Context Protocol (MCP) server for agent-driven vector illustration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

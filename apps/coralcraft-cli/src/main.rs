@@ -1,11 +1,11 @@
-//! CoralCraft CLI（`coralcraft-cli`）。
+//! CoralCraft CLI (`coralcraft-cli`).
 //!
-//! 退出码约定：
-//! - `0`：成功
-//! - `2`：命令行参数错误（`clap` 默认）
-//! - `3`：非 CDR/CMX 文件（`NotCdr` / `TooShort`）
-//! - `4`：文件读取 I/O 错误
-//! - `5`：容器结构损坏、截断或超出安全解析上限（`Truncated` / `Invalid` / `LimitExceeded`）
+//! Exit code convention:
+//! - `0`: Success
+//! - `2`: CLI argument usage error (`clap` default)
+//! - `3`: Not a CDR/CMX file (`NotCdr` / `TooShort`)
+//! - `4`: File I/O error or file size exceeds safety limit
+//! - `5`: Corrupted/truncated container or safety limit exceeded (`Truncated` / `Invalid` / `LimitExceeded`)
 
 use std::fs;
 use std::process::ExitCode;
@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport};
 
 #[derive(Parser)]
-#[command(name = "coralcraft-cli", version, about = "CoralCraft 命令行工具")]
+#[command(name = "coralcraft-cli", version, about = "CoralCraft command-line utility")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -22,11 +22,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 识别 CDR/CMX 文件的容器、版本与顶层 chunk 清单
+    /// Inspect the container generation, version, and top-level chunks of a CDR/CMX file
     Probe {
-        /// 待识别的文件路径
+        /// Path to the file to inspect
         file: String,
-        /// 以结构化 JSON 输出（含 schema_version = 1）
+        /// Emit structured JSON output (`schema_version = 1`)
         #[arg(long)]
         json: bool,
     },
@@ -73,26 +73,26 @@ fn print_human_report(file: &str, report: &ProbeReport) {
     }
 }
 
-/// CLI 单次读入内存探测的文件大小上限（512 MiB），防止超大敌意文件引发 OOM。
+/// Maximum file size read into memory at once by the CLI probe (512 MiB) to prevent OOM on hostile inputs.
 const MAX_PROBE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 fn run_probe(file: &str, json: bool) -> ExitCode {
     let meta = match fs::metadata(file) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("coralcraft-cli probe: 无法读取文件元数据 '{file}': {e}");
+            eprintln!("coralcraft-cli probe: failed to read file metadata '{file}': {e}");
             return ExitCode::from(4);
         }
     };
     if meta.len() > MAX_PROBE_FILE_BYTES {
-        eprintln!("coralcraft-cli probe: 文件 '{file}' 大小 ({} bytes) 超出安全探测上限 ({} bytes)", meta.len(), MAX_PROBE_FILE_BYTES);
+        eprintln!("coralcraft-cli probe: file '{file}' size ({} bytes) exceeds maximum probe limit ({} bytes)", meta.len(), MAX_PROBE_FILE_BYTES);
         return ExitCode::from(4);
     }
 
     let bytes = match fs::read(file) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("coralcraft-cli probe: 无法读取文件 '{file}': {e}");
+            eprintln!("coralcraft-cli probe: failed to read file '{file}': {e}");
             return ExitCode::from(4);
         }
     };
@@ -103,7 +103,7 @@ fn run_probe(file: &str, json: bool) -> ExitCode {
                 match serde_json::to_string_pretty(&report) {
                     Ok(s) => println!("{s}"),
                     Err(e) => {
-                        eprintln!("coralcraft-cli probe: JSON 序列化失败: {e}");
+                        eprintln!("coralcraft-cli probe: JSON serialization failed: {e}");
                         return ExitCode::from(5);
                     }
                 }

@@ -1,4 +1,4 @@
-//! coralcraft-mcp：MCP server：agent 驱动绘图（M5 实装，对齐家族 agent-native 约定）
+//! `coralcraft-mcp`: Model Context Protocol (MCP) server for agent-driven vector illustration (lands in M5).
 
 #[cfg(test)]
 mod tests {

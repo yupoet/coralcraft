@@ -1,4 +1,4 @@
-//! coralcraft-tools：工具与面板语义：选择/形状/钢笔/文本（M4 实装）
+//! `coralcraft-tools`: Interactive tool and panel state machines: Pick, Shape, Pen, Text (lands in M4).
 
 #[cfg(test)]
 mod tests {

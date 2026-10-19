@@ -1,56 +1,48 @@
-# 02 — 架构、关键决策与依赖关系
+# 02 — Architecture, Key Decisions & Dependency Layers
 
-## 1. 双轨净室方法论（核心法务与工程边界）
+## 1. Dual-Track Clean-Room Methodology
 
-1. **行为轨（公开文档净室）**：
-   - 应用行为（工具、面板、命令、快捷键）**只**来自公开文档（官方在线手册、公开用户指南 PDF、出版教程、论坛帖子，引用需附 URL）。
-   - **绝对禁止**启动、运行、自动化、截图、反汇编对标商业软件，也**绝对禁止**用对标软件生成测试 fixture。
-2. **格式轨（自有样例 + 公开逆向规范）**：
-   - 以 [Photopea CDR 规范](https://github.com/photopea/CDR-specification)（`refs/cdr-spec/`）为结构主干；
-   - 以 [libcdr](https://github.com/LibreOffice/libcdr)（`refs/libcdr/`，**MPL-2.0**）作为 chunk 语义与版本差异参考（**只读不抄**，结论写入 `docs/reverse/` 日志并注明出处，零代码搬运）；
-   - **严禁读取** `refs/uniconvertor/` 源码（**AGPL-3.0** 高危传染，仅参考其公开网页格式清单）；
-   - 逆向助手 `refs/morluto-rea/` 与 `refs/rea/` **仅用于分析自有样例或合成 fixture**，永不指向商业软件二进制。
+1. **Behavioral Track (Public Documentation Clean-Room)**:
+   - Application workflows (tools, panels, commands, shortcuts) are derived strictly from public documentation (public user guides, published books, tutorials, forum posts, cited with URLs).
+   - **Never** launch, run, automate, screenshot, or disassemble proprietary Corel software, and **never** generate test fixtures using proprietary software.
+2. **Format Track (Public Specifications + Operator Samples)**:
+   - Structural specification backbone: [Photopea CDR Format Specification](https://github.com/photopea/CDR-specification) (`refs/cdr-spec/`) and [Kaitai Struct `coreldraw_cdr.ksy`](https://formats.kaitai.io/coreldraw_cdr/).
+   - Semantic reference: [libcdr](https://github.com/LibreOffice/libcdr) (`refs/libcdr/`, **MPL-2.0** — read-only semantic reference, zero code copying; document findings in `docs/reverse/`).
+   - **Never** read `refs/uniconvertor/` source code (**AGPL-3.0**).
+   - Reverse-engineering assistants (`refs/morluto-rea/`, `refs/rea/`) may **only** inspect operator-owned sample files or synthetic fixtures.
 
-## 2. 关键架构决策（D1–D8）
+## 2. Key Architectural Decisions (`D1`–`D8`)
 
-| 编号 | 决策 | 说明与依据 |
+| ID | Decision | Rationale |
 | :--- | :--- | :--- |
-| **D1** | 纯 Rust Workspace 矩阵 | 对齐 `storytold/vectorcraft` 布局（`crates/*` + `apps/*` + `xtask`），便于复用 `craft-libs`、`craft-common-actions`、`craft-fonts` 生态约定 |
-| **D2** | UI 与引擎解耦（`ui-egui`） | 引擎逻辑下沉在 `doc`/`geom`/`color`/`render`/`tools`/`engine`，UI 独立在 `crates/ui-egui` |
-| **D3** | 多页文档模型（`coralcraft-doc`） | 对标 CorelDRAW 的多页/跨页（Page/Spread/Layer）排版范式，参照 `refs/designcraft/` 而非单画板模型 |
-| **D4** | 色彩优先级前移（`coralcraft-color`） | 印刷/标识场景刚需 CMYK、专色（Spot Color）与 `.cpl`/XML 色板解析 |
-| **D5** | CDR 格式三阶段演进（`coralcraft-cdr`） | `probe`（容器/版本/chunk 走读）→ `parse`（对象树转文档模型 + warning 台账）→ `build`（写出长期战役） |
-| **D6** | 敌意输入防御（No Panic） | 所有格式解析器把输入视为不可信数据，一律返回 `Result`，在格式 crate 启用 `#![deny(clippy::unwrap_used)]` |
-| **D7** | Agent-native（`coralcraft-mcp`） | 内置 MCP server 与 JSON 控制通道，支持 AI agent 自动化操作与回归验证 |
-| **D8** | 字体分仓模式 | 字体文件永不进主仓，参照 `refs/craft-fonts/` 通过可选 `CRAFT_FONTS_DIR` 注入 |
+| **D1** | Pure-Rust Layered Workspace (`L0..L7`) | Aligned with `storytold/vectorcraft` (`crates/*` + `apps/*` + `xtask`), enforced by `cargo xtask layers` |
+| **D2** | Decoupled UI (`coralcraft-ui-egui`) | Core logic lives in `geom`/`color`/`doc`/`cdr`/`render`/`tools`/`engine`; UI is isolated at `L6` |
+| **D3** | Multi-Page Document Model (`coralcraft-doc`) | Models CorelDRAW spreads, per-page dimensions, document-level layer stack, and shared `Desktop` layer |
+| **D4** | Early CMYK & Spot Color Support (`coralcraft-color`) | Prepress and signage workflows require CMYK, spot colors, and user-imported `.cpl`/`.xml` palettes |
+| **D5** | Three-Stage CDR Format Pipeline (`coralcraft-cdr`) | `probe` (WL / RIFF+RIFX / ZIP+RIFF) -> `parse` (object tree + warning ledger) -> `build` (writer campaign) |
+| **D6** | Hostile-Input Hardening (No Panic) | All parsers treat inputs as untrusted, return `Result`, and forbid `unsafe`, `unwrap`, `expect`, and `panic` |
+| **D7** | Agent-Native MCP (`coralcraft-mcp`) | Built-in Model Context Protocol server for AI-driven illustration and automated regression testing |
+| **D8** | External Font Repository | Fonts are never committed to this repo; injected optionally via `CRAFT_FONTS_DIR` |
 
-## 3. Crate 依赖关系图
+## 3. Crate Dependency Graph (`L0`–`L7`)
 
 ```mermaid
 flowchart TD
-    CLI["apps/coralcraft-cli"] --> CDR["crates/cdr"]
-    CLI --> ENGINE["crates/engine"]
-    APP["apps/coralcraft"] --> UI["crates/ui-egui"]
+    CLI["apps/coralcraft-cli (L7)"] --> CDR["crates/cdr (L3)"]
+    CLI --> ENGINE["crates/engine (L5)"]
+    APP["apps/coralcraft (L7)"] --> UI["crates/ui-egui (L6)"]
     APP --> ENGINE
     UI --> ENGINE
-    UI --> TOOLS["crates/tools"]
-    MCP["crates/mcp"] --> ENGINE
-    ENGINE --> DOC["crates/doc"]
-    ENGINE --> RENDER["crates/render"]
+    UI --> TOOLS["crates/tools (L4)"]
+    MCP["crates/mcp (L6)"] --> ENGINE
+    ENGINE --> DOC["crates/doc (L1)"]
+    ENGINE --> RENDER["crates/render (L3)"]
     ENGINE --> TOOLS
     ENGINE --> CDR
     CDR --> DOC
     RENDER --> DOC
-    RENDER --> GEOM["crates/geom"]
-    RENDER --> COLOR["crates/color"]
+    RENDER --> GEOM["crates/geom (L0)"]
+    RENDER --> COLOR["crates/color (L0)"]
     DOC --> GEOM
     DOC --> COLOR
 ```
-
-## 4. 外部依赖策略
-
-- **Workspace 共享依赖**（见根 [`Cargo.toml`](../../Cargo.toml)）：
-  - `thiserror = "2"`：库层结构化错误定义
-  - `serde = { version = "1", features = ["derive"] }` / `serde_json = "1"`：序列化与 CLI `--json` 输出
-  - `clap = { version = "4.5", features = ["derive"] }`：CLI 参数解析
-- **`xtask` 零第三方依赖**：仅使用 Rust 标准库实现 `ci`、`cleanroom`、`assets` 门禁。

@@ -1,84 +1,65 @@
-# CoralCraft — instructions for agents
+# CoralCraft — Instructions for Agents
 
-CoralCraft 是一个净室（clean-room）、开源、Rust 原生的矢量插画 + 多页排版应用，
-目标 CorelDRAW parity（及超越）。运行于 macOS / Windows / Linux，后续经 WASM 上 Web。
-方法论与结构对标 [storytold/vectorcraft](https://github.com/storytold/vectorcraft)
-（Illustrator parity）及其家族约定。
+CoralCraft is a clean-room, open-source, Rust-native vector illustration and multi-page layout application targeting CorelDRAW parity (and beyond). It runs natively on macOS, Windows, and Linux, and compiles to WebAssembly for the Web. Its engineering methodology and workspace architecture align with [storytold/vectorcraft](https://github.com/storytold/vectorcraft) (Illustrator parity) and the ArtCraft family conventions.
 
-## 每个会话从这里开始
+## Start Every Session Here
 
-1. **必读 AI 记忆库（`docs/ai-memory/`）**：开始任何工作前，必须先读取：
-   - [`docs/ai-memory/00-project.md`](docs/ai-memory/00-project.md) — 项目目标、模块、目录说明
-   - [`docs/ai-memory/01-commands.md`](docs/ai-memory/01-commands.md) — 常用命令、启动方式、测试方式
-   - [`docs/ai-memory/02-architecture.md`](docs/ai-memory/02-architecture.md) — 架构、关键决策、依赖关系
-   - [`docs/ai-memory/03-current.md`](docs/ai-memory/03-current.md) — 当前任务、进行中问题、下一步
-   - [`docs/ai-memory/04-known-issues.md`](docs/ai-memory/04-known-issues.md) — 已知 bug、坑点、规避方式
-   - 按需读取 [`docs/ai-memory/05-ref-docs/`](docs/ai-memory/05-ref-docs/) — 参考的外部信息、知识梳理等（多文件）
-2. **持续回写记忆库**：当做出重要发现、推进任务状态、遇到新坑点或整理外部知识时，必须将重要结论持久化回写到 `docs/ai-memory/03-current.md`、`04-known-issues.md` 或 `05-ref-docs/`。
-3. 读 [`ROADMAP.md`](ROADMAP.md)（阶段、各维度数字、下一步）与
-   [`docs/gaps.md`](docs/gaps.md)（排序后的差距清单）。除非操作者给定任务，
-   从差距清单选活干。
-4. 读当前里程碑计划 `docs/superpowers/plans/*.md`，按其中的 Task 执行。
-5. 遵循自主运行协议：定向 → 计划 → 失败测试先行 → 实现 → 全量回归 → 记录（同步更新 `docs/ai-memory/`） → 提交。
-   除非计划中标注为"操作者裁决"，不要停下来问。
+1. **Read the AI Memory Bank (`docs/ai-memory/`)**: Before starting any work, read:
+   - [`docs/ai-memory/00-project.md`](docs/ai-memory/00-project.md) — Project goals, workspace modules, and directory layout
+   - [`docs/ai-memory/01-commands.md`](docs/ai-memory/01-commands.md) — Common commands, build/run/test workflows
+   - [`docs/ai-memory/02-architecture.md`](docs/ai-memory/02-architecture.md) — Architecture, key design decisions, and layer rules
+   - [`docs/ai-memory/03-current.md`](docs/ai-memory/03-current.md) — Current milestone status, active tasks, and next steps
+   - [`docs/ai-memory/04-known-issues.md`](docs/ai-memory/04-known-issues.md) — Known bugs, pitfalls, and workarounds
+   - Read [`docs/ai-memory/05-ref-docs/`](docs/ai-memory/05-ref-docs/) as needed for external format and architecture references.
+2. **Persist Important Findings Back into Memory**: Whenever you make important discoveries, advance task state, encounter new pitfalls, or synthesize external knowledge, persist those findings into `docs/ai-memory/03-current.md`, `04-known-issues.md`, or `05-ref-docs/`.
+3. Read [`ROADMAP.md`](ROADMAP.md) (stage, per-dimension scores, next steps) and [`docs/gaps.md`](docs/gaps.md) (prioritized gap list). Unless the operator assigns a specific task, pick the top unfinished item from `docs/gaps.md`.
+4. Read the active milestone plan under `docs/superpowers/plans/*.md` and execute its tasks in order.
+5. Follow the autonomous execution loop: Orient -> Plan -> Failing Test First -> Implement -> Full CI Regression (`cargo xtask ci`) -> Record (sync `docs/ai-memory/`) -> Commit. Do not pause to ask unless a decision is explicitly marked as an operator decision gate.
 
-`plan/` 是 gitignored 的本地会话笔记目录。
+`plan/` is a git-ignored directory for local session scratch notes.
 
-## 不可协商项（绝对规则）
+## Non-Negotiable Rules
 
-### 净室：从不使用 Corel 软件（项目所有者铁律）
+### Language: English for All Code Comments, Logs, Diagnostics, and Commits
 
-Corel 的 EULA 禁止逆向其软件（包括观察输入输出来重建行为）。因此：
+- **All** source code comments, doc comments (`///`, `//!`), error/warning messages, CLI output, log messages, test descriptions, and git commit messages **must be written in English**.
 
-- **从不**启动、运行、脚本化、自动化（VBA/COM/UI automation）、截图或测量
-  CorelDRAW 或任何 Corel 应用，**从不**把我们的输出与它对比。
-  不用 Corel 软件制造测试文件，"合成的"也不行。
-- **从不**读取、反汇编或复制 Corel 安装目录内的任何东西（二进制、预设、
-  资源、帮助文件、字体、ICC profile、对象模型文档副本）。
-- **从不**把 Corel 撰写的代码或文本复制进本仓（测试也不行）。测试输入一律
-  从公开规范（Photopea CDR 规范、RIFF、PDF/ISO 32000 等）从零手写。
-- 行为只来自**公开文档**（Corel 官方在线手册、出版书籍、公开教程、论坛帖子，
-  逐条引用 URL），以及**操作者自有的、发给我们本地使用的文件**
-  （永不提交进仓）。
-- 除功能名称外，**从不**复制 Corel 图标、 artwork、预设或措辞。
-- 某个任务看似需要以上任何一条时：停下并说明，而不是做。
-  `cargo xtask cleanroom`（由 `cargo xtask ci` 运行）扫描 Corel 版权标记与
-  Corel 软件生成的 fixture。
+### Clean-Room: Never Use Proprietary Software
 
-### 许可：不抄 GPL/AGPL，不抄 MPL 代码
+- **Never** launch, run, script, automate (VBA/COM/UI automation), screenshot, or measure CorelDRAW or any proprietary Corel application, and **never** compare our output against a running instance of it. Never use Corel software to generate test fixtures (even "synthetic" ones).
+- **Never** read, disassemble, or copy anything from a Corel installation directory (binaries, presets, resources, help files, fonts, ICC profiles, object-model docs).
+- **Never** copy Corel-authored code or text into this repository (including in tests). All test inputs must be handcrafted from scratch using public specifications (Photopea CDR specification, Kaitai Struct `coreldraw_cdr.ksy`, RIFF, PKWARE APPNOTE, PDF/ISO 32000).
+- Application behavior must be derived strictly from **public documentation** (public user guides, published technical books, public tutorials, forum posts, cited by URL) and **operator-owned local sample files** (which are never committed to the repository).
+- Beyond standard feature names, **never** copy proprietary icons, artwork, presets, or UI phrasing.
+- `cargo xtask cleanroom` (run by `cargo xtask ci`) scans for prohibited copyright strings and `.cdr`/`.cmx` binary fixtures in the repository tree.
 
-- **从不**复制 GPL/AGPL 代码（Inkscape、UniConvertor、lib2geom、sK1……）。
-  需要理解其思路时只读文档与论文，并在代码注释中引用出处 URL，不搬代码。
-- libcdr 是 MPL-2.0：可以读（作为格式语义参考与差异验证），**从不**逐行搬运；
-  若确需集成，必须单独立项评估 MPL 条款，默认不集成、走独立实现。
-- 代码与原创资产：`MIT OR Apache-2.0`。
+### Licensing: Never Copy GPL/AGPL or MPL Code
 
-### 资产：永不使用 Corel 图标或图像
+- **Never** copy GPL/AGPL code (Inkscape, UniConvertor, lib2geom, sK1, etc.). Study public papers/docs only, cite URLs in comments, and write clean-room implementations.
+- `libcdr` is MPL-2.0: it may be read as a format-semantics reference and differential oracle, but **never** copied line-by-line; our implementation is written independently from scratch.
+- All code and original assets in this repository are dual-licensed under `MIT OR Apache-2.0`.
 
-- 永不添加、复制、描摹、内嵌或分发来自 Corel 产品或任何许可不兼容来源的
-  图标、图片、光标、预设、色板/符号库、ICC profile 或截图。
-- 每个资产文件必须在 [`ASSETS.md`](ASSETS.md) 有登记行（路径、作者、来源 URL、
-  许可、备注）；许可文本放在资产旁；`cargo xtask assets` 拦截未登记资产。
-- 字体放独立仓库（参照 storytold/craft-fonts 模式），永不进本仓。
+### Assets: Never Use Proprietary Icons or Artwork
 
-### 质量：发布的代码不 panic
+- Never add, copy, trace, embed, or distribute icons, images, cursors, presets, swatch libraries, ICC profiles, or screenshots from Corel products or incompatible licenses.
+- Every asset file under `assets/` must have an attribution row in [`ASSETS.md`](ASSETS.md) (path, author, source URL, license, notes); `cargo xtask assets` blocks unregistered assets.
+- Fonts belong in a separate repository (following the `storytold/craft-fonts` pattern) and are never committed here.
 
-- 库层返回 `Result`，解析器对敌意输入返回错误而不是 panic（见
-  vectorcraft 的 hostile-input 传统；CDR 文件按不可信输入处理）。
-- 每个 crate 的公共 API 变更先写失败测试。
+### Quality: Shipped Code Never Panics
 
-## 提交与流程
+- Library crates return `Result`; parsers return structured errors on hostile input and never panic (all `.cdr`/`.cmx` files are treated as untrusted input).
+- Every public API change must start with a failing test.
 
-- 严格 TDD（失败测试先行）；conventional commits（feat/fix/docs/test/chore），
-  中文提交说明，无 attribution。
-- 每 Task 一个提交；不跨失败的 Slice 提交（见计划文档）。
-- `refs/` 目录永不提交（第三方代码只在本地参考）。
+## Commits & Workflow
 
-## 路线与文档
+- Strict TDD (failing test first); conventional commits (`feat`/`fix`/`docs`/`test`/`chore`) with **English** commit messages and no AI attribution footer.
+- One commit per task; never commit across a failing slice.
+- `refs/` is never committed (external reference code stays local-only).
 
-- 阶段与自评分：[`ROADMAP.md`](ROADMAP.md)
-- 对标评估：`docs/target-app-parity.md`（M1 建立）
-- 格式支持矩阵：`docs/file-format-parity.md`（M1 建立）
-- 差距清单：`docs/gaps.md`
-- 逆向工作日志（格式层）：`docs/reverse/`（记录 chunk 语义发现，含证据文件 hash，
-  不含第三方代码）
+## Roadmap & Documentation
+
+- Stage and self-assessment scores: [`ROADMAP.md`](ROADMAP.md)
+- Target application workflow parity: [`docs/target-app-parity.md`](docs/target-app-parity.md)
+- File format support matrix: [`docs/file-format-parity.md`](docs/file-format-parity.md)
+- Prioritized gap list: [`docs/gaps.md`](docs/gaps.md)
+- Format reverse-engineering log: [`docs/reverse/log-format.md`](docs/reverse/log-format.md) (records chunk semantics and evidence SHA-256 hashes, never third-party code)

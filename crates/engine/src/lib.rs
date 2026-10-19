@@ -1,4 +1,4 @@
-//! coralcraft-engine：引擎组装：文档+渲染+输入（M4 实装）
+//! `coralcraft-engine`: Engine assembly combining document state, rendering, and input dispatch (lands in M4).
 
 #[cfg(test)]
 mod tests {

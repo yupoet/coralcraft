@@ -1,4 +1,4 @@
-//! coralcraft-geom：几何内核：贝塞尔/布尔/捕捉（M2 实装，借鉴 refs/vectorcraft crates/geom 结构）
+//! `coralcraft-geom`: 2D geometry kernel: Bezier curves, boolean path ops, and snapping (lands in M2).
 
 #[cfg(test)]
 mod tests {

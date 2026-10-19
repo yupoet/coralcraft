@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft-ui-egui"
-description = "egui 前端（独立 crate，可整体替换，M4 实装）"
+description = "Replaceable egui desktop and Web frontend for CoralCraft"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

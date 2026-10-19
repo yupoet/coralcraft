@@ -1,10 +1,8 @@
-# 05-ref-docs — 外部参考信息与领域知识梳理索引
+# 05-ref-docs — External Reference & Domain Knowledge Notes
 
-本目录存放 CoralCraft 项目持续沉淀的外部参考调研、生态对比与格式规范知识梳理（多文件结构）。当在开发或逆向过程中整理出新的外部公开规范、竞品对标细节或格式知识时，在此新增或更新专题文档。
+Index of external domain knowledge and review syntheses persisted for CoralCraft development:
 
-## 文档索引
-
-1. [`01-artcraft-ecosystem.md`](01-artcraft-ecosystem.md) — ArtCraft (`storytold`) 13 应用矩阵、方法论拆解与共享基础设施梳理
-2. [`02-cdr-open-source-ecosystem.md`](02-cdr-open-source-ecosystem.md) — CDR/CMX 开源生态现状调研（`libcdr`、`Photopea CDR-specification`、`UniConvertor`、逆向助手 `REA` 与许可红线）
-3. [`03-cdr-format-primer.md`](03-cdr-format-primer.md) — CDR 文件格式结构初探（基于 Photopea 公开规范的 `WL` 与 `RIFF` 容器、基本数据类型与 chunk 规则梳理）
-4. [`04-m1-plan-four-way-review.md`](04-m1-plan-four-way-review.md) — M0/M1 实施计划四方独立评审汇总（GLM-5.3 / Kimi K3 / DeepSeek V4.1 Flash / Grok 4.6）
+1. [`01-artcraft-ecosystem.md`](01-artcraft-ecosystem.md) — Architecture, workspace layering (`L0..L7`), and quality gate conventions across the `storytold` ArtCraft family (`vectorcraft`, `designcraft`, `cadcraft`, `craft-libs`, `craft-fonts`).
+2. [`02-cdr-open-source-ecosystem.md`](02-cdr-open-source-ecosystem.md) — Survey of open-source CDR/CMX projects (`libcdr`, Photopea `CDR-specification`, Kaitai Struct `coreldraw_cdr.ksy`, `morluto/rea`) and licensing boundaries.
+3. [`03-cdr-format-primer.md`](03-cdr-format-primer.md) — Clean-room CDR format primer: three container generations (`WL`, bare `RIFF`/`RIFX`, X4+ `ZIP+RIFF`), ASCII version byte mapping table, coordinate system (`0.1 μm`), and chunk hierarchy.
+4. [`04-m1-plan-four-way-review.md`](04-m1-plan-four-way-review.md) — Synthesis of the 5-way independent review (`GLM-5.3`, `Kimi K3`, `Grok 4.6`, `DeepSeek V4.1 Flash`, `Claude Opus 5.5`) across M1–M9.

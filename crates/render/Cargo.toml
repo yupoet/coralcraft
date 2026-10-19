@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft-render"
-description = "SIMD 多线程渲染（M2 实装）"
+description = "SIMD multi-threaded 2D vector rasterization and rendering pipeline"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

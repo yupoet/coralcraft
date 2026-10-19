@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft-cli"
-description = "CoralCraft 命令行：probe / headless 导出（M2+）/ MCP server（M5+）"
+description = "CoralCraft CLI: probe, headless rendering/export, and MCP server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

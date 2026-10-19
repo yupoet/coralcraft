@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft-engine"
-description = "引擎组装：文档+渲染+输入（M4 实装）"
+description = "Core application engine combining document state, rendering, and input dispatch"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

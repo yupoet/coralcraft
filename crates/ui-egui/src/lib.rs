@@ -1,4 +1,4 @@
-//! coralcraft-ui-egui：egui 前端（独立 crate，可整体替换，M4 实装）
+//! `coralcraft-ui-egui`: Replaceable `egui` desktop and Web frontend (lands in M4).
 
 #[cfg(test)]
 mod tests {

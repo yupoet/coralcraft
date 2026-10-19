@@ -1,4 +1,4 @@
-//! coralcraft-doc：多页文档模型（借鉴 refs/designcraft 页模型；区别于 vectorcraft 的画板模型）
+//! `coralcraft-doc`: Multi-page document model (spreads, pages, document-level layers, desktop layer; lands in M2).
 
 #[cfg(test)]
 mod tests {

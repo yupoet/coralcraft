@@ -1,61 +1,54 @@
-# REFS — 参考仓库索引与许可边界
+# REFS — External Reference Repository Index & Clean-Room Boundaries
 
-> `refs/` 内容永不提交（.gitignore，唯一例外是本文件）；迁移/新机时用
-> `scripts/bootstrap-refs.sh` 按 §D 冻结版本一键重建（约 200MB）。
-> 克隆均为浅克隆；日常更新用 `git -C refs/<dir> pull --ff-only`，更新后回写 §D。
+> Contents under `refs/` are never committed (`.gitignore`, except for this file). On a new machine, run `scripts/bootstrap-refs.sh` to restore all pinned commits from §D (~200 MB).
 
-## A. 应用与家族约定（ArtCraft / storytold）
+## A. Application & Ecosystem Conventions (ArtCraft / storytold & Format References)
 
-| 目录 | 许可 | 借鉴什么 | 边界 |
-|---|---|---|---|
-| `vectorcraft/` | MIT OR Apache-2.0 | **方法论母本**：AGENTS.md 净室规则措辞、workspace/xttask 结构、crate 划分（geom/color/doc/…）、parity 文档与自评分制度、`format/tests/prop_format.rs` 属性测试思路、Image Trace（→ PowerTRACE 对标）、EPS/打印管线 | 只借鉴结构与思路；不搬码（家族许可兼容，可搬，但本项目自立门户，默认独立实现，引用处注明 URL） |
-| `designcraft/` | Apache-2.0 | 多页/页面排版模型（InDesign 对标）——CorelDRAW 多页文档语义的最近参照 | 同上 |
-| `cadcraft/` | Apache-2.0 | **格式净室先例**：未公开二进制格式（DWG/DXF）的 clean-room 解析策略、fixture 管理 | 同上 |
-| `craft-libs/` | Apache-2.0 | craft-pdf / craft-print / craft-docpath / craft-ui 共享库——M2+ 决定直接 git-dep 引用还是仿接口独立实现 | 引用即可（Apache-2.0 兼容） |
-| `craft-common-actions/` | 未标（仓内声明） | 共享 GitHub Actions（CI 门） | 引用前核对仓内许可声明 |
-| `craft-fonts/` | Apache-2.0 | 字体分仓模式（字体永不进主仓；`CRAFT_FONTS_DIR` 可选构建输入） | 模式照搬；字体文件按其许可 |
-| `libcdr/`（GitHub 镜像） | **MPL-2.0** | CDR 格式语义对照（支持版本、chunk 语义差异）、**测试语料清单**（其 test 文件可本地对照） | ⚠️ **只读不抄**：MPL 弱传染；语义结论写进 `docs/reverse/` 日志并注明出处，代码零搬运 |
-| `cdr-spec/`（Photopea CDR-specification） | 未标（公开逆向文档） | **格式轨的结构圣经**：RIFF 容器、chunk 表、coord 编码、版本差异 | 事实性格式知识不受版权保护；但文档文本不复制进本仓，只引用小节与结论 |
-| `uniconvertor/` | **AGPL-3.0** ⚠️ | CMX/CCX 覆盖面的存在性证明、格式清单 | **高危：AGPL 传染。绝不搬运/链接/改写其代码**；连"参考思路"也仅限其公开文档页（sk1project.net），agents 不得打开其源码目录 |
-| `rea/`（cyberkaida/reverse-engineering-assistant） | 见仓内 | Ghidra 逆向 MCP（备选工具链） | 仅用于分析**我们自有**的样例文件；永不指向 Corel 二进制 |
-| `morluto-rea/`（REA: Reverse Engineer Anything） | MIT | **主力逆向助手**（用户指定）：跨二进制/应用/运行时行为的 RE MCP（`npx rea-agents`），CDR 逆向战役的效率工具 | 同上——只分析自有样例文件；Corel 安装介质/二进制是净室禁区 |
+| Directory | License | What We Reference | Clean-Room Boundary |
+| --- | --- | --- | --- |
+| `vectorcraft/` | MIT OR Apache-2.0 | **Methodology template**: `AGENTS.md` clean-room structure, workspace/`xtask` layout, crate layering (`geom`/`color`/`doc`/…), parity docs and self-scoring, `format/tests/prop_format.rs` property-testing pattern | Reference architecture and patterns; write independent implementations and cite URLs in comments |
+| `designcraft/` | Apache-2.0 | Multi-page publication model (`Spread`/`Page`/`Master`) — closest architectural sibling to CorelDRAW's multi-page layout model | Same as above |
+| `cadcraft/` | Apache-2.0 | **Clean-room binary format precedent**: clean-room parser and synthetic fixture strategy for undocumented binary formats (DWG/DXF) | Same as above |
+| `craft-libs/` | Apache-2.0 | Shared `craft-pdf` / `craft-print` / `craft-docpath` / `craft-ui` libraries | Compatible (`Apache-2.0`) |
+| `craft-common-actions/` | See repo | Shared GitHub Actions workflows | Verify license before reuse |
+| `craft-fonts/` | Apache-2.0 | Separate font repository pattern (`CRAFT_FONTS_DIR` optional build input; fonts never committed to main repo) | Follow pattern |
+| `libcdr/` (GitHub mirror) | **MPL-2.0** | CDR format structural semantics and version differences | **Read-only reference, never copy code**: MPL-2.0 is weak copyleft; document structural findings in `docs/reverse/` with citations and implement independently |
+| `cdr-spec/` (Photopea CDR-specification) | Public specification | **Primary CDR format specification**: RIFF containers, chunk tables, coordinate encoding, version differences | Factual format knowledge; cite sections and URLs |
+| `uniconvertor/` | **AGPL-3.0** | Format support matrix existence proof only | **Strict prohibition**: AGPL-3.0. **Never** open, read, copy, link, or adapt its source code |
+| `rea/` (`cyberkaida/reverse-engineering-assistant`) | See repo | Optional Ghidra RE MCP | Only for inspecting operator-owned sample files; **never** point at proprietary binaries |
+| `morluto-rea/` (`REA: Reverse Engineer Anything`) | MIT | Primary RE assistant (`npx rea-agents`) | Same as above — only inspect operator-owned sample files |
 
-> 备注：vectorcraft AGENTS.md 引用的 `storytold/craftrules` 已 404（2026-10-19
-> 核实）；家族共享规则现散落在 craft-libs 与各 app 的 AGENTS.md 中。
+## B. Public Behavioral Documentation Sources (Cite URLs)
 
-## B. 行为轨公开文档（净室合规的行为依据，引用需带 URL）
+| Source | Purpose |
+| --- | --- |
+| CorelDRAW Online Help (Windows): `https://product.corel.com/help/CorelDRAW/Documentation-Windows/index.html` | Primary public reference for tool, command, and docker behavior |
+| CorelDRAW 2022 Public User Guide PDF: `https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf` | Publicly distributed user manual |
+| CorelDRAW Learning Center: `https://www.coreldraw.com/en/learn/` | Public tutorials and workflow documentation |
+| DLP `libcdr` Wiki: `https://wiki.documentfoundation.org/DLP/Libraries/libcdr` | Format support scope reference |
+| Photopea CDR Specification: `https://github.com/photopea/CDR-specification` | Format structure specification |
+| Kaitai Struct `coreldraw_cdr.ksy`: `https://formats.kaitai.io/coreldraw_cdr/` | Declarative container and chunk specification |
 
-| 来源 | 用途 |
-|---|---|
-| CorelDRAW 官方在线手册（Windows）：`https://product.corel.com/help/CorelDRAW/Documentation-Windows/index.html` | 工具/命令/面板行为的第一依据 |
-| CorelDRAW 2022 官方用户指南 PDF（981 页）：`https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf` | 离线完整行为参考（公开分发物） |
-| CorelDRAW 支持与学习中心：`https://www.coreldraw.com/en/support/` · `https://www.coreldraw.com/en/learn/` | 教程/技巧，补手册未覆盖的实操行为 |
-| DLP libcdr wiki：`https://wiki.documentfoundation.org/DLP/Libraries/libcdr` | 格式支持范围的第三方对照 |
-| Photopea CDR 规范：`https://github.com/photopea/CDR-specification` | 格式结构（同 refs/cdr-spec） |
+## C. Reverse-Engineering Tooling Red Lines
 
-## C. 逆向工具链使用红线（重申）
+1. Tools such as REA (`morluto-rea`) may **only** inspect operator-owned `.cdr` sample files, synthetic fixtures, or our own output.
+2. **Never** inspect a Corel installation directory, running process, or any proprietary binary (including trial installers).
+3. Findings recorded in `docs/reverse/` must include the sample SHA-256 hash, public specification citations, and structural conclusions.
 
-1. REA（`morluto-rea`）等工具**只**分析：自有 `.cdr` 样例、合成 fixture、
-   我们自己的产物。
-2. **永不**分析 Corel 安装目录、CorelDRAW 进程、Corel 分发的任何二进制
-   （含试用版）——那是 AGENTS.md 净室铁律第 1 条的绝对禁区。
-3. 工具产出的结论进入 `docs/reverse/` 日志时必须附：样例文件 SHA-256、
-   工具与版本、发现、置信度。
+## D. Pinned Commits (`scripts/bootstrap-refs.sh`)
 
-## D. 冻结版本与重建（迁移/新机引导）
+Pinned on 2026-10-19 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
 
-冻结时间：2026-10-19（bootstrap 脚本与本表互为镜像，改动任一处须同步另一处）。
-
-| 目录 | 上游 | 冻结 commit |
-|---|---|---|
-| `vectorcraft/` | github.com/storytold/vectorcraft | `a466625` |
-| `designcraft/` | github.com/storytold/designcraft | `443ea46` |
-| `cadcraft/` | github.com/storytold/cadcraft | `0b32c2e` |
-| `craft-libs/` | github.com/storytold/craft-libs | `ae2f796` |
-| `craft-common-actions/` | github.com/storytold/craft-common-actions | `d7bf8f0` |
-| `craft-fonts/` | github.com/storytold/craft-fonts | `d1cf47d` |
-| `libcdr/` | github.com/LibreOffice/libcdr | `22c3968` |
-| `cdr-spec/` | github.com/photopea/CDR-specification | `f91b3c7` |
-| `uniconvertor/` | github.com/sk1project/uniconvertor | `973d5b6` ⚠️ AGPL |
-| `rea/` | github.com/cyberkaida/reverse-engineering-assistant | `a05a6b0` |
-| `morluto-rea/` | github.com/morluto/rea | `ba866a2` |
+| Directory | Upstream | Pinned Commit |
+| --- | --- | --- |
+| `vectorcraft/` | `github.com/storytold/vectorcraft` | `a466625c8987550635cda951ebf36e08e1e80a56` |
+| `designcraft/` | `github.com/storytold/designcraft` | `443ea4640ca368fcf0241b04813bd3817acd5df8` |
+| `cadcraft/` | `github.com/storytold/cadcraft` | `0b32c2e6a14c761835ea62c01e7b20845971d781` |
+| `craft-libs/` | `github.com/storytold/craft-libs` | `ae2f796b673f29cf3161f36eb6a8933f0a3fe028` |
+| `craft-common-actions/` | `github.com/storytold/craft-common-actions` | `d7bf8f06e138618890d0ebe8a84a18b010bf3f66` |
+| `craft-fonts/` | `github.com/storytold/craft-fonts` | `d1cf47d05e04426615fbda1d637b9ca6b1e7af35` |
+| `libcdr/` | `github.com/LibreOffice/libcdr` | `22c396810e72d40b94f78c192eb06e6d09bc34a0` |
+| `cdr-spec/` | `github.com/photopea/CDR-specification` | `f91b3c7e8c812b28473f6399e95a624a72a3d6b8` |
+| `uniconvertor/` | `github.com/sk1project/uniconvertor` | `973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472` (AGPL — do not read source) |
+| `rea/` | `github.com/cyberkaida/reverse-engineering-assistant` | `a05a6b0a18649efd6d74ec8447bdadf8d468c365` |
+| `morluto-rea/` | `github.com/morluto/rea` | `ba866a26ecbe179a717e746cbc0d1605ae616ad5` |

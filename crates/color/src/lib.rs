@@ -1,4 +1,4 @@
-//! coralcraft-color：色彩：CMYK/专色/色板文件 .cpl/.xml（Corel 印刷现场刚需，M2 实装）
+//! `coralcraft-color`: Color spaces, CMYK/spot colors, and `.cpl`/`.xml` palette files (lands in M2).
 
 #[cfg(test)]
 mod tests {

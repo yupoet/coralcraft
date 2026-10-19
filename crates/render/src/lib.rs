@@ -1,4 +1,4 @@
-//! coralcraft-render：SIMD 多线程渲染（M2 实装）
+//! `coralcraft-render`: 2D vector rasterization and rendering pipeline (lands in M2).
 
 #[cfg(test)]
 mod tests {

@@ -1,9 +1,7 @@
-# ASSETS.md — 资产登记表
+# ASSETS.md — Asset Attribution Ledger
 
-规则（AGENTS.md）：每个进入仓库的图标/图片/字体/预设/样本文件必须有一行登记；
-来源必须是原创（MIT OR Apache-2.0 授权）、OSI 开源、公有领域/CC0、或允许再分发的 CC。
-`cargo xtask assets` 校验本表与 `assets/` 目录一致。
+Rule (`AGENTS.md`): Every icon, image, preset, or sample asset committed to the repository must have an attribution row in this file. All assets must be original (`MIT OR Apache-2.0`), OSI-approved open source, public domain / CC0, or redistributable CC. `cargo xtask assets` verifies that every file under `assets/` is listed here.
 
-| 路径 | 作者 | 来源 URL | 许可 | 备注 |
-|---|---|---|---|---|
-| （暂无入库资产） | | | | |
+| Path | Author | Source URL | License | Notes |
+| --- | --- | --- | --- | --- |
+| *(no assets committed yet)* | | | | |

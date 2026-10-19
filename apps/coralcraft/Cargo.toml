@@ -1,6 +1,6 @@
 [package]
 name = "coralcraft"
-description = "CoralCraft 桌面应用（M0 占位：M4 引入 egui/wgpu 窗口）"
+description = "CoralCraft desktop application"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

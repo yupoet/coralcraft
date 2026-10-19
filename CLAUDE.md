@@ -5,12 +5,15 @@ When making important discoveries, update `docs/ai-memory/03-current.md`, `04-kn
 
 ```text
 docs/ai-memory/
-├── 00-project.md        # 项目目标、模块、目录说明
-├── 01-commands.md       # 常用命令、启动方式、测试方式
-├── 02-architecture.md   # 架构、关键决策、依赖关系
-├── 03-current.md        # 当前任务、进行中问题、下一步
-├── 04-known-issues.md   # 已知 bug、坑点、规避方式
-└── 05-ref-docs/         # 参考的外部信息、知识梳理等，多文件
+├── 00-project.md        # Project goals, workspace modules, and directory layout
+├── 01-commands.md       # Common commands, build/run/test workflows
+├── 02-architecture.md   # Architecture, key design decisions, and dependency layers
+├── 03-current.md        # Current task status, active issues, and next steps
+├── 04-known-issues.md   # Known bugs, pitfalls, and workarounds
+└── 05-ref-docs/         # External references and domain knowledge notes
 ```
 
-完整的项目净室铁律、许可边界、资产规范与工作流要求见 [`AGENTS.md`](AGENTS.md)，任何时候均须严格遵守。
+## Language & Engineering Rules
+
+- **All code comments, docstrings, error/warning messages, log output, documentation, and git commit messages must be written in English.**
+- Full clean-room rules, licensing boundaries, asset attribution requirements, and TDD workflow rules are defined in [`AGENTS.md`](AGENTS.md) and must be strictly followed at all times.
