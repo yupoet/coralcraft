@@ -4,36 +4,31 @@
 
 ## 1. 当前阶段状态
 
-- **阶段**：`pre-alpha`（M0 骨架已全部交付并对齐 `vectorcraft` 工程规范，处于 **M1 启动前**）。
+- **阶段**：`pre-alpha`（**M0 与 M1 已 100% 交付并通过全量 CI 门禁**，进入 **M2 启动前**）。
 - **本轮已完成工作**：
-  1. 克隆仓库 `https://github.com/yupoet/coralcraft` 至 `/data/coralcraft`。
-  2. 执行 `./scripts/bootstrap-refs.sh` 下载全部 11 个参考仓库至 `refs/`，并将 `scripts/bootstrap-refs.sh` 升级为 40 位完整 SHA，确保 11 个参考仓全部精确检出在 [`refs/REFS.md`](../../refs/REFS.md) §D 冻结版本。
-  3. 建立 `docs/ai-memory/` 持久记忆体系，并将读写规范写入 [`AGENTS.md`](../../AGENTS.md) 与 [`CLAUDE.md`](../../CLAUDE.md)。
-  4. **全面对齐 `refs/vectorcraft` 风格与行为**：
-     - 补齐 [`.cargo/config.toml`](../../.cargo/config.toml)（支持 `cargo xtask <cmd>` 别名）、[`clippy.toml`](../../clippy.toml)（测试允许 unwrap/expect/panic，库与二进制严禁）与 [`rustfmt.toml`](../../rustfmt.toml)（`max_width = 150`、`use_small_heuristics = "Max"`）。
-     - 对齐 [`Cargo.toml`](../../Cargo.toml) 的 `[workspace.lints.clippy]`（`dbg_macro = "warn"`, `unwrap_used = "deny"`, `expect_used = "deny"`, `panic = "deny"`）及 `[profile.dev.package."*"] opt-level = 2`。
-     - 升级 [`xtask/src/main.rs`](../../xtask/src/main.rs)：新增 `layers`（强制执行 `L0`..`L7` 分层架构，禁止 `L6` 以下依赖 UI 库）与 `stats`（按 crate 统计文件数、代码行数与 `#[test]` 数），并将 `cleanroom`、`assets`、`layers` 全部并入 `cargo xtask ci`。
-     - 重写 [`README.md`](../../README.md) 首页与 GitHub `About`：采用与 `vectorcraft/README.md` 完全一致的章节布局、徽章配色（`#e8573f` / `#b83a24` / `#555555`）与 Star History 图表，同时在首屏与核心卖点中突出 **CorelDRAW**（及常见搜索拼写 *CoralDraw*）与 `.cdr` / `.cmx` 格式原生支持。
+  1. **五路大模型交叉评审（Five-Way Plan Review）**：
+     - 在 `zcode-delegate`（GLM-5.3）、`kimi-delegate`（Kimi K3）、`grok-delegate`（Grok 4.6）、`codebuddy-delegate`（DeepSeek V4.1 Flash）基础上，补充第五路内部模型 **`claude-opus-5-5-high`（Claude Opus 5.5）** 深度审查，并将全部结论汇总至 [`docs/ai-memory/05-ref-docs/04-m1-plan-four-way-review.md`](05-ref-docs/04-m1-plan-four-way-review.md)。
+     - Opus 5.5 独特发现已全部吸收进 M1 代码与架构文档：Mac CMX 的大端序 `RIFX`、X6+ ZIP 容器的 `content/root.dat` + `content/dataFileList.dat` 配对、CDR v3 的空格版本字节 `"CDR "` (`0x20` → `300`) 及 2024/2025 的 `'Q'`/`'R'`、M3 预烘焙几何兜底、以及 `0.1 μm` (`1/254,000 inch`) 精确整数单位。
+  2. **M1：CDR/CMX 格式探测纵切（Task 9–13 全部转绿）**：
+     - [`crates/cdr/src/error.rs`](../../crates/cdr/src/error.rs)：定义 `#[non_exhaustive]` 的 `ProbeError` 与 `ProbeWarning`，支持 `serde::Serialize` / `Deserialize`。
+     - [`crates/cdr/src/riff.rs`](../../crates/cdr/src/riff.rs)：实现 `inspect_riff`，支持 `RIFF`（小端）与 `RIFX`（大端）、`MAX_DEPTH = 32`、`MAX_CHUNKS = 100_000`、`u64` + `checked_add` 溢出防护、`vrsn` chunk 提取、`LIST cmpr`/`LIST stlt` 压缩/样式表载荷 opaque 跳过、以及 EOF 缺失尾随 pad byte 容忍（记录 warning）。
+     - [`crates/cdr/src/zip.rs`](../../crates/cdr/src/zip.rs)：零外部解压依赖手写 ZIP EOCD + Central Directory 扫描器（`MAX_ZIP_ENTRIES = 10_000`），精准区分 X4–X5 (`content/riffData.cdr`)、X6+ (`content/root.dat` + `content/dataFileList.dat`) 与普通 `.zip`/`.docx`，并在条目为 `Stored (method == 0)` 时直接下钻解析内部 RIFF 头。
+     - [`crates/cdr/src/lib.rs`](../../crates/cdr/src/lib.rs)：实现 `probe() -> Result<ProbeReport, ProbeError>`，覆盖 Legacy `WL`、Bare `RIFF`/`RIFX`、现代 `ZIP+RIFF` 三代容器；22 个单元测试（含 10,000 次确定性敌意变异测试 `hostile_random_mutations_never_panic`）全部通过。
+     - [`apps/coralcraft-cli/src/main.rs`](../../apps/coralcraft-cli/src/main.rs) 与 [`apps/coralcraft-cli/tests/cli_probe.rs`](../../apps/coralcraft-cli/tests/cli_probe.rs)：实现 `coralcraft-cli probe [--json] <path>`，规范化退出码（`0=OK`, `2=用法`, `3=NotCdr/TooShort`, `4=I/O`, `5=Truncated/Invalid/LimitExceeded`），4 个集成测试全绿；并在 `refs/cdr-samples/` 全部 64 个真实 `.cdr` 样本上达成 **64/64 (100%)** 识别通过。
+     - [`xtask/src/main.rs`](../../xtask/src/main.rs)：新增 `cleanroom`（运行期拼接违规串 + `.cdr` 文件检测）与 `assets`（未登记资产拦截）单元测试（Task 12）。
+     - 建立 [`docs/target-app-parity.md`](../target-app-parity.md)、[`docs/file-format-parity.md`](../file-format-parity.md)、[`docs/reverse/log-format.md`](../reverse/log-format.md)（含 `REV-0001`），并更新 [`ROADMAP.md`](../../ROADMAP.md) 与 [`docs/gaps.md`](../gaps.md)（Task 13）。
 
-## 2. 下一步待执行任务（M1：CDR 格式探测纵切，见 [`docs/gaps.md`](../gaps.md)）
+## 2. 下一步待执行任务（M2：多页文档模型 + 原生格式 `.coralcraft` + 渲染首帧）
 
-按 [`docs/superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md`](../superpowers/plans/2026-10-19-m0-bootstrap-m1-cdr-probe.md) 的 Slice B 顺序推进：
+1. **`coralcraft-doc` 多页出版文档模型**：
+   - `Document`、`Spread`、`Page`（支持单页独立尺寸与出血）、文档级 `Layer` 栈 + 跨页共享 `Desktop` 层。
+   - 稳定句柄 `ObjectId(u64)`（供 PowerClip 容器与调和路径引用）与 `Object::Unsupported { kind, raw_ref, fallback_bounds }` 无损透传节点。
+2. **`.coralcraft` 原生格式与属性测试往返**：
+   - 支持单文件 JSON 与 ZIP 容器（`manifest.json` + `document.json` + `blobs/`），通过 `proptest` 属性测试保证 `load(save(doc)) == doc`。
+3. **`coralcraft-render` 首帧软光栅**：
+   - 基于 `tiny-skia` 渲染指定页面为 PNG，并提供 `coralcraft-cli render <input> -o <out.png>`。
 
-1. **Task 9 — RIFF 走读器（`crates/cdr/src/riff.rs`，红 → 绿）**
-   - 编写合成最小 RIFF/CDR 字节流测试（`RIFF` + u32 LE size + `CDR` + 版本字节、`LIST` 子 chunk、奇数长度 1 字节 padding、截断与越界错误路径）。
-   - 实现 `RiffReader` 与 chunk 迭代，绝不 panic。
-2. **Task 10 — `coralcraft-cdr::probe` API 转绿**
-   - 将 [`crates/cdr/src/lib.rs`](../../crates/cdr/src/lib.rs) 中现有的 5 个红灯测试全部转绿（识别 RIFF CDR/CMX + 版本字节、识别老 `WL` 头、拒绝过短或非 CDR 输入）。
-   - 预留 `cargo fuzz` 目标占位。
-3. **Task 11 — CLI `probe` 子命令（`apps/coralcraft-cli`）**
-   - 集成测试先行：验证人类可读输出、`--json` 序列化输出、非 CDR 文件返回非零退出码且 stderr 含清晰错误信息。
-4. **Task 12 — `xtask cleanroom` / `assets` 门完善**
-   - 用临时违规样例驱动测试，完善 `xtask` 扫描器。
-5. **Task 13 — 格式 parity 文档初版 + 逆向日志规范**
-   - 建立 `docs/file-format-parity.md` 与 `docs/reverse/log-format.md`（含首条 RIFF 头部发现示例），更新 `ROADMAP.md` 自评分数。
+## 3. 本地 CDR 样本语料验证结果（2026-10-19）
 
-## 3. 挂起的操作者裁决点（M3 前需确认，不阻塞 M1/M2）
-
-- **Q1（M3 版本带优先级）**：默认先攻 X4–2026 的现代 RIFF 带。
-- **Q2（自有样例语料）**：M3 解析真实对象树前，需确认使用操作者自有 `.cdr` 样例（本地 git-ignored）或独立 `coralcraft-corpus` 仓库。
-- **Q3（CDR 写出兼容性验证）**：M5+ 写出战役拟采用外部社区志愿者回归矩阵验证。
+- `refs/cdr-samples/`：共 92 个文件（64 个完整真实 `.cdr` 图纸 + 28 个 PRONOM 零字节填充签名骨架）。
+- `coralcraft-cli probe` 对全部 **64 个真实 `.cdr` 样本（覆盖 CDR4..CDRF 及 X7+ ZIP 容器）100% 探测成功（64/64 OK）**，无一报错或 panic。
