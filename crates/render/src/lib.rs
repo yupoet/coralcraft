@@ -7,8 +7,8 @@ pub mod raster;
 pub mod surface;
 pub mod svg;
 
-use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, VectorEffect};
+use coralcraft_color::{Color, interpolate_stops};
+use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle, VectorEffect};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use pdf::export_pdf;
@@ -107,7 +107,10 @@ fn render_object_node(
     if !node.visible {
         return Ok(());
     }
-    let eff_opacity = (inherited_opacity * node.opacity.get()).clamp(0.0, 1.0);
+    let mut eff_opacity = (inherited_opacity * node.opacity.get()).clamp(0.0, 1.0);
+    if let Some(TransparencyStyle::Uniform { opacity }) = &node.transparency {
+        eff_opacity = (eff_opacity * opacity.get()).clamp(0.0, 1.0);
+    }
     if eff_opacity <= 0.0 {
         return Ok(());
     }
@@ -138,6 +141,47 @@ fn render_object_node(
     let Some((local_path, local_bbox)) = extract_local_path_and_bbox(&node.kind)? else {
         return Ok(());
     };
+
+    if let Some(TransparencyStyle::Fountain { geometry, blend_mode, stops }) = &node.transparency {
+        let mut offscreen = Surface::new(surface.width, surface.height, [0, 0, 0, 0])?;
+        paint_geometry_and_powerclip(&mut offscreen, node, &local_path, local_bbox, local_to_dev, page_scale, eff_opacity, clip_depth, warnings)?;
+        let dev_to_local = local_to_dev.invert().unwrap_or(Affine2::IDENTITY);
+        let bx0 = local_bbox.x0.get();
+        let by0 = local_bbox.y0.get();
+        let bw = local_bbox.width().max(1e-6);
+        let bh = local_bbox.height().max(1e-6);
+        let w = surface.width as usize;
+        let h = surface.height as usize;
+
+        for py in 0..h {
+            for px in 0..w {
+                let sp = offscreen.pixels[py * w + px];
+                if sp[3] == 0 {
+                    continue;
+                }
+                let dev_pt = Point::new((px as f64) + 0.5, (py as f64) + 0.5)?;
+                let loc_pt = dev_to_local.apply_point(dev_pt)?;
+                let u = (loc_pt.x.get() - bx0) / bw;
+                let v = (loc_pt.y.get() - by0) / bh;
+                let t = evaluate_fountain_t(*geometry, u, v);
+                let rgb = interpolate_stops(stops, *blend_mode, t)?;
+                let lum = (0.2126 * f64::from(rgb[0]) + 0.7152 * f64::from(rgb[1]) + 0.0722 * f64::from(rgb[2])) / 255.0;
+                let alpha_mult = lum.clamp(0.0, 1.0);
+                if alpha_mult <= 0.0 {
+                    continue;
+                }
+                let masked_src = [
+                    (f64::from(sp[0]) * alpha_mult).round() as u8,
+                    (f64::from(sp[1]) * alpha_mult).round() as u8,
+                    (f64::from(sp[2]) * alpha_mult).round() as u8,
+                    (f64::from(sp[3]) * alpha_mult).round() as u8,
+                ];
+                let dst = &mut surface.pixels[py * w + px];
+                *dst = src_over_premul(masked_src, *dst);
+            }
+        }
+        return Ok(());
+    }
 
     paint_geometry_and_powerclip(surface, node, &local_path, local_bbox, local_to_dev, page_scale, eff_opacity, clip_depth, warnings)
 }
@@ -793,5 +837,33 @@ mod tests {
         let pdf_str = String::from_utf8_lossy(&pdf_bytes);
         assert!(pdf_str.contains("BI\n/W 2\n/H 2\n/CS /DeviceRGB\n/BPC 8\n/F /AHx\nID\n"));
         assert!(pdf_str.contains("EI"));
+    }
+
+    #[test]
+    fn fountain_transparency_raster_and_svg_mask() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(100.0, 40.0).unwrap();
+
+        let rect = RectSpec::sharp(Rect::new(0.0, 0.0, 100.0, 40.0).unwrap());
+        let mut node = ObjectNode::new(
+            ObjectId(120),
+            Some("Fountain Transparent Rect".to_owned()),
+            ObjectKind::Rect(rect),
+            Some(FillStyle::uniform(Color::rgb8(255, 0, 0))),
+            None,
+        );
+        // Left (x=0) opaque (1.0), Right (x=99) transparent (0.0)
+        node.transparency = Some(TransparencyStyle::fountain_linear(0.0, 1.0, 0.0));
+        doc.pages[0].layers[0].objects.push(node);
+
+        let out = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        let left_rgba = out.surface.get_straight_rgba(5, 20);
+        let right_rgba = out.surface.get_straight_rgba(95, 20);
+        assert!(left_rgba[3] > 220, "left side should be nearly opaque: {left_rgba:?}");
+        assert!(right_rgba[3] < 40, "right side should be nearly transparent: {right_rgba:?}");
+
+        let svg = export_svg(&doc, 0).unwrap();
+        assert!(svg.contains("<mask id=\"mask-obj-120\" maskUnits=\"userSpaceOnUse\">"));
+        assert!(svg.contains("mask=\"url(#mask-obj-120)\""));
     }
 }

@@ -3,7 +3,8 @@
 
 use coralcraft_color::Color;
 use coralcraft_doc::{
-    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual, VectorEffect,
+    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual, TransparencyStyle,
+    VectorEffect,
 };
 use coralcraft_geom::{Affine2, BooleanOp, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths};
 use coralcraft_tools::{
@@ -101,6 +102,8 @@ pub enum EngineCommand {
     CreateBlend { start_id: ObjectId, end_id: ObjectId, steps: u32 },
     /// Bakes (expands) all live vector effects on the specified object into static geometry.
     ExpandEffects { object_id: ObjectId },
+    /// Sets or removes object-level transparency on selected objects.
+    SetTransparency { transparency: Option<TransparencyStyle> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1001,6 +1004,11 @@ impl EditorEngine {
                         }
                         obj.effects.clear();
                     }
+                });
+            }
+            EngineCommand::SetTransparency { transparency } => {
+                self.for_each_selected_mut(|obj| {
+                    obj.transparency = transparency.clone();
                 });
             }
         }

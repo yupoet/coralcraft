@@ -7,8 +7,8 @@ pub mod style;
 
 pub use container::{BLOB_THRESHOLD, crc32, list_zip_blobs, load_bytes, save_json, save_zip, sha256_hex};
 pub use model::{
-    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, SchemaVersion, UnsupportedObject,
-    VectorEffect,
+    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, SchemaVersion, TransparencyStyle,
+    UnsupportedObject, VectorEffect,
 };
 pub use style::{ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex};
 

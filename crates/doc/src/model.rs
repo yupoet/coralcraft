@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use coralcraft_color::{Color, Palette};
+use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette};
 use coralcraft_geom::{Affine2, BBox, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
 
-use crate::style::{ChunkTag, FillStyle, OutlineStyle, RawPayload, Residual};
+use crate::style::{ChunkTag, FillStyle, FountainGeometry, OutlineStyle, RawPayload, Residual};
 
 /// Current `.coralcraft` native document schema version (`1.0`).
 pub const CURRENT_SCHEMA: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
@@ -235,6 +235,50 @@ pub enum VectorEffect {
     },
 }
 
+/// Object-level transparency and lens compositing (`Uniform` or `Fountain`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransparencyStyle {
+    /// Uniform opacity across the entire object (`1.0` = fully opaque, `0.0` = fully transparent).
+    Uniform { opacity: F64 },
+    /// Fountain (gradient) transparency ramp.
+    Fountain {
+        /// Spatial gradient geometry (`Linear` or `Radial`).
+        geometry: FountainGeometry,
+        /// Color blend mode along the gradient ramp.
+        blend_mode: FountainBlendMode,
+        /// Ordered gradient stops controlling opacity.
+        stops: Vec<FountainStop>,
+    },
+}
+
+impl TransparencyStyle {
+    /// Constructs uniform transparency with `opacity in 0.0..=1.0`.
+    #[must_use]
+    pub fn uniform(opacity: f64) -> Self {
+        Self::Uniform { opacity: F64::new(opacity.clamp(0.0, 1.0)).unwrap_or(F64::ONE) }
+    }
+
+    /// Constructs linear fountain transparency from `start_opacity` to `end_opacity` at `angle_deg`.
+    #[must_use]
+    pub fn fountain_linear(angle_deg: f64, start_opacity: f64, end_opacity: f64) -> Self {
+        let s0 = (start_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let s1 = (end_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let mut stops = Vec::with_capacity(2);
+        if let Ok(st0) = FountainStop::new(0.0, Color::rgb8(s0, s0, s0)) {
+            stops.push(st0);
+        }
+        if let Ok(st1) = FountainStop::new(1.0, Color::rgb8(s1, s1, s1)) {
+            stops.push(st1);
+        }
+        Self::Fountain {
+            geometry: FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
+            blend_mode: FountainBlendMode::Direct,
+            stops,
+        }
+    }
+}
+
 /// A scene-graph object on a [`Layer`] or inside a `Group` / `PowerClip` container.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObjectNode {
@@ -254,6 +298,9 @@ pub struct ObjectNode {
     pub fill: Option<FillStyle>,
     /// Outline Pen style (`None` = no outline).
     pub outline: Option<OutlineStyle>,
+    /// Object-level transparency or lens compositing (`None` = fully opaque).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparency: Option<TransparencyStyle>,
     /// Non-destructive vector effect stack applied to this object.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<VectorEffect>,
@@ -283,6 +330,7 @@ impl ObjectNode {
             opacity: F64::ONE,
             fill,
             outline,
+            transparency: None,
             effects: Vec::new(),
             powerclip_children: Vec::new(),
             kind,

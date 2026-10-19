@@ -3,7 +3,7 @@
 
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, ObjectId, ObjectKind};
+use coralcraft_doc::{Document, ObjectId, ObjectKind, TransparencyStyle};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
 use coralcraft_render::{export_pdf, export_svg};
@@ -220,6 +220,11 @@ impl McpServer {
                         {
                             "name": "expand_effects",
                             "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_transparency",
+                            "description": "Applies uniform or linear fountain transparency to selected objects.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -498,6 +503,24 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
                 Ok(json!({ "effects_expanded": ok, "object_id": target.0 }))
             }
+            "set_transparency" => {
+                let mode = args.get("mode").and_then(Value::as_str).unwrap_or("uniform");
+                let transparency = match mode {
+                    "none" => None,
+                    "fountain" => {
+                        let angle = args.get("angle_deg").and_then(Value::as_f64).unwrap_or(0.0);
+                        let start_op = args.get("start_opacity").and_then(Value::as_f64).unwrap_or(1.0);
+                        let end_op = args.get("end_opacity").and_then(Value::as_f64).unwrap_or(0.0);
+                        Some(TransparencyStyle::fountain_linear(angle, start_op, end_op))
+                    }
+                    _ => {
+                        let op = args.get("opacity").and_then(Value::as_f64).unwrap_or(0.5);
+                        Some(TransparencyStyle::uniform(op))
+                    }
+                };
+                let ok = self.engine.execute(EngineCommand::SetTransparency { transparency });
+                Ok(json!({ "transparency_set": ok, "mode": mode }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -527,7 +550,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 26);
+        assert_eq!(tools, 27);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

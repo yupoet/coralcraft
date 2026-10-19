@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle};
+use coralcraft_doc::{Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle};
 use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpec};
 
 use crate::surface::RenderError;
@@ -341,8 +341,29 @@ fn emit_path_node(
     let has_powerclip = !node.powerclip_children.is_empty();
     let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
     let transform_attr = format_transform_attr(node.transform);
-    let opacity = node.opacity.get().clamp(0.0, 1.0);
+    let mut opacity = node.opacity.get().clamp(0.0, 1.0);
+    if let Some(TransparencyStyle::Uniform { opacity: tr_op }) = &node.transparency {
+        opacity = (opacity * tr_op.get()).clamp(0.0, 1.0);
+    }
     let opacity_attr = if (opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(opacity)) } else { String::new() };
+    let mask_attr = if let Some(TransparencyStyle::Fountain { geometry, blend_mode, stops }) = &node.transparency {
+        let mask_grad_id = format!("trsp-obj-{}", node.id.0);
+        let mask_fill = FillStyle::Fountain { geometry: *geometry, blend_mode: *blend_mode, stops: stops.clone() };
+        emit_fountain_def(defs, &mask_grad_id, &mask_fill, local_bbox);
+        let _ = writeln!(defs, "    <mask id=\"mask-obj-{}\" maskUnits=\"userSpaceOnUse\">", node.id.0);
+        let _ = writeln!(
+            defs,
+            "      <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"url(#grad-{mask_grad_id})\"/>",
+            fmt_num(local_bbox.x0.get()),
+            fmt_num(local_bbox.y0.get()),
+            fmt_num(local_bbox.width()),
+            fmt_num(local_bbox.height())
+        );
+        defs.push_str("    </mask>\n");
+        format!(" mask=\"url(#mask-obj-{})\"", node.id.0)
+    } else {
+        String::new()
+    };
 
     if has_powerclip {
         let clip_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " clip-rule=\"evenodd\"" } else { "" };
@@ -351,9 +372,9 @@ fn emit_path_node(
         defs.push_str("    </clipPath>\n");
     }
 
-    let needs_wrapper = has_powerclip || behind_fill || !transform_attr.is_empty() || !opacity_attr.is_empty();
+    let needs_wrapper = has_powerclip || behind_fill || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
     if needs_wrapper {
-        let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}>", node.id.0);
+        let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}{mask_attr}>", node.id.0);
         let child_indent = "  ".repeat(indent_level + 1);
 
         // 1. Outline behind fill
