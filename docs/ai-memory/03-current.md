@@ -4,28 +4,23 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `pre-alpha` (**M0 and M1 are 100% delivered and passing all CI gates**; ready to start **M2**).
+- **Stage**: `pre-alpha` (**M0, M1, and M2 are 100% delivered and passing all CI gates**; advancing into **M3** and **M4**).
 - **Completed in This Cycle**:
-  1. **Five-Way Independent Plan Review**:
-     - Conducted independent reviews across `zcode-delegate` (GLM-5.3), `kimi-delegate` (Kimi K3), `grok-delegate` (Grok 4.6), `codebuddy-delegate` (DeepSeek V4.1 Flash), and internal **`claude-opus-5-5-high` (Claude Opus 5.5)**, synthesized in [`docs/ai-memory/05-ref-docs/04-m1-plan-four-way-review.md`](05-ref-docs/04-m1-plan-four-way-review.md).
-     - All unique Opus 5.5 findings were incorporated into M1 code and architecture docs: big-endian `RIFX` for Mac CMX, `content/root.dat` + `content/dataFileList.dat` pairing in X6+ ZIP containers, CDR v3 space version byte (`"CDR "` -> `300`) and 2024/2025 (`'Q'`/`'R'`), M3 pre-baked geometry fallback, and exact `0.1 μm` (`1/254,000 inch`) integer units.
-  2. **M1: CDR/CMX Format Probe Vertical Slice (Tasks 9–13 Green)**:
-     - [`crates/cdr/src/error.rs`](../../crates/cdr/src/error.rs): `#[non_exhaustive]` `ProbeError` and `ProbeWarning` with `serde::Serialize` / `Deserialize`.
-     - [`crates/cdr/src/riff.rs`](../../crates/cdr/src/riff.rs): `inspect_riff` supporting `RIFF` (LE) and `RIFX` (BE), `MAX_DEPTH = 32`, `MAX_CHUNKS = 100_000`, `u64` + `checked_add` overflow protection, `vrsn` chunk extraction, `LIST cmpr`/`LIST stlt` opaque payload skipping, and EOF missing pad tolerance.
-     - [`crates/cdr/src/zip.rs`](../../crates/cdr/src/zip.rs): Dependency-free ZIP EOCD + Central Directory scanner (`MAX_ZIP_ENTRIES = 10_000`) distinguishing X4–X5 (`content/riffData.cdr`), X6+ (`content/root.dat` + `content/dataFileList.dat`), and non-CDR `.zip`/`.docx` archives, with automatic inner RIFF inspection for `Stored` (`method == 0`) entries.
-     - [`crates/cdr/src/lib.rs`](../../crates/cdr/src/lib.rs): `probe() -> Result<ProbeReport, ProbeError>` covering Legacy `WL`, bare `RIFF`/`RIFX`, and modern `ZIP+RIFF` containers; 22 unit tests green including a 10,000-iteration deterministic hostile mutation test (`hostile_random_mutations_never_panic`).
-     - [`apps/coralcraft-cli/src/main.rs`](../../apps/coralcraft-cli/src/main.rs) & [`apps/coralcraft-cli/tests/cli_probe.rs`](../../apps/coralcraft-cli/tests/cli_probe.rs): `coralcraft-cli probe [--json] <path>` with 512 MiB file size guard and standardized exit codes (`0/2/3/4/5`); 4 integration tests green and **64/64 (100%)** real-world `.cdr` samples in `refs/cdr-samples/` passing.
-     - [`xtask/src/main.rs`](../../xtask/src/main.rs): Added unit tests for `cleanroom` and `assets` gates and hardened directory traversal against following symlinks (Task 12).
-     - Established [`docs/target-app-parity.md`](../target-app-parity.md), [`docs/file-format-parity.md`](../file-format-parity.md), [`docs/reverse/log-format.md`](../reverse/log-format.md) (`REV-0001`), and updated [`ROADMAP.md`](../../ROADMAP.md) and [`docs/gaps.md`](../gaps.md) (Task 13).
-  3. **English-Only Convention Applied**:
-     - Converted all source comments, docstrings, error/warning messages, CLI/xtask logs, Cargo manifest descriptions, and repository documentation (`AGENTS.md`, `CLAUDE.md`, `ROADMAP.md`, `ASSETS.md`, `NOTICE`, `docs/gaps.md`, `refs/REFS.md`) to English.
+  1. **M1: CDR/CMX Format Probe Vertical Slice (Tasks 9–13 Green)**:
+     - `coralcraft-cdr::probe()` covering Legacy `WL`, bare `RIFF`/`RIFX`, and modern `ZIP+RIFF` containers; 22 unit tests green including a 10,000-iteration deterministic hostile mutation test (`hostile_random_mutations_never_panic`).
+     - `coralcraft-cli probe [--json] <path>` passing **64/64 (100%)** real-world `.cdr` samples in `refs/cdr-samples/`.
+  2. **M2: Multi-Page Document Model, `.coralcraft` Container & First Rendered Frame (Slices 1–4 Green)**:
+     - [`crates/geom/`](../../crates/geom/src/lib.rs) (L0, `commit 18bb494`): Canonical finite `F64` (`-0.0 -> +0.0`, `Eq`/`Ord`/`Hash` with `serde_json` `float_roundtrip`), exact `CdrUnit(i64)` (`1/254,000 inch = 0.1 µm`) <-> `Pt(F64)` via `31_750 / 9` rational, `Affine2`, adaptive de Casteljau Bézier flattener (`max_depth = 12`), and CorelDRAW parametric shapes (`RectSpec` with per-corner `Round`/`Scalloped`/`Chamfered`, `EllipseSpec` with `Full`/`Pie`/`Arc`, `PolygonSpec` regular polygon/star).
+     - [`crates/color/`](../../crates/color/src/lib.rs) (L0, `commit 4e87d30`): `Rgb`/`Cmyk`/`Hsb`/`Gray`/`LabD50`/`LabD65`/`Spot`/`Registration`, Bradford D50<->D65 CAT ($\Delta E < 0.01$), Fountain stops (`Direct`, `RainbowCw`, `RainbowCcw`, midpoint skew), and clean-room `.xml`/`.cpl` palette parser/serializer.
+     - [`crates/doc/`](../../crates/doc/src/lib.rs) (L1, `commit 0a0d4d0`): Multi-page `Document` / `Page` / document-level `Layer` (`Normal`, `MasterAllPages`, `MasterOddPages`, `MasterEvenPages`, `Desktop`, `Guides`, `Grid`), `Document::effective_layers_for_page()`, `ObjectNode` (`powerclip_children`, `residual`), `ObjectKind::Unsupported` lossless passthrough, and dual-mode `.coralcraft` container (`save_json`, deterministic Stored ZIP `save_zip` with `manifest.json` + `document.json` + `blobs/<sha256>.bin`, `load_bytes`), verified by 100-iteration random document round-trip property tests and tamper-detection tests.
+     - [`crates/render/`](../../crates/render/src/lib.rs) & [`apps/coralcraft-cli/`](../../apps/coralcraft-cli/src/main.rs) (`commit ff3fe51`): Premultiplied RGBA8 software rasterizer with 4×4 supersampled scanline filler, stroke expander (`behind_fill`, `scale_with_object`, Hairline `width_pt == 0.0`), Linear/Radial Fountain shader, recursive PowerClip offscreen mask stack (`MAX_CLIP_DEPTH = 8`), clean-room PNG encoder/decoder, and `coralcraft-cli render` / `inspect-palette`.
 
-## 2. Next Up (M2: Multi-Page Document Model + Native `.coralcraft` Format + First Frame Render)
+## 2. Next Up (M3: CDR Object-Tree Parser + SVG/PDF Vector Export & M4: CorelDRAW-Style `egui` Desktop Shell)
 
-1. **`coralcraft-doc` Multi-Page Publication Model**:
-   - `Document`, `Spread`, `Page` (per-page dimensions and bleed), document-level `Layer` stack + cross-page `Desktop` layer.
-   - Stable `ObjectId(u64)` handles and lossless `Object::Unsupported { kind, raw_ref, fallback_bounds }` passthrough node.
-2. **`.coralcraft` Native Format & Property-Tested Round-Trip**:
-   - Single-file JSON and ZIP container (`manifest.json` + `document.json` + `blobs/`) verified with `proptest` (`load(save(doc)) == doc`).
-3. **`coralcraft-render` First Frame Software Rasterizer**:
-   - Static page PNG rendering via `tiny-skia` + `coralcraft-cli render <input> -o <out.png>`.
+1. **`coralcraft-cdr` Decompression & Object-Tree Parser (M3)**:
+   - Clean-room RFC 1951/1950 inflate (`crates/cdr/src/inflate.rs`) for `LIST cmpr` blocks and ZIP Deflate (`method = 8`) inner entries (`content/riffData.cdr`, `content/root.dat`) with `MAX_DECOMPRESSED_BYTES` safety limits.
+   - `coralcraft_cdr::parse_document(&[u8]) -> Result<ParseOutcome, ProbeError>` extracting pages (`page`), layers (`layr`), objects (`obj ` / `loda` / `trfd` / `outl` / `fild` / `LIST stlt`), and falling back to `ObjectKind::Unsupported` with structured warnings across all 64 real-world `.cdr` samples.
+2. **Vector Export (`SVG` & `PDF`) + CLI `export` (M3)**:
+   - Clean-room SVG 1.1 (`export_svg`) and ISO 32000-1 PDF 1.4 (`export_pdf`, multi-page `/Pages`, CMYK `k`/`K`, RGB `rg`/`RG`, cubic Bézier paths, PowerClip clipping) + `coralcraft-cli export <input> -o <out.{svg,pdf,png,coralcraft}>`.
+3. **CorelDRAW-Style `egui` Desktop Shell (M4)**:
+   - `coralcraft-tools`, `coralcraft-engine`, `coralcraft-ui-egui`, and `coralcraft-desktop` replicating CorelDRAW's classic workspace layout, Property Bar, Toolbox, right vertical Color Palette Bar (Left-Click Fill / Right-Click Outline), bottom Page Navigator Tabs, Status Bar, and Dockers.
