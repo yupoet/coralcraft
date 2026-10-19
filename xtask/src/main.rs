@@ -257,7 +257,8 @@ fn parse_dep_names(toml_text: &str) -> Vec<String> {
             continue;
         }
         if in_deps && let Some((k, _)) = t.split_once('=') {
-            deps.push(k.trim().to_owned());
+            let dep_name = k.trim().trim_end_matches(".workspace").trim();
+            deps.push(dep_name.to_owned());
         }
     }
     deps

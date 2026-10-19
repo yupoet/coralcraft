@@ -4,12 +4,12 @@
 
 ## A. Application & Ecosystem Conventions (ArtCraft / storytold & Format References)
 
-| Directory | License | What We Reference | Clean-Room Boundary |
+| Directory | License | How We Use It | Clean-Room & License Boundary |
 | --- | --- | --- | --- |
-| `vectorcraft/` | MIT OR Apache-2.0 | **Methodology template**: `AGENTS.md` clean-room structure, workspace/`xtask` layout, crate layering (`geom`/`color`/`doc`/…), parity docs and self-scoring, `format/tests/prop_format.rs` property-testing pattern | Reference architecture and patterns; write independent implementations and cite URLs in comments |
-| `designcraft/` | Apache-2.0 | Multi-page publication model (`Spread`/`Page`/`Master`) — closest architectural sibling to CorelDRAW's multi-page layout model | Same as above |
-| `cadcraft/` | Apache-2.0 | **Clean-room binary format precedent**: clean-room parser and synthetic fixture strategy for undocumented binary formats (DWG/DXF) | Same as above |
-| `craft-libs/` | Apache-2.0 | Shared `craft-pdf` / `craft-print` / `craft-docpath` / `craft-ui` libraries | Compatible (`Apache-2.0`) |
+| `vectorcraft/` | MIT OR Apache-2.0 | **Core engine foundation**: reuse and adapt geometry (`geom`), boolean ops (`pathops`), color/CMS (`color`), rendering (`render`), text (`text`), effects (`effects`), bitmap tracing (`trace` -> PowerTRACE), SVG/PDF/EPS/CAD/Metafile I/O, and `egui` canvas/docking primitives, while reshaping the document model, tools, and UI into a pixel-faithful CorelDRAW workspace | License-compatible (`MIT OR Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
+| `designcraft/` | Apache-2.0 | **Multi-page layout foundation**: reuse and adapt multi-page spreads, master pages, guides, and page-panel mechanics for CorelDRAW's multi-page publication model | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
+| `cadcraft/` | Apache-2.0 | **Clean-room binary format & CAD precedent**: DXF/DWG handling and clean-room binary format test patterns | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
+| `craft-libs/` | Apache-2.0 | Shared `craft-pdf` / `craft-print` / `craft-docpath` / `craft-ui` libraries | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
 | `craft-common-actions/` | See repo | Shared GitHub Actions workflows | Verify license before reuse |
 | `craft-fonts/` | Apache-2.0 | Separate font repository pattern (`CRAFT_FONTS_DIR` optional build input; fonts never committed to main repo) | Follow pattern |
 | `libcdr/` (GitHub mirror) | **MPL-2.0** | CDR format structural semantics and version differences | **Read-only reference, never copy code**: MPL-2.0 is weak copyleft; document structural findings in `docs/reverse/` with citations and implement independently |
@@ -22,7 +22,7 @@
 
 | Source | Purpose |
 | --- | --- |
-| CorelDRAW Online Help (Windows): `https://product.corel.com/help/CorelDRAW/Documentation-Windows/index.html` | Primary public reference for tool, command, and docker behavior |
+| CorelDRAW Online Help (Windows): `https://product.corel.com/help/CorelDRAW/Documentation-Windows/index.html` | Primary public reference for tool, command, property bar, docker, and workspace layout behavior |
 | CorelDRAW 2022 Public User Guide PDF: `https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf` | Publicly distributed user manual |
 | CorelDRAW Learning Center: `https://www.coreldraw.com/en/learn/` | Public tutorials and workflow documentation |
 | DLP `libcdr` Wiki: `https://wiki.documentfoundation.org/DLP/Libraries/libcdr` | Format support scope reference |

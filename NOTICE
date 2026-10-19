@@ -1,8 +1,13 @@
 # NOTICE
 
-CoralCraft — Open-source, clean-room vector illustration and multi-page layout application targeting CorelDRAW parity.
+CoralCraft — Open-source, clean-room vector illustration and multi-page layout application targeting CorelDRAW workflow and workspace parity.
 
 - Source code and original assets: `MIT OR Apache-2.0` (see `LICENSE-MIT` and `LICENSE-APACHE`).
-- CoralCraft is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Corel or Alludo. CorelDRAW is a trademark of its respective owner. This project contains no proprietary code, assets, or documentation.
+- Portions of the underlying geometry, color, path-operations, rendering, format, and UI infrastructure are derived from or adapted from the ArtCraft open-source family:
+  - [storytold/vectorcraft](https://github.com/storytold/vectorcraft) (`MIT OR Apache-2.0`)
+  - [storytold/designcraft](https://github.com/storytold/designcraft) (`Apache-2.0`)
+  - [storytold/cadcraft](https://github.com/storytold/cadcraft) (`Apache-2.0`)
+  - [storytold/craft-libs](https://github.com/storytold/craft-libs) (`Apache-2.0`)
+- CoralCraft is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Corel or Alludo. CorelDRAW is a trademark of its respective owner. This project contains no proprietary Corel code, binary assets, or documentation.
 - The `refs/` directory (git-ignored) holds external reference repositories under their respective licenses and is never committed to this repository; see `refs/REFS.md` for clean-room boundaries.
 - Every third-party or original asset under `assets/` must be registered in `ASSETS.md` (path, author, source URL, license).
