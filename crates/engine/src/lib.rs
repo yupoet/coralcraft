@@ -333,6 +333,14 @@ impl EditorEngine {
                     self.zoom = new_zoom;
                 }
             }
+            ToolKind::InteractiveFill => {
+                if self.selection.is_empty()
+                    && let Some(hit_id) = self.hit_test_point(pt)
+                {
+                    self.selection = vec![hit_id];
+                }
+                self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
+            }
             _ => {
                 self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
             }
@@ -360,6 +368,37 @@ impl EditorEngine {
                 && let (Ok(dx_pt), Ok(dy_pt)) = (F64::new(dx), F64::new(dy))
             {
                 self.execute(EngineCommand::TranslateSelection { dx_pt, dy_pt });
+            }
+            return;
+        }
+
+        if let Some(coralcraft_tools::GestureState::DragInteractiveFill { start, current }) = self.tool_state.gesture.clone() {
+            self.tool_state.gesture = None;
+            let dx = current.x.get() - start.x.get();
+            let dy = current.y.get() - start.y.get();
+            if (dx.abs() > 1e-6 || dy.abs() > 1e-6) && !self.selection.is_empty() {
+                let angle_deg = dy.atan2(dx).to_degrees();
+                let (c0, c1) = self.current_target_objects().iter().find(|o| self.selection.contains(&o.id)).map_or(
+                    (Color::rgb8(0, 120, 215), Color::WHITE),
+                    |o| match &o.fill {
+                        Some(FillStyle::Fountain { stops, .. }) if stops.len() >= 2 => (stops[0].color.clone(), stops[stops.len() - 1].color.clone()),
+                        Some(FillStyle::Uniform { color }) => (color.clone(), Color::WHITE),
+                        _ => (Color::rgb8(0, 120, 215), Color::WHITE),
+                    },
+                );
+                let mut stops = Vec::with_capacity(2);
+                if let Ok(st0) = coralcraft_color::FountainStop::new(0.0, c0) {
+                    stops.push(st0);
+                }
+                if let Ok(st1) = coralcraft_color::FountainStop::new(1.0, c1) {
+                    stops.push(st1);
+                }
+                let fill = FillStyle::Fountain {
+                    geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
+                    blend_mode: coralcraft_color::FountainBlendMode::Direct,
+                    stops,
+                };
+                self.execute(EngineCommand::SetFill { fill: Some(fill) });
             }
             return;
         }
@@ -1093,7 +1132,8 @@ impl EditorEngine {
         self.default_outline = entry.default_outline;
     }
 
-    fn current_target_objects(&self) -> &[ObjectNode] {
+    #[must_use]
+    pub fn current_target_objects(&self) -> &[ObjectNode] {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
                 let page_idx = idx.min(self.document.pages.len().saturating_sub(1));

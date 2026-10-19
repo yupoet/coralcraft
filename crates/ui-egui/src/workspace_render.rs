@@ -109,6 +109,41 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
         // Center `X` inside 7x7 box
         draw_line(&mut surface, smx - 3, smy - 3, smx + 3, smy + 3, TEXT_BLACK);
         draw_line(&mut surface, smx - 3, smy + 3, smx + 3, smy - 3, TEXT_BLACK);
+
+        // 3b. Interactive Fill (`G`) on-canvas vector handles (Start Swatch, Axis, Midpoint Slider, End Swatch)
+        if snap.active_tool == ToolKind::InteractiveFill {
+            let (angle_deg, start_rgba, end_rgba) = ws.engine.current_target_objects().iter().find(|o| ws.engine.selection.contains(&o.id)).map_or(
+                (0.0, [0, 120, 215, 255], PAPER_WHITE),
+                |o| match &o.fill {
+                    Some(coralcraft_doc::FillStyle::Fountain { geometry, stops, .. }) => {
+                        let ang = match geometry {
+                            coralcraft_doc::FountainGeometry::Linear { angle_deg, .. } => angle_deg.get(),
+                            coralcraft_doc::FountainGeometry::Radial { .. } => 0.0,
+                        };
+                        let c0 = stops.first().map(|s| s.color.to_rgba8(1.0)).unwrap_or([0, 120, 215, 255]);
+                        let c1 = stops.last().map(|s| s.color.to_rgba8(1.0)).unwrap_or(PAPER_WHITE);
+                        (ang, c0, c1)
+                    }
+                    Some(coralcraft_doc::FillStyle::Uniform { color }) => (0.0, color.to_rgba8(1.0), PAPER_WHITE),
+                    _ => (0.0, [0, 120, 215, 255], PAPER_WHITE),
+                },
+            );
+            let half_len = ((sx1 - sx0).abs().max(24) as f64) * 0.4;
+            let rad = angle_deg.to_radians();
+            let dx = (half_len * rad.cos()).round() as i32;
+            let dy = (half_len * rad.sin()).round() as i32;
+            let vx0 = smx - dx;
+            let vy0 = smy - dy;
+            let vx1 = smx + dx;
+            let vy1 = smy + dy;
+            draw_line(&mut surface, vx0, vy0, vx1, vy1, GUIDELINE_BLUE);
+            fill_rect(&mut surface, smx - 3, smy - 3, 6, 6, PAPER_WHITE);
+            stroke_rect(&mut surface, smx - 3, smy - 3, 6, 6, GUIDELINE_BLUE);
+            fill_rect(&mut surface, vx0 - 4, vy0 - 4, 8, 8, start_rgba);
+            stroke_rect(&mut surface, vx0 - 4, vy0 - 4, 8, 8, TEXT_BLACK);
+            fill_rect(&mut surface, vx1 - 4, vy1 - 4, 8, 8, end_rgba);
+            stroke_rect(&mut surface, vx1 - 4, vy1 - 4, 8, 8, TEXT_BLACK);
+        }
     }
 
     // 4. Rulers (20 px top horizontal ruler, 20 px left vertical ruler, 20x20 corner box)

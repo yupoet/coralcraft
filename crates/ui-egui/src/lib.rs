@@ -725,4 +725,38 @@ mod tests {
         assert!(snap_cleared.horizontal_guidelines.is_empty());
         assert!(snap_cleared.vertical_guidelines.is_empty());
     }
+
+    #[test]
+    fn interactive_fill_vector_handles_and_drag_gesture_acceptance() {
+        let mut ws = DesktopWorkspace::default();
+        // 1. Create a rectangle and give it a uniform fill
+        ws.dispatch(UiAction::Shortcut(KeyShortcut::F6));
+        ws.dispatch(UiAction::CanvasPointerDown { pt: Point::new(50.0, 50.0).unwrap(), shift: false, alt: false });
+        ws.dispatch(UiAction::CanvasPointerUp { pt: Point::new(200.0, 150.0).unwrap(), shift: false, alt: false });
+        ws.dispatch(UiAction::PaletteLeftClick { cell_index: 3 });
+
+        // 2. Switch to Interactive Fill tool (`G`) and drag a 45-degree gradient vector
+        ws.dispatch(UiAction::Shortcut(KeyShortcut::Char('g')));
+        assert_eq!(ws.snapshot().active_tool, ToolKind::InteractiveFill);
+        ws.dispatch(UiAction::CanvasPointerDown { pt: Point::new(60.0, 60.0).unwrap(), shift: false, alt: false });
+        ws.dispatch(UiAction::CanvasPointerUp { pt: Point::new(160.0, 160.0).unwrap(), shift: false, alt: false });
+
+        let obj = &ws.engine.document.pages[0].layers[0].objects[0];
+        match &obj.fill {
+            Some(coralcraft_doc::FillStyle::Fountain { geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg, .. }, .. }) => {
+                assert!((angle_deg.get() - 45.0).abs() < 1e-4);
+            }
+            other => panic!("expected linear Fountain fill, got {other:?}"),
+        }
+
+        // 3. Render workspace PNG with Interactive Fill vector handles active
+        let out = ws.render_workspace_png().unwrap();
+        assert_eq!(out.surface.width, 1440);
+        assert_eq!(out.surface.height, 900);
+
+        // 4. Undo reverts back to uniform fill
+        ws.dispatch(UiAction::Undo);
+        let obj_after_undo = &ws.engine.document.pages[0].layers[0].objects[0];
+        assert!(matches!(obj_after_undo.fill, Some(coralcraft_doc::FillStyle::Uniform { .. })));
+    }
 }
