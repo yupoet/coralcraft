@@ -93,15 +93,14 @@ pub fn encode_raw_png_rgba(w: u32, h: u32, rgba_pixels: &[u8]) -> Result<Vec<u8>
 pub fn base64_encode(data: &[u8]) -> String {
     const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    let mut chunks = data.chunks_exact(3);
-    for chunk in &mut chunks {
-        let b = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+    let (chunks, rem) = data.as_chunks::<3>();
+    for &[c0, c1, c2] in chunks {
+        let b = (u32::from(c0) << 16) | (u32::from(c1) << 8) | u32::from(c2);
         out.push(B64_CHARS[((b >> 18) & 0x3F) as usize] as char);
         out.push(B64_CHARS[((b >> 12) & 0x3F) as usize] as char);
         out.push(B64_CHARS[((b >> 6) & 0x3F) as usize] as char);
         out.push(B64_CHARS[(b & 0x3F) as usize] as char);
     }
-    let rem = chunks.remainder();
     if rem.len() == 1 {
         let b = u32::from(rem[0]) << 16;
         out.push(B64_CHARS[((b >> 18) & 0x3F) as usize] as char);
@@ -138,13 +137,13 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         }
     };
     let mut out = Vec::with_capacity((clean.len() / 4) * 3);
-    for chunk in clean.chunks_exact(4) {
-        let v0 = decode_val(chunk[0])?;
-        let v1 = decode_val(chunk[1])?;
-        let pad2 = chunk[2] == b'=';
-        let pad3 = chunk[3] == b'=';
-        let v2 = if pad2 { 0 } else { decode_val(chunk[2])? };
-        let v3 = if pad3 { 0 } else { decode_val(chunk[3])? };
+    for &[c0, c1, c2, c3] in clean.as_chunks::<4>().0 {
+        let v0 = decode_val(c0)?;
+        let v1 = decode_val(c1)?;
+        let pad2 = c2 == b'=';
+        let pad3 = c3 == b'=';
+        let v2 = if pad2 { 0 } else { decode_val(c2)? };
+        let v3 = if pad3 { 0 } else { decode_val(c3)? };
         let triple = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
         out.push(((triple >> 16) & 0xFF) as u8);
         if !pad2 {
@@ -326,8 +325,8 @@ pub fn decode_stored_png_rgba(png: &[u8]) -> Result<(u32, u32, Vec<[u8; 4]>), St
         if row[0] != 0 {
             return Err("unexpected scanline filter byte".to_owned());
         }
-        for px in row[1..].chunks_exact(4) {
-            pixels.push([px[0], px[1], px[2], px[3]]);
+        for px in row[1..].as_chunks::<4>().0 {
+            pixels.push(*px);
         }
     }
 

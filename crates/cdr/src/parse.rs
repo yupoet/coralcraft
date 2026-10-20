@@ -1036,7 +1036,7 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
 fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
     // Per GLM-5.2 spec: byte 0 is encoding flag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE)
     let text = if payload.first() == Some(&0x02) && payload.len() >= 3 {
-        let u16s: Vec<u16> = payload[1..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&ch| ch != 0).collect();
+        let u16s: Vec<u16> = payload[1..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&ch| ch != 0).collect();
         String::from_utf16_lossy(&u16s)
     } else if payload.first().is_some_and(|&b| b <= 0x01) && payload.len() >= 2 {
         String::from_utf8_lossy(&payload[1..]).trim_end_matches('\0').to_owned()
@@ -1119,11 +1119,11 @@ fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind
         let raw_pixels = payload.get(40..)?;
         let mut rgba = Vec::with_capacity((w as usize) * (h as usize) * 4);
         if bpp == 32 {
-            for chunk in raw_pixels.chunks_exact(4).take((w as usize) * (h as usize)) {
-                rgba.push(chunk[2]);
-                rgba.push(chunk[1]);
-                rgba.push(chunk[0]);
-                rgba.push(chunk[3]);
+            for &[b, g, r, a] in raw_pixels.as_chunks::<4>().0.iter().take((w as usize) * (h as usize)) {
+                rgba.push(r);
+                rgba.push(g);
+                rgba.push(b);
+                rgba.push(a);
             }
         } else if bpp == 24 {
             let row_stride = (w as usize * 3).div_ceil(4) * 4;

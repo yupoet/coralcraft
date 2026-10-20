@@ -1976,7 +1976,7 @@ impl EditorEngine {
                 let mut extracted_ids = Vec::new();
                 for mut obj in layer.objects.drain(..) {
                     if obj.id == container_id && !obj.locked {
-                        let children: Vec<ObjectNode> = obj.powerclip_children.drain(..).collect();
+                        let children: Vec<ObjectNode> = std::mem::take(&mut obj.powerclip_children);
                         new_objects.push(obj);
                         for child in children {
                             extracted_ids.push(child.id);
@@ -2375,10 +2375,10 @@ impl EditorEngine {
                         && !obj.locked
                         && let ObjectKind::Bitmap { rgba_pixels, .. } = &mut obj.kind
                     {
-                        for px in rgba_pixels.chunks_exact_mut(4) {
-                            let mut r = f64::from(px[0]) / 255.0;
-                            let mut g = f64::from(px[1]) / 255.0;
-                            let mut b = f64::from(px[2]) / 255.0;
+                        for [pr, pg, pb, _] in rgba_pixels.as_chunks_mut::<4>().0 {
+                            let mut r = f64::from(*pr) / 255.0;
+                            let mut g = f64::from(*pg) / 255.0;
+                            let mut b = f64::from(*pb) / 255.0;
                             if grayscale {
                                 let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
                                 r = lum;
@@ -2393,9 +2393,9 @@ impl EditorEngine {
                                 g = 1.0 - g;
                                 b = 1.0 - b;
                             }
-                            px[0] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
-                            px[1] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
-                            px[2] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+                            *pr = (r * 255.0).round().clamp(0.0, 255.0) as u8;
+                            *pg = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+                            *pb = (b * 255.0).round().clamp(0.0, 255.0) as u8;
                         }
                     }
                 });

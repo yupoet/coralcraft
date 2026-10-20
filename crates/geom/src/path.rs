@@ -1810,9 +1810,7 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
                 }
             }
             hits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            for pair in hits.chunks_exact(2) {
-                let ua = pair[0];
-                let ub = pair[1];
+            for &[ua, ub] in hits.as_chunks::<2>().0 {
                 if (ub - ua).abs() > 1e-6 {
                     let pa = Point::new(ua * c - v * s, ua * s + v * c)?;
                     let pb = Point::new(ub * c - v * s, ub * s + v * c)?;
