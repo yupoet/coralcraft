@@ -6,8 +6,8 @@ use coralcraft_color::Color;
 use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
-    build_spiral_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_callout_path, build_connector_path,
+    build_graph_paper_path, build_spiral_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -343,6 +343,21 @@ impl McpServer {
                         {
                             "name": "adjust_bitmap",
                             "description": "Applies brightness, contrast, BT.709 grayscale, and/or color inversion to a bitmap object.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "apply_distortion",
+                            "description": "Applies a non-destructive PushPull, Zipper, or Twister distortion effect to object_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "trace_bitmap",
+                            "description": "Traces an ObjectKind::Bitmap into a closed vector Path (PowerTrace / Outline Trace).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "mirror_selection",
+                            "description": "Mirrors selected objects horizontally and/or vertically around their center, optionally duplicating (copy=true).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -905,6 +920,33 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::AdjustBitmap { object_id: target, brightness, contrast, grayscale, invert });
                 Ok(json!({ "bitmap_adjusted": ok, "object_id": target.0 }))
             }
+            "apply_distortion" => {
+                let target = self.resolve_target_id(args)?;
+                let kind = match args.get("kind").and_then(Value::as_str).unwrap_or("twister") {
+                    "push_pull" => DistortionKind::PushPull,
+                    "zipper" => DistortionKind::Zipper,
+                    _ => DistortionKind::Twister,
+                };
+                let amplitude = F64::new(args.get("amplitude").and_then(Value::as_f64).unwrap_or(30.0)).map_err(|e| e.to_string())?;
+                let frequency = F64::new(args.get("frequency").and_then(Value::as_f64).unwrap_or(4.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ApplyDistortion { object_id: target, kind, amplitude, frequency });
+                Ok(json!({ "distortion_applied": ok, "object_id": target.0 }))
+            }
+            "trace_bitmap" => {
+                let target = self.resolve_target_id(args)?;
+                let threshold = args.get("threshold").and_then(Value::as_u64).unwrap_or(128).min(255) as u8;
+                let ok = self.engine.execute(EngineCommand::TraceBitmap { object_id: target, threshold });
+                Ok(json!({ "bitmap_traced": ok, "object_id": target.0 }))
+            }
+            "mirror_selection" => {
+                self.apply_optional_selection(args);
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let vertical = args.get("vertical").and_then(Value::as_bool).unwrap_or(false);
+                let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::MirrorSelection { horizontal, vertical, copy });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "mirrored": ok, "selected_ids": ids }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -934,7 +976,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 50);
+        assert_eq!(tools, 53);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

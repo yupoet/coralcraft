@@ -241,6 +241,14 @@ fn apply_deforming_effects(node: &ObjectNode, local_path: &mut Path, local_bbox:
                     *local_bbox = bb;
                 }
             }
+            VectorEffect::Distortion { kind, amplitude, frequency } => {
+                if let Ok(dist) = coralcraft_geom::distort_path(local_path, *local_bbox, *kind, amplitude.get(), frequency.get())
+                    && let Some(bb) = dist.bounds()
+                {
+                    *local_path = dist;
+                    *local_bbox = bb;
+                }
+            }
             _ => {}
         }
     }

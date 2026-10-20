@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette};
-use coralcraft_geom::{Affine2, BBox, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
+use coralcraft_geom::{Affine2, BBox, DistortionKind, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
 
 use crate::style::{ChunkTag, FillStyle, FountainGeometry, OutlineStyle, RawPayload, Residual};
 
@@ -274,6 +274,15 @@ pub enum VectorEffect {
     Perspective {
         /// Four target corner positions `[top_left, top_right, bottom_right, bottom_left]` in local coordinates.
         corners: [Point; 4],
+    },
+    /// Interactive path distortion (`Effects -> Distort`: `PushPull`, `Zipper`, or `Twister`).
+    Distortion {
+        /// Distortion algorithm (`PushPull`, `Zipper`, or `Twister`).
+        kind: DistortionKind,
+        /// Amplitude in typographic points (or swirl angle in degrees for `Twister`).
+        amplitude: F64,
+        /// Spatial frequency / lobe count (`>= 1.0`).
+        frequency: F64,
     },
 }
 

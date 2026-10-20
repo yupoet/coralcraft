@@ -531,3 +531,162 @@ pub fn expand_artistic_brush_stroke(spine: &Path, start_width_pt: f64, end_width
     }
     Ok(out)
 }
+
+/// CorelDRAW interactive distortion mode (`Effects -> Distort`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistortionKind {
+    /// Radial push/pull of path segments relative to the bounding-box center (`Push and Pull Distortion`).
+    #[default]
+    PushPull,
+    /// Sawtooth/sinusoidal normal oscillation along path edges (`Zipper Distortion`).
+    Zipper,
+    /// Vortex angular swirl around the bounding-box center (`Twister Distortion`).
+    Twister,
+}
+
+/// Applies a CorelDRAW distortion (`PushPull`, `Zipper`, or `Twister`) to `path` within `bbox`.
+pub fn distort_path(path: &Path, bbox: Rect, kind: DistortionKind, amplitude: f64, frequency: f64) -> Result<Path, GeomError> {
+    if !amplitude.is_finite() || !frequency.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    let center = bbox.center()?;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let max_r = (0.5 * bbox.width()).hypot(0.5 * bbox.height()).max(1.0);
+    let freq = frequency.clamp(1.0, 64.0);
+
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+
+    for poly in polylines {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        // Subdivide each segment into 4 sub-steps so straight edges can curve under distortion
+        let mut dense_pts = Vec::with_capacity(poly.points.len() * 4);
+        for seg in poly.points.windows(2) {
+            let p0 = seg[0];
+            let p1 = seg[1];
+            for k in 0..4 {
+                let t = f64::from(k) / 4.0;
+                let x = p0.x.get() + t * (p1.x.get() - p0.x.get());
+                let y = p0.y.get() + t * (p1.y.get() - p0.y.get());
+                dense_pts.push(Point::new(x, y)?);
+            }
+        }
+        if let Some(&last) = poly.points.last() {
+            dense_pts.push(last);
+        }
+
+        let mut cum_len = 0.0_f64;
+        for (idx, &pt) in dense_pts.iter().enumerate() {
+            if idx > 0 {
+                cum_len += dense_pts[idx - 1].distance(pt);
+            }
+            let dx = pt.x.get() - cx;
+            let dy = pt.y.get() - cy;
+            let r = dx.hypot(dy);
+            let mapped = match kind {
+                DistortionKind::PushPull => {
+                    let angle = dy.atan2(dx);
+                    let lobe = (freq * angle).cos();
+                    let scale = (1.0 + (amplitude / max_r) * lobe).max(0.05);
+                    Point::new(cx + dx * scale, cy + dy * scale)?
+                }
+                DistortionKind::Zipper => {
+                    let prev = if idx > 0 { dense_pts[idx - 1] } else { pt };
+                    let next = if idx + 1 < dense_pts.len() { dense_pts[idx + 1] } else { pt };
+                    let tx = next.x.get() - prev.x.get();
+                    let ty = next.y.get() - prev.y.get();
+                    let tlen = tx.hypot(ty).max(1e-6);
+                    let nx = -ty / tlen;
+                    let ny = tx / tlen;
+                    let wave = amplitude * (std::f64::consts::TAU * freq * cum_len / max_r.max(10.0)).sin();
+                    Point::new(pt.x.get() + nx * wave, pt.y.get() + ny * wave)?
+                }
+                DistortionKind::Twister => {
+                    let falloff = (1.0 - (r / max_r).clamp(0.0, 1.0)).powi(2);
+                    let swirl_rad = amplitude.to_radians() * falloff;
+                    let (sin_a, cos_a) = swirl_rad.sin_cos();
+                    Point::new(cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a)?
+                }
+            };
+            if idx == 0 {
+                out.move_to(mapped)?;
+            } else {
+                out.line_to(mapped)?;
+            }
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
+/// Clean-room PowerTrace bitmap-to-vector contour tracer (`Bitmaps -> Outline Trace`):
+/// thresholds an RGBA8 image (`alpha >= 128 && BT.709 luminance <= threshold`) and emits merged
+/// scanline run rectangles as a closed vector [`Path`] in typographic points (`72 / dpi`).
+pub fn trace_bitmap_to_path(
+    pixel_width: u32,
+    pixel_height: u32,
+    dpi_x: f64,
+    dpi_y: f64,
+    rgba_pixels: &[u8],
+    threshold: u8,
+) -> Result<Path, GeomError> {
+    if pixel_width == 0 || pixel_height == 0 {
+        return Err(GeomError::InvalidShapeParameter("bitmap dimensions must be positive"));
+    }
+    let expected = (pixel_width as usize).saturating_mul(pixel_height as usize).saturating_mul(4);
+    if rgba_pixels.len() < expected {
+        return Err(GeomError::InvalidShapeParameter("rgba_pixels buffer shorter than pixel_width * pixel_height * 4"));
+    }
+    let scale_x = 72.0 / dpi_x.max(1.0);
+    let scale_y = 72.0 / dpi_y.max(1.0);
+
+    let mut path = Path { elements: Vec::new(), fill_rule: FillRule::NonZero };
+    for y in 0..pixel_height {
+        let mut x = 0u32;
+        while x < pixel_width {
+            let idx = ((y * pixel_width + x) as usize) * 4;
+            let r = u16::from(rgba_pixels[idx]);
+            let g = u16::from(rgba_pixels[idx + 1]);
+            let b = u16::from(rgba_pixels[idx + 2]);
+            let a = rgba_pixels[idx + 3];
+            let lum = ((54 * r + 183 * g + 19 * b) >> 8) as u8;
+            if a >= 128 && lum <= threshold {
+                let start_x = x;
+                x += 1;
+                while x < pixel_width {
+                    let idx2 = ((y * pixel_width + x) as usize) * 4;
+                    let r2 = u16::from(rgba_pixels[idx2]);
+                    let g2 = u16::from(rgba_pixels[idx2 + 1]);
+                    let b2 = u16::from(rgba_pixels[idx2 + 2]);
+                    let a2 = rgba_pixels[idx2 + 3];
+                    let lum2 = ((54 * r2 + 183 * g2 + 19 * b2) >> 8) as u8;
+                    if a2 >= 128 && lum2 <= threshold {
+                        x += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let x0 = f64::from(start_x) * scale_x;
+                let x1 = f64::from(x) * scale_x;
+                let y0 = f64::from(y) * scale_y;
+                let y1 = f64::from(y + 1) * scale_y;
+                if path.elements.len() + 5 <= MAX_PATH_ELEMENTS {
+                    path.move_to(Point::new(x0, y0)?)?;
+                    path.line_to(Point::new(x1, y0)?)?;
+                    path.line_to(Point::new(x1, y1)?)?;
+                    path.line_to(Point::new(x0, y1)?)?;
+                    path.close()?;
+                }
+            } else {
+                x += 1;
+            }
+        }
+    }
+    Ok(path)
+}

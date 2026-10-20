@@ -7,7 +7,8 @@ use coralcraft_doc::{
     VectorEffect,
 };
 use coralcraft_geom::{
-    Affine2, BooleanOp, CornerKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths,
+    Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
+    boolean_paths, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -130,6 +131,12 @@ pub enum EngineCommand {
     BreakApartSelection,
     /// Applies non-destructive/undoable per-pixel brightness, contrast, BT.709 grayscale, and color inversion to an `ObjectKind::Bitmap` (`Bitmaps -> Mode / Effects -> Adjust`).
     AdjustBitmap { object_id: ObjectId, brightness: F64, contrast: F64, grayscale: bool, invert: bool },
+    /// Applies a non-destructive Distortion effect (`PushPull`, `Zipper`, or `Twister`) to `object_id` (`Effects -> Distort`).
+    ApplyDistortion { object_id: ObjectId, kind: DistortionKind, amplitude: F64, frequency: F64 },
+    /// Traces an `ObjectKind::Bitmap` into a closed vector `ObjectKind::Path` (`Bitmaps -> Outline Trace`).
+    TraceBitmap { object_id: ObjectId, threshold: u8 },
+    /// Mirrors selected objects horizontally and/or vertically around their combined center, optionally duplicating (`Object -> Transformations -> Scale and Mirror`).
+    MirrorSelection { horizontal: bool, vertical: bool, copy: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +514,7 @@ impl EditorEngine {
             | EngineCommand::AddExtrude { object_id, .. }
             | EngineCommand::ApplyEnvelope { object_id, .. }
             | EngineCommand::ApplyPerspective { object_id, .. }
+            | EngineCommand::ApplyDistortion { object_id, .. }
             | EngineCommand::FilletPathCorners { object_id, .. }
             | EngineCommand::ApplyArtisticBrush { object_id, .. }
             | EngineCommand::ExpandEffects { object_id } => {
@@ -573,9 +581,19 @@ impl EditorEngine {
                     return false;
                 }
             }
-            EngineCommand::AdjustBitmap { object_id, .. } => {
+            EngineCommand::AdjustBitmap { object_id, .. } | EngineCommand::TraceBitmap { object_id, .. } => {
                 let is_bmp = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::Bitmap { .. }));
                 if !is_bmp {
+                    return false;
+                }
+            }
+            EngineCommand::MirrorSelection { horizontal, vertical, .. } => {
+                if !*horizontal && !*vertical {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
                     return false;
                 }
             }
@@ -1356,6 +1374,13 @@ impl EditorEngine {
                                             base_path = p;
                                         }
                                     }
+                                    VectorEffect::Distortion { kind, amplitude, frequency } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::distort_path(&base_path, bbox, *kind, amplitude.get(), frequency.get())
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
                                     VectorEffect::TextOnPath { spine, offset_pt } => {
                                         if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &obj.kind
                                             && let Ok(p) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
@@ -1510,6 +1535,74 @@ impl EditorEngine {
                         }
                     }
                 });
+            }
+            EngineCommand::ApplyDistortion { object_id, kind, amplitude, frequency } => {
+                let effect = VectorEffect::Distortion { kind, amplitude, frequency };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.retain(|e| !matches!(e, VectorEffect::Distortion { .. }));
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::TraceBitmap { object_id, threshold } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } = &obj.kind
+                        && let Ok(traced_path) = trace_bitmap_to_path(*pixel_width, *pixel_height, dpi_x.get(), dpi_y.get(), rgba_pixels, threshold)
+                    {
+                        obj.kind = ObjectKind::Path(traced_path);
+                        if obj.fill.is_none() {
+                            obj.fill = Some(FillStyle::uniform(Color::BLACK));
+                        }
+                    }
+                });
+            }
+            EngineCommand::MirrorSelection { horizontal, vertical, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(center) = bounds.center() else {
+                    return false;
+                };
+                let sx = if horizontal { -1.0 } else { 1.0 };
+                let sy = if vertical { -1.0 } else { 1.0 };
+                let Ok(t_to_origin) = Affine2::translation(-center.x.get(), -center.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(center.x.get(), center.y.get()) else {
+                    return false;
+                };
+                let Ok(mirror_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+
+                if copy {
+                    let sel = self.selection.clone();
+                    let templates: Vec<ObjectNode> =
+                        self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                    let mut new_selection = Vec::new();
+                    for mut dup in templates {
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        if let Ok(composed) = dup.transform.then(mirror_tf) {
+                            dup.transform = composed;
+                        }
+                        new_selection.push(dup.id);
+                        self.target_layer_mut().objects.push(dup);
+                    }
+                    if !new_selection.is_empty() {
+                        self.selection = new_selection;
+                    }
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if let Ok(composed) = obj.transform.then(mirror_tf) {
+                            obj.transform = composed;
+                        }
+                    });
+                }
             }
         }
         true

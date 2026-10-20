@@ -22,8 +22,8 @@ pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, fillet_path_corners,
-    warp_path_bilinear, warp_path_perspective,
+    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, distort_path, expand_artistic_brush_stroke,
+    fillet_path_corners, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{
     CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
@@ -295,5 +295,24 @@ mod tests {
         let callout = build_callout_path(bbox, Point::new(50.0, 90.0).unwrap(), 16.0).unwrap();
         let cb = callout.bounds().unwrap();
         assert!((cb.y1.get() - 90.0).abs() < 1e-6);
+
+        let twisted = distort_path(&rect_path, bbox, DistortionKind::Twister, 45.0, 4.0).unwrap();
+        assert!(!twisted.is_empty());
+        let zippered = distort_path(&rect_path, bbox, DistortionKind::Zipper, 6.0, 4.0).unwrap();
+        assert!(!zippered.is_empty());
+
+        let mut bmp = vec![255u8; 4 * 4 * 4]; // 4x4 white opaque
+        // Paint a 2x2 black square at (1, 1)
+        for py in 1..3 {
+            for px in 1..3 {
+                let off = (py * 4 + px) * 4;
+                bmp[off] = 0;
+                bmp[off + 1] = 0;
+                bmp[off + 2] = 0;
+                bmp[off + 3] = 255;
+            }
+        }
+        let traced = trace_bitmap_to_path(4, 4, 72.0, 72.0, &bmp, 128).unwrap();
+        assert_eq!(traced.elements.len(), 2 * 5); // 2 scanline runs
     }
 }
