@@ -398,6 +398,7 @@ mod tests {
         out.extend_from_slice(&len.to_le_bytes());
         out.extend_from_slice(&(!len).to_le_bytes());
         out.extend_from_slice(raw);
+        out.extend_from_slice(&crate::inflate::adler32(raw).to_be_bytes());
         out
     }
 
@@ -550,7 +551,7 @@ mod tests {
 
     #[test]
     fn parse_document_never_panics_on_tiny_declared_size_or_hostile_mutations() {
-        // Regression test for GLM-5.2 finding: declared_size in 0..4 where 8 + declared_size < 12
+        // Regression test for RIFF headers where declared_size in 0..4 makes 8 + declared_size < 12
         for declared in 0u32..8 {
             let mut buf = Vec::new();
             buf.extend_from_slice(b"RIFF");

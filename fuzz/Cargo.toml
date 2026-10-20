@@ -1,0 +1,32 @@
+[package]
+name = "coralcraft-fuzz"
+version = "0.0.1"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[workspace]
+
+[dependencies]
+coralcraft-cdr = { path = "../crates/cdr" }
+coralcraft-doc = { path = "../crates/doc" }
+
+[[bin]]
+name = "probe"
+path = "fuzz_targets/probe.rs"
+
+[[bin]]
+name = "parse_cdr"
+path = "fuzz_targets/parse_cdr.rs"
+
+[[bin]]
+name = "load_doc"
+path = "fuzz_targets/load_doc.rs"
+
+[[bin]]
+name = "import_svg"
+path = "fuzz_targets/import_svg.rs"
+
+[[bin]]
+name = "import_dxf"
+path = "fuzz_targets/import_dxf.rs"

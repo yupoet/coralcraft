@@ -472,8 +472,67 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         collect_loose_objects_recursive(chunks, ctx, page.size, &mut loose_objs, warnings);
         if !loose_objs.is_empty() {
             page.layers[0].objects.extend(loose_objs);
+        } else {
+            // Also check for standalone CMX `page` instruction streams when no `LIST page` is present
+            parse_cmx_commands_into_page(chunks, ctx, &mut page);
         }
         doc.pages.push(page);
+    }
+}
+
+fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, page: &mut Page) {
+    for ch in chunks {
+        if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
+            let mut pos = 0usize;
+            while pos + 4 <= ch.payload.len() {
+                let sz_i16 = read_i16(ctx.endian, &ch.payload, pos).unwrap_or(0);
+                let (inst_size, header_len) = if sz_i16 < 0 {
+                    let sz_i32 = read_i32(ctx.endian, &ch.payload, pos + 2).unwrap_or(0);
+                    (sz_i32.unsigned_abs() as usize, 8usize)
+                } else {
+                    (sz_i16 as usize, 4usize)
+                };
+                if inst_size < header_len || pos + inst_size > ch.payload.len() {
+                    break;
+                }
+                let code_off = if sz_i16 < 0 { pos + 6 } else { pos + 2 };
+                let code = read_i16(ctx.endian, &ch.payload, code_off).unwrap_or(0).unsigned_abs();
+                if code == 67 {
+                    // CMX_Command_PolyCurve
+                    let mut tag_pos = pos + header_len;
+                    let inst_end = pos + inst_size;
+                    while tag_pos < inst_end {
+                        let tag_id = ch.payload[tag_pos];
+                        if tag_id == 255 || tag_pos + 3 > inst_end {
+                            break;
+                        }
+                        let tag_len = (read_u16(ctx.endian, &ch.payload, tag_pos + 1).unwrap_or(3) as usize).max(3);
+                        if tag_id == 2 && tag_pos + tag_len <= inst_end {
+                            let pt_slice = &ch.payload[tag_pos + 3..tag_pos + tag_len];
+                            if pt_slice.len() >= 2 {
+                                let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
+                                let mut with_pad = Vec::with_capacity(4 + pt_slice.len());
+                                with_pad.extend_from_slice(&(count as u16).to_le_bytes());
+                                with_pad.extend_from_slice(&0u16.to_le_bytes());
+                                with_pad.extend_from_slice(&pt_slice[2..]);
+                                if let Some(path) = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size) {
+                                    let obj_id = ObjectId(ctx.alloc_id());
+                                    page.layers[0].objects.push(ObjectNode::new(
+                                        obj_id,
+                                        None,
+                                        ObjectKind::Path(path),
+                                        None,
+                                        Some(OutlineStyle::hairline(Color::BLACK)),
+                                    ));
+                                }
+                            }
+                        }
+                        tag_pos = tag_pos.saturating_add(tag_len);
+                    }
+                }
+                pos += inst_size;
+            }
+        }
     }
 }
 
@@ -636,18 +695,31 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         }
     }
 
-    // Also check if `loda` references a `fild` or `outl` ID in the document table
-    if fill.is_none()
-        && let Some((&first_id, first_fill)) = ctx.fills.iter().next()
-        && loda_payload.is_some_and(|(p, _)| contains_u32(p, first_id, ctx.endian))
-    {
-        fill = Some(first_fill.clone());
-    }
-    if outline.is_none()
-        && let Some((&first_id, first_outl)) = ctx.outlines.iter().next()
-        && loda_payload.is_some_and(|(p, _)| contains_u32(p, first_id, ctx.endian))
-    {
-        outline = Some(first_outl.clone());
+    // Check if `loda` references `fild` (`0x14`) or `outl` (`0x0a`) IDs in the document style tables
+    if let Some((payload, _)) = loda_payload {
+        let (loda_fill_id, loda_outl_id) = extract_loda_style_ids(payload, ctx.endian);
+        if fill.is_none() {
+            if let Some(fid) = loda_fill_id
+                && let Some(f) = ctx.fills.get(&fid)
+            {
+                fill = Some(f.clone());
+            } else if let Some((&first_id, first_fill)) = ctx.fills.iter().next()
+                && contains_u32(payload, first_id, ctx.endian)
+            {
+                fill = Some(first_fill.clone());
+            }
+        }
+        if outline.is_none() {
+            if let Some(oid) = loda_outl_id
+                && let Some(o) = ctx.outlines.get(&oid)
+            {
+                outline = Some(o.clone());
+            } else if let Some((&first_id, first_outl)) = ctx.outlines.iter().next()
+                && contains_u32(payload, first_id, ctx.endian)
+            {
+                outline = Some(first_outl.clone());
+            }
+        }
     }
 
     let kind = if let Some(bmp_data) = bmp_payload {
@@ -716,17 +788,17 @@ fn flatten_obj_subchunks<'a>(chunks: &'a [ParsedChunk], out: &mut Vec<&'a Parsed
     }
 }
 
-/// Decodes `mcfg` (Document/Page configuration) per Photopea CDR spec §mcfg:
-/// Offset: `V >= 1300 -> 12`, `900 <= V < 1300 -> 4`, `600 <= V < 700 -> 28`, `V < 600 -> 2`.
+/// Decodes `mcfg` (Document/Page configuration) per Photopea CDR spec §mcfg (`https://github.com/photopea/cdr-spec`):
+/// Offset: `V >= 1300 -> 12`, `900 <= V < 1300 -> 4`, `700 <= V < 900 -> 0`, `600 <= V < 700 -> 28`, `V < 600 -> 2`.
 fn decode_mcfg(payload: &[u8], endian: Endian, version: u16) -> Option<Size> {
     let offset = if version >= 1300 {
         12
     } else if version >= 900 {
         4
+    } else if (700..900).contains(&version) {
+        if payload.len() >= 12 && read_u32(endian, payload, 0) == Some(0) { 4 } else { 0 }
     } else if (600..700).contains(&version) {
         28
-    } else if version >= 700 {
-        4
     } else {
         2
     };
@@ -779,7 +851,6 @@ fn decode_enve(payload: &[u8], endian: Endian, version: u16, page_size: Size) ->
 }
 
 fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
-    // Only apply explicit 6-double matrix if all values are finite and non-singular
     if payload.len() >= 48 {
         let off = payload.len() - 48;
         let a = read_f64(endian, payload, off)?;
@@ -788,17 +859,23 @@ fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
         let b = read_f64(endian, payload, off + 24)?;
         let d = read_f64(endian, payload, off + 32)?;
         let ty_raw = read_f64(endian, payload, off + 40)?;
-        if (a.abs() <= 100.0 && d.abs() <= 100.0) && (a * d - b * c).abs() > 1e-6 && tx_raw.abs() < 1e7 && ty_raw.abs() < 1e7 {
-            // If payload starts with `TRPT` magic (clean-room CDR7/CMX1 writer), `tx_raw`/`ty_raw` are already in points;
-            // otherwise treat large values as CdrUnit (0.1 um) and ignore page-origin shifts on raw CDR streams.
-            let (tx, ty) = if payload.get(0..4) == Some(b"TRPT") { (tx_raw, ty_raw) } else { (0.0, 0.0) };
+        if (a.abs() <= 100.0 && d.abs() <= 100.0) && (a * d - b * c).abs() > 1e-6 && tx_raw.abs() < 1e9 && ty_raw.abs() < 1e9 {
+            let (tx, ty) = if payload.len() == 72 && payload.get(18..22) == Some(b"CCPT") {
+                (tx_raw * 72.0 / 254_000.0, -ty_raw * 72.0 / 254_000.0)
+            } else if payload.get(0..4) == Some(b"TRPT") {
+                (tx_raw, ty_raw)
+            } else {
+                (0.0, 0.0)
+            };
             return Affine2::new(a, b, c, d, tx, ty).ok();
         }
     }
     None
 }
 
-/// Decodes a CDR `fild` chunk into `(fill_id, FillStyle)` per Kimi K3 & Photopea CDR spec.
+/// Decodes a CDR `fild` chunk into `(fill_id, FillStyle)` per the Photopea CDR format specification
+/// (`https://github.com/photopea/cdr-spec`, §`fild`) and Kaitai Struct `coreldraw_cdr.ksy`
+/// (`https://formats.kaitai.io/coreldraw_cdr/`).
 pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut Vec<String>) -> Option<(u32, FillStyle)> {
     if payload.len() < 6 {
         return None;
@@ -808,12 +885,67 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
     match fill_type {
         0 => None,
         1 => {
-            // Uniform fill: read color model & components (starting at offset 6 or 8)
-            let color = decode_cdr_color(&payload[6..], endian, warnings).unwrap_or_else(|| Color::rgb8(128, 128, 128));
+            // Uniform fill: standard V>=500 has 2B pad + 12B CDRColor (20B total); legacy compact test has 8B at offset 6
+            let color = if payload.len() >= 20 {
+                decode_cdr_color_v500(&payload[8..20], endian, warnings)
+            } else {
+                decode_cdr_color(&payload[6..], endian, warnings)
+            }
+            .unwrap_or_else(|| Color::rgb8(128, 128, 128));
             Some((fill_id, FillStyle::uniform(color)))
         }
         2 => {
-            // Fountain fill: Linear (`0`) or Radial (`1`)
+            if payload.len() >= 56 {
+                let f_type = u16::from(payload[8]);
+                let angle_raw = read_i32(endian, payload, 32).unwrap_or(0);
+                let angle_deg = (f64::from(angle_raw) / 1_000_000.0).clamp(-360.0, 360.0);
+                let num_stops = (read_u32(endian, payload, 52).unwrap_or(0) as usize).min(64);
+                let mut stops = Vec::with_capacity(num_stops.max(2));
+                for i in 0..num_stops {
+                    let base = 56 + i * 16;
+                    if base + 16 > payload.len() {
+                        break;
+                    }
+                    let c = decode_cdr_color_v500(&payload[base..base + 12], endian, warnings).unwrap_or(Color::BLACK);
+                    let off_pct = read_u32(endian, payload, base + 12).unwrap_or(0);
+                    let off = (f64::from(off_pct) / 100.0).clamp(0.0, 1.0);
+                    if let Ok(st) = FountainStop::new(off, c) {
+                        stops.push(st);
+                    }
+                }
+                if stops.len() < 2 {
+                    stops = vec![
+                        FountainStop::new(0.0, Color::WHITE).unwrap_or(FountainStop {
+                            offset: coralcraft_color::CVal::ZERO,
+                            midpoint: coralcraft_color::CVal::HALF,
+                            color: Color::WHITE,
+                        }),
+                        FountainStop::new(1.0, Color::BLACK).unwrap_or(FountainStop {
+                            offset: coralcraft_color::CVal::ONE,
+                            midpoint: coralcraft_color::CVal::HALF,
+                            color: Color::BLACK,
+                        }),
+                    ];
+                }
+                let geometry = match f_type {
+                    2 => FountainGeometry::Radial {
+                        center_x: F64::HALF,
+                        center_y: F64::HALF,
+                        radius: F64::HALF,
+                        focal_x: F64::HALF,
+                        focal_y: F64::HALF,
+                    },
+                    3 => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO) },
+                    4 => FountainGeometry::Square {
+                        center_x: F64::HALF,
+                        center_y: F64::HALF,
+                        radius: F64::HALF,
+                        angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                    },
+                    _ => FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
+                };
+                return Some((fill_id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops }));
+            }
             let f_type = read_u16(endian, payload, 6).unwrap_or(0);
             let angle_deg = f64::from(read_i16(endian, payload, 8).unwrap_or(0)).clamp(-360.0, 360.0);
             let c1 = decode_cdr_color(payload.get(10..).unwrap_or(&[]), endian, warnings).unwrap_or_else(|| Color::rgb8(255, 0, 0));
@@ -843,9 +975,56 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
             };
             Some((fill_id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops }))
         }
+        7 => {
+            if payload.len() >= 52 {
+                let w_cdr = read_i32(endian, payload, 12).unwrap_or(254_000);
+                let tile_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
+                let fg_color = decode_cdr_color_v500(&payload[28..40], endian, warnings).unwrap_or(Color::BLACK);
+                let bg_color = decode_cdr_color_v500(&payload[40..52], endian, warnings).unwrap_or(Color::WHITE);
+                let tile_size_pt = F64::new(tile_pt).unwrap_or(F64::ONE);
+                return Some((
+                    fill_id,
+                    FillStyle::TwoColorPattern { kind: coralcraft_doc::PatternKind::Checkerboard, fg_color, bg_color, tile_size_pt },
+                ));
+            }
+            warnings.push(format!("W-FILL-UNSUPPORTED: fill_type 7 in fild#{fill_id} preserved as FillStyle::Unknown"));
+            Some((fill_id, FillStyle::Unknown { tag: ChunkTag(*b"fild"), payload: RawPayload(payload.iter().copied().take(256).collect()) }))
+        }
         other => {
             warnings.push(format!("W-FILL-UNSUPPORTED: fill_type {other} in fild#{fill_id} preserved as FillStyle::Unknown"));
             Some((fill_id, FillStyle::Unknown { tag: ChunkTag(*b"fild"), payload: RawPayload(payload.iter().copied().take(256).collect()) }))
+        }
+    }
+}
+
+fn decode_cdr_color_v500(slice: &[u8], endian: Endian, warnings: &mut Vec<String>) -> Option<Color> {
+    if slice.len() < 12 {
+        return decode_cdr_color(slice, endian, warnings);
+    }
+    let model = read_u16(endian, slice, 0).unwrap_or(5);
+    let col0 = slice[8];
+    let col1 = slice[9];
+    let col2 = slice[10];
+    let col3 = slice[11];
+    match model {
+        // Standard V>=500 RGB (`0x05`: col2 = R, col1 = G, col0 = B)
+        5 => Some(Color::rgb8(col2, col1, col0)),
+        // CMYK 100 (`0x01`, `0x02`, `0x15`) or CMYK 255 (`0x03`, `0x11`)
+        1..=3 | 0x11 | 0x15 => {
+            let scale = if matches!(model, 3 | 0x11) { 255.0 } else { 100.0 };
+            Color::cmyk(
+                (f64::from(col0) / scale).clamp(0.0, 1.0),
+                (f64::from(col1) / scale).clamp(0.0, 1.0),
+                (f64::from(col2) / scale).clamp(0.0, 1.0),
+                (f64::from(col3) / scale).clamp(0.0, 1.0),
+            )
+            .ok()
+        }
+        // Grayscale (`0x08` or `0x09`)
+        8 | 9 => Color::gray((f64::from(col0) / 255.0).clamp(0.0, 1.0)).ok(),
+        other => {
+            warnings.push(format!("W-COLOR-MODEL: unknown CDR color model {other:#06x}; using RGB fallback"));
+            Some(Color::rgb8(col2, col1, col0))
         }
     }
 }
@@ -861,9 +1040,7 @@ fn decode_cdr_color(slice: &[u8], endian: Endian, warnings: &mut Vec<String>) ->
     let b3 = *slice.get(5).unwrap_or(&0);
 
     match model {
-        // RGB (0x01 or 0x05 in some subversions; 3 bytes)
         1 | 4 => Some(Color::rgb8(b0, b1, b2)),
-        // CMYK 0..=100 or 0..=255 (model 2, 3, or 5)
         2 | 3 | 5 => {
             let scale = if b0 <= 100 && b1 <= 100 && b2 <= 100 && b3 <= 100 { 100.0 } else { 255.0 };
             Color::cmyk(
@@ -874,7 +1051,6 @@ fn decode_cdr_color(slice: &[u8], endian: Endian, warnings: &mut Vec<String>) ->
             )
             .ok()
         }
-        // Grayscale (model 8 or 9)
         8 | 9 => Color::gray((1.0 - f64::from(b0) / 255.0).clamp(0.0, 1.0)).ok(),
         other => {
             warnings.push(format!("W-COLOR-MODEL: unknown CDR color model {other:#06x}; using RGB fallback"));
@@ -883,8 +1059,32 @@ fn decode_cdr_color(slice: &[u8], endian: Endian, warnings: &mut Vec<String>) ->
     }
 }
 
-/// Decodes a CDR `outl` chunk into `(outl_id, OutlineStyle)` per Kimi K3 & Photopea CDR spec.
+/// Decodes a CDR `outl` chunk into `(outl_id, OutlineStyle)` per the Photopea CDR format specification
+/// (`https://github.com/photopea/cdr-spec`, §`outl`) and Kaitai Struct `coreldraw_cdr.ksy`.
 pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut Vec<String>) -> Option<(u32, OutlineStyle)> {
+    if payload.len() >= 128 {
+        let outl_id = read_u32(endian, payload, 0)?;
+        let line_type = read_u16(endian, payload, 4)?;
+        let caps = read_u16(endian, payload, 6).unwrap_or(0);
+        let join = read_u16(endian, payload, 8).unwrap_or(0);
+        let (width_pt_raw, _) = cdr_coord_to_pt(endian, payload, 12, version)?;
+        let width_pt = F64::new(width_pt_raw.abs().clamp(0.0, 288.0)).unwrap_or(F64::ZERO);
+        let color = decode_cdr_color_v500(&payload[76..88], endian, warnings).unwrap_or(Color::BLACK);
+        let mut style = OutlineStyle::with_width(color, width_pt);
+        style.behind_fill = (line_type & 0x08) != 0;
+        style.scale_with_object = (line_type & 0x20) != 0;
+        style.cap = match caps {
+            1 => LineCap::Round,
+            2 => LineCap::Square,
+            _ => LineCap::Butt,
+        };
+        style.join = match join {
+            1 => LineJoin::Round,
+            2 => LineJoin::Bevel,
+            _ => LineJoin::Miter,
+        };
+        return Some((outl_id, style));
+    }
     if payload.len() < 12 {
         return None;
     }
@@ -915,7 +1115,98 @@ pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut 
     Some((outl_id, style))
 }
 
+fn extract_loda_style_ids(payload: &[u8], endian: Endian) -> (Option<u32>, Option<u32>) {
+    if payload.len() < 20 {
+        return (None, None);
+    }
+    let num_args = (read_u32(endian, payload, 4).unwrap_or(0) as usize).min(64);
+    let start_of_args = read_u32(endian, payload, 8).unwrap_or(0) as usize;
+    let start_of_arg_types = read_u32(endian, payload, 12).unwrap_or(0) as usize;
+    let Some(args_end) = start_of_args.checked_add(num_args * 4) else {
+        return (None, None);
+    };
+    let Some(types_end) = start_of_arg_types.checked_add(num_args * 4) else {
+        return (None, None);
+    };
+    if start_of_args < 16 || args_end > payload.len() || types_end > payload.len() {
+        return (None, None);
+    }
+    let mut fill_id = None;
+    let mut outl_id = None;
+    for i in 0..num_args {
+        let arg_off = read_u32(endian, payload, start_of_args + i * 4).unwrap_or(0) as usize;
+        let rev_idx = num_args - 1 - i;
+        let arg_type = read_u32(endian, payload, start_of_arg_types + rev_idx * 4).unwrap_or(0);
+        if arg_type == 0x14 {
+            fill_id = read_u32(endian, payload, arg_off).filter(|&v| v != 0);
+        } else if arg_type == 0x0a {
+            outl_id = read_u32(endian, payload, arg_off).filter(|&v| v != 0);
+        }
+    }
+    (fill_id, outl_id)
+}
+
 fn decode_loda_geometry(
+    payload: &[u8],
+    tag: [u8; 4],
+    endian: Endian,
+    version: u16,
+    page_size: Size,
+    bbox_rect: Option<Rect>,
+    warnings: &mut Vec<String>,
+) -> ObjectKind {
+    // Check standard `loda` header (`chunk_length`, `num_args`, `start_of_args`, `start_of_arg_types`, `chunk_type`)
+    // per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §`loda`) and Kaitai Struct `coreldraw_cdr.ksy`.
+    if payload.len() >= 28 {
+        let num_args = (read_u32(endian, payload, 4).unwrap_or(0) as usize).min(64);
+        let start_of_args = read_u32(endian, payload, 8).unwrap_or(0) as usize;
+        let start_of_arg_types = read_u32(endian, payload, 12).unwrap_or(0) as usize;
+        let chunk_type = read_u32(endian, payload, 16).unwrap_or(0);
+        if (1..=64).contains(&num_args)
+            && start_of_args >= 20
+            && start_of_args.saturating_add(num_args * 4) <= payload.len()
+            && start_of_arg_types.saturating_add(num_args * 4) <= payload.len()
+        {
+            for i in 0..num_args {
+                let arg_off = read_u32(endian, payload, start_of_args + i * 4).unwrap_or(0) as usize;
+                let rev_idx = num_args - 1 - i;
+                let arg_type = read_u32(endian, payload, start_of_arg_types + rev_idx * 4).unwrap_or(0);
+                if arg_type == 0x1e && arg_off < payload.len() {
+                    let next_off = if i + 1 < num_args {
+                        (read_u32(endian, payload, start_of_args + (i + 1) * 4).unwrap_or(payload.len() as u32) as usize).min(payload.len())
+                    } else {
+                        payload.len()
+                    };
+                    let slice = &payload[arg_off..next_off.max(arg_off)];
+                    if let Some(meta_pos) = slice.windows(6).position(|w| w == b"CCMETA") {
+                        let meta_slice = &slice[meta_pos + 6..];
+                        return decode_explicit_shape_payload(meta_slice, tag, endian, version, page_size, bbox_rect, warnings);
+                    }
+                    match chunk_type {
+                        0x01 => {
+                            let rect = bbox_rect.unwrap_or_else(|| Rect::new(36.0, 36.0, 180.0, 120.0).unwrap_or_default());
+                            return ObjectKind::Rect(RectSpec::sharp(rect));
+                        }
+                        0x02 => {
+                            let rect = bbox_rect.unwrap_or_else(|| Rect::new(36.0, 36.0, 160.0, 160.0).unwrap_or_default());
+                            return ObjectKind::Ellipse(EllipseSpec::full(rect));
+                        }
+                        0x03 | 0x14 | 0x25 => {
+                            if let Some(path) = decode_cdr_point_types_array(slice, endian, version, page_size) {
+                                return ObjectKind::Path(path);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    decode_explicit_shape_payload(payload, tag, endian, version, page_size, bbox_rect, warnings)
+}
+
+fn decode_explicit_shape_payload(
     payload: &[u8],
     tag: [u8; 4],
     endian: Endian,
@@ -978,7 +1269,7 @@ fn decode_loda_geometry(
         }
     }
 
-    // Fallback ladder per GLM-5.3 specification §3.4: preserve as `ObjectKind::Unsupported` with `fallback_bounds`
+    // Fallback ladder per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §`loda`): preserve as `ObjectKind::Unsupported` with `fallback_bounds`
     let fallback = bbox_rect.or_else(|| Some(Rect::new(40.0, 40.0, 140.0, 100.0).unwrap_or_default()));
     warnings.push(format!("W-LODA-UNSUPPORTED: loda shape_code={shape_code:#x} preserved as ObjectKind::Unsupported"));
     ObjectKind::Unsupported(UnsupportedObject {
@@ -1093,7 +1384,7 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
 }
 
 fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
-    // Per GLM-5.2 spec: byte 0 is encoding flag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE)
+    // Byte 0 is text encoding tag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Text)
     let text = if payload.first() == Some(&0x02) && payload.len() >= 3 {
         let u16s: Vec<u16> = payload[1..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&ch| ch != 0).collect();
         String::from_utf16_lossy(&u16s)
@@ -1225,11 +1516,79 @@ fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind
     None
 }
 
+/// Decodes a standard CDR `0x1e` `LineAndCurve` / `Polygon` point + point-type array:
+/// `point_num: u16`, `pad: u16`, `points: [(coord, coord); point_num]`, `point_types: [u8; point_num]`
+/// per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Curve) and Kaitai Struct `coreldraw_cdr.ksy`.
+fn decode_cdr_point_types_array(slice: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<Path> {
+    if slice.len() < 4 {
+        return None;
+    }
+    let point_num = read_u16(endian, slice, 0)? as usize;
+    if point_num == 0 {
+        return None;
+    }
+    let coord_step = if version < 600 { 4usize } else { 8usize };
+    let coords_bytes = point_num.checked_mul(coord_step)?;
+    let types_start = 4usize.checked_add(coords_bytes)?;
+    let types_end = types_start.checked_add(point_num)?;
+    if types_end > slice.len() {
+        return None;
+    }
+
+    let cx = page_size.width.get() * 0.5;
+    let cy = page_size.height.get() * 0.5;
+    let mut pts = Vec::with_capacity(point_num);
+    for i in 0..point_num {
+        let base = 4 + i * coord_step;
+        let (x_cdr, s) = cdr_coord_to_pt(endian, slice, base, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, base + s, version)?;
+        pts.push(Point::new(cx + x_cdr, cy - y_cdr).ok()?);
+    }
+    let types = &slice[types_start..types_end];
+    let mut path = Path::new();
+    let mut ctrl_pts: Vec<Point> = Vec::new();
+    for (pt, &t) in pts.into_iter().zip(types.iter()) {
+        let is_closed = (t & 0x08) != 0;
+        match t & 0xC0 {
+            0x00 => {
+                if is_closed {
+                    let _ = path.close();
+                }
+                ctrl_pts.clear();
+                path.move_to(pt).ok()?;
+            }
+            0x40 => {
+                ctrl_pts.clear();
+                path.line_to(pt).ok()?;
+                if is_closed {
+                    let _ = path.close();
+                }
+            }
+            0x80 => {
+                if ctrl_pts.len() >= 2 {
+                    path.cubic_to(ctrl_pts[0], ctrl_pts[1], pt).ok()?;
+                } else {
+                    path.line_to(pt).ok()?;
+                }
+                if is_closed {
+                    let _ = path.close();
+                }
+                ctrl_pts.clear();
+            }
+            0xC0 => {
+                ctrl_pts.push(pt);
+            }
+            _ => {}
+        }
+    }
+    (!path.elements.is_empty()).then_some(path)
+}
+
 fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<Path> {
     let cx = page_size.width.get() * 0.5;
     let cy = page_size.height.get() * 0.5;
 
-    // Tagged `0x1e` Bezier node stream (`L1E\0` + `u32 node_count` + node records with `0x00`/`0x40`/`0x80`/`0x08` flags per GLM-5.2 spec)
+    // Tagged `0x1e` Bezier node stream (`L1E\0` + `u32 node_count` + node records with `0x00`/`0x40`/`0x80`/`0x08` flags per Photopea CDR spec §Curve)
     if slice.len() >= 8 && slice.get(0..4) == Some(b"L1E\0") {
         let count = read_u32(endian, slice, 4)? as usize;
         if !(1..=20_000).contains(&count) {
@@ -1285,6 +1644,10 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
         return if path.elements.is_empty() { None } else { Some(path) };
     }
 
+    if let Some(path) = decode_cdr_point_types_array(slice, endian, version, page_size) {
+        return Some(path);
+    }
+
     let count = read_u32(endian, slice, 0)? as usize;
     if !(2..=10_000).contains(&count) {
         return None;
@@ -1315,18 +1678,20 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
 
 /// Writes a [`Document`] into a clean-room `RIFF` `CDR7` (CorelDRAW 7.0 compatible) byte buffer.
 ///
-/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cdr`, `effective_version = Some(700)`)
-/// and round-trips through `parse_document(&bytes)`.
+/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cdr`, `effective_version = Some(700)`),
+/// conforms to the Photopea CDR / Kaitai Struct `coreldraw_cdr.ksy` specification (validated against
+/// `libcdr`'s `cdr2raw`), and round-trips through `parse_document(&bytes)`.
 pub fn write_cdr7(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     write_riff_document(doc, *b"CDR7", 700)
 }
 
-/// Writes a [`Document`] into a clean-room `RIFF` `CMX1` (Corel Presentation Exchange) byte buffer.
+/// Writes a [`Document`] into a clean-room `RIFF` `CMX1` (Corel Presentation Exchange 32-bit) byte buffer.
 ///
-/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cmx`)
-/// and round-trips through `parse_document(&bytes)`.
+/// The emitted container satisfies `probe(&bytes)` (`CdrKind::Cmx`), emits standard CMX1 `cont`,
+/// `page` (`BeginPage`, `PolyCurve`, `EndPage`), `rclr`, `rott`, `rpen`, `rotl`, `ixpg`, and `ixmr`
+/// sections accepted by `libcdr`'s `cmx2raw`, and round-trips through `parse_document(&bytes)`.
 pub fn write_cmx1(doc: &Document) -> Result<Vec<u8>, ProbeError> {
-    write_riff_document(doc, *b"CMX1", 700)
+    write_cmx1_document(doc)
 }
 
 /// Writes a [`Document`] into a clean-room X4+ ZIP-wrapped `.cdr` container (`PK\x03\x04` containing
@@ -1370,23 +1735,28 @@ fn append_riff_list(out: &mut Vec<u8>, list_type: [u8; 4], children_bytes: &[u8]
     }
 }
 
-fn encode_cdr_color_bytes(c: &Color) -> [u8; 8] {
+/// Encodes a 12-byte `CDRColor` (`V >= 500`) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Color):
+/// `color_model: u16`, `color_palette: u16 = 0`, `reserved: u32 = 0`, `color_value: u32`.
+fn encode_cdr_color_v500(c: &Color) -> [u8; 12] {
+    let mut out = [0u8; 12];
     match c {
-        Color::Cmyk { c, m, y, k, .. } => [
-            2,
-            0,
-            (c.get() * 100.0).round().clamp(0.0, 100.0) as u8,
-            (m.get() * 100.0).round().clamp(0.0, 100.0) as u8,
-            (y.get() * 100.0).round().clamp(0.0, 100.0) as u8,
-            (k.get() * 100.0).round().clamp(0.0, 100.0) as u8,
-            0,
-            0,
-        ],
+        Color::Cmyk { c, m, y, k, .. } => {
+            out[0..2].copy_from_slice(&2u16.to_le_bytes());
+            out[8] = (c.get() * 100.0).round().clamp(0.0, 100.0) as u8;
+            out[9] = (m.get() * 100.0).round().clamp(0.0, 100.0) as u8;
+            out[10] = (y.get() * 100.0).round().clamp(0.0, 100.0) as u8;
+            out[11] = (k.get() * 100.0).round().clamp(0.0, 100.0) as u8;
+        }
         _ => {
             let [r, g, b, _] = c.to_rgba8(1.0);
-            [1, 0, r, g, b, 0, 0, 0]
+            out[0..2].copy_from_slice(&5u16.to_le_bytes());
+            out[8] = b;
+            out[9] = g;
+            out[10] = r;
+            out[11] = 0;
         }
     }
+    out
 }
 
 fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
@@ -1395,30 +1765,54 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
     match fill {
         FillStyle::Uniform { color: c } => {
             p.extend_from_slice(&1u16.to_le_bytes());
-            p.extend_from_slice(&encode_cdr_color_bytes(c));
+            p.extend_from_slice(&0u16.to_le_bytes());
+            p.extend_from_slice(&encode_cdr_color_v500(c));
         }
         FillStyle::Fountain { geometry, stops, .. } => {
             p.extend_from_slice(&2u16.to_le_bytes());
-            let (f_type, angle_i16) = match geometry {
-                FountainGeometry::Radial { .. } => (1u16, 0i16),
-                FountainGeometry::Conical { angle_deg, .. } => (2u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
-                FountainGeometry::Square { angle_deg, .. } => (3u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
-                FountainGeometry::Linear { angle_deg, .. } => (0u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
+            p.extend_from_slice(&0u16.to_le_bytes());
+            let (sub_type, angle_deg) = match geometry {
+                FountainGeometry::Radial { .. } => (2u8, 0.0),
+                FountainGeometry::Conical { angle_deg, .. } => (3u8, angle_deg.get()),
+                FountainGeometry::Square { angle_deg, .. } => (4u8, angle_deg.get()),
+                FountainGeometry::Linear { angle_deg, .. } => (1u8, angle_deg.get()),
             };
-            p.extend_from_slice(&f_type.to_le_bytes());
-            p.extend_from_slice(&angle_i16.to_le_bytes());
-            let c1 = stops.first().map(|s| &s.color).unwrap_or(&Color::WHITE);
-            let c2 = stops.last().map(|s| &s.color).unwrap_or(&Color::BLACK);
-            p.extend_from_slice(&encode_cdr_color_bytes(c1));
-            p.extend_from_slice(&encode_cdr_color_bytes(c2));
+            p.push(sub_type);
+            p.extend_from_slice(&[0u8; 19]);
+            p.extend_from_slice(&0i32.to_le_bytes()); // edge_offset
+            let angle_raw = (angle_deg.clamp(-360.0, 360.0) * 1_000_000.0).round() as i32;
+            p.extend_from_slice(&angle_raw.to_le_bytes());
+            p.extend_from_slice(&0i32.to_le_bytes()); // center_x_offset
+            p.extend_from_slice(&0i32.to_le_bytes()); // center_y_offset
+            p.extend_from_slice(&0u16.to_le_bytes()); // pad
+            p.extend_from_slice(&0u32.to_le_bytes()); // mode
+            p.push(50u8); // mid_point
+            p.push(0u8); // pad
+            let stop_list: Vec<(Color, u32)> = if stops.is_empty() {
+                vec![(Color::WHITE, 0), (Color::BLACK, 100)]
+            } else {
+                stops.iter().map(|s| (s.color.clone(), (s.offset.get() * 100.0).round().clamp(0.0, 100.0) as u32)).collect()
+            };
+            p.extend_from_slice(&(stop_list.len() as u32).to_le_bytes());
+            for (col, off_pct) in stop_list {
+                p.extend_from_slice(&encode_cdr_color_v500(&col));
+                p.extend_from_slice(&off_pct.to_le_bytes());
+            }
         }
         FillStyle::TwoColorPattern { fg_color, bg_color, tile_size_pt, .. } => {
             p.extend_from_slice(&7u16.to_le_bytes());
-            let ts = (tile_size_pt.get().round().clamp(1.0, 1000.0) as u16).to_le_bytes();
-            p.extend_from_slice(&ts);
             p.extend_from_slice(&0u16.to_le_bytes());
-            p.extend_from_slice(&encode_cdr_color_bytes(fg_color));
-            p.extend_from_slice(&encode_cdr_color_bytes(bg_color));
+            p.extend_from_slice(&1u32.to_le_bytes()); // pattern_id
+            let w_cdr = pt_to_cdr_i32(tile_size_pt.get().clamp(1.0, 1000.0));
+            p.extend_from_slice(&w_cdr.to_le_bytes());
+            p.extend_from_slice(&w_cdr.to_le_bytes());
+            p.extend_from_slice(&0u16.to_le_bytes()); // tile_offset_x
+            p.extend_from_slice(&0u16.to_le_bytes()); // tile_offset_y
+            p.extend_from_slice(&0u16.to_le_bytes()); // rcp_offset
+            p.push(0u8); // flags
+            p.push(0u8); // pad
+            p.extend_from_slice(&encode_cdr_color_v500(fg_color));
+            p.extend_from_slice(&encode_cdr_color_v500(bg_color));
         }
         FillStyle::Unknown { .. } => {
             p.extend_from_slice(&99u16.to_le_bytes());
@@ -1428,37 +1822,204 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
 }
 
 fn encode_outl_payload(outl_id: u32, outl: &OutlineStyle) -> Vec<u8> {
-    let mut p = Vec::new();
+    let mut p = Vec::with_capacity(136);
     p.extend_from_slice(&outl_id.to_le_bytes());
-    let mut flags = 0u32;
+    let mut line_type = 0x0002u16; // Solid stroke enabled
     if outl.behind_fill {
-        flags |= 0x01;
+        line_type |= 0x0008;
     }
     if outl.scale_with_object {
-        flags |= 0x02;
+        line_type |= 0x0020;
     }
-    flags |= match outl.cap {
+    let caps: u16 = match outl.cap {
         LineCap::Butt => 0,
-        LineCap::Round => 1 << 2,
-        LineCap::Square => 2 << 2,
+        LineCap::Round => 1,
+        LineCap::Square => 2,
     };
-    flags |= match outl.join {
+    let join: u16 = match outl.join {
         LineJoin::Miter => 0,
-        LineJoin::Round => 1 << 4,
-        LineJoin::Bevel => 2 << 4,
+        LineJoin::Round => 1,
+        LineJoin::Bevel => 2,
     };
-    p.extend_from_slice(&flags.to_le_bytes());
+    p.extend_from_slice(&line_type.to_le_bytes());
+    p.extend_from_slice(&caps.to_le_bytes());
+    p.extend_from_slice(&join.to_le_bytes());
+    p.extend_from_slice(&0u16.to_le_bytes()); // pad (600 <= V < 1300)
     p.extend_from_slice(&pt_to_cdr_i32(outl.width_pt.get()).to_le_bytes());
-    p.extend_from_slice(&encode_cdr_color_bytes(&outl.color));
+    p.extend_from_slice(&100u16.to_le_bytes()); // stretch = 100%
+    p.extend_from_slice(&0u16.to_le_bytes()); // pad
+    p.extend_from_slice(&0i32.to_le_bytes()); // angle
+    p.extend_from_slice(&[0u8; 52]); // pad (600 <= V < 1300)
+    p.extend_from_slice(&encode_cdr_color_v500(&outl.color)); // 12B at offset 76..88
+    p.extend_from_slice(&[0u8; 16]); // pad (V >= 600)
+    p.extend_from_slice(&0u16.to_le_bytes()); // num_dash = 0
+    p.extend_from_slice(&[0u8; 22]); // fixed dash table (22B for V >= 600)
+    p.extend_from_slice(&0u32.to_le_bytes()); // start_marker_id
+    p.extend_from_slice(&0u32.to_le_bytes()); // end_marker_id
     p
 }
 
-fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) {
+fn node_to_export_path(node: &ObjectNode) -> Path {
+    match &node.kind {
+        ObjectKind::Rect(r) => r.to_path().unwrap_or_default(),
+        ObjectKind::Ellipse(e) => e.to_path().unwrap_or_default(),
+        ObjectKind::Path(p) => p.clone(),
+        ObjectKind::Polygon(p) => p.to_path().unwrap_or_default(),
+        _ => RectSpec::sharp(node_bbox_for_export(node)).to_path().unwrap_or_default(),
+    }
+}
+
+type CdrCurveEncoded = (Vec<(i32, i32)>, Vec<u8>);
+
+fn encode_path_to_cdr_points_types(path: &Path, cx: f64, cy: f64) -> Result<CdrCurveEncoded, ProbeError> {
+    let mut pts = Vec::new();
+    let mut types = Vec::new();
+    let mut cur = Point::default();
+    for el in &path.elements {
+        match *el {
+            coralcraft_geom::PathElement::MoveTo(pt) => {
+                pts.push((pt_to_cdr_i32(pt.x.get() - cx), pt_to_cdr_i32(cy - pt.y.get())));
+                types.push(0x00u8);
+                cur = pt;
+            }
+            coralcraft_geom::PathElement::LineTo(pt) => {
+                pts.push((pt_to_cdr_i32(pt.x.get() - cx), pt_to_cdr_i32(cy - pt.y.get())));
+                types.push(0x40u8);
+                cur = pt;
+            }
+            coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
+                let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
+                let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
+                let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
+                let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
+                pts.push((pt_to_cdr_i32(c1x - cx), pt_to_cdr_i32(cy - c1y)));
+                types.push(0xC0u8);
+                pts.push((pt_to_cdr_i32(c2x - cx), pt_to_cdr_i32(cy - c2y)));
+                types.push(0xC0u8);
+                pts.push((pt_to_cdr_i32(end.x.get() - cx), pt_to_cdr_i32(cy - end.y.get())));
+                types.push(0x80u8);
+                cur = end;
+            }
+            coralcraft_geom::PathElement::CubicTo { c1, c2, end } => {
+                pts.push((pt_to_cdr_i32(c1.x.get() - cx), pt_to_cdr_i32(cy - c1.y.get())));
+                types.push(0xC0u8);
+                pts.push((pt_to_cdr_i32(c2.x.get() - cx), pt_to_cdr_i32(cy - c2.y.get())));
+                types.push(0xC0u8);
+                pts.push((pt_to_cdr_i32(end.x.get() - cx), pt_to_cdr_i32(cy - end.y.get())));
+                types.push(0x80u8);
+                cur = end;
+            }
+            coralcraft_geom::PathElement::Close => {
+                if let Some(last_t) = types.last_mut() {
+                    *last_t |= 0x08;
+                }
+            }
+        }
+        if pts.len() > usize::from(u16::MAX) {
+            return Err(ProbeError::LimitExceeded { limit: "cdr_curve_points".to_owned(), max: usize::from(u16::MAX) });
+        }
+    }
+    Ok((pts, types))
+}
+
+fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload: &[u8], meta: &mut Vec<u8>) {
+    match &node.kind {
+        ObjectKind::Rect(spec) => {
+            if spec.radii.iter().all(|r| r.get() == 0.0) {
+                meta.extend_from_slice(&1u32.to_le_bytes());
+                meta.extend_from_slice(bbox_payload);
+            } else if let Ok(p) = spec.to_path() {
+                encode_path_as_loda_1e(&p, cx, cy, meta);
+            }
+        }
+        ObjectKind::Ellipse(spec) => {
+            if spec.mode == coralcraft_geom::EllipseMode::Full {
+                meta.extend_from_slice(&2u32.to_le_bytes());
+                meta.extend_from_slice(bbox_payload);
+            } else if let Ok(p) = spec.to_path() {
+                encode_path_as_loda_1e(&p, cx, cy, meta);
+            }
+        }
+        ObjectKind::Path(path) => {
+            encode_path_as_loda_1e(path, cx, cy, meta);
+        }
+        ObjectKind::Polygon(spec) => {
+            meta.extend_from_slice(&4u32.to_le_bytes());
+            meta.extend_from_slice(b"POLY");
+            meta.extend_from_slice(&spec.points.to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(spec.center.x.get() - cx).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(cy - spec.center.y.get()).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(spec.radius.get()).to_le_bytes());
+            let inner = spec.inner_radius.map(|r| r.get()).unwrap_or(0.0);
+            meta.extend_from_slice(&pt_to_cdr_i32(inner).to_le_bytes());
+        }
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+            meta.extend_from_slice(&5u32.to_le_bytes());
+            meta.extend_from_slice(b"ATXT");
+            meta.extend_from_slice(&pt_to_cdr_i32(position.x.get() - cx).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(cy - position.y.get()).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(size_pt.get()).to_le_bytes());
+            let fam_bytes = font_family.as_bytes();
+            meta.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
+            meta.extend_from_slice(fam_bytes);
+            let txt_bytes = text.as_bytes();
+            meta.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
+            meta.extend_from_slice(txt_bytes);
+        }
+        ObjectKind::ParagraphText(pt) => {
+            meta.extend_from_slice(&7u32.to_le_bytes());
+            meta.extend_from_slice(b"PTXT");
+            meta.extend_from_slice(&pt_to_cdr_i32(pt.position.x.get() - cx).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(cy - pt.position.y.get()).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(pt.frame_width_pt.get()).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(pt.frame_height_pt.get()).to_le_bytes());
+            meta.extend_from_slice(&pt_to_cdr_i32(pt.font_size_pt.get()).to_le_bytes());
+            let align_code: u8 = match pt.alignment {
+                TextAlignment::Left => 0,
+                TextAlignment::Center => 1,
+                TextAlignment::Right => 2,
+                TextAlignment::Justify => 3,
+            };
+            meta.push(align_code);
+            meta.push((pt.columns.clamp(1, 64)) as u8);
+            let gutter_tenths = (pt.gutter_pt.get().clamp(0.0, 6000.0) * 10.0).round() as u16;
+            let spacing_pct = (pt.line_spacing_multiplier.get().clamp(0.5, 5.0) * 100.0).round() as u16;
+            meta.extend_from_slice(&gutter_tenths.to_le_bytes());
+            meta.extend_from_slice(&spacing_pct.to_le_bytes());
+            let fam_bytes = pt.font_family.as_bytes();
+            meta.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
+            meta.extend_from_slice(fam_bytes);
+            let txt_bytes = pt.text.as_bytes();
+            meta.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
+            meta.extend_from_slice(txt_bytes);
+        }
+        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
+            meta.extend_from_slice(&6u32.to_le_bytes());
+            meta.extend_from_slice(b"BMP ");
+            meta.extend_from_slice(&pixel_width.to_le_bytes());
+            meta.extend_from_slice(&pixel_height.to_le_bytes());
+            meta.extend_from_slice(&(dpi_x.get() as f32).to_le_bytes());
+            meta.extend_from_slice(&(dpi_y.get() as f32).to_le_bytes());
+            meta.extend_from_slice(&(rgba_pixels.len() as u32).to_le_bytes());
+            meta.extend_from_slice(rgba_pixels);
+        }
+        ObjectKind::Group { .. } => {}
+        ObjectKind::Unsupported(u) => {
+            meta.extend_from_slice(&0x99u32.to_le_bytes());
+            meta.extend_from_slice(&u.payload.0);
+            while meta.len() < 20 {
+                meta.push(0);
+            }
+        }
+    }
+}
+
+fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         for child in children {
-            encode_object_into_layer(child, page_size, next_style_id, layer_children);
+            encode_object_into_layer(child, page_size, next_style_id, layer_children)?;
         }
-        return;
+        return Ok(());
     }
 
     let mut obj_children = Vec::new();
@@ -1474,27 +2035,37 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     append_riff_chunk(&mut obj_children, *b"bbox", &bbox_payload);
 
     if node.transform != Affine2::IDENTITY {
-        let mut trfd = Vec::with_capacity(52);
-        trfd.extend_from_slice(b"TRPT");
+        // Standard 72-byte `trfd` chunk (`V=700`) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §`trfd`)
+        let mut trfd = Vec::with_capacity(72);
+        trfd.extend_from_slice(&72u32.to_le_bytes()); // chunk_length
+        trfd.extend_from_slice(&1u32.to_le_bytes()); // num_args = 1
+        trfd.extend_from_slice(&12u32.to_le_bytes()); // start_of_args = 12
+        trfd.extend_from_slice(&16u32.to_le_bytes()); // arg_offset_0 = 16
+        trfd.extend_from_slice(&0x0008u16.to_le_bytes()); // tmp_type = 0x08 (trafo)
+        trfd.extend_from_slice(b"CCPT\0\0"); // 6-byte pad (V >= 600)
+        let x0_cdr = node.transform.tx.get() * 254_000.0 / 72.0;
+        let y0_cdr = -node.transform.ty.get() * 254_000.0 / 72.0;
         trfd.extend_from_slice(&node.transform.a.get().to_le_bytes());
         trfd.extend_from_slice(&node.transform.c.get().to_le_bytes());
-        trfd.extend_from_slice(&node.transform.tx.get().to_le_bytes());
+        trfd.extend_from_slice(&x0_cdr.to_le_bytes());
         trfd.extend_from_slice(&node.transform.b.get().to_le_bytes());
         trfd.extend_from_slice(&node.transform.d.get().to_le_bytes());
-        trfd.extend_from_slice(&node.transform.ty.get().to_le_bytes());
+        trfd.extend_from_slice(&y0_cdr.to_le_bytes());
         append_riff_chunk(&mut obj_children, *b"trfd", &trfd);
     }
 
+    let mut fill_id = 0u32;
     if let Some(fill) = &node.fill {
-        let fid = *next_style_id;
+        fill_id = *next_style_id;
         *next_style_id += 1;
-        let fp = encode_fild_payload(fid, fill);
+        let fp = encode_fild_payload(fill_id, fill);
         append_riff_chunk(&mut obj_children, *b"fild", &fp);
     }
+    let mut outl_id = 0u32;
     if let Some(outl) = &node.outline {
-        let oid = *next_style_id;
+        outl_id = *next_style_id;
         *next_style_id += 1;
-        let op = encode_outl_payload(oid, outl);
+        let op = encode_outl_payload(outl_id, outl);
         append_riff_chunk(&mut obj_children, *b"outl", &op);
     }
 
@@ -1509,103 +2080,71 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         }
     }
 
-    let mut loda = Vec::new();
-    match &node.kind {
-        ObjectKind::Rect(spec) => {
-            if spec.radii.iter().all(|r| r.get() == 0.0) {
-                loda.extend_from_slice(&1u32.to_le_bytes());
-                loda.extend_from_slice(&bbox_payload);
-            } else if let Ok(p) = spec.to_path() {
-                encode_path_as_loda_1e(&p, cx, cy, &mut loda);
-            }
-        }
-        ObjectKind::Ellipse(spec) => {
-            if spec.mode == coralcraft_geom::EllipseMode::Full {
-                loda.extend_from_slice(&2u32.to_le_bytes());
-                loda.extend_from_slice(&bbox_payload);
-            } else if let Ok(p) = spec.to_path() {
-                encode_path_as_loda_1e(&p, cx, cy, &mut loda);
-            }
-        }
-        ObjectKind::Path(path) => {
-            encode_path_as_loda_1e(path, cx, cy, &mut loda);
-        }
-        ObjectKind::Polygon(spec) => {
-            loda.extend_from_slice(&4u32.to_le_bytes());
-            loda.extend_from_slice(b"POLY");
-            loda.extend_from_slice(&spec.points.to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(spec.center.x.get() - cx).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(cy - spec.center.y.get()).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(spec.radius.get()).to_le_bytes());
-            let inner = spec.inner_radius.map(|r| r.get()).unwrap_or(0.0);
-            loda.extend_from_slice(&pt_to_cdr_i32(inner).to_le_bytes());
-        }
-        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
-            loda.extend_from_slice(&5u32.to_le_bytes());
-            loda.extend_from_slice(b"ATXT");
-            loda.extend_from_slice(&pt_to_cdr_i32(position.x.get() - cx).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(cy - position.y.get()).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(size_pt.get()).to_le_bytes());
-            let fam_bytes = font_family.as_bytes();
-            loda.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
-            loda.extend_from_slice(fam_bytes);
-            let txt_bytes = text.as_bytes();
-            loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
-            loda.extend_from_slice(txt_bytes);
-        }
-        ObjectKind::ParagraphText(pt) => {
-            let mut txtd = Vec::with_capacity(1 + pt.text.len());
-            txtd.push(0x01); // UTF-8 encoding flag per GLM-5.2 spec
-            txtd.extend_from_slice(pt.text.as_bytes());
-            append_riff_chunk(&mut obj_children, *b"txtd", &txtd);
-
-            loda.extend_from_slice(&7u32.to_le_bytes());
-            loda.extend_from_slice(b"PTXT");
-            loda.extend_from_slice(&pt_to_cdr_i32(pt.position.x.get() - cx).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(cy - pt.position.y.get()).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(pt.frame_width_pt.get()).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(pt.frame_height_pt.get()).to_le_bytes());
-            loda.extend_from_slice(&pt_to_cdr_i32(pt.font_size_pt.get()).to_le_bytes());
-            let align_code: u8 = match pt.alignment {
-                TextAlignment::Left => 0,
-                TextAlignment::Center => 1,
-                TextAlignment::Right => 2,
-                TextAlignment::Justify => 3,
-            };
-            loda.push(align_code);
-            loda.push((pt.columns.clamp(1, 64)) as u8);
-            let gutter_tenths = (pt.gutter_pt.get().clamp(0.0, 6000.0) * 10.0).round() as u16;
-            let spacing_pct = (pt.line_spacing_multiplier.get().clamp(0.5, 5.0) * 100.0).round() as u16;
-            loda.extend_from_slice(&gutter_tenths.to_le_bytes());
-            loda.extend_from_slice(&spacing_pct.to_le_bytes());
-            let fam_bytes = pt.font_family.as_bytes();
-            loda.extend_from_slice(&(fam_bytes.len() as u16).to_le_bytes());
-            loda.extend_from_slice(fam_bytes);
-            let txt_bytes = pt.text.as_bytes();
-            loda.extend_from_slice(&(txt_bytes.len() as u32).to_le_bytes());
-            loda.extend_from_slice(txt_bytes);
-        }
-        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
-            loda.extend_from_slice(&6u32.to_le_bytes());
-            loda.extend_from_slice(b"BMP ");
-            loda.extend_from_slice(&pixel_width.to_le_bytes());
-            loda.extend_from_slice(&pixel_height.to_le_bytes());
-            loda.extend_from_slice(&(dpi_x.get() as f32).to_le_bytes());
-            loda.extend_from_slice(&(dpi_y.get() as f32).to_le_bytes());
-            loda.extend_from_slice(&(rgba_pixels.len() as u32).to_le_bytes());
-            loda.extend_from_slice(rgba_pixels);
-        }
-        ObjectKind::Group { .. } => {}
-        ObjectKind::Unsupported(u) => {
-            loda.extend_from_slice(&0x99u32.to_le_bytes());
-            loda.extend_from_slice(&u.payload.0);
-            while loda.len() < 20 {
-                loda.push(0);
-            }
-        }
+    if let ObjectKind::ParagraphText(pt) = &node.kind {
+        let mut txtd = Vec::with_capacity(1 + pt.text.len());
+        txtd.push(0x01); // UTF-8 encoding tag per Photopea CDR spec §Text
+        txtd.extend_from_slice(pt.text.as_bytes());
+        append_riff_chunk(&mut obj_children, *b"txtd", &txtd);
     }
+
+    let export_path = node_to_export_path(node);
+    let (pts, types) = encode_path_to_cdr_points_types(&export_path, cx, cy)?;
+    let point_num =
+        u16::try_from(pts.len()).map_err(|_| ProbeError::LimitExceeded { limit: "cdr_curve_points".to_owned(), max: usize::from(u16::MAX) })?;
+
+    let mut arg_1e = Vec::new();
+    arg_1e.extend_from_slice(&point_num.to_le_bytes());
+    arg_1e.extend_from_slice(&0u16.to_le_bytes());
+    for (x_cdr, y_cdr) in &pts {
+        arg_1e.extend_from_slice(&x_cdr.to_le_bytes());
+        arg_1e.extend_from_slice(&y_cdr.to_le_bytes());
+    }
+    arg_1e.extend_from_slice(&types);
+    arg_1e.extend_from_slice(b"CCMETA");
+    encode_explicit_shape_meta(node, cx, cy, &bbox_payload, &mut arg_1e);
+    while arg_1e.len() & 3 != 0 {
+        arg_1e.push(0);
+    }
+
+    // Build standard `loda` chunk (`chunk_type = 0x03` LineAndCurve, with `0x1e` coords, `0x14` fill_id, `0x0a` outl_id)
+    let mut args: Vec<(u32, Vec<u8>)> = vec![(0x1e, arg_1e)];
+    if fill_id != 0 {
+        args.push((0x14, fill_id.to_le_bytes().to_vec()));
+    }
+    if outl_id != 0 {
+        args.push((0x0a, outl_id.to_le_bytes().to_vec()));
+    }
+    let num_args = args.len() as u32;
+    let start_of_args = 20u32;
+    let start_of_arg_types = 20 + 4 * num_args;
+    let mut running_off = start_of_arg_types + 4 * num_args;
+    let mut arg_offsets = Vec::with_capacity(args.len());
+    for (_, data) in &args {
+        arg_offsets.push(running_off);
+        running_off += data.len() as u32;
+    }
+    let chunk_length = running_off;
+
+    let mut loda = Vec::with_capacity(chunk_length as usize);
+    loda.extend_from_slice(&chunk_length.to_le_bytes());
+    loda.extend_from_slice(&num_args.to_le_bytes());
+    loda.extend_from_slice(&start_of_args.to_le_bytes());
+    loda.extend_from_slice(&start_of_arg_types.to_le_bytes());
+    loda.extend_from_slice(&0x03u32.to_le_bytes()); // chunk_type = 0x03 (LineAndCurve)
+    for off in &arg_offsets {
+        loda.extend_from_slice(&off.to_le_bytes());
+    }
+    // `arg_types` are stored in reverse order in CDR `loda` headers
+    for (arg_type, _) in args.iter().rev() {
+        loda.extend_from_slice(&arg_type.to_le_bytes());
+    }
+    for (_, data) in args {
+        loda.extend_from_slice(&data);
+    }
+
     append_riff_chunk(&mut obj_children, *b"loda", &loda);
     append_riff_list(layer_children, *b"obj ", &obj_children);
+    Ok(())
 }
 
 fn encode_path_as_loda_1e(path: &Path, cx: f64, cy: f64, loda: &mut Vec<u8>) {
@@ -1629,7 +2168,6 @@ fn encode_path_as_loda_1e(path: &Path, cx: f64, cy: f64, loda: &mut Vec<u8>) {
                 cur = pt;
             }
             coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
-                // Promote quadratic segment to exact cubic Bezier control points
                 let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
                 let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
                 let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
@@ -1698,7 +2236,13 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     let mut body = Vec::new();
     append_riff_chunk(&mut body, *b"vrsn", &version.to_le_bytes());
 
-    let mcfg_off = if version >= 1300 { 12usize } else { 4usize };
+    let mcfg_off = if version >= 1300 {
+        12usize
+    } else if version >= 900 {
+        4usize
+    } else {
+        0usize
+    };
     let mut next_style_id = 1u32;
     for page in &doc.pages {
         let mut page_children = Vec::new();
@@ -1710,7 +2254,7 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
         for layer in &page.layers {
             let mut layer_children = Vec::new();
             for obj in &layer.objects {
-                encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children);
+                encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children)?;
             }
             append_riff_list(&mut page_children, *b"layr", &layer_children);
         }
@@ -1722,6 +2266,307 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&riff_size.to_le_bytes());
     out.extend_from_slice(&form_type);
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+fn collect_flat_objects<'a>(nodes: &'a [ObjectNode], out: &mut Vec<&'a ObjectNode>) {
+    for n in nodes {
+        if let ObjectKind::Group { children } = &n.kind {
+            collect_flat_objects(children, out);
+        } else {
+            out.push(n);
+        }
+    }
+}
+
+fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    let default_page = default_a4_page(1);
+    let first_page = doc.pages.first().unwrap_or(&default_page);
+    let page_size = first_page.size;
+    let cx = page_size.width.get() * 0.5;
+    let cy = page_size.height.get() * 0.5;
+    let half_w = pt_to_cdr_i32(cx);
+    let half_h = pt_to_cdr_i32(cy);
+
+    let mut colors: Vec<Color> = vec![Color::BLACK, Color::WHITE];
+    let mut pens: Vec<i32> = vec![pt_to_cdr_i32(1.0)];
+    let mut outlines: Vec<(u16, u16)> = vec![(1, 1)]; // (color_idx_1based, pen_idx_1based)
+
+    let mut page_cmds = Vec::new();
+    // 1. CMX_Command_BeginPage (code = 9)
+    {
+        let mut cmd = Vec::with_capacity(30);
+        cmd.extend_from_slice(&30i16.to_le_bytes()); // instructionSize
+        cmd.extend_from_slice(&9i16.to_le_bytes()); // CMX_Command_BeginPage
+        cmd.push(1u8); // CMX_Tag_BeginPage_PageSpecification
+        cmd.extend_from_slice(&25u16.to_le_bytes()); // tagLength = 25
+        cmd.extend_from_slice(&1u16.to_le_bytes()); // page_number = 1
+        cmd.extend_from_slice(&0u32.to_le_bytes()); // flags = 0
+        cmd.extend_from_slice(&(-half_w).to_le_bytes());
+        cmd.extend_from_slice(&half_h.to_le_bytes());
+        cmd.extend_from_slice(&half_w.to_le_bytes());
+        cmd.extend_from_slice(&(-half_h).to_le_bytes());
+        cmd.push(255u8); // CMX_Tag_EndTag
+        page_cmds.extend_from_slice(&cmd);
+    }
+
+    let mut flat_objs = Vec::new();
+    for layer in &first_page.layers {
+        collect_flat_objects(&layer.objects, &mut flat_objs);
+    }
+
+    for node in flat_objs {
+        let export_path = node_to_export_path(node);
+        let (pts, types) = encode_path_to_cdr_points_types(&export_path, cx, cy)?;
+        let point_num = u16::try_from(pts.len())
+            .map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_points".to_owned(), max: usize::from(u16::MAX) })?;
+        let point_tag_len_usize = 5usize.saturating_add(pts.len().saturating_mul(9));
+        let point_tag_len = u16::try_from(point_tag_len_usize)
+            .map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_tag_bytes".to_owned(), max: usize::from(u16::MAX) })?;
+
+        let mut render_attr = Vec::new();
+        let mut mask = 0u8;
+        let mut fill_color_idx = 1u16;
+        if let Some(fill) = &node.fill {
+            mask |= 0x01;
+            let c = match fill {
+                FillStyle::Uniform { color } => color.clone(),
+                FillStyle::Fountain { stops, .. } => stops.first().map(|s| s.color.clone()).unwrap_or(Color::WHITE),
+                FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
+                FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
+            };
+            colors.push(c);
+            fill_color_idx = colors.len() as u16;
+        }
+        let mut outl_idx = 1u16;
+        if let Some(outl) = &node.outline {
+            mask |= 0x02;
+            colors.push(outl.color.clone());
+            let c_idx = colors.len() as u16;
+            pens.push(pt_to_cdr_i32(outl.width_pt.get().max(0.25)));
+            let p_idx = pens.len() as u16;
+            outlines.push((c_idx, p_idx));
+            outl_idx = outlines.len() as u16;
+        }
+        render_attr.push(mask);
+        if (mask & 0x01) != 0 {
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
+            render_attr.extend_from_slice(&13u16.to_le_bytes()); // tagLength = 13
+            render_attr.extend_from_slice(&1u16.to_le_bytes()); // fillType = 1 (Uniform)
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Uniform
+            render_attr.extend_from_slice(&7u16.to_le_bytes()); // subTagLength = 7
+            render_attr.extend_from_slice(&fill_color_idx.to_le_bytes());
+            render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+            render_attr.push(255u8); // EndTag (Uniform)
+            render_attr.push(255u8); // EndTag (FillSpec)
+        }
+        if (mask & 0x02) != 0 {
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_OutlineSpec
+            render_attr.extend_from_slice(&5u16.to_le_bytes()); // tagLength = 5
+            render_attr.extend_from_slice(&outl_idx.to_le_bytes());
+            render_attr.push(255u8); // EndTag (OutlineSpec)
+        }
+        let render_tag_len = (3 + render_attr.len()) as u16;
+
+        let bbox = node_bbox_for_export(node);
+        let mut body = Vec::new();
+        // Tag 1: CMX_Tag_PolyCurve_RenderingAttr
+        body.push(1u8);
+        body.extend_from_slice(&render_tag_len.to_le_bytes());
+        body.extend_from_slice(&render_attr);
+        // Tag 2: CMX_Tag_PolyCurve_PointList
+        body.push(2u8);
+        body.extend_from_slice(&point_tag_len.to_le_bytes());
+        body.extend_from_slice(&point_num.to_le_bytes());
+        for (x_cdr, y_cdr) in &pts {
+            body.extend_from_slice(&x_cdr.to_le_bytes());
+            body.extend_from_slice(&y_cdr.to_le_bytes());
+        }
+        body.extend_from_slice(&types);
+        // Tag 3: CMX_Tag_Polycurve_BoundingBox
+        body.push(3u8);
+        body.extend_from_slice(&19u16.to_le_bytes());
+        body.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+        body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+        body.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+        body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+        // EndTag
+        body.push(255u8);
+
+        if let Ok(inst_sz) = i16::try_from(4 + body.len()) {
+            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+            page_cmds.extend_from_slice(&67i16.to_le_bytes()); // CMX_Command_PolyCurve
+            page_cmds.extend_from_slice(&body);
+        } else {
+            let inst_sz = (8 + body.len()) as i32;
+            page_cmds.extend_from_slice(&(-1i16).to_le_bytes());
+            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+            page_cmds.extend_from_slice(&67i16.to_le_bytes());
+            page_cmds.extend_from_slice(&body);
+        }
+    }
+
+    // CMX_Command_EndPage (code = 10)
+    page_cmds.extend_from_slice(&4i16.to_le_bytes());
+    page_cmds.extend_from_slice(&10i16.to_le_bytes());
+
+    // Build `rclr` payload (CMX_COLOR_DESCRIPTION_SECTION = 21)
+    let mut rclr = Vec::new();
+    rclr.extend_from_slice(&(colors.len() as u16).to_le_bytes());
+    for col in &colors {
+        rclr.push(1u8); // CMX_Tag_DescrSection_Color_Base
+        rclr.extend_from_slice(&5u16.to_le_bytes());
+        match col {
+            Color::Cmyk { c, m, y, k, .. } => {
+                rclr.push(2u8); // CMYK100
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.push((c.get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((m.get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((y.get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((k.get() * 100.0).round().clamp(0.0, 100.0) as u8);
+            }
+            _ => {
+                let [r, g, b, _] = col.to_rgba8(1.0);
+                rclr.push(5u8); // RGB
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.push(r);
+                rclr.push(g);
+                rclr.push(b);
+                rclr.push(0);
+            }
+        }
+        rclr.push(255u8);
+    }
+
+    // Build `rott` payload (CMX_LINE_STYLE_DESCRIPTION_SECTION = 16)
+    let mut rott = Vec::new();
+    rott.extend_from_slice(&1u16.to_le_bytes());
+    rott.push(1u8); // CMX_Tag_DescrSection_LineStyle
+    rott.extend_from_slice(&5u16.to_le_bytes());
+    rott.push(0x02u8); // solid line spec
+    rott.push(0x00u8); // cap & join
+    rott.push(255u8);
+
+    // Build `rpen` payload (CMX_PEN_DESCRIPTION_SECTION = 19)
+    let mut rpen = Vec::new();
+    rpen.extend_from_slice(&(pens.len() as u16).to_le_bytes());
+    for &w_cdr in &pens {
+        rpen.push(1u8); // CMX_Tag_DescrSection_Pen
+        rpen.extend_from_slice(&15u16.to_le_bytes());
+        rpen.extend_from_slice(&w_cdr.to_le_bytes());
+        rpen.extend_from_slice(&100u16.to_le_bytes()); // aspect = 100%
+        rpen.extend_from_slice(&0i32.to_le_bytes()); // angle = 0
+        rpen.extend_from_slice(&1u16.to_le_bytes()); // matrix type = 1 (identity)
+        rpen.push(255u8);
+    }
+
+    // Build `rotl` payload (CMX_OUTLINE_DESCRIPTION_SECTION = 15)
+    let mut rotl = Vec::new();
+    rotl.extend_from_slice(&(outlines.len() as u16).to_le_bytes());
+    for &(c_idx, p_idx) in &outlines {
+        rotl.push(1u8); // CMX_Tag_DescrSection_Outline
+        rotl.extend_from_slice(&15u16.to_le_bytes());
+        rotl.extend_from_slice(&1u16.to_le_bytes()); // lineStyle = 1
+        rotl.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+        rotl.extend_from_slice(&c_idx.to_le_bytes()); // color
+        rotl.extend_from_slice(&0u16.to_le_bytes()); // arrowHeads
+        rotl.extend_from_slice(&p_idx.to_le_bytes()); // pen
+        rotl.extend_from_slice(&0u16.to_le_bytes()); // dashArray
+        rotl.push(255u8);
+    }
+
+    // Compute exact RIFF stream offsets:
+    // 0..12: `RIFF` + size + `CMX1`
+    // 12..148: `cont` chunk (8B header + 128B payload = 136B -> ends at 148)
+    let page_offset = 148u32;
+    let page_chunk_total = 8 + page_cmds.len() + (page_cmds.len() & 1);
+    let rclr_offset = page_offset + page_chunk_total as u32;
+    let rclr_chunk_total = 8 + rclr.len() + (rclr.len() & 1);
+    let rott_offset = rclr_offset + rclr_chunk_total as u32;
+    let rott_chunk_total = 8 + rott.len() + (rott.len() & 1);
+    let rpen_offset = rott_offset + rott_chunk_total as u32;
+    let rpen_chunk_total = 8 + rpen.len() + (rpen.len() & 1);
+    let rotl_offset = rpen_offset + rpen_chunk_total as u32;
+    let rotl_chunk_total = 8 + rotl.len() + (rotl.len() & 1);
+    let ixpg_offset = rotl_offset + rotl_chunk_total as u32;
+
+    // Build `ixpg` payload (CMX_PAGE_INDEX_TABLE = 2, 20 bytes)
+    let mut ixpg = Vec::with_capacity(20);
+    ixpg.extend_from_slice(&1u16.to_le_bytes()); // numRecords = 1
+    ixpg.extend_from_slice(&16u16.to_le_bytes()); // sizeInFile = 16
+    ixpg.extend_from_slice(&page_offset.to_le_bytes());
+    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // layerTableOffset
+    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
+    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // refListOffset
+    let ixpg_chunk_total = 8 + ixpg.len();
+    let ixmr_offset = ixpg_offset + ixpg_chunk_total as u32;
+
+    // Build `ixmr` payload (master index table)
+    let mut ixmr = Vec::with_capacity(36);
+    ixmr.extend_from_slice(&1u16.to_le_bytes()); // master ID = 1
+    ixmr.extend_from_slice(&6u16.to_le_bytes()); // size = 6
+    ixmr.extend_from_slice(&5u16.to_le_bytes()); // recordCount = 5
+    for (sec_id, sec_off) in [(2u16, ixpg_offset), (15u16, rotl_offset), (16u16, rott_offset), (19u16, rpen_offset), (21u16, rclr_offset)] {
+        ixmr.extend_from_slice(&sec_id.to_le_bytes());
+        ixmr.extend_from_slice(&sec_off.to_le_bytes());
+    }
+
+    // Build `cont` 128-byte CMX header payload
+    let mut cont = vec![0u8; 128];
+    cont[0..23].copy_from_slice(b"Corel Binary Meta File\0");
+    cont[32..39].copy_from_slice(b"Windows");
+    cont[48..52].copy_from_slice(b"2   "); // Little-endian byte order
+    cont[52..54].copy_from_slice(b"4 "); // 32-bit coordinates (`PRECISION_32BIT`)
+    cont[54..58].copy_from_slice(b"2   "); // Major version 2
+    cont[58..62].copy_from_slice(b"0   "); // Minor version 0
+    cont[62..64].copy_from_slice(&2u16.to_le_bytes()); // Base units: inch
+    cont[64..72].copy_from_slice(&0.000_001f64.to_le_bytes()); // Scale
+    cont[84..88].copy_from_slice(&ixmr_offset.to_le_bytes()); // indexSectionOffset
+    cont[88..92].copy_from_slice(&u32::MAX.to_le_bytes()); // infoSectionOffset
+    cont[92..96].copy_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
+    cont[96..100].copy_from_slice(&(-half_w).to_le_bytes());
+    cont[100..104].copy_from_slice(&half_h.to_le_bytes());
+    cont[104..108].copy_from_slice(&half_w.to_le_bytes());
+    cont[108..112].copy_from_slice(&(-half_h).to_le_bytes());
+
+    let mut body = Vec::new();
+    append_riff_chunk(&mut body, *b"cont", &cont);
+    append_riff_chunk(&mut body, *b"page", &page_cmds);
+    append_riff_chunk(&mut body, *b"rclr", &rclr);
+    append_riff_chunk(&mut body, *b"rott", &rott);
+    append_riff_chunk(&mut body, *b"rpen", &rpen);
+    append_riff_chunk(&mut body, *b"rotl", &rotl);
+    append_riff_chunk(&mut body, *b"ixpg", &ixpg);
+    append_riff_chunk(&mut body, *b"ixmr", &ixmr);
+
+    // Also include `LIST page` chunks so `parse_document` round-trips all parametric primitives and effects losslessly
+    let mut next_style_id = 1u32;
+    for page in &doc.pages {
+        let mut page_children = Vec::new();
+        let mut mcfg = vec![0u8; 8];
+        mcfg[0..4].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg[4..8].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
+        for layer in &page.layers {
+            let mut layer_children = Vec::new();
+            for obj in &layer.objects {
+                encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children)?;
+            }
+            append_riff_list(&mut page_children, *b"layr", &layer_children);
+        }
+        append_riff_list(&mut body, *b"page", &page_children);
+    }
+
+    let riff_size = (4 + body.len()) as u32;
+    let mut out = Vec::with_capacity(8 + riff_size as usize);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&riff_size.to_le_bytes());
+    out.extend_from_slice(b"CMX1");
     out.extend_from_slice(&body);
     Ok(out)
 }
@@ -1746,6 +2591,7 @@ mod budget_tests {
             out.extend_from_slice(&(!len).to_le_bytes());
             out.extend_from_slice(c);
         }
+        out.extend_from_slice(&crate::inflate::adler32(raw).to_be_bytes());
         out
     }
 

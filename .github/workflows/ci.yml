@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 permissions:
@@ -30,8 +32,30 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install libcdr-tools differential oracle (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcdr-tools
       - name: cargo xtask ci
         run: cargo xtask ci
+
+  fuzz-smoke:
+    name: fuzz targets check & smoke run
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+      - name: Build and run fuzz targets
+        env:
+          CORALCRAFT_FUZZ_ITERS: ${{ github.event_name == 'schedule' && '50000' || '2000' }}
+        run: |
+          for bin in probe parse_cdr load_doc import_svg import_dxf; do
+            cargo run --manifest-path fuzz/Cargo.toml --release --bin "$bin"
+          done
 
   linux-package-smoke:
     # Build the .deb against a glibc 2.17 baseline and install it on an older distribution, so a

@@ -58,9 +58,9 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [ ] R6.2 Linux: glibc 2.17 baseline, with `nfpm` `.deb`/`.rpm`, a real AppImage, a Flatpak manifest, and container install tests. Windows: MSI or portable package and the GUI subsystem. FreeBSD: native build. Web: a real wasm egui build.
 
 **Phase 7: format interop and fuzzing (D5)**
-- [ ] R7.1 Rewrite the CDR `loda` and CMX writers to the Photopea/Kaitai specs. Add libcdr `cdr2raw` as a local differential oracle. Return `Err` on truncation instead of silently cutting data.
-- [ ] R7.2 Replace LLM-attributed format citations with public-spec URLs, and add one `docs/reverse` entry per decoder.
-- [ ] R7.3 Inflate: build fixed Huffman tables once, verify Adler-32/CRC-32, add fixed/dynamic test vectors. Add a `fuzz/` crate with nightly CI runs.
+- [x] R7.1 Rewrite the CDR `loda` and CMX writers to the Photopea/Kaitai specs. Add libcdr `cdr2raw` as a local differential oracle. Return `Err` on truncation instead of silently cutting data.
+- [x] R7.2 Replace LLM-attributed format citations with public-spec URLs, and add one `docs/reverse` entry per decoder.
+- [x] R7.3 Inflate: build fixed Huffman tables once, verify Adler-32/CRC-32, add fixed/dynamic test vectors. Add a `fuzz/` crate with nightly CI runs.
 
 **Phase 8: structural refactor**
 - [ ] R8.1 Split `engine/lib.rs` and `mcp/lib.rs` into modules. Deduplicate clipping, quad→cubic elevation, CRC-32, the xref writer and crop marks.

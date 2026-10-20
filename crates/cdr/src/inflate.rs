@@ -8,10 +8,28 @@
 //!
 //! Enforces a hard `max_output_len` cap (`MAX_DECOMPRESSED_BYTES`) to prevent decompression bombs.
 
+use std::sync::OnceLock;
+
 use crate::error::ProbeError;
 
 /// Default maximum decompressed payload size (64 MiB).
 pub const MAX_DECOMPRESSED_BYTES: usize = 64 * 1024 * 1024;
+
+/// Computes the RFC 1950 §8.2 Adler-32 checksum of `bytes`.
+pub fn adler32(bytes: &[u8]) -> u32 {
+    const MOD_ADLER: u32 = 65_521;
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for chunk in bytes.chunks(5_552) {
+        for &b in chunk {
+            s1 = s1.wrapping_add(u32::from(b));
+            s2 = s2.wrapping_add(s1);
+        }
+        s1 %= MOD_ADLER;
+        s2 %= MOD_ADLER;
+    }
+    (s2 << 16) | s1
+}
 
 const MAX_BITS: usize = 15;
 
@@ -134,18 +152,24 @@ impl HuffmanTable {
         Ok(Self { counts, symbols })
     }
 
-    fn fixed_lit_len() -> Result<Self, ProbeError> {
-        let mut lengths = [0u8; 288];
-        lengths[0..=143].fill(8);
-        lengths[144..=255].fill(9);
-        lengths[256..=279].fill(7);
-        lengths[280..=287].fill(8);
-        Self::from_lengths(&lengths)
+    fn fixed_lit_len() -> &'static Self {
+        static TABLE: OnceLock<HuffmanTable> = OnceLock::new();
+        TABLE.get_or_init(|| {
+            let mut lengths = [0u8; 288];
+            lengths[0..=143].fill(8);
+            lengths[144..=255].fill(9);
+            lengths[256..=279].fill(7);
+            lengths[280..=287].fill(8);
+            Self::from_lengths(&lengths).unwrap_or(Self { counts: [0; MAX_BITS + 1], symbols: Vec::new() })
+        })
     }
 
-    fn fixed_dist() -> Result<Self, ProbeError> {
-        let lengths = [5u8; 32];
-        Self::from_lengths(&lengths)
+    fn fixed_dist() -> &'static Self {
+        static TABLE: OnceLock<HuffmanTable> = OnceLock::new();
+        TABLE.get_or_init(|| {
+            let lengths = [5u8; 32];
+            Self::from_lengths(&lengths).unwrap_or(Self { counts: [0; MAX_BITS + 1], symbols: Vec::new() })
+        })
     }
 
     fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, ProbeError> {
@@ -180,6 +204,10 @@ impl HuffmanTable {
 
 /// Decompresses a raw RFC 1951 DEFLATE stream, enforcing `max_output_len`.
 pub fn inflate_raw(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, ProbeError> {
+    inflate_raw_with_consumed(bytes, max_output_len).map(|(out, _)| out)
+}
+
+fn inflate_raw_with_consumed(bytes: &[u8], max_output_len: usize) -> Result<(Vec<u8>, usize), ProbeError> {
     let mut reader = BitReader::new(bytes);
     let mut out = Vec::new();
 
@@ -202,9 +230,9 @@ pub fn inflate_raw(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Probe
             }
             1 => {
                 // Fixed Huffman block
-                let lit_len_table = HuffmanTable::fixed_lit_len()?;
-                let dist_table = HuffmanTable::fixed_dist()?;
-                decode_huffman_block(&mut reader, &lit_len_table, &dist_table, &mut out, max_output_len)?;
+                let lit_len_table = HuffmanTable::fixed_lit_len();
+                let dist_table = HuffmanTable::fixed_dist();
+                decode_huffman_block(&mut reader, lit_len_table, dist_table, &mut out, max_output_len)?;
             }
             2 => {
                 // Dynamic Huffman block
@@ -289,7 +317,9 @@ pub fn inflate_raw(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Probe
         }
     }
 
-    Ok(out)
+    reader.align_to_byte();
+    let consumed = reader.byte_pos.saturating_sub(usize::from(reader.bit_count / 8));
+    Ok((out, consumed))
 }
 
 fn decode_huffman_block(
@@ -364,7 +394,20 @@ pub fn inflate_zlib(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Prob
         return Err(ProbeError::Invalid { offset: 0, reason: "RFC 1950 FDICT preset dictionary is not supported".to_owned() });
     }
 
-    inflate_raw(&payload[2..], max_output_len)
+    let (out, consumed) = inflate_raw_with_consumed(&payload[2..], max_output_len)?;
+    let trailer_start = 2usize.saturating_add(consumed);
+    let Some(trailer_slice) = payload.get(trailer_start..trailer_start.saturating_add(4)) else {
+        return Err(ProbeError::Truncated { offset: trailer_start as u64, needed: 4, available: payload.len().saturating_sub(trailer_start) as u64 });
+    };
+    let expected_adler = u32::from_be_bytes([trailer_slice[0], trailer_slice[1], trailer_slice[2], trailer_slice[3]]);
+    let actual_adler = adler32(&out);
+    if actual_adler != expected_adler {
+        return Err(ProbeError::Invalid {
+            offset: trailer_start as u64,
+            reason: format!("RFC 1950 Adler-32 checksum mismatch (expected {expected_adler:#010x}, got {actual_adler:#010x})"),
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -373,26 +416,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decompresses_stored_fixed_and_zlib_streams_and_enforces_max_len() {
-        // 1. RFC 1950 zlib with fixed Huffman compressing "Hello Hello Hello!"
-        // Let's also test stored block via zlib header 0x78 0x01
+    fn decompresses_stored_fixed_dynamic_and_zlib_streams_with_adler32_r7_3() {
+        // 1. RFC 1950 zlib with stored block + valid big-endian Adler-32 trailer
         let mut zlib_stored = vec![0x78, 0x01, 0x01]; // BFINAL=1, BTYPE=0
         let msg = b"CoralCraft Clean-Room Inflate Test";
         let len = msg.len() as u16;
         zlib_stored.extend_from_slice(&len.to_le_bytes());
         zlib_stored.extend_from_slice(&(!len).to_le_bytes());
         zlib_stored.extend_from_slice(msg);
+        zlib_stored.extend_from_slice(&adler32(msg).to_be_bytes());
 
         let out = inflate_zlib(&zlib_stored, 1024).unwrap();
         assert_eq!(out, msg);
 
-        // 2. With CPng prefix (`CPng\x01\x00\x04\x00`)
+        // 2. Corrupted Adler-32 trailer must be rejected
+        let mut bad_adler = zlib_stored.clone();
+        let last = bad_adler.len() - 1;
+        bad_adler[last] ^= 0xFF;
+        let err = inflate_zlib(&bad_adler, 1024).unwrap_err();
+        assert!(matches!(err, ProbeError::Invalid { .. }));
+
+        // 3. With CPng prefix (`CPng\x01\x00\x04\x00`)
         let mut cpng = b"CPng\x01\x00\x04\x00".to_vec();
         cpng.extend_from_slice(&zlib_stored);
         assert_eq!(inflate_zlib(&cpng, 1024).unwrap(), msg);
 
-        // 3. Enforce max_output_len cap
+        // 4. Enforce max_output_len cap
         let err = inflate_zlib(&zlib_stored, 10).unwrap_err();
         assert!(matches!(err, ProbeError::LimitExceeded { .. }));
+
+        // 5. Real RFC 1951 fixed Huffman (BTYPE=1) + LZ77 back-reference zlib vector
+        // Compresses "Hello Hello Hello!" (18 bytes) with fixed Huffman codes + Adler-32 0x3c4c063e
+        let zlib_fixed: &[u8] = &[120, 218, 243, 72, 205, 201, 201, 87, 240, 64, 144, 138, 0, 60, 76, 6, 62];
+        assert_eq!((zlib_fixed[2] >> 1) & 0x03, 1);
+        let fixed_out = inflate_zlib(zlib_fixed, 1024).unwrap();
+        assert_eq!(fixed_out, b"Hello Hello Hello!");
+
+        // 6. Real RFC 1951 dynamic Huffman (BTYPE=2) zlib vector
+        let zlib_dynamic: &[u8] = &[
+            120, 1, 5, 193, 1, 13, 0, 0, 0, 130, 176, 108, 108, 66, 255, 72, 254, 56, 41, 156, 20, 78, 10, 39, 133, 147, 194, 73, 225, 164, 112, 82,
+            56, 41, 156, 20, 78, 10, 39, 133, 147, 194, 73, 225, 164, 112, 82, 56, 41, 14, 136, 96, 31, 222,
+        ];
+        assert_eq!((zlib_dynamic[2] >> 1) & 0x03, 2);
+        let dyn_out = inflate_zlib(zlib_dynamic, 1024).unwrap();
+        let expected_dyn: Vec<u8> = (0..120).map(|i| 65 + (((i * i + i * 3) % 7) as u8)).collect();
+        assert_eq!(dyn_out, expected_dyn);
     }
 }

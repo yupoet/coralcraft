@@ -80,6 +80,7 @@ struct CdEntry {
     name: String,
     flags: u16,
     method: u16,
+    crc32: u32,
     compressed_size: u32,
     uncompressed_size: u32,
     local_header_offset: u32,
@@ -137,6 +138,7 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
 
         let flags = read_u16_le(bytes, cursor + 8).unwrap_or(0);
         let method = read_u16_le(bytes, cursor + 10).unwrap_or(0);
+        let crc32 = read_u32_le(bytes, cursor + 16).unwrap_or(0);
         let compressed_size = read_u32_le(bytes, cursor + 20).unwrap_or(0);
         let uncompressed_size = read_u32_le(bytes, cursor + 24).unwrap_or(0);
         let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
@@ -168,9 +170,10 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
         if name.eq_ignore_ascii_case("content/dataFileList.dat") {
             has_data_file_list = true;
         } else if name.eq_ignore_ascii_case("content/riffData.cdr") {
-            primary = Some((ZipCdrRole::RiffDataCdr, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+            primary =
+                Some((ZipCdrRole::RiffDataCdr, CdEntry { name, flags, method, crc32, compressed_size, uncompressed_size, local_header_offset }));
         } else if name.eq_ignore_ascii_case("content/root.dat") && primary.is_none() {
-            primary = Some((ZipCdrRole::RootDat, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+            primary = Some((ZipCdrRole::RootDat, CdEntry { name, flags, method, crc32, compressed_size, uncompressed_size, local_header_offset }));
         }
 
         cursor = next_cursor;
@@ -222,6 +225,13 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
             needed: u64::from(entry.compressed_size),
             available: bytes.len().saturating_sub(data_start) as u64,
         })?;
+        let actual_crc = crc32_ieee(inner_slice);
+        if actual_crc != entry.crc32 {
+            return Err(ProbeError::Invalid {
+                offset: data_start as u64,
+                reason: format!("ZIP entry {} CRC-32 mismatch (expected {:#010x}, got {actual_crc:#010x})", entry.name, entry.crc32),
+            });
+        }
         let riff_res = crate::riff::inspect_riff(inner_slice)?;
         warnings.extend(riff_res.warnings.iter().cloned());
         Some(riff_res)
@@ -254,6 +264,7 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
         }
         let flags = read_u16_le(bytes, cursor + 8).unwrap_or(0);
         let method = read_u16_le(bytes, cursor + 10).unwrap_or(0);
+        let crc32 = read_u32_le(bytes, cursor + 16).unwrap_or(0);
         let compressed_size = read_u32_le(bytes, cursor + 20).unwrap_or(0);
         let uncompressed_size = read_u32_le(bytes, cursor + 24).unwrap_or(0);
         let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
@@ -269,9 +280,10 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
         }
         let name = String::from_utf8_lossy(bytes.get(name_start..name_end).unwrap_or(&[])).into_owned();
         if name.eq_ignore_ascii_case("content/riffData.cdr") {
-            primary = Some((ZipCdrRole::RiffDataCdr, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+            primary =
+                Some((ZipCdrRole::RiffDataCdr, CdEntry { name, flags, method, crc32, compressed_size, uncompressed_size, local_header_offset }));
         } else if name.eq_ignore_ascii_case("content/root.dat") && primary.is_none() {
-            primary = Some((ZipCdrRole::RootDat, CdEntry { name, flags, method, compressed_size, uncompressed_size, local_header_offset }));
+            primary = Some((ZipCdrRole::RootDat, CdEntry { name, flags, method, crc32, compressed_size, uncompressed_size, local_header_offset }));
         }
         cursor = next_cursor;
     }
@@ -306,16 +318,24 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
         available: bytes.len().saturating_sub(data_start) as u64,
     })?;
 
-    match entry.method {
-        0 => Ok((role, raw_slice.to_vec())),
-        8 => {
-            let decompressed = crate::inflate::inflate_raw(raw_slice, max_decompressed_bytes)?;
-            Ok((role, decompressed))
-        }
+    let decompressed = match entry.method {
+        0 => raw_slice.to_vec(),
+        8 => crate::inflate::inflate_raw(raw_slice, max_decompressed_bytes)?,
         other => {
-            Err(ProbeError::Invalid { offset: data_start as u64, reason: format!("unsupported ZIP compression method {other} for {}", entry.name) })
+            return Err(ProbeError::Invalid {
+                offset: data_start as u64,
+                reason: format!("unsupported ZIP compression method {other} for {}", entry.name),
+            });
         }
+    };
+    let actual_crc = crc32_ieee(&decompressed);
+    if actual_crc != entry.crc32 {
+        return Err(ProbeError::Invalid {
+            offset: data_start as u64,
+            reason: format!("ZIP entry {} CRC-32 mismatch (expected {:#010x}, got {actual_crc:#010x})", entry.name, entry.crc32),
+        });
     }
+    Ok((role, decompressed))
 }
 
 /// Computes the standard IEEE 802.3 CRC-32 checksum used by PKWARE ZIP headers.
@@ -524,5 +544,25 @@ pub(crate) mod tests {
     fn rejects_truncated_zip_without_eocd() {
         let err = inspect_zip_cdr(b"PK\x03\x04truncated_garbage_data_here").expect_err("truncated ZIP without EOCD must fail");
         assert!(matches!(err, ProbeError::Truncated { .. } | ProbeError::Invalid { .. }));
+    }
+
+    #[test]
+    fn rejects_zip_entry_with_corrupted_crc32_r7_3() {
+        let mut inner_riff = Vec::new();
+        inner_riff.extend_from_slice(b"RIFF");
+        inner_riff.extend_from_slice(&4u32.to_le_bytes());
+        inner_riff.extend_from_slice(b"CDRE");
+
+        let mut zip_bytes = synth_zip(&[("content/riffData.cdr", 0, &inner_riff)]);
+        // Flip one byte in the stored payload so its IEEE CRC-32 no longer matches the Central Directory header
+        let lfh_data_start = 30 + "content/riffData.cdr".len();
+        zip_bytes[lfh_data_start] ^= 0xFF;
+
+        let err1 = inspect_zip_cdr(&zip_bytes).expect_err("corrupted Stored payload CRC-32 must be rejected by inspect_zip_cdr");
+        assert!(matches!(err1, ProbeError::Invalid { .. }));
+
+        let err2 =
+            extract_zip_primary_riff(&zip_bytes, 4096).expect_err("corrupted Stored payload CRC-32 must be rejected by extract_zip_primary_riff");
+        assert!(matches!(err2, ProbeError::Invalid { .. }));
     }
 }

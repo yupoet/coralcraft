@@ -8,6 +8,7 @@
 
 # Rust build artifacts
 /target/
+/fuzz/target/
 **/*.rs.bk
 
 # Distribution artifacts
