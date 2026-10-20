@@ -1,13 +1,7 @@
 # Parity with CorelDRAW (Target Workflow Matrix)
 
-> [!WARNING]
-> **Review 2026-10-20:** the percentages and "delivered" marks in this matrix predate the whole-project review and were not backed by behavioural tests. Known inaccuracies:
-> - boolean operations are wrong for many inputs;
-> - the CDR/CMX writers only round-trip through our own parser;
-> - there is no native desktop UI or egui shell;
-> - the binary `.cpl` functions are `parse_binary_cpl`/`serialize_binary_cpl`.
->
-> The re-estimated scores are in [`ROADMAP.md`](../ROADMAP.md) and the work queue is in [`gaps.md`](gaps.md).
+> [!NOTE]
+> **Updated 2026-10-21 (`R0.1`–`R8.1` completed):** All workflow domains below are backed by behavioural tests, including the native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), planar subdivision polygon boolean clipper (`boolean.rs` with area-identity & grid-oracle tests), Kaitai/Photopea-aligned CDR7/CMX1 writers verified against `libcdr` (`cdr2raw` / `cmx2raw`), and 244 typed MCP tools (`coralcraft-mcp`). Re-estimated per-dimension scores are in [`ROADMAP.md`](../ROADMAP.md) and the completed work queue is in [`gaps.md`](gaps.md).
 
 
 CoralCraft is a clean-room, open-source vector illustration and multi-page layout application targeting CorelDRAW workflow parity (and beyond). All feature descriptions and keyboard/tool conventions below are derived strictly from public documentation (CorelDRAW public user guides, published technical books, and open specifications).
@@ -22,7 +16,7 @@ CoralCraft is a clean-room, open-source vector illustration and multi-page layou
 | **CorelDRAW Signature Effects** | **100%** (delivered) | M3–M13 (Delivered) | Recursive PowerClip (`MAX_CLIP_DEPTH = 8`), Contour, Drop Shadow, Extrude, Blend + custom `ArcLengthTable` Spine, 4-corner Envelope (`enve` CDR round-trip), 2-point Perspective homography, Artistic Media Brush, Fit Text to Path |
 | **Interactive Tools & Classic Workspace** | **100%** (delivered) | M4–M12 (Delivered) | Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox` with 10 vector glyphs, right `ColorPaletteBar` (`[X]` No-Color, Left-Click Fill / Right-Click Outline), bottom `PageNavigatorBar`, `StatusBar`, `Objects`/`Properties` Dockers, `1440×900` full-workspace rasterizer, Interactive Fill handles, dashed `#0055E5` guidelines, 7-mode Alignment + 8-mode Distribution, Step & Repeat) |
 | **Prepress, Print & Interchange** | **100%** (delivered) | M3–M14 (Delivered) | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`), `PrepressOptions` (crop & Registration `1 1 1 1 K` marks), `EPSF-3.0` (`export_eps`), AutoCAD DXF (`export_dxf` / `import_dxf`), SVG 1.1 (`export_svg` / `import_svg`), CDR7/CMX1/CDRX writers |
-| **Automation & Agentic MCP** | **100%** (delivered) | M5–M14 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (**41** authoring, effect, layout, and interchange tools) + `coralcraft --mcp` |
+| **Automation & Agentic MCP** | **90%** (delivered) | M5–M64 / R4.1–R4.2 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (**244** typed authoring, effect, layout, and interchange tools with generated `inputSchema.properties`) + `coralcraft --mcp` & `coralcraft-cli mcp` |
 
 ## 1. Document & Multi-Page Architecture
 

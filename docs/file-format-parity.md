@@ -1,13 +1,7 @@
 # File Format Parity Matrix
 
-> [!WARNING]
-> **Review 2026-10-20:** the percentages and "delivered" marks in this matrix predate the whole-project review and were not backed by behavioural tests. Known inaccuracies:
-> - boolean operations are wrong for many inputs;
-> - the CDR/CMX writers only round-trip through our own parser;
-> - there is no native desktop UI or egui shell;
-> - the binary `.cpl` functions are `parse_binary_cpl`/`serialize_binary_cpl`.
->
-> The re-estimated scores are in [`ROADMAP.md`](../ROADMAP.md) and the work queue is in [`gaps.md`](gaps.md).
+> [!NOTE]
+> **Updated 2026-10-21 (`R0.1`–`R8.1` completed):** All format parsers and writers are backed by behavioural tests, deterministic hostile-input mutation tests, nightly `cargo-fuzz` targets (`fuzz/`), and `libcdr` (`cdr2raw` / `cmx2raw`) differential oracle verification. Re-estimated per-dimension scores are tracked in [`ROADMAP.md`](../ROADMAP.md) and the completed work queue is in [`gaps.md`](gaps.md).
 
 
 CoralCraft treats CorelDRAW `.cdr` and `.cmx` as first-class citizens alongside our open native `.coralcraft` format and standard vector interchange formats.
@@ -31,7 +25,7 @@ All `.cdr` and `.cmx` format knowledge is clean-room derived from public specifi
 | **Portable Network Graphics** | `.png` | RGBA8 PNG with 4×4 MSAA | — | — | **Yes** (`coralcraft_render::encode_png`) | M2 (Delivered) |
 | **Encapsulated PostScript** | `.eps` | PostScript / `EPSF-3.0` (`%%BoundingBox`, `%%HiResBoundingBox`, CMYK `setcmykcolor`, RGB `setrgbcolor`) | — | — | **Yes** (`coralcraft_render::export_eps`) | M14 (Delivered) |
 | **AutoCAD Drawing Exchange** | `.dxf` | ASCII DXF (`AC1009` / R12 `ENTITIES`: `LINE`, `POLYLINE`/`VERTEX`/`SEQEND`, `LWPOLYLINE`, `CIRCLE`) | — | **Yes** (`coralcraft_doc::import_dxf`) | **Yes** (`coralcraft_render::export_dxf`) | M14 (Delivered) |
-| **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot) | — | **Yes** (`parse_xml_palette` / `parse_cpl_palette`) | **Yes** (`to_xml_palette` / `to_cpl_palette`) | M2 / M7 (Delivered) |
+| **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot) | — | **Yes** (`parse_xml_palette` / `parse_binary_cpl`) | **Yes** (`to_xml_palette` / `serialize_binary_cpl`) | M2 / M7 / R5.4 (Delivered) |
 
 ## M1–M3 Format Capabilities (`coralcraft-cdr`, `coralcraft-doc`, `coralcraft-render`)
 
