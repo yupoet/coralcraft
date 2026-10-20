@@ -1,11 +1,17 @@
-//! Cross-platform interactive Desktop GUI server & native App Window launcher (`gui_server`).
+//! Experimental localhost preview server for the CoralCraft workspace (`gui_server`).
 //!
-//! Operates in 100% safe Rust (`#![forbid(unsafe_code)]`) across macOS (Intel `x86_64` &
-//! Apple Silicon `aarch64`), Windows (`x86_64`), and Linux (`x86_64`).
+//! This is a stop-gap until the native egui shell lands (docs/gaps.md R2.1). Because any web page
+//! the user visits can send requests to `127.0.0.1`, every request is checked by [`RequestGuard`]:
+//! - a per-launch 128-bit token (query parameter for GET, `X-CoralCraft-Token` header for POST;
+//!   a custom header cannot be sent cross-origin without a CORS preflight, which is never granted);
+//! - the `Host` header must name the loopback address and port (blocks DNS rebinding);
+//! - an `Origin` header, when present, must be the server's own origin;
+//! - header and body sizes are capped and sockets have read/write timeouts.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Command;
+use std::time::Duration;
 
 use coralcraft_cdr::{parse_document, write_cdr7};
 use coralcraft_doc::{Document, import_dxf, import_svg, load_bytes, save_zip};
@@ -64,19 +70,20 @@ const STUDIO_HTML: &str = r#"<!DOCTYPE html>
     <span class="brand">CORALCRAFT</span>
     <button class="btn" onclick="document.getElementById('file-input').click()">Open (.cdr / .coralcraft / .svg / .dxf)</button>
     <input type="file" id="file-input" accept=".cdr,.cmx,.coralcraft,.svg,.dxf" onchange="uploadFile(this.files[0])">
-    <a class="btn" href="/api/export/coralcraft" download="document.coralcraft">Save .coralcraft</a>
-    <a class="btn" href="/api/export/cdr" download="document.cdr">Export .CDR</a>
-    <a class="btn" href="/api/export/svg" download="document.svg">Export .SVG</a>
-    <a class="btn" href="/api/export/pdf" download="document.pdf">Export .PDF</a>
-    <a class="btn" href="/api/frame.png" download="workspace.png">Export .PNG</a>
+    <a class="btn" href="/api/export/coralcraft?token=__CC_TOKEN__" download="document.coralcraft">Save .coralcraft</a>
+    <a class="btn" href="/api/export/cdr?token=__CC_TOKEN__" download="document.cdr">Export .CDR</a>
+    <a class="btn" href="/api/export/svg?token=__CC_TOKEN__" download="document.svg">Export .SVG</a>
+    <a class="btn" href="/api/export/pdf?token=__CC_TOKEN__" download="document.pdf">Export .PDF</a>
+    <a class="btn" href="/api/frame.png?token=__CC_TOKEN__" download="workspace.png">Export .PNG</a>
     <input id="mcp-input" type="text" placeholder='Run any of 240 MCP tools, e.g. {"name":"add_koch_snowflake","arguments":{"cx":300,"cy":260,"radius_pt":70,"iterations":3}}' onkeydown="if(event.key==='Enter')runMcp()">
     <button class="btn btn-primary" onclick="runMcp()">Run Tool</button>
   </div>
   <div id="viewport-wrap">
-    <img id="workspace-canvas" src="/api/frame.png" width="1440" height="900" draggable="false" alt="CoralCraft Workspace">
+    <img id="workspace-canvas" src="/api/frame.png?token=__CC_TOKEN__" width="1440" height="900" draggable="false" alt="CoralCraft Workspace">
   </div>
   <div id="toast"></div>
 <script>
+const TOKEN = '__CC_TOKEN__';
 const img = document.getElementById('workspace-canvas');
 const toast = document.getElementById('toast');
 let busy = false;
@@ -90,14 +97,14 @@ function showToast(msg) {
 }
 
 function refreshFrame() {
-  img.src = '/api/frame.png?t=' + Date.now();
+  img.src = '/api/frame.png?token=' + TOKEN + '&t=' + Date.now();
 }
 
 async function sendEvent(payload) {
   try {
     const res = await fetch('/api/event', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-CoralCraft-Token': TOKEN},
       body: JSON.stringify(payload)
     });
     if (res.ok) {
@@ -169,7 +176,7 @@ async function runMcp() {
   };
   const res = await fetch('/api/mcp', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CoralCraft-Token': TOKEN},
     body: JSON.stringify(req)
   });
   const out = await res.json();
@@ -182,6 +189,7 @@ async function uploadFile(file) {
   const buf = await file.arrayBuffer();
   const res = await fetch('/api/open?name=' + encodeURIComponent(file.name), {
     method: 'POST',
+    headers: {'X-CoralCraft-Token': TOKEN},
     body: new Uint8Array(buf)
   });
   const out = await res.json();
@@ -198,7 +206,8 @@ async function uploadFile(file) {
 pub fn run_gui_server(initial_doc: Document, port: u16, open_window: bool, max_requests: Option<usize>) -> Result<u16, String> {
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("failed to bind GUI server: {e}"))?;
     let local_port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let url = format!("http://127.0.0.1:{local_port}");
+    let guard = RequestGuard::new(generate_session_token(), local_port);
+    let url = format!("http://127.0.0.1:{local_port}/?token={}", guard.token);
 
     let mut session = InteractiveGuiSession::new(initial_doc);
     if session.workspace.engine.document.pages.iter().all(|p| p.layers.iter().all(|l| l.objects.is_empty())) {
@@ -215,7 +224,9 @@ pub fn run_gui_server(initial_doc: Document, port: u16, open_window: bool, max_r
         let Ok(mut stream) = stream else {
             continue;
         };
-        let _ = handle_http_connection(&mut stream, &mut session);
+        let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+        let _ = handle_http_connection(&mut stream, &mut session, &guard);
         handled += 1;
         if let Some(limit) = max_requests
             && handled >= limit
@@ -226,37 +237,149 @@ pub fn run_gui_server(initial_doc: Document, port: u16, open_window: bool, max_r
     Ok(local_port)
 }
 
-/// Handles a single HTTP request against [`InteractiveGuiSession`].
-pub fn handle_http_connection(stream: &mut TcpStream, session: &mut InteractiveGuiSession) -> Result<(), String> {
-    let mut buf = vec![0u8; 65536];
-    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
-    if n == 0 {
-        return Ok(());
+/// Maximum size of the request line plus headers.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+/// Maximum accepted request body (documents opened through `/api/open`).
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Per-launch request authorization for the preview server.
+#[derive(Debug, Clone)]
+pub struct RequestGuard {
+    token: String,
+    port: u16,
+}
+
+impl RequestGuard {
+    /// Creates a guard that accepts `token` on the loopback server bound to `port`.
+    #[must_use]
+    pub fn new(token: String, port: u16) -> Self {
+        Self { token, port }
     }
-    let header_end = find_header_end(&buf[..n]).unwrap_or(n);
-    let header_str = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+
+    fn host_allowed(&self, host: Option<&str>) -> bool {
+        let Some(host) = host else { return false };
+        let host = host.trim();
+        [format!("127.0.0.1:{}", self.port), format!("localhost:{}", self.port)].iter().any(|h| h.eq_ignore_ascii_case(host))
+    }
+
+    fn origin_allowed(&self, origin: Option<&str>) -> bool {
+        match origin {
+            None => true,
+            Some(o) => {
+                let o = o.trim();
+                [format!("http://127.0.0.1:{}", self.port), format!("http://localhost:{}", self.port)].iter().any(|a| a.eq_ignore_ascii_case(o))
+            }
+        }
+    }
+
+    fn token_matches(&self, candidate: Option<&str>) -> bool {
+        candidate.is_some_and(|c| constant_time_eq(c.as_bytes(), self.token.as_bytes()))
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Returns a 128-bit hex token seeded from the standard library's per-process random SipHash keys,
+/// the process id and the clock (no external RNG dependency).
+fn generate_session_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let mut words = [0u64; 2];
+    for (i, w) in words.iter_mut().enumerate() {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u128(nanos);
+        h.write_u32(std::process::id());
+        h.write_usize(i);
+        *w = h.finish();
+    }
+    format!("{:016x}{:016x}", words[0], words[1])
+}
+
+fn header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
+    headers.lines().skip(1).find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        k.trim().eq_ignore_ascii_case(name).then_some(v.trim())
+    })
+}
+
+fn query_param<'a>(raw_path: &'a str, name: &str) -> Option<&'a str> {
+    let query = raw_path.split_once('?')?.1;
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name).then_some(v)
+    })
+}
+
+/// Handles a single HTTP request against [`InteractiveGuiSession`] after [`RequestGuard`] checks.
+pub fn handle_http_connection(stream: &mut TcpStream, session: &mut InteractiveGuiSession, guard: &RequestGuard) -> Result<(), String> {
+    // Read until the end of the headers (possibly across several reads), bounded by MAX_HEADER_BYTES.
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let header_end = loop {
+        if let Some(end) = find_header_end(&buf) {
+            break end;
+        }
+        if buf.len() >= MAX_HEADER_BYTES {
+            return write_response(stream, "431 Request Header Fields Too Large", "text/plain", b"headers too large");
+        }
+        let mut chunk = [0u8; 8192];
+        let r = stream.read(&mut chunk).map_err(|e| e.to_string())?;
+        if r == 0 {
+            if buf.is_empty() {
+                return Ok(());
+            }
+            return write_response(stream, "400 Bad Request", "text/plain", b"incomplete request");
+        }
+        buf.extend_from_slice(chunk.get(..r).unwrap_or_default());
+    };
+    let header_str = String::from_utf8_lossy(buf.get(..header_end).unwrap_or_default()).into_owned();
     let first_line = header_str.lines().next().unwrap_or("");
     let mut parts = first_line.split_whitespace();
     let method = parts.next().unwrap_or("GET");
     let raw_path = parts.next().unwrap_or("/");
     let path = raw_path.split('?').next().unwrap_or("/");
 
-    let content_len = parse_content_length(&header_str);
-    let mut body = Vec::new();
-    if header_end < n {
-        body.extend_from_slice(&buf[header_end..n]);
+    if !guard.host_allowed(header_value(&header_str, "host")) || !guard.origin_allowed(header_value(&header_str, "origin")) {
+        return write_response(stream, "403 Forbidden", "text/plain", b"forbidden");
     }
+    let authorized = match method {
+        "GET" => guard.token_matches(query_param(raw_path, "token")),
+        // State-changing requests must carry the custom header (never sent cross-origin without a
+        // CORS preflight, which this server never grants).
+        _ => guard.token_matches(header_value(&header_str, "x-coralcraft-token")),
+    };
+    if !authorized {
+        return write_response(stream, "403 Forbidden", "text/plain", b"forbidden");
+    }
+
+    let content_len = parse_content_length(&header_str);
+    if content_len > MAX_BODY_BYTES {
+        return write_response(stream, "413 Payload Too Large", "text/plain", b"payload too large");
+    }
+    let mut body = buf.get(header_end..).unwrap_or_default().to_vec();
+    body.truncate(content_len);
     while body.len() < content_len {
         let mut chunk = [0u8; 8192];
         let r = stream.read(&mut chunk).map_err(|e| e.to_string())?;
         if r == 0 {
             break;
         }
-        body.extend_from_slice(&chunk[..r]);
+        let take = r.min(content_len - body.len());
+        body.extend_from_slice(chunk.get(..take).unwrap_or_default());
     }
 
     match (method, path) {
-        ("GET", "/") => write_response(stream, "200 OK", "text/html; charset=utf-8", STUDIO_HTML.as_bytes()),
+        ("GET", "/") => {
+            let html = STUDIO_HTML.replace("__CC_TOKEN__", &guard.token);
+            write_response(stream, "200 OK", "text/html; charset=utf-8", html.as_bytes())
+        }
         ("GET", "/api/frame.png") => {
             let rendered = session.render_frame().map_err(|e| e.to_string())?;
             write_response(stream, "200 OK", "image/png", &rendered.png_bytes)
@@ -288,7 +411,7 @@ pub fn handle_http_connection(stream: &mut TcpStream, session: &mut InteractiveG
             write_response(stream, "200 OK", "application/json", resp_str.as_bytes())
         }
         ("POST", "/api/open") => {
-            let name = raw_path.split("name=").nth(1).unwrap_or("document");
+            let name = query_param(raw_path, "name").unwrap_or("document");
             let msg = match load_any_document(name, &body) {
                 Ok(doc) => {
                     session.workspace.engine = coralcraft_engine::EditorEngine::new(doc);

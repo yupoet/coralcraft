@@ -148,34 +148,89 @@ mod tests {
         run(&["--dump-workspace".to_owned(), "--json".to_owned()]).unwrap();
     }
 
-    #[test]
-    fn interactive_gui_http_endpoints_serve_frame_and_handle_events() {
+    /// Serves `requests.len()` connections on an ephemeral port with `guard` and returns the raw
+    /// response of each request.
+    fn serve_and_collect(requests: Vec<Vec<u8>>, token: &str) -> Vec<String> {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+        let guard = gui_server::RequestGuard::new(token.to_owned(), port);
+        let n = requests.len();
         let handle = thread::spawn(move || {
             let mut session = coralcraft_ui_egui::InteractiveGuiSession::new_with_welcome_artwork();
-            for _ in 0..2 {
+            for _ in 0..n {
                 let (mut stream, _) = listener.accept().unwrap();
-                gui_server::handle_http_connection(&mut stream, &mut session).unwrap();
+                let _ = gui_server::handle_http_connection(&mut stream, &mut session, &guard);
             }
         });
-
-        let mut client1 = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        client1.write_all(b"GET /api/frame.png HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
-        let mut resp1 = Vec::new();
-        client1.read_to_end(&mut resp1).unwrap();
-        assert!(resp1.starts_with(b"HTTP/1.1 200 OK"));
-        assert!(resp1.windows(8).any(|w| w == b"\x89PNG\r\n\x1a\n"));
-
-        let mut client2 = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let body = br#"{"type":"key_down","key":"F6","ctrl":false,"shift":false}"#;
-        let req2 = format!("POST /api/event HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n", body.len());
-        client2.write_all(req2.as_bytes()).unwrap();
-        client2.write_all(body).unwrap();
-        let mut resp2 = String::new();
-        client2.read_to_string(&mut resp2).unwrap();
-        assert!(resp2.contains("Rectangle"));
-
+        let mut out = Vec::new();
+        for req in requests {
+            let req = String::from_utf8(req).unwrap().replace("{PORT}", &port.to_string());
+            let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            client.write_all(req.as_bytes()).unwrap();
+            let mut resp = Vec::new();
+            client.read_to_end(&mut resp).unwrap();
+            out.push(String::from_utf8_lossy(&resp).into_owned());
+        }
         handle.join().unwrap();
+        out
+    }
+
+    #[test]
+    fn gui_server_rejects_requests_without_token_wrong_host_or_foreign_origin() {
+        let t = "0123456789abcdef0123456789abcdef";
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let resps = serve_and_collect(
+            vec![
+                // 1. no token at all
+                b"GET /api/export/svg HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\n\r\n".to_vec(),
+                // 2. wrong token
+                b"GET /?token=deadbeef HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\n\r\n".to_vec(),
+                // 3. valid token but a rebinding Host header
+                format!("GET /api/state?token={t} HTTP/1.1\r\nHost: evil.example:{{PORT}}\r\n\r\n").into_bytes(),
+                // 4. POST with token header but a foreign Origin
+                format!(
+                    "POST /api/mcp HTTP/1.1\r\nHost: 127.0.0.1:{{PORT}}\r\nOrigin: https://evil.example\r\nX-CoralCraft-Token: {t}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes(),
+                // 5. POST carrying the token only in the query string (no custom header): rejected
+                format!(
+                    "POST /api/mcp?token={t} HTTP/1.1\r\nHost: 127.0.0.1:{{PORT}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes(),
+                // 6. oversized declared body
+                format!("POST /api/open HTTP/1.1\r\nHost: 127.0.0.1:{{PORT}}\r\nX-CoralCraft-Token: {t}\r\nContent-Length: 999999999999\r\n\r\n").into_bytes(),
+            ],
+            t,
+        );
+        for (i, r) in resps.iter().take(5).enumerate() {
+            assert!(r.starts_with("HTTP/1.1 403"), "request {} should be forbidden, got: {}", i + 1, r.lines().next().unwrap_or(""));
+        }
+        assert!(resps[5].starts_with("HTTP/1.1 413"), "oversized body should be 413, got: {}", resps[5].lines().next().unwrap_or(""));
+    }
+
+    #[test]
+    fn interactive_gui_http_endpoints_serve_frame_and_handle_events() {
+        let t = "0123456789abcdef0123456789abcdef";
+        let body = r#"{"type":"key_down","key":"F6","ctrl":false,"shift":false}"#;
+        let resps = serve_and_collect(
+            vec![
+                format!("GET /?token={t} HTTP/1.1\r\nHost: 127.0.0.1:{{PORT}}\r\n\r\n").into_bytes(),
+                format!("GET /api/frame.png?token={t} HTTP/1.1\r\nHost: localhost:{{PORT}}\r\n\r\n").into_bytes(),
+                format!(
+                    "POST /api/event HTTP/1.1\r\nHost: 127.0.0.1:{{PORT}}\r\nOrigin: http://127.0.0.1:{{PORT}}\r\nX-CoralCraft-Token: {t}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes(),
+            ],
+            t,
+        );
+        assert!(resps[0].starts_with("HTTP/1.1 200 OK"));
+        assert!(resps[0].contains(t), "studio page must embed the session token for its own API calls");
+        assert!(resps[1].starts_with("HTTP/1.1 200 OK"));
+        assert!(resps[1].contains("PNG"));
+        assert!(resps[2].starts_with("HTTP/1.1 200 OK"));
+        assert!(resps[2].contains("Rectangle"));
     }
 }
