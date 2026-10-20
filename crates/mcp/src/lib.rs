@@ -8,14 +8,14 @@ use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
     TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg,
 };
-use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
+use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path,
     build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path,
     build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
-use coralcraft_tools::{AlignMode, ZOrderOp};
+use coralcraft_tools::{AlignMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -638,6 +638,26 @@ impl McpServer {
                         {
                             "name": "delete_page",
                             "description": "Deletes the specified 0-based page when document.pages.len() > 1 (Layout -> Delete Page).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "smear_path",
+                            "description": "Directionally drags vertices within radius_pt of (ox, oy) along (dx_pt, dy_pt) on an object (Smear Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_paragraph_text_layout",
+                            "description": "Updates columns, gutter_pt, line_spacing, and/or alignment on a ParagraphText frame (Text -> Columns / Paragraph Formatting).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_active_page_target",
+                            "description": "Switches the active page tab (target = page with page_index, master, or desktop) in the Page Navigator Bar.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "inspect_object",
+                            "description": "Returns detailed metadata (id, name, kind, visible, locked, opacity, bounds, effects_count) for an object.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1734,6 +1754,75 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::DeletePage { page_index });
                 Ok(json!({ "page_deleted": ok, "pages": self.engine.document.pages.len(), "active_page_index": self.engine.current_page_index() }))
             }
+            "smear_path" => {
+                let target = self.resolve_target_id(args)?;
+                let ox = args.get("ox").and_then(Value::as_f64).unwrap_or(100.0);
+                let oy = args.get("oy").and_then(Value::as_f64).unwrap_or(100.0);
+                let origin = Point::new(ox, oy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0)).map_err(|e| e.to_string())?;
+                let dx_pt = F64::new(args.get("dx_pt").and_then(Value::as_f64).unwrap_or(15.0)).map_err(|e| e.to_string())?;
+                let dy_pt = F64::new(args.get("dy_pt").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SmearObjectPath { object_id: target, origin, radius_pt, dx_pt, dy_pt });
+                Ok(json!({ "smeared": ok, "object_id": target.0 }))
+            }
+            "set_paragraph_text_layout" => {
+                let target = self.resolve_target_id(args)?;
+                let columns = args.get("columns").and_then(Value::as_u64).map(|v| v as u32);
+                let gutter_pt = args.get("gutter_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let line_spacing = args.get("line_spacing").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let alignment = args.get("alignment").and_then(Value::as_str).map(|s| match s {
+                    "center" => TextAlignment::Center,
+                    "right" => TextAlignment::Right,
+                    "justify" => TextAlignment::Justify,
+                    _ => TextAlignment::Left,
+                });
+                let ok =
+                    self.engine.execute(EngineCommand::SetParagraphTextLayout { object_id: target, columns, gutter_pt, line_spacing, alignment });
+                Ok(json!({ "layout_updated": ok, "object_id": target.0 }))
+            }
+            "set_active_page_target" => {
+                let target = match args.get("target").and_then(Value::as_str).unwrap_or("page") {
+                    "master" => ActivePageTarget::MasterPage,
+                    "desktop" => ActivePageTarget::Desktop,
+                    _ => {
+                        let idx = args.get("page_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                        ActivePageTarget::Page(idx)
+                    }
+                };
+                self.engine.set_active_target(target);
+                Ok(json!({ "active_page_index": self.engine.current_page_index() }))
+            }
+            "inspect_object" => {
+                let target = self.resolve_target_id(args)?;
+                let obj = self.engine.inspect_object(target).ok_or_else(|| format!("Object {} not found", target.0))?;
+                let bbox = combined_selection_bounds(&[obj]);
+                let kind_name = match &obj.kind {
+                    ObjectKind::Rect(_) => "rect",
+                    ObjectKind::Ellipse(_) => "ellipse",
+                    ObjectKind::Polygon(_) => "polygon",
+                    ObjectKind::Path(_) => "path",
+                    ObjectKind::ArtisticText { .. } => "artistic_text",
+                    ObjectKind::ParagraphText(_) => "paragraph_text",
+                    ObjectKind::Group { .. } => "group",
+                    ObjectKind::Bitmap { .. } => "bitmap",
+                    ObjectKind::Unsupported(_) => "unsupported",
+                };
+                Ok(json!({
+                    "id": obj.id.0,
+                    "name": obj.name,
+                    "kind": kind_name,
+                    "visible": obj.visible,
+                    "locked": obj.locked,
+                    "opacity": obj.opacity.get(),
+                    "effects_count": obj.effects.len(),
+                    "bounds": {
+                        "x": bbox.x0.get(),
+                        "y": bbox.y0.get(),
+                        "width": bbox.width(),
+                        "height": bbox.height()
+                    }
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1763,7 +1852,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 108);
+        assert_eq!(tools, 112);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

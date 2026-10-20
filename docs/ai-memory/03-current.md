@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M31 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M32 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -29,9 +29,10 @@
   21. **M28: Impact Tool Radial Burst Rays (`build_impact_rays_path`), Layer Deletion & Reordering (`DeleteLayer` & `MoveLayer`), Invert Selection (`InvertSelection`), and 96 MCP Tools (`commit d9c889e`)**.
   22. **M29: Complex Star `{n/k}` Schläfli Star Polygons (`build_complex_star_path`), Outline Pen Properties (`SetOutlineProperties`), Select By Kind (`SelectByKind`), Document Title (`SetDocumentTitle`), and 100 MCP Tools (`commit 5d9c3c5`)**.
   23. **M30: Twirl Tool Localized Path Deformer (`twirl_path_around_point`), Clear & Clone Vector Effects (`ClearEffects` & `CloneEffectsFrom`), Page Size & Units (`set_page_size`), and 104 MCP Tools (`commit cdc5170`)**.
-  24. **M31: Attract and Repel Tool Localized Path Deformer (`radial_push_path_around_point`), Page Duplication/Rename/Delete (`duplicate_page`, `rename_page`, `delete_page`), and 108 MCP Tools**:
-      - `coralcraft-geom`: Added `radial_push_path_around_point`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `AttractRepelObjectPath`, `attract_repel_path`, `duplicate_page`, `rename_page`, `delete_page`, and expanded MCP server to **108 tools**.
+  24. **M31: Attract and Repel Tool Localized Path Deformer (`radial_push_path_around_point`), Page Duplication/Rename/Delete (`duplicate_page`, `rename_page`, `delete_page`), and 108 MCP Tools (`commit 757e7ac`)**.
+  25. **M32: Smear Tool Localized Path Deformer (`smear_path_from_point`), Paragraph Text Frame Layout (`SetParagraphTextLayout`), Page Target Switch (`set_active_page_target`), Object Inspection (`inspect_object`), and 112 MCP Tools**:
+      - `coralcraft-geom`: Added `smear_path_from_point`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SmearObjectPath`, `SetParagraphTextLayout`, `inspect_object`, `smear_path`, `set_paragraph_text_layout`, `set_active_page_target`, and expanded MCP server to **112 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

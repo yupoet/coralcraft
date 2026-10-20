@@ -9,8 +9,8 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
     boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
-    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
-    twirl_path_around_point,
+    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, simplify_path_nodes, smear_path_from_point,
+    trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -219,6 +219,16 @@ pub enum EngineCommand {
     CloneEffectsFrom { source_id: ObjectId },
     /// Radially attracts (`strength > 0`) or repels (`strength < 0`) vertices within `radius_pt` of `center` on `object_id` (`Attract and Repel Tool`).
     AttractRepelObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64 },
+    /// Directionally drags vertices within `radius_pt` of `origin` along `(dx_pt, dy_pt)` on `object_id` (`Smear Tool`).
+    SmearObjectPath { object_id: ObjectId, origin: Point, radius_pt: F64, dx_pt: F64, dy_pt: F64 },
+    /// Updates multi-column layout (`columns`, `gutter_pt`, `line_spacing`, `alignment`) on a `ParagraphText` frame (`Text -> Columns / Paragraph Formatting`).
+    SetParagraphTextLayout {
+        object_id: ObjectId,
+        columns: Option<u32>,
+        gutter_pt: Option<F64>,
+        line_spacing: Option<F64>,
+        alignment: Option<TextAlignment>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -912,6 +922,21 @@ impl EditorEngine {
                     !o.locked
                         && object_to_path(o).is_some_and(|p| radial_push_path_around_point(&p, *center, radius_pt.get(), strength.get()).is_ok())
                 });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| smear_path_from_point(&p, *origin, radius_pt.get(), dx_pt.get(), dy_pt.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetParagraphTextLayout { object_id, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ParagraphText(_)));
                 if !valid {
                     return false;
                 }
@@ -2504,6 +2529,45 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
+                let r = radius_pt.get();
+                let dx = dx_pt.get();
+                let dy = dy_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smear_path_from_point(&base_path, origin, r, dx, dy)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetParagraphTextLayout { object_id, columns, gutter_pt, line_spacing, alignment } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::ParagraphText(spec) = &mut obj.kind
+                    {
+                        if let Some(cols) = columns {
+                            spec.columns = cols.clamp(1, 8);
+                        }
+                        if let Some(g) = gutter_pt
+                            && let Ok(clamped) = F64::new(g.get().max(0.0))
+                        {
+                            spec.gutter_pt = clamped;
+                        }
+                        if let Some(ls) = line_spacing
+                            && let Ok(clamped) = F64::new(ls.get().clamp(0.5, 5.0))
+                        {
+                            spec.line_spacing_multiplier = clamped;
+                        }
+                        if let Some(align) = alignment {
+                            spec.alignment = align;
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -2646,6 +2710,12 @@ impl EditorEngine {
                 self.document.master_layers.iter().find(|l| l.role == LayerRole::Desktop).map_or(&[], |l| l.objects.as_slice())
             }
         }
+    }
+
+    /// Looks up an [`ObjectNode`] by `id` across all numbered pages and master/desktop layers.
+    #[must_use]
+    pub fn inspect_object(&self, id: ObjectId) -> Option<&ObjectNode> {
+        self.selected_or_all_node(id)
     }
 
     fn selected_or_all_node(&self, id: ObjectId) -> Option<&ObjectNode> {
@@ -3218,12 +3288,32 @@ mod tests {
         assert!(engine.execute(EngineCommand::ClearEffects { object_id: boundary_id }));
         assert!(engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
 
-        // 25. AttractRepelObjectPath
+        // 25. AttractRepelObjectPath, SmearObjectPath, and SetParagraphTextLayout
         assert!(engine.execute(EngineCommand::AttractRepelObjectPath {
             object_id: boundary_id,
             center: Point::new(100.0, 100.0).unwrap(),
             radius_pt: F64::new(60.0).unwrap(),
             strength: F64::new(0.4).unwrap(),
         }));
+        assert!(engine.execute(EngineCommand::SmearObjectPath {
+            object_id: boundary_id,
+            origin: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            dx_pt: F64::new(12.0).unwrap(),
+            dy_pt: F64::new(-8.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SetParagraphTextLayout {
+            object_id: art_id,
+            columns: Some(2),
+            gutter_pt: Some(F64::new(14.0).unwrap()),
+            line_spacing: Some(F64::new(1.5).unwrap()),
+            alignment: Some(TextAlignment::Justify),
+        }));
+        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
+            assert_eq!(pt.columns, 2);
+            assert_eq!(pt.alignment, TextAlignment::Justify);
+        } else {
+            panic!("expected ParagraphText");
+        }
     }
 }

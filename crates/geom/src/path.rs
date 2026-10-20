@@ -1182,6 +1182,36 @@ pub fn radial_push_path_around_point(path: &Path, center: Point, radius_pt: f64,
     Ok(out)
 }
 
+/// Directionally drags vertices within `radius_pt` of `origin` along `(dx_pt, dy_pt)` with smooth quadratic falloff (`Smear Tool`).
+pub fn smear_path_from_point(path: &Path, origin: Point, radius_pt: f64, dx_pt: f64, dy_pt: f64) -> Result<Path, GeomError> {
+    let r = crate::F64::new(radius_pt)?.get();
+    let dx = crate::F64::new(dx_pt)?.get();
+    let dy = crate::F64::new(dy_pt)?.get();
+    if r <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("radius_pt must be positive"));
+    }
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let dist = (p.x.get() - origin.x.get()).hypot(p.y.get() - origin.y.get());
+        if dist >= r {
+            return Ok(p);
+        }
+        let u = 1.0 - dist / r;
+        let w = u * u;
+        Point::new(p.x.get() + dx * w, p.y.get() + dy * w)
+    };
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => out.move_to(warp_pt(p)?)?,
+            PathElement::LineTo(p) => out.line_to(warp_pt(p)?)?,
+            PathElement::QuadTo { ctrl, end } => out.quad_to(warp_pt(ctrl)?, warp_pt(end)?)?,
+            PathElement::CubicTo { c1, c2, end } => out.cubic_to(warp_pt(c1)?, warp_pt(c2)?, warp_pt(end)?)?,
+            PathElement::Close => out.close()?,
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1208,5 +1238,7 @@ mod m26_tests {
         assert_eq!(twirled.elements.len(), 2);
         let attracted = radial_push_path_around_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 0.5).unwrap();
         assert_eq!(attracted.elements.len(), 2);
+        let smeared = smear_path_from_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 15.0, -10.0).unwrap();
+        assert_eq!(smeared.elements.len(), 2);
     }
 }
