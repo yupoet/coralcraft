@@ -1,13 +1,14 @@
 //! Model Context Protocol (MCP) JSON-RPC 2.0 server (`coralcraft-mcp`, L6)
 //! for agent-driven multi-page CorelDRAW illustration and vector export.
+#![recursion_limit = "512"]
 
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_callout_path, build_connector_path,
-    build_graph_paper_path, build_spiral_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_callout_path,
+    build_connector_path, build_graph_paper_path, build_spiral_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -358,6 +359,21 @@ impl McpServer {
                         {
                             "name": "mirror_selection",
                             "description": "Mirrors selected objects horizontally and/or vertically around their center, optionally duplicating (copy=true).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_angular_dimension",
+                            "description": "Adds an engineering angular dimension annotation measuring the angle at (vx, vy) between (x1, y1) and (x2, y2) with arc_radius_pt and label.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "create_boundary",
+                            "description": "Creates a new closed union silhouette path around selected objects without deleting originals (Object -> Shaping -> Boundary).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "convert_outline_to_object",
+                            "description": "Converts selected objects' outlines into closed filled vector paths (Object -> Convert Outline to Object / Ctrl+Shift+Q).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -947,6 +963,34 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "mirrored": ok, "selected_ids": ids }))
             }
+            "add_angular_dimension" => {
+                let vx = args.get("vx").and_then(Value::as_f64).unwrap_or(100.0);
+                let vy = args.get("vy").and_then(Value::as_f64).unwrap_or(100.0);
+                let x1 = args.get("x1").and_then(Value::as_f64).unwrap_or(180.0);
+                let y1 = args.get("y1").and_then(Value::as_f64).unwrap_or(100.0);
+                let x2 = args.get("x2").and_then(Value::as_f64).unwrap_or(100.0);
+                let y2 = args.get("y2").and_then(Value::as_f64).unwrap_or(180.0);
+                let arc_radius_pt = args.get("arc_radius_pt").and_then(Value::as_f64).unwrap_or(40.0);
+                let label = args.get("label").and_then(Value::as_str).unwrap_or("90 deg");
+                let font_size_pt = args.get("font_size_pt").and_then(Value::as_f64).unwrap_or(10.0);
+                let vertex = Point::new(vx, vy).map_err(|e| e.to_string())?;
+                let ray1 = Point::new(x1, y1).map_err(|e| e.to_string())?;
+                let ray2 = Point::new(x2, y2).map_err(|e| e.to_string())?;
+                let path = build_angular_dimension_path(vertex, ray1, ray2, arc_radius_pt, label, font_size_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Angular Dimension".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "angular_dimension", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "create_boundary" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::CreateBoundary);
+                Ok(json!({ "boundary_created": ok, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "convert_outline_to_object" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::ConvertOutlineToObject);
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "converted_outline": ok, "selected_ids": ids }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -976,7 +1020,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 53);
+        assert_eq!(tools, 56);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

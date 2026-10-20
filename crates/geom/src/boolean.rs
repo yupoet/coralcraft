@@ -414,6 +414,106 @@ pub fn build_linear_dimension_path(p1: Point, p2: Point, offset_pt: f64, label: 
     local.transform(tf)
 }
 
+/// Builds a parametric CorelDRAW Angular Dimension path measuring the interior angle at `vertex`
+/// between `ray1_pt` and `ray2_pt` with circular dimension arc at `arc_radius_pt`, extension rays,
+/// tangent arrowheads, and an angle `label` positioned outside the arc midpoint.
+pub fn build_angular_dimension_path(
+    vertex: Point,
+    ray1_pt: Point,
+    ray2_pt: Point,
+    arc_radius_pt: f64,
+    label: &str,
+    font_size_pt: f64,
+) -> Result<Path, GeomError> {
+    if !arc_radius_pt.is_finite() || !font_size_pt.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if arc_radius_pt <= 0.0 || font_size_pt <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("angular dimension radius and font size must be positive"));
+    }
+    let vx = vertex.x.get();
+    let vy = vertex.y.get();
+    let dx1 = ray1_pt.x.get() - vx;
+    let dy1 = ray1_pt.y.get() - vy;
+    let dx2 = ray2_pt.x.get() - vx;
+    let dy2 = ray2_pt.y.get() - vy;
+    if dx1.hypot(dy1) < 1e-6 || dx2.hypot(dy2) < 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("degenerate angular dimension ray"));
+    }
+
+    let a1 = dy1.atan2(dx1);
+    let a2 = dy2.atan2(dx2);
+    let mut delta = (a2 - a1).rem_euclid(std::f64::consts::TAU);
+    if delta > std::f64::consts::PI {
+        delta -= std::f64::consts::TAU;
+    }
+    if delta.abs() < 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("collinear angular dimension rays"));
+    }
+
+    let arrow = (font_size_pt * 0.4).clamp(2.0, 8.0);
+    let ext_r = arc_radius_pt + arrow * 0.75;
+    let a_end = a1 + delta;
+
+    let mut path = Path::new();
+    // 1. Extension rays from vertex
+    path.move_to(vertex)?;
+    path.line_to(Point::new(vx + ext_r * a1.cos(), vy + ext_r * a1.sin())?)?;
+    path.move_to(vertex)?;
+    path.line_to(Point::new(vx + ext_r * a_end.cos(), vy + ext_r * a_end.sin())?)?;
+
+    // 2. Dimension circular arc (16 segments)
+    let steps = 16_u32;
+    let p_arc_start = Point::new(vx + arc_radius_pt * a1.cos(), vy + arc_radius_pt * a1.sin())?;
+    path.move_to(p_arc_start)?;
+    for step in 1..=steps {
+        let t = f64::from(step) / f64::from(steps);
+        let ang = a1 + delta * t;
+        path.line_to(Point::new(vx + arc_radius_pt * ang.cos(), vy + arc_radius_pt * ang.sin())?)?;
+    }
+
+    // 3. Tangent arrowheads at arc endpoints
+    let dir_sign = if delta >= 0.0 { 1.0 } else { -1.0 };
+    let aw = arrow.min(arc_radius_pt * delta.abs() * 0.4);
+    let ah = aw * 0.4;
+
+    // Start arrowhead pointing along +dir_sign tangent
+    let tx1 = -a1.sin() * dir_sign;
+    let ty1 = a1.cos() * dir_sign;
+    let rx1 = a1.cos();
+    let ry1 = a1.sin();
+    path.move_to(p_arc_start)?;
+    path.line_to(Point::new(p_arc_start.x.get() + aw * tx1 - ah * rx1, p_arc_start.y.get() + aw * ty1 - ah * ry1)?)?;
+    path.line_to(Point::new(p_arc_start.x.get() + aw * tx1 + ah * rx1, p_arc_start.y.get() + aw * ty1 + ah * ry1)?)?;
+    path.close()?;
+
+    // End arrowhead pointing along -dir_sign tangent
+    let p_arc_end = Point::new(vx + arc_radius_pt * a_end.cos(), vy + arc_radius_pt * a_end.sin())?;
+    let tx2 = a_end.sin() * dir_sign;
+    let ty2 = -a_end.cos() * dir_sign;
+    let rx2 = a_end.cos();
+    let ry2 = a_end.sin();
+    path.move_to(p_arc_end)?;
+    path.line_to(Point::new(p_arc_end.x.get() + aw * tx2 - ah * rx2, p_arc_end.y.get() + aw * ty2 - ah * ry2)?)?;
+    path.line_to(Point::new(p_arc_end.x.get() + aw * tx2 + ah * rx2, p_arc_end.y.get() + aw * ty2 + ah * ry2)?)?;
+    path.close()?;
+
+    // 4. Angle measurement label outside the arc midpoint
+    if !label.is_empty() {
+        let a_mid = a1 + delta * 0.5;
+        let label_r = arc_radius_pt + font_size_pt * 0.8;
+        let scale = (font_size_pt / 10.0).max(0.1);
+        let label_w: f64 = label.chars().map(|ch| (glyph_outline(ch).0 + 1.5) * scale).sum();
+        let text_origin = Point::new(vx + label_r * a_mid.cos() - label_w * 0.5, vy + label_r * a_mid.sin())?;
+        let label_path = artistic_text_to_path(label, "Sans", font_size_pt, text_origin);
+        for el in label_path.elements {
+            path.push(el)?;
+        }
+    }
+
+    Ok(path)
+}
+
 #[derive(Clone, Copy)]
 enum GlyphOp {
     MoveTo(f64, f64),
@@ -543,5 +643,18 @@ mod tests {
         assert!((db.x0.get() - 20.0).abs() < 1e-4);
         assert!((db.x1.get() - 140.0).abs() < 1e-4);
         assert!(db.height() >= 18.0);
+
+        let ang_dim = build_angular_dimension_path(
+            Point::new(100.0, 100.0).unwrap(),
+            Point::new(180.0, 100.0).unwrap(),
+            Point::new(100.0, 180.0).unwrap(),
+            40.0,
+            "90 deg",
+            10.0,
+        )
+        .unwrap();
+        let ab = ang_dim.bounds().unwrap();
+        assert!(ab.width() >= 40.0);
+        assert!(ab.height() >= 40.0);
     }
 }

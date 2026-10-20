@@ -137,6 +137,10 @@ pub enum EngineCommand {
     TraceBitmap { object_id: ObjectId, threshold: u8 },
     /// Mirrors selected objects horizontally and/or vertically around their combined center, optionally duplicating (`Object -> Transformations -> Scale and Mirror`).
     MirrorSelection { horizontal: bool, vertical: bool, copy: bool },
+    /// Creates a new closed union silhouette `ObjectNode` around selected objects without deleting originals (`Object -> Shaping -> Boundary`).
+    CreateBoundary,
+    /// Converts each selected object's `OutlineStyle` stroke into a closed filled `ObjectKind::Path` (`Object -> Convert Outline to Object` / `Ctrl+Shift+Q`).
+    ConvertOutlineToObject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,6 +598,23 @@ impl EditorEngine {
                 let sel = &self.selection;
                 let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
                 if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::CreateBoundary => {
+                let sel = &self.selection;
+                let has_path = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some());
+                if !has_path {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertOutlineToObject => {
+                let sel = &self.selection;
+                let has_outlined = self
+                    .current_target_objects()
+                    .iter()
+                    .any(|o| !o.locked && sel.contains(&o.id) && o.outline.is_some() && object_to_path(o).is_some());
+                if !has_outlined {
                     return false;
                 }
             }
@@ -1604,6 +1625,49 @@ impl EditorEngine {
                     });
                 }
             }
+            EngineCommand::CreateBoundary => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let default_outline = self.default_outline.clone();
+                let layer = self.target_layer_mut();
+                let mut boundary_path: Option<Path> = None;
+                let mut boundary_outline = None;
+                for obj in &layer.objects {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let Some(local_p) = object_to_path(obj)
+                        && let Ok(world_p) = local_p.transform(obj.transform)
+                    {
+                        boundary_outline = obj.outline.clone();
+                        boundary_path = Some(match boundary_path {
+                            None => world_p,
+                            Some(acc) => boolean_paths(&acc, &world_p, BooleanOp::Weld).unwrap_or(acc),
+                        });
+                    }
+                }
+                let Some(final_path) = boundary_path else {
+                    return false;
+                };
+                let outline = boundary_outline.or(default_outline).or_else(|| Some(OutlineStyle::hairline(Color::BLACK)));
+                let new_node = ObjectNode::new(new_id, Some("Boundary".to_owned()), ObjectKind::Path(final_path), None, outline);
+                layer.objects.push(new_node);
+                self.selection = vec![new_id];
+            }
+            EngineCommand::ConvertOutlineToObject => {
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(outline) = obj.outline.clone()
+                        && let Some(base_path) = object_to_path(obj)
+                    {
+                        let w = outline.width_pt.get().max(0.25);
+                        if let Ok(stroke_path) = coralcraft_geom::expand_artistic_brush_stroke(&base_path, w, w) {
+                            obj.kind = ObjectKind::Path(stroke_path);
+                            obj.fill = Some(FillStyle::uniform(outline.color));
+                            obj.outline = None;
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -2109,5 +2173,16 @@ mod tests {
         assert!(engine.execute(EngineCommand::CombineSelection));
         assert!(engine.execute(EngineCommand::BreakApartSelection));
         assert!(engine.selection.len() >= 2);
+
+        // 13. CreateBoundary (non-destructive union silhouette) & ConvertOutlineToObject (Ctrl+Shift+Q)
+        let count_before_boundary = engine.current_target_objects().len();
+        assert!(engine.execute(EngineCommand::CreateBoundary));
+        assert_eq!(engine.current_target_objects().len(), count_before_boundary + 1);
+        let boundary_id = engine.selection[0];
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().outline.is_some());
+        assert!(engine.execute(EngineCommand::ConvertOutlineToObject));
+        let converted = engine.selected_or_all_node(boundary_id).unwrap();
+        assert!(converted.outline.is_none());
+        assert!(converted.fill.is_some());
     }
 }

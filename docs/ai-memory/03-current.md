@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M17 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M18 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -15,9 +15,10 @@
   7. **M14: Encapsulated PostScript (`EPSF-3.0`), AutoCAD `DXF` (`AC1009`) Export/Import, SVG 1.1 Vector Import (`import_svg`), and 41 MCP Tools (`commit 4e50004`)**.
   8. **M15: Symmetrical & Logarithmic Spirals (`build_spiral_path`), Graph Paper Grid (`build_graph_paper_path`), N-Up PDF Sheet Imposition (`export_pdf_imposed`), Attributes Eyedropper (`CopyPropertiesFrom`), and 45 MCP Tools (`commit 2682dd1`)**.
   9. **M16: Orthogonal Connectors (`build_connector_path`), Callout Boxes (`build_callout_path`), Combine/Break Apart (`Ctrl+L`/`Ctrl+K`), Bitmap Adjustments (`AdjustBitmap`), and 50 MCP Tools (`commit fecf0a1`)**.
-  10. **M17: Interactive Distortion Effects (`PushPull`/`Zipper`/`Twister`), PowerTrace Bitmap-to-Vector Outline Tracer (`trace_bitmap_to_path`), Mirror & Symmetry Duplication (`MirrorSelection`), and 53 MCP Tools**:
-      - `coralcraft-geom`: Added `DistortionKind`, `distort_path`, and `trace_bitmap_to_path`.
-      - `coralcraft-doc`, `coralcraft-render`, `coralcraft-engine`, `coralcraft-mcp`: Added `VectorEffect::Distortion`, `ApplyDistortion`, `TraceBitmap`, `MirrorSelection`, and expanded MCP server to **53 tools**.
+  10. **M17: Interactive Distortion Effects (`PushPull`/`Zipper`/`Twister`), PowerTrace Bitmap-to-Vector Outline Tracer (`trace_bitmap_to_path`), Mirror & Symmetry Duplication (`MirrorSelection`), and 53 MCP Tools (`commit 95a59d9`)**.
+  11. **M18: Engineering Angular Dimensions (`build_angular_dimension_path`), Create Boundary Silhouette (`CreateBoundary`), Convert Outline to Object (`Ctrl+Shift+Q`), and 56 MCP Tools**:
+      - `coralcraft-geom`: Added `build_angular_dimension_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `CreateBoundary`, `ConvertOutlineToObject`, and expanded MCP server to **56 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 
