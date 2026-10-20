@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-const TOOLS_JSON: &str = r##"{
+const TOOLS_JSON: &str = r#"{
   "tools": [
     {
       "name": "new_document",
@@ -3005,7 +3005,7 @@ const TOOLS_JSON: &str = r##"{
       }
     }
   ]
-}"##;
+}"#;
 
 /// Returns the cached `tools/list` result payload containing all 244 MCP tool definitions.
 #[must_use]

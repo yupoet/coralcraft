@@ -1,6 +1,6 @@
 //! Robustness tests: hostile tool arguments must yield error results, never crash the server.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use coralcraft_mcp::McpServer;
 use serde_json::{Value, json};

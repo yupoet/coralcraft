@@ -38,6 +38,39 @@ fn sanitize_dxf_name(s: &str) -> String {
     if out.is_empty() { "0".to_owned() } else { out }
 }
 
+fn sanitize_dxf_text(s: &str) -> String {
+    s.chars().filter(|&ch| ch != '\n' && ch != '\r').collect()
+}
+
+fn ps_font_name(font_family: &str) -> &'static str {
+    let lower = font_family.to_ascii_lowercase();
+    if lower.contains("times") || lower.contains("serif") {
+        "Times-Roman"
+    } else if lower.contains("courier") || lower.contains("mono") {
+        "Courier"
+    } else {
+        "Helvetica"
+    }
+}
+
+fn transform_scale(tf: Affine2) -> f64 {
+    let a = tf.a.get();
+    let b = tf.b.get();
+    let c = tf.c.get();
+    let d = tf.d.get();
+    let s = ((a * a + b * b + c * c + d * d) * 0.5).sqrt();
+    if s.is_finite() && s > 0.0 { s } else { 1.0 }
+}
+
+fn node_fill_color(node: &ObjectNode) -> Option<&Color> {
+    node.fill.as_ref().and_then(|fill| match fill {
+        FillStyle::Uniform { color } => Some(color),
+        FillStyle::Fountain { stops, .. } => stops.first().map(|s| &s.color),
+        FillStyle::TwoColorPattern { fg_color, .. } => Some(fg_color),
+        FillStyle::Unknown { .. } => None,
+    })
+}
+
 /// Exports `page_index` (0-based) of `doc` as a clean-room Encapsulated PostScript (`%!PS-Adobe-3.0 EPSF-3.0`) document.
 pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
@@ -84,6 +117,51 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
             emit_eps_node(out, ch, world_tf, page_h)?;
         }
         return Ok(());
+    }
+    if node.effects.is_empty() {
+        match &node.kind {
+            ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+                if !text.is_empty() {
+                    let col = node_fill_color(node).unwrap_or(&Color::BLACK);
+                    emit_ps_color(out, col);
+                    let scaled_sz = (size_pt.get() * transform_scale(world_tf)).max(0.1);
+                    let _ = writeln!(out, "/{} findfont {} scalefont setfont", ps_font_name(font_family), fmt_num(scaled_sz));
+                    let world_pt = world_tf.apply_point(*position)?;
+                    let _ = writeln!(
+                        out,
+                        "{} {} moveto\n({}) show",
+                        fmt_num(world_pt.x.get()),
+                        fmt_num(page_h - world_pt.y.get()),
+                        sanitize_ps_text(text)
+                    );
+                }
+                return Ok(());
+            }
+            ObjectKind::ParagraphText(pt) => {
+                let layout = coralcraft_doc::layout_paragraph_text(pt);
+                if !layout.lines.is_empty() {
+                    let col = node_fill_color(node).unwrap_or(&Color::BLACK);
+                    emit_ps_color(out, col);
+                    let scaled_sz = (pt.font_size_pt.get() * transform_scale(world_tf)).max(0.1);
+                    let _ = writeln!(out, "/{} findfont {} scalefont setfont", ps_font_name(&pt.font_family), fmt_num(scaled_sz));
+                    for line in &layout.lines {
+                        if let Ok(local_pt) = Point::new(line.origin_x, line.origin_y)
+                            && let Ok(world_pt) = world_tf.apply_point(local_pt)
+                        {
+                            let _ = writeln!(
+                                out,
+                                "{} {} moveto\n({}) show",
+                                fmt_num(world_pt.x.get()),
+                                fmt_num(page_h - world_pt.y.get()),
+                                sanitize_ps_text(&line.text)
+                            );
+                        }
+                    }
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
     }
     let Some((mut local_path, mut local_bbox)) = extract_local_path_and_bbox(&node.kind)? else {
         return Ok(());
@@ -271,6 +349,46 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
         }
         return Ok(());
     }
+    if node.effects.is_empty() {
+        match &node.kind {
+            ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+                let clean = sanitize_dxf_text(text);
+                if !clean.is_empty() {
+                    let world_pt = world_tf.apply_point(*position)?;
+                    let h_pt = (size_pt.get() * transform_scale(world_tf)).max(0.1);
+                    let _ = writeln!(
+                        out,
+                        "0\nTEXT\n8\n{layer_name}\n10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
+                        fmt_num(world_pt.x.get()),
+                        fmt_num(page_h - world_pt.y.get()),
+                        fmt_num(h_pt)
+                    );
+                }
+                return Ok(());
+            }
+            ObjectKind::ParagraphText(pt) => {
+                let layout = coralcraft_doc::layout_paragraph_text(pt);
+                let h_pt = (pt.font_size_pt.get() * transform_scale(world_tf)).max(0.1);
+                for line in &layout.lines {
+                    let clean = sanitize_dxf_text(&line.text);
+                    if !clean.is_empty()
+                        && let Ok(local_pt) = Point::new(line.origin_x, line.origin_y)
+                        && let Ok(world_pt) = world_tf.apply_point(local_pt)
+                    {
+                        let _ = writeln!(
+                            out,
+                            "0\nTEXT\n8\n{layer_name}\n10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
+                            fmt_num(world_pt.x.get()),
+                            fmt_num(page_h - world_pt.y.get()),
+                            fmt_num(h_pt)
+                        );
+                    }
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
     let Some((mut local_path, mut local_bbox)) = extract_local_path_and_bbox(&node.kind)? else {
         return Ok(());
     };
@@ -386,5 +504,60 @@ mod tests {
         let clip_pos = eps.find("\nclip\nnewpath\n").expect("PowerClip clip scope");
         assert!(stroke_pos < fill_pos, "behind_fill stroke must precede fill in EPS output");
         assert!(fill_pos < clip_pos, "PowerClip clip scope must follow fill");
+    }
+
+    #[test]
+    fn export_eps_and_dxf_emit_native_artistic_and_paragraph_text_m68() {
+        let mut doc = Document::new_a4_portrait();
+        let atxt = ObjectNode::new(
+            ObjectId(20),
+            Some("Headline".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Hello (EPS)".to_owned(),
+                font_family: "Helvetica".to_owned(),
+                size_pt: F64::new(18.0).unwrap(),
+                position: Point::new(50.0, 100.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::rgb8(20, 40, 200))),
+            None,
+        );
+        let ptxt_spec = coralcraft_doc::ParagraphTextSpec::new(
+            Point::new(50.0, 200.0).unwrap(),
+            160.0,
+            80.0,
+            "First line\nSecond line".to_owned(),
+            "Times".to_owned(),
+            12.0,
+            1.2,
+            coralcraft_doc::TextAlignment::Left,
+            1,
+            12.0,
+        )
+        .unwrap();
+        let ptxt = ObjectNode::new(
+            ObjectId(21),
+            Some("BodyFrame".to_owned()),
+            ObjectKind::ParagraphText(Box::new(ptxt_spec)),
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        );
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+        objs.push(atxt);
+        objs.push(ptxt);
+
+        let eps = export_eps(&doc, 0).expect("export_eps");
+        assert!(eps.contains("/Helvetica findfont 18 scalefont setfont"), "EPS should select Helvetica 18pt: {eps}");
+        assert!(eps.contains("(Hello \\(EPS\\)) show"), "EPS should emit escaped PostScript show operator: {eps}");
+        assert!(eps.contains("/Times-Roman findfont 12 scalefont setfont"), "EPS should select Times-Roman 12pt: {eps}");
+        assert!(eps.contains("(First line) show") && eps.contains("(Second line) show"), "EPS should emit paragraph lines: {eps}");
+
+        let dxf = export_dxf(&doc, 0).expect("export_dxf");
+        assert!(dxf.contains("0\nTEXT\n8\nLayer_1\n"), "DXF should emit TEXT entities: {dxf}");
+        assert!(dxf.contains("\n40\n18\n1\nHello (EPS)\n"), "DXF should include 18pt ArtisticText: {dxf}");
+        assert!(dxf.contains("\n1\nFirst line\n") && dxf.contains("\n1\nSecond line\n"), "DXF should include ParagraphText lines: {dxf}");
+
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf");
+        let re_objs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(re_objs.len(), 3, "import_dxf should reconstruct 3 ArtisticText objects from DXF TEXT entities");
     }
 }

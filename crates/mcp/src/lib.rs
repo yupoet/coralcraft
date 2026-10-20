@@ -100,9 +100,9 @@ impl McpServer {
                 break;
             }
             if let Some(pos) = newline_pos {
-                let take = pos + 1;
+                let take = pos.saturating_add(1);
                 if !oversized {
-                    let slice = &reader.fill_buf()?[..pos];
+                    let slice = reader.fill_buf()?.get(..pos).unwrap_or_default();
                     if line_buf.len().saturating_add(slice.len()) <= MAX_STDIO_LINE_BYTES {
                         line_buf.extend_from_slice(slice);
                     } else {
@@ -284,7 +284,7 @@ impl McpServer {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

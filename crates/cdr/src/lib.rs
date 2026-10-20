@@ -902,4 +902,40 @@ mod tests {
             other => panic!("expected ObjectKind::Group from CMX1 BeginGroup/EndGroup, got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_cdr7_and_decode_outl_dash_pattern_and_arrowheads_m68() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{ArrowheadKind, Document, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode, OutlineStyle};
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(20, 120, 220), F64::new(2.0).unwrap());
+        outl.cap = LineCap::Round;
+        outl.join = LineJoin::Bevel;
+        outl.behind_fill = true;
+        outl.scale_with_object = true;
+        outl.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()];
+        outl.start_arrow = ArrowheadKind::Triangle;
+        outl.end_arrow = ArrowheadKind::Diamond;
+
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(71),
+            Some("DashedArrowBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 40.0, 140.0, 100.0).unwrap())),
+            None,
+            Some(outl),
+        ));
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        let decoded_outl = parsed.document.pages[0].layers[0].objects[0].outline.as_ref().expect("decoded outline");
+        assert_eq!(decoded_outl.cap, LineCap::Round);
+        assert_eq!(decoded_outl.join, LineJoin::Bevel);
+        assert!(decoded_outl.behind_fill);
+        assert!(decoded_outl.scale_with_object);
+        assert_eq!(decoded_outl.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()]);
+        assert_eq!(decoded_outl.start_arrow, ArrowheadKind::Triangle);
+        assert_eq!(decoded_outl.end_arrow, ArrowheadKind::Diamond);
+    }
 }

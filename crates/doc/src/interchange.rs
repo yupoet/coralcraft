@@ -449,6 +449,41 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     );
                 }
             }
+        } else if code == 0 && val == "TEXT" {
+            p = p.saturating_add(1);
+            let mut tx = 0.0;
+            let mut ty = 0.0;
+            let mut height = 12.0;
+            let mut text_val = String::new();
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => tx = v.parse::<f64>().unwrap_or(0.0),
+                    20 => ty = v.parse::<f64>().unwrap_or(0.0),
+                    40 => height = v.parse::<f64>().unwrap_or(12.0),
+                    1 => text_val = v.to_owned(),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            if !text_val.is_empty()
+                && let Ok(pos) = Point::new(tx, page_h - ty)
+                && let Ok(size_pt) = F64::new(height.max(1.0))
+            {
+                let id = doc.allocate_object_id();
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Text".to_owned()),
+                        ObjectKind::ArtisticText { text: text_val, font_family: "Sans".to_owned(), size_pt, position: pos },
+                        Some(FillStyle::uniform(Color::BLACK)),
+                        None,
+                    ),
+                );
+            }
         } else {
             p = p.saturating_add(1);
         }

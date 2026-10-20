@@ -1267,7 +1267,8 @@ pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut 
         let caps = read_u16(endian, payload, 6).unwrap_or(0);
         let join = read_u16(endian, payload, 8).unwrap_or(0);
         let (width_pt_raw, _) = cdr_coord_to_pt(endian, payload, 12, version)?;
-        let width_pt = F64::new(width_pt_raw.abs().clamp(0.0, 288.0)).unwrap_or(F64::ZERO);
+        let width_rounded = (width_pt_raw.abs().clamp(0.0, 288.0) * 1000.0).round() / 1000.0;
+        let width_pt = F64::new(width_rounded).unwrap_or(F64::ZERO);
         let color = decode_cdr_color_v500(payload.get(76..88).unwrap_or_default(), endian, warnings).unwrap_or(Color::BLACK);
         let mut style = OutlineStyle::with_width(color, width_pt);
         style.behind_fill = (line_type & 0x08) != 0;
@@ -1282,6 +1283,31 @@ pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut 
             2 => LineJoin::Bevel,
             _ => LineJoin::Miter,
         };
+        let num_dash = (read_u16(endian, payload, 104).unwrap_or(0) as usize).min(11);
+        if (line_type & 0x04) != 0 && num_dash > 0 {
+            let base_w = if width_pt.get() > 0.0 { width_pt.get() } else { 1.0 };
+            for i in 0..num_dash {
+                let off = 106usize.saturating_add(i.saturating_mul(2));
+                if let Some(mult) = read_u16(endian, payload, off)
+                    && mult > 0
+                    && let Ok(val) = F64::new(((f64::from(mult) * base_w) * 1000.0).round() / 1000.0)
+                {
+                    style.dash_pattern.push(val);
+                }
+            }
+        }
+        if payload.len() >= 136 {
+            let decode_arrow = |id: u32| match id {
+                0 => coralcraft_doc::ArrowheadKind::None,
+                1 => coralcraft_doc::ArrowheadKind::Triangle,
+                2 => coralcraft_doc::ArrowheadKind::OpenArrow,
+                3 => coralcraft_doc::ArrowheadKind::Circle,
+                4 => coralcraft_doc::ArrowheadKind::Diamond,
+                _ => coralcraft_doc::ArrowheadKind::Unknown,
+            };
+            style.start_arrow = decode_arrow(read_u32(endian, payload, 128).unwrap_or(0));
+            style.end_arrow = decode_arrow(read_u32(endian, payload, 132).unwrap_or(0));
+        }
         return Some((outl_id, style));
     }
     if payload.len() < 12 {
@@ -2028,6 +2054,9 @@ fn encode_outl_payload(outl_id: u32, outl: &OutlineStyle) -> Vec<u8> {
     let mut p = Vec::with_capacity(136);
     p.extend_from_slice(&outl_id.to_le_bytes());
     let mut line_type = 0x0002u16; // Solid stroke enabled
+    if !outl.dash_pattern.is_empty() {
+        line_type |= 0x0004; // Dashed stroke enabled
+    }
     if outl.behind_fill {
         line_type |= 0x0008;
     }
@@ -2055,10 +2084,30 @@ fn encode_outl_payload(outl_id: u32, outl: &OutlineStyle) -> Vec<u8> {
     p.extend_from_slice(&[0u8; 52]); // pad (600 <= V < 1300)
     p.extend_from_slice(&encode_cdr_color_v500(&outl.color)); // 12B at offset 76..88
     p.extend_from_slice(&[0u8; 16]); // pad (V >= 600)
-    p.extend_from_slice(&0u16.to_le_bytes()); // num_dash = 0
-    p.extend_from_slice(&[0u8; 22]); // fixed dash table (22B for V >= 600)
-    p.extend_from_slice(&0u32.to_le_bytes()); // start_marker_id
-    p.extend_from_slice(&0u32.to_le_bytes()); // end_marker_id
+    let num_dash = outl.dash_pattern.len().min(11);
+    p.extend_from_slice(&(num_dash as u16).to_le_bytes()); // num_dash at 104..106
+    let base_w = if outl.width_pt.get() > 0.0 { outl.width_pt.get() } else { 1.0 };
+    let mut dash_table = [0u8; 22];
+    for (i, d) in outl.dash_pattern.iter().take(11).enumerate() {
+        let mult = (d.get() / base_w).round().clamp(1.0, f64::from(u16::MAX)) as u16;
+        let off = i.saturating_mul(2);
+        if let Some(slot) = dash_table.get_mut(off..off.saturating_add(2)) {
+            slot.copy_from_slice(&mult.to_le_bytes());
+        }
+    }
+    p.extend_from_slice(&dash_table); // fixed dash table (22B for V >= 600) at 106..128
+    let encode_arrow = |a: coralcraft_doc::ArrowheadKind| -> u32 {
+        match a {
+            coralcraft_doc::ArrowheadKind::None => 0,
+            coralcraft_doc::ArrowheadKind::Triangle => 1,
+            coralcraft_doc::ArrowheadKind::OpenArrow => 2,
+            coralcraft_doc::ArrowheadKind::Circle => 3,
+            coralcraft_doc::ArrowheadKind::Diamond => 4,
+            coralcraft_doc::ArrowheadKind::Unknown => 99,
+        }
+    };
+    p.extend_from_slice(&encode_arrow(outl.start_arrow).to_le_bytes()); // start_marker_id at 128..132
+    p.extend_from_slice(&encode_arrow(outl.end_arrow).to_le_bytes()); // end_marker_id at 132..136
     p
 }
 

@@ -1260,8 +1260,8 @@ impl McpServer {
                 if let Some(arr) = args.get("radii_pt").and_then(Value::as_array)
                     && arr.len() == 4
                 {
-                    for (idx, val) in arr.iter().enumerate() {
-                        radii[idx] = F64::new(val.as_f64().unwrap_or(0.0).max(0.0)).map_err(|e| e.to_string())?;
+                    for (slot, val) in radii.iter_mut().zip(arr.iter()) {
+                        *slot = F64::new(val.as_f64().unwrap_or(0.0).max(0.0)).map_err(|e| e.to_string())?;
                     }
                     corners_locked = args.get("corners_locked").and_then(Value::as_bool).unwrap_or(false);
                 }
@@ -1532,8 +1532,7 @@ impl McpServer {
                 if let Some(arr) = args.get("points").and_then(Value::as_array) {
                     for item in arr {
                         if let Some(pair) = item.as_array()
-                            && pair.len() >= 2
-                            && let (Some(x), Some(y)) = (pair[0].as_f64(), pair[1].as_f64())
+                            && let (Some(x), Some(y)) = (pair.first().and_then(Value::as_f64), pair.get(1).and_then(Value::as_f64))
                         {
                             pts.push(Point::new(x, y).map_err(|e| e.to_string())?);
                         }
@@ -1597,8 +1596,7 @@ impl McpServer {
                 let element_indices: Vec<usize> = args
                     .get("element_indices")
                     .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
-                    .unwrap_or_else(|| vec![0, 1]);
+                    .map_or_else(|| vec![0, 1], |arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect());
                 let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
                 let vertical = args.get("vertical").and_then(Value::as_bool).unwrap_or(false);
                 let ok = self.exec(EngineCommand::AlignCurveNodes { object_id: target, element_indices, horizontal, vertical });
@@ -1667,8 +1665,7 @@ impl McpServer {
                 let element_indices: Vec<usize> = args
                     .get("element_indices")
                     .and_then(Value::as_array)
-                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
-                    .unwrap_or_else(|| vec![0, 1]);
+                    .map_or_else(|| vec![0, 1], |arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect());
                 let scale_x = F64::new(args.get("scale_x").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
                 let scale_y = F64::new(args.get("scale_y").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
                 let rotate_deg = F64::new(args.get("rotate_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
@@ -1990,8 +1987,7 @@ impl McpServer {
                 if let Some(arr) = args.get("seeds").and_then(Value::as_array) {
                     for item in arr {
                         if let Some(pair) = item.as_array()
-                            && pair.len() >= 2
-                            && let (Some(sx), Some(sy)) = (pair[0].as_f64(), pair[1].as_f64())
+                            && let (Some(sx), Some(sy)) = (pair.first().and_then(Value::as_f64), pair.get(1).and_then(Value::as_f64))
                         {
                             seeds.push(Point::new(sx, sy).map_err(|e| e.to_string())?);
                         }
@@ -2598,11 +2594,11 @@ impl McpServer {
                 let mut total_objects = 0usize;
                 for page in &self.engine.document.pages {
                     for layer in &page.layers {
-                        total_objects += layer.objects.len();
+                        total_objects = total_objects.saturating_add(layer.objects.len());
                     }
                 }
                 for layer in &self.engine.document.master_layers {
-                    total_objects += layer.objects.len();
+                    total_objects = total_objects.saturating_add(layer.objects.len());
                 }
                 Ok(json!({
                     "title": self.engine.document.title,
@@ -2680,7 +2676,7 @@ impl McpServer {
                 let mut total_objects = 0usize;
                 for page in &doc.pages {
                     for layer in &page.layers {
-                        total_objects += layer.objects.len();
+                        total_objects = total_objects.saturating_add(layer.objects.len());
                     }
                 }
                 self.engine = EditorEngine::new(doc);

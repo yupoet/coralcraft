@@ -244,9 +244,14 @@
     - `coralcraft-render`: Upgraded `export_eps` with PostScript PowerClip clipping (`gsave`/`clip`/`eoclip`/`grestore`), `behind_fill` stroke ordering, `scale_with_object` linewidth scaling, and `setlinecap`/`setlinejoin`; enforced `MAX_PDF_EXPORT_BYTES` (`128 MiB`) across `export_svg_with_prepress`, `export_eps`, and `export_dxf`.
     - `coralcraft-cdr`: Parsed CMX1 `rclr`, `rpen`, and `rotl` style tables and `PolyCurve` Tag 1 (`RenderingAttr`) in `parse_cmx_commands_into_page`.
     - `apps/coralcraft`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` in `apps/coralcraft` (9 of 12 workspace crates now enforced).
+68. **M68 EPS Native PostScript Text (`findfont`/`scalefont`/`setfont`/`show`), DXF `TEXT` Entity Export & Import, CDR7 `outl` Dash Pattern & Arrowhead Round-Trip, and `coralcraft-mcp` Strict Lints**:
+    - `coralcraft-render` & `coralcraft-doc`: Emitted native PostScript text operators (`findfont`, `scalefont`, `setfont`, `moveto`, `show`) for `ArtisticText` and `ParagraphText` in `export_eps`, and DXF `TEXT` entities in `export_dxf` and `import_dxf`.
+    - `coralcraft-cdr`: Encoded and decoded `OutlineStyle::dash_pattern` (11-entry `u16` dash table) and `start_arrow`/`end_arrow` (`ArrowheadKind`) in `write_cdr7` / `decode_outl`.
+    - `coralcraft-mcp`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` across `coralcraft-mcp` (10 of 12 workspace crates now enforced).
 
 ## Changelog
 
+- 2026-10-21: M68 delivered (EPS native PostScript text `findfont`/`scalefont`/`setfont`/`show`, DXF `TEXT` entity export & import, CDR7 `outl` `dash_pattern` & `ArrowheadKind` round-trip, and strict clippy lints in `coralcraft-mcp`).
 - 2026-10-21: M67 delivered (EPS PowerClip `clip`/`eoclip`, `behind_fill`, `scale_with_object` & `setlinecap`/`setlinejoin`, SVG/EPS/DXF output budget guards, CMX1 `rclr`/`rpen`/`rotl` & `RenderingAttr` style parsing in `coralcraft-cdr`, and strict clippy lints in `apps/coralcraft`).
 - 2026-10-21: M66 delivered (`OffsetJoinKind` & `offset_path_with_join` circular arc-fan / bevel joins in `coralcraft-geom`, CMX1 `BeginGroup`/`EndGroup` round-trip in `coralcraft-cdr`, `MAX_PDF_EXPORT_BYTES` guard in `coralcraft-render`, and strict clippy lints in `coralcraft-cli` & `xtask`).
 - 2026-10-21: M65 delivered (`LIST grp ` hierarchical group parse/write round-trip, `extract_zip_data_file_streams` X6+ multi-stream loader, forward-compatible `#[serde(other)]` enum variants in `coralcraft-doc`, PDF/X-1a `/OutputIntents` in `export_pdf_with_prepress`, and strict clippy lints in `coralcraft-tools`).

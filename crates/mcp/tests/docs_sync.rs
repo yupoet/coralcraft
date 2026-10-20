@@ -4,8 +4,9 @@
 //! `END GENERATED TOOL LIST` markers) is generated from the server's own `tools/list` response.
 //! Regenerate it with `CORALCRAFT_BLESS=1 cargo test -p coralcraft-mcp --test docs_sync`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use coralcraft_mcp::McpServer;
@@ -36,9 +37,9 @@ fn render_block(tools: &[(String, String)]) -> String {
     let mut out = String::new();
     out.push_str(BEGIN);
     out.push('\n');
-    out.push_str(&format!("\n{} tools, sorted by name.\n\n| Tool | Description |\n|---|---|\n", tools.len()));
+    let _ = write!(out, "\n{} tools, sorted by name.\n\n| Tool | Description |\n|---|---|\n", tools.len());
     for (name, desc) in tools {
-        out.push_str(&format!("| `{name}` | {desc} |\n"));
+        let _ = writeln!(out, "| `{name}` | {desc} |");
     }
     out.push('\n');
     out.push_str(END);
