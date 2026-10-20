@@ -8,7 +8,7 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, close_open_subpaths, join_open_subpaths, reference_point, reverse_path_direction, trace_bitmap_to_path,
+    boolean_paths, close_open_subpaths, join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -163,6 +163,14 @@ pub enum EngineCommand {
     UngroupAllSelection,
     /// Moves the 0-based page at `from_index` to `to_index` and activates `to_index`.
     MovePage { from_index: usize, to_index: usize },
+    /// Simplifies `object_id`'s path using Ramer-Douglas-Peucker node reduction (`Shape Tool -> Reduce Nodes`).
+    ReducePathNodes { object_id: ObjectId, tolerance_pt: F64 },
+    /// Sets exact position `(x_pt, y_pt)` and/or dimensions `(width_pt, height_pt)` of the current selection relative to the 9-point Object Origin (`0..=8`).
+    SetSelectionBounds { x_pt: Option<F64>, y_pt: Option<F64>, width_pt: Option<F64>, height_pt: Option<F64>, origin_index: u8 },
+    /// Adds a new normal layer with `name` on the active page (`Object -> Layer -> New Layer`).
+    AddLayer { name: String },
+    /// Updates `visible`, `locked`, `printable`, and/or `opacity` on `layer_id` (`Objects` Docker).
+    SetLayerProperties { layer_id: LayerId, visible: Option<bool>, locked: Option<bool>, printable: Option<bool>, opacity: Option<F64> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -714,6 +722,42 @@ impl EditorEngine {
             EngineCommand::MovePage { from_index, to_index } => {
                 let len = self.document.pages.len();
                 if *from_index >= len || *to_index >= len || *from_index == *to_index {
+                    return false;
+                }
+            }
+            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
+                if tolerance_pt.get() < 0.0 {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
+                if *origin_index > 8 || (x_pt.is_none() && y_pt.is_none() && width_pt.is_none() && height_pt.is_none()) {
+                    return false;
+                }
+                if width_pt.is_some_and(|w| w.get() <= 1e-6) || height_pt.is_some_and(|h| h.get() <= 1e-6) {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::AddLayer { name } => {
+                if name.trim().is_empty() || self.document.pages.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
+                if visible.is_none() && locked.is_none() && printable.is_none() && opacity.is_none() {
+                    return false;
+                }
+                let exists = self.document.pages.iter().flat_map(|p| &p.layers).chain(&self.document.master_layers).any(|l| l.id == *layer_id);
+                if !exists {
                     return false;
                 }
             }
@@ -1931,6 +1975,92 @@ impl EditorEngine {
                 self.active_target = ActivePageTarget::Page(to_index);
                 self.selection.clear();
             }
+            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(reduced) = simplify_path_nodes(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(reduced);
+                    }
+                });
+            }
+            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let cur_w = bounds.width().max(1e-6);
+                let cur_h = bounds.height().max(1e-6);
+                let sx = width_pt.map_or(1.0, |w| (w.get() / cur_w).max(1e-6));
+                let sy = height_pt.map_or(1.0, |h| (h.get() / cur_h).max(1e-6));
+                let target_x = x_pt.map_or(pivot.x.get(), F64::get);
+                let target_y = y_pt.map_or(pivot.y.get(), F64::get);
+
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
+                    return false;
+                };
+                let Ok(t_to_target) = Affine2::translation(target_x, target_y) else {
+                    return false;
+                };
+                let Ok(tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_to_target)) else {
+                    return false;
+                };
+                self.apply_selection_transform(tf, false);
+            }
+            EngineCommand::AddLayer { name } => {
+                let id_raw = self.document.allocate_object_id().0;
+                let page_idx = self.current_page_index();
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    page.layers.push(Layer::new_normal(LayerId(id_raw), name.trim()));
+                }
+            }
+            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
+                for page in &mut self.document.pages {
+                    for layer in &mut page.layers {
+                        if layer.id == layer_id {
+                            if let Some(v) = visible {
+                                layer.visible = v;
+                            }
+                            if let Some(lk) = locked {
+                                layer.locked = lk;
+                            }
+                            if let Some(pr) = printable {
+                                layer.printable = pr;
+                            }
+                            if let Some(op) = opacity
+                                && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
+                            {
+                                layer.opacity = clamped;
+                            }
+                        }
+                    }
+                }
+                for layer in &mut self.document.master_layers {
+                    if layer.id == layer_id {
+                        if let Some(v) = visible {
+                            layer.visible = v;
+                        }
+                        if let Some(lk) = locked {
+                            layer.locked = lk;
+                        }
+                        if let Some(pr) = printable {
+                            layer.printable = pr;
+                        }
+                        if let Some(op) = opacity
+                            && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
+                        {
+                            layer.opacity = clamped;
+                        }
+                    }
+                }
+            }
         }
         true
     }
@@ -2530,5 +2660,30 @@ mod tests {
         assert_eq!(engine.document.pages.len(), 2);
         assert!(engine.execute(EngineCommand::MovePage { from_index: 1, to_index: 0 }));
         assert_eq!(engine.current_page_index(), 0);
+
+        // 17. ReducePathNodes, SetSelectionBounds, AddLayer, and SetLayerProperties
+        engine.set_active_target(ActivePageTarget::Page(1));
+        assert!(engine.execute(EngineCommand::ReducePathNodes { object_id: boundary_id, tolerance_pt: F64::new(1.5).unwrap() }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::SetSelectionBounds {
+            x_pt: Some(F64::new(100.0).unwrap()),
+            y_pt: Some(F64::new(100.0).unwrap()),
+            width_pt: Some(F64::new(80.0).unwrap()),
+            height_pt: Some(F64::new(50.0).unwrap()),
+            origin_index: 4,
+        }));
+        let layers_before = engine.document.pages[1].layers.len();
+        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 2".to_owned() }));
+        assert_eq!(engine.document.pages[1].layers.len(), layers_before + 1);
+        let new_layer_id = engine.document.pages[1].layers.last().unwrap().id;
+        assert!(engine.execute(EngineCommand::SetLayerProperties {
+            layer_id: new_layer_id,
+            visible: Some(false),
+            locked: Some(true),
+            printable: Some(false),
+            opacity: Some(F64::new(0.5).unwrap()),
+        }));
+        let updated_layer = engine.document.pages[1].layers.last().unwrap();
+        assert!(!updated_layer.visible && updated_layer.locked && !updated_layer.printable);
     }
 }

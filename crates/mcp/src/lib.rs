@@ -5,7 +5,7 @@
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
-    ArrowheadKind, Document, FillStyle, FountainGeometry, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
+    ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
     TextAlignment, TransparencyStyle, import_dxf, import_svg,
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
@@ -457,6 +457,26 @@ impl McpServer {
                         {
                             "name": "move_page",
                             "description": "Moves the 0-based page at from_index to to_index.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "reduce_path_nodes",
+                            "description": "Simplifies path subpaths in an object using Ramer-Douglas-Peucker node reduction (Shape Tool -> Reduce Nodes).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_selection_bounds",
+                            "description": "Sets exact position (x_pt, y_pt) and/or dimensions (width_pt, height_pt) of selected objects around any 9-point Object Origin (origin_index 0..=8).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_layer",
+                            "description": "Adds a new normal layer with the given name on the active page (Object -> Layer -> New Layer).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_layer_properties",
+                            "description": "Updates visible, locked, printable, and/or opacity on a layer (Objects Docker).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1266,6 +1286,38 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::MovePage { from_index, to_index });
                 Ok(json!({ "page_moved": ok, "pages": self.engine.document.pages.len(), "active_page_index": self.engine.current_page_index() }))
             }
+            "reduce_path_nodes" => {
+                let target = self.resolve_target_id(args)?;
+                let tolerance_pt = F64::new(args.get("tolerance_pt").and_then(Value::as_f64).unwrap_or(1.5)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ReducePathNodes { object_id: target, tolerance_pt });
+                Ok(json!({ "nodes_reduced": ok, "object_id": target.0 }))
+            }
+            "set_selection_bounds" => {
+                self.apply_optional_selection(args);
+                let x_pt = args.get("x_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let y_pt = args.get("y_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let width_pt = args.get("width_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let height_pt = args.get("height_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let origin_index = args.get("origin_index").and_then(Value::as_u64).unwrap_or(4).min(8) as u8;
+                let ok = self.engine.execute(EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index });
+                Ok(json!({ "bounds_set": ok }))
+            }
+            "add_layer" => {
+                let name = args.get("name").and_then(Value::as_str).unwrap_or("Layer 2").to_owned();
+                let ok = self.engine.execute(EngineCommand::AddLayer { name });
+                let page_idx = self.engine.current_page_index();
+                let layer_id = self.engine.document.pages.get(page_idx).and_then(|p| p.layers.last()).map(|l| l.id.0);
+                Ok(json!({ "layer_added": ok, "layer_id": layer_id }))
+            }
+            "set_layer_properties" => {
+                let layer_raw = args.get("layer_id").and_then(Value::as_u64).unwrap_or(2);
+                let visible = args.get("visible").and_then(Value::as_bool);
+                let locked = args.get("locked").and_then(Value::as_bool);
+                let printable = args.get("printable").and_then(Value::as_bool);
+                let opacity = args.get("opacity").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SetLayerProperties { layer_id: LayerId(layer_raw), visible, locked, printable, opacity });
+                Ok(json!({ "layer_updated": ok, "layer_id": layer_raw }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1295,7 +1347,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 72);
+        assert_eq!(tools, 76);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

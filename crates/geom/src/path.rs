@@ -893,3 +893,98 @@ pub fn join_open_subpaths(path: &Path, tolerance_pt: f64) -> Result<Path, GeomEr
     }
     Ok(out)
 }
+
+/// Simplifies each subpath in `path` using the Ramer-Douglas-Peucker algorithm with maximum perpendicular
+/// error `tolerance_pt` (`Shape Tool -> Reduce Nodes`).
+pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomError> {
+    if !tolerance_pt.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if tolerance_pt < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("tolerance_pt must be >= 0"));
+    }
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+
+    for poly in polylines {
+        let pts = &poly.points;
+        if pts.is_empty() {
+            continue;
+        }
+        if pts.len() <= 2 || tolerance_pt <= 1e-9 {
+            out.move_to(pts[0])?;
+            for &p in &pts[1..] {
+                out.line_to(p)?;
+            }
+            if poly.closed {
+                out.close()?;
+            }
+            continue;
+        }
+
+        let mut keep = vec![false; pts.len()];
+        keep[0] = true;
+        keep[pts.len() - 1] = true;
+        if poly.closed && pts.len() >= 4 {
+            keep[pts.len() / 2] = true;
+        }
+
+        let mut stack = Vec::new();
+        if poly.closed && pts.len() >= 4 {
+            stack.push((0usize, pts.len() / 2));
+            stack.push((pts.len() / 2, pts.len() - 1));
+        } else {
+            stack.push((0usize, pts.len() - 1));
+        }
+
+        while let Some((start_idx, end_idx)) = stack.pop() {
+            if end_idx <= start_idx + 1 {
+                continue;
+            }
+            let a = pts[start_idx];
+            let b = pts[end_idx];
+            let dx = b.x.get() - a.x.get();
+            let dy = b.y.get() - a.y.get();
+            let len_sq = dx * dx + dy * dy;
+
+            let mut max_dist = 0.0;
+            let mut max_idx = start_idx;
+            for (idx, p) in pts.iter().enumerate().take(end_idx).skip(start_idx + 1) {
+                let d = if len_sq <= 1e-12 {
+                    (p.x.get() - a.x.get()).hypot(p.y.get() - a.y.get())
+                } else {
+                    let t = (((p.x.get() - a.x.get()) * dx + (p.y.get() - a.y.get()) * dy) / len_sq).clamp(0.0, 1.0);
+                    let proj_x = a.x.get() + t * dx;
+                    let proj_y = a.y.get() + t * dy;
+                    (p.x.get() - proj_x).hypot(p.y.get() - proj_y)
+                };
+                if d > max_dist {
+                    max_dist = d;
+                    max_idx = idx;
+                }
+            }
+
+            if max_dist > tolerance_pt && max_idx > start_idx && max_idx < end_idx {
+                keep[max_idx] = true;
+                stack.push((start_idx, max_idx));
+                stack.push((max_idx, end_idx));
+            }
+        }
+
+        let mut first = true;
+        for (i, &p) in pts.iter().enumerate() {
+            if keep[i] {
+                if first {
+                    out.move_to(p)?;
+                    first = false;
+                } else {
+                    out.line_to(p)?;
+                }
+            }
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
