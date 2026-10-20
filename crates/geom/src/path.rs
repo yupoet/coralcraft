@@ -2232,6 +2232,89 @@ pub fn convex_hull_of_path(path: &Path) -> Result<Path, GeomError> {
     Ok(out)
 }
 
+/// Computes an internal medial-chord / centerline skeleton [`Path`] of `path` by sampling
+/// `sample_steps` (`8..=128`) boundary points along its arc length and pairing each sample
+/// with its closest non-local opposing boundary sample (`Object -> Shaping -> Centerline Skeleton`).
+pub fn medial_chord_skeleton_of_path(path: &Path, sample_steps: u32) -> Result<Path, GeomError> {
+    let lut = ArcLengthTable::from_path(path)?;
+    let total_len = lut.total_length();
+    if total_len <= 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("cannot skeletonize zero-length path"));
+    }
+    let steps = sample_steps.clamp(8, 128) as usize;
+    let mut samples = Vec::with_capacity(steps);
+    for i in 0..steps {
+        let u = (i as f64) / (steps as f64);
+        if let Some(s) = lut.sample_normalized(u) {
+            samples.push(s);
+        }
+    }
+    let n = samples.len();
+    if n < 8 {
+        return Err(GeomError::InvalidShapeParameter("insufficient boundary samples for skeleton"));
+    }
+    let min_idx_gap = (n / 6).max(2);
+    let mut midpoints = Vec::new();
+    for i in 0..n {
+        let pi = samples[i].point;
+        let ti = samples[i].tangent;
+        let mut best_dist = f64::INFINITY;
+        let mut best_mid = None;
+        for (j, sj) in samples.iter().enumerate() {
+            let diff = i.abs_diff(j);
+            let circ_gap = diff.min(n - diff);
+            if circ_gap < min_idx_gap {
+                continue;
+            }
+            let pj = sj.point;
+            let dx = pj.x.get() - pi.x.get();
+            let dy = pj.y.get() - pi.y.get();
+            let dist = dx.hypot(dy);
+            if dist <= 1e-6 {
+                continue;
+            }
+            // Prefer opposing chords roughly orthogonal to the local tangent
+            let ortho_penalty = 1.0 + ((dx * ti.0 + dy * ti.1) / dist).abs();
+            let score = dist * ortho_penalty;
+            if score < best_dist {
+                best_dist = score;
+                if let Ok(m) = Point::new(0.5 * (pi.x.get() + pj.x.get()), 0.5 * (pi.y.get() + pj.y.get())) {
+                    best_mid = Some(m);
+                }
+            }
+        }
+        if let Some(m) = best_mid {
+            midpoints.push(m);
+        }
+    }
+    if midpoints.len() < 2 {
+        return Err(GeomError::InvalidShapeParameter("skeleton produced fewer than 2 medial points"));
+    }
+    let max_jump = (total_len / (n as f64)) * 4.0;
+    let mut out = Path::new();
+    let mut prev: Option<Point> = None;
+    for m in midpoints {
+        if let Some(p) = prev {
+            let d = (m.x.get() - p.x.get()).hypot(m.y.get() - p.y.get());
+            if d <= 1e-4 {
+                continue;
+            }
+            if d <= max_jump {
+                out.line_to(m)?;
+            } else {
+                out.move_to(m)?;
+            }
+        } else {
+            out.move_to(m)?;
+        }
+        prev = Some(m);
+    }
+    if out.elements.len() < 2 {
+        out.line_to(prev.unwrap_or(Point::ZERO))?;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2327,5 +2410,8 @@ mod m26_tests {
 
         let hull = convex_hull_of_path(&sym).unwrap();
         assert!(hull.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let skel = medial_chord_skeleton_of_path(&rect_path, 24).unwrap();
+        assert!(skel.elements.len() >= 2);
     }
 }

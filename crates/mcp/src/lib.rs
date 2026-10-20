@@ -3,7 +3,7 @@
 #![recursion_limit = "512"]
 
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
-use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, serialize_binary_cpl};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
     ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json,
@@ -13,8 +13,8 @@ use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
-    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_honeycomb_grid_path, build_impact_rays_path,
-    build_isometric_box_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
+    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_hilbert_curve_path, build_honeycomb_grid_path,
+    build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
     build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
     build_voronoi_mosaic_path,
 };
@@ -1157,6 +1157,56 @@ impl McpServer {
                                     "margin_pt": { "type": "number" },
                                     "gutter_pt": { "type": "number" },
                                     "crop_marks": { "type": "boolean" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "add_hilbert_curve",
+                            "description": "Adds a continuous space-filling Hilbert fractal polyline path of order 1..=5 filling a rectangular region.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "x": { "type": "number" },
+                                    "y": { "type": "number" },
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" },
+                                    "order": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "extract_path_skeleton",
+                            "description": "Replaces a vector object with its internal medial-chord centerline skeleton path (Object -> Shaping -> Centerline Skeleton).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "sample_steps": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "jitter_selection_transforms",
+                            "description": "Applies deterministic SplitMix64 pseudo-random translation, rotation, and uniform scale around each selected object's center.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "dx_max_pt": { "type": "number" },
+                                    "dy_max_pt": { "type": "number" },
+                                    "angle_max_deg": { "type": "number" },
+                                    "scale_max_pct": { "type": "number" },
+                                    "seed": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "export_cpl_palette_base64",
+                            "description": "Exports the document's extracted color swatches to a CorelDRAW binary .cpl (0xCDDC) palette and returns its byte length and base64-encoded payload.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "palette_name": { "type": "string" }
                                 }
                             }
                         }
@@ -3369,6 +3419,77 @@ impl McpServer {
                     "pdf_imposed_base64": b64
                 }))
             }
+            "add_hilbert_curve" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(120.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let order = args.get("order").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let bounds = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_hilbert_curve_path(bounds, order).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Hilbert Curve".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "hilbert_curve", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "extract_path_skeleton" => {
+                let target = self.resolve_target_id(args)?;
+                let sample_steps = args.get("sample_steps").and_then(Value::as_u64).unwrap_or(32) as u32;
+                let ok = self.engine.execute(EngineCommand::ExtractPathSkeleton { object_id: target, sample_steps });
+                Ok(json!({ "skeleton_extracted": ok, "object_id": target.0 }))
+            }
+            "jitter_selection_transforms" => {
+                self.apply_optional_selection(args);
+                let dx_max_pt = F64::new(args.get("dx_max_pt").and_then(Value::as_f64).unwrap_or(6.0)).map_err(|e| e.to_string())?;
+                let dy_max_pt = F64::new(args.get("dy_max_pt").and_then(Value::as_f64).unwrap_or(6.0)).map_err(|e| e.to_string())?;
+                let angle_max_deg = F64::new(args.get("angle_max_deg").and_then(Value::as_f64).unwrap_or(15.0)).map_err(|e| e.to_string())?;
+                let scale_max_pct = F64::new(args.get("scale_max_pct").and_then(Value::as_f64).unwrap_or(20.0)).map_err(|e| e.to_string())?;
+                let seed = args.get("seed").and_then(Value::as_u64).unwrap_or(42);
+                let ok = self.engine.execute(EngineCommand::JitterSelectionTransforms { dx_max_pt, dy_max_pt, angle_max_deg, scale_max_pct, seed });
+                Ok(json!({ "jittered": ok, "seed": seed }))
+            }
+            "export_cpl_palette_base64" => {
+                let palette_name = args.get("palette_name").and_then(Value::as_str).unwrap_or("Document Palette").to_owned();
+                let mut seen = std::collections::BTreeSet::new();
+                let mut swatches = Vec::new();
+                let mut record = |c: &Color| {
+                    let [r, g, b] = c.to_srgb8();
+                    if seen.insert([r, g, b]) {
+                        swatches.push(PaletteSwatch { name: format!("#{r:02X}{g:02X}{b:02X}"), color: c.clone() });
+                    }
+                };
+                for page in &self.engine.document.pages {
+                    for layer in &page.layers {
+                        for obj in &layer.objects {
+                            if let Some(fill) = &obj.fill {
+                                match fill {
+                                    FillStyle::Uniform { color } => record(color),
+                                    FillStyle::Fountain { stops, .. } => {
+                                        for s in stops {
+                                            record(&s.color);
+                                        }
+                                    }
+                                    FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                        record(fg_color);
+                                        record(bg_color);
+                                    }
+                                    FillStyle::Unknown { .. } => {}
+                                }
+                            }
+                            if let Some(ol) = &obj.outline {
+                                record(&ol.color);
+                            }
+                        }
+                    }
+                }
+                let palette =
+                    if swatches.is_empty() { Palette::default_workspace_palette() } else { Palette { name: palette_name, guid: None, swatches } };
+                let bytes = serialize_binary_cpl(&palette);
+                let b64 = base64_encode(&bytes);
+                Ok(json!({
+                    "swatch_count": palette.swatches.len(),
+                    "cpl_bytes": bytes.len(),
+                    "cpl_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3398,7 +3519,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 204);
+        assert_eq!(tools, 208);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3619,5 +3740,33 @@ mod tests {
         )
         .unwrap();
         assert!(pdf_imp_b64_resp.result.unwrap()["structuredContent"]["pdf_imposed_bytes"].as_u64().unwrap() > 150);
+
+        let hilb_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"add_hilbert_curve","arguments":{"x":20.0,"y":20.0,"width":100.0,"height":100.0,"order":3}}}"#,
+            ),
+        )
+        .unwrap();
+        let hilb_id = hilb_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let skel_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":37,"method":"tools/call","params":{{"name":"extract_path_skeleton","arguments":{{"object_id":{hc_id},"sample_steps":24}}}}}}"#
+        )))
+        .unwrap();
+        assert!(skel_resp.result.unwrap()["structuredContent"]["skeleton_extracted"].as_bool().unwrap());
+
+        let jit_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":38,"method":"tools/call","params":{{"name":"jitter_selection_transforms","arguments":{{"selection":[{hilb_id},{hc_id}],"dx_max_pt":5.0,"dy_max_pt":5.0,"angle_max_deg":12.0,"scale_max_pct":15.0,"seed":99}}}}}}"#
+        )))
+        .unwrap();
+        assert!(jit_resp.result.unwrap()["structuredContent"]["jittered"].as_bool().unwrap());
+
+        let cpl_b64_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":39,"method":"tools/call","params":{"name":"export_cpl_palette_base64","arguments":{"palette_name":"M56 Palette"}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(cpl_b64_resp.result.unwrap()["structuredContent"]["cpl_bytes"].as_u64().unwrap() > 10);
     }
 }

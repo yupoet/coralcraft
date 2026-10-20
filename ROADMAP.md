@@ -199,9 +199,13 @@
 55. **M55 Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools**:
     - `coralcraft-geom`: `build_honeycomb_grid_path` (pointy-top hexagonal honeycomb lattice with optional mortar gap) and `convex_hull_of_path` (Andrew's monotone-chain convex hull).
     - `coralcraft-engine` & `coralcraft-mcp`: `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `add_honeycomb_grid`, `convex_hull_selection`, `arrange_selection_on_circle`, `export_pdf_imposed_base64`, and **204 MCP tools**.
+56. **M56 Space-Filling Hilbert Fractal Curve (`build_hilbert_curve_path`), Medial-Chord Centerline Skeleton (`medial_chord_skeleton_of_path` & `ExtractPathSkeleton`), Deterministic Transform Jitter (`JitterSelectionTransforms`), Binary `.cpl` Palette Base64 Export (`export_cpl_palette_base64`), and 208 MCP Tools**:
+    - `coralcraft-geom`: `build_hilbert_curve_path` (continuous space-filling Hilbert fractal curve of order `1..=5`) and `medial_chord_skeleton_of_path` (opposing-chord medial centerline skeleton).
+    - `coralcraft-engine` & `coralcraft-mcp`: `ExtractPathSkeleton`, `JitterSelectionTransforms`, `add_hilbert_curve`, `extract_path_skeleton`, `jitter_selection_transforms`, `export_cpl_palette_base64`, and **208 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M56 delivered (`build_hilbert_curve_path` & `add_hilbert_curve`, `medial_chord_skeleton_of_path` & `ExtractPathSkeleton`, `JitterSelectionTransforms`, `export_cpl_palette_base64`, 208 MCP tools).
 - 2026-10-20: M55 delivered (`build_honeycomb_grid_path` & `add_honeycomb_grid`, `convex_hull_of_path` & `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `export_pdf_imposed_base64`, 204 MCP tools).
 - 2026-10-20: M54 delivered (`build_concentric_rings_path` & `add_concentric_rings`, `dash_path_to_open_subpaths` & `DashObjectPath`, `QuantizeSelectionPositions`, `export_cdrx_zip_base64`, 200 MCP tools).
 - 2026-10-20: M53 delivered (`build_spirograph_path` & `add_spirograph`, `build_dihedral_symmetry_path` & `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `export_cmx1_base64`, 196 MCP tools).

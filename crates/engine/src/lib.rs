@@ -11,10 +11,10 @@ use coralcraft_geom::{
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
-    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
-    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
-    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
-    twirl_path_around_point, wave_distort_path,
+    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, medial_chord_skeleton_of_path,
+    morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
+    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -333,6 +333,10 @@ pub enum EngineCommand {
     ConvexHullSelection,
     /// Places all selected unlocked objects at equal angular intervals around a circle of `radius_pt` centered at `center` starting at `start_angle_deg`, optionally rotating each object to align with the circle tangent (`Object -> Align and Distribute -> Arrange on Circle`).
     ArrangeSelectionOnCircle { center: Point, radius_pt: F64, start_angle_deg: F64, rotate_to_tangent: bool },
+    /// Replaces `object_id` with its internal medial-chord centerline skeleton sampled at `sample_steps` (`Object -> Shaping -> Centerline Skeleton`).
+    ExtractPathSkeleton { object_id: ObjectId, sample_steps: u32 },
+    /// Applies a deterministic SplitMix64 pseudo-random translation, rotation, and uniform scale around each selected unlocked object's center (`Object -> Transformations -> Jitter / Randomize Selection`).
+    JitterSelectionTransforms { dx_max_pt: F64, dy_max_pt: F64, angle_max_deg: F64, scale_max_pct: F64, seed: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4302,6 +4306,66 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ExtractPathSkeleton { object_id, sample_steps } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(skel) = medial_chord_skeleton_of_path(&base_path, sample_steps)
+                    {
+                        obj.kind = ObjectKind::Path(skel);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::JitterSelectionTransforms { dx_max_pt, dy_max_pt, angle_max_deg, scale_max_pct, seed } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut state = seed;
+                let mut next_signed_unit = || -> f64 {
+                    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                    let mut z = state;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                    z ^= z >> 31;
+                    ((z >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64)) * 2.0 - 1.0
+                };
+                let dx_m = dx_max_pt.get().max(0.0);
+                let dy_m = dy_max_pt.get().max(0.0);
+                let ang_m = angle_max_deg.get().max(0.0);
+                let sc_m = (scale_max_pct.get() / 100.0).clamp(0.0, 0.9);
+                let mut jitters = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = next_signed_unit() * dx_m;
+                    let dy = next_signed_unit() * dy_m;
+                    let rot_rad = (next_signed_unit() * ang_m).to_radians();
+                    let scale = (1.0 + next_signed_unit() * sc_m).clamp(0.1, 10.0);
+                    jitters.insert(obj.id, (oc, dx, dy, rot_rad, scale));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, dx, dy, rot_rad, scale)) = jitters.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(scale, scale)
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get() + dx, oc.y.get() + dy)
+                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_rot)).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5232,6 +5296,14 @@ mod tests {
             radius_pt: F64::new(50.0).unwrap(),
             start_angle_deg: F64::new(0.0).unwrap(),
             rotate_to_tangent: true,
+        }));
+        assert!(engine.execute(EngineCommand::ExtractPathSkeleton { object_id: hull_id, sample_steps: 24 }));
+        assert!(engine.execute(EngineCommand::JitterSelectionTransforms {
+            dx_max_pt: F64::new(5.0).unwrap(),
+            dy_max_pt: F64::new(5.0).unwrap(),
+            angle_max_deg: F64::new(10.0).unwrap(),
+            scale_max_pct: F64::new(15.0).unwrap(),
+            seed: 42,
         }));
     }
 }

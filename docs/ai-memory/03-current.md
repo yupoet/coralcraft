@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M55 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M56 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -53,9 +53,10 @@
   45. **M52: Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools (`commit dc9b5c4`)**.
   46. **M53: Parametric Spirograph / Roulette Curves (`build_spirograph_path`), Dihedral $D_n$ Kaleidoscope Symmetry (`build_dihedral_symmetry_path`), Attractor Distance Falloff Scaling (`ScaleSelectionByDistance`), CMX1 Base64 Export (`export_cmx1_base64`), and 196 MCP Tools (`commit 7069354`)**.
   47. **M54: Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools (`commit 6f24791`)**.
-  48. **M55: Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools**:
-      - `coralcraft-geom`: Added `build_honeycomb_grid_path` and `convex_hull_of_path`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `add_honeycomb_grid`, `convex_hull_selection`, `arrange_selection_on_circle`, `export_pdf_imposed_base64`, and expanded MCP server to **204 tools**.
+  48. **M55: Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools (`commit 9f7ad34`)**.
+  49. **M56: Space-Filling Hilbert Fractal Curve (`build_hilbert_curve_path`), Medial-Chord Centerline Skeleton (`medial_chord_skeleton_of_path` & `ExtractPathSkeleton`), Deterministic Transform Jitter (`JitterSelectionTransforms`), Binary `.cpl` Palette Base64 Export (`export_cpl_palette_base64`), and 208 MCP Tools**:
+      - `coralcraft-geom`: Added `build_hilbert_curve_path` and `medial_chord_skeleton_of_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ExtractPathSkeleton`, `JitterSelectionTransforms`, `add_hilbert_curve`, `extract_path_skeleton`, `jitter_selection_transforms`, `export_cpl_palette_base64`, and expanded MCP server to **208 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

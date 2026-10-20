@@ -1567,6 +1567,51 @@ pub fn build_honeycomb_grid_path(bounds: Rect, cell_radius_pt: f64, cell_gap_pt:
     Ok(path)
 }
 
+/// Builds a continuous space-filling Hilbert fractal polyline [`Path`] of `order` (`1..=5`)
+/// filling `bounds` (`Object -> Insert -> Space-Filling Hilbert Curve`).
+pub fn build_hilbert_curve_path(bounds: Rect, order: u32) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 || !(1..=5).contains(&order) {
+        return Err(GeomError::InvalidShapeParameter("invalid Hilbert curve parameters"));
+    }
+    let n = 1_u32 << order;
+    let total = n * n;
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let mut path = Path::new();
+    for d in 0..total {
+        let mut x = 0_u32;
+        let mut y = 0_u32;
+        let mut t = d;
+        let mut s = 1_u32;
+        while s < n {
+            let rx = 1 & (t / 2);
+            let ry = 1 & (t ^ rx);
+            if ry == 0 {
+                if rx == 1 {
+                    x = s - 1 - x;
+                    y = s - 1 - y;
+                }
+                std::mem::swap(&mut x, &mut y);
+            }
+            x += s * rx;
+            y += s * ry;
+            t /= 4;
+            s *= 2;
+        }
+        let px = x0 + (f64::from(x) + 0.5) / f64::from(n) * w;
+        let py = y0 + (f64::from(y) + 0.5) / f64::from(n) * h;
+        let pt = Point::new(px, py)?;
+        if d == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1665,5 +1710,8 @@ mod m27_tests {
         let honeycomb = build_honeycomb_grid_path(Rect::new(0.0, 0.0, 140.0, 120.0).unwrap(), 18.0, 2.0).unwrap();
         let hex_closes = honeycomb.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert!(hex_closes >= 4);
+
+        let hilbert = build_hilbert_curve_path(Rect::new(0.0, 0.0, 100.0, 100.0).unwrap(), 3).unwrap();
+        assert_eq!(hilbert.elements.len(), 64);
     }
 }
