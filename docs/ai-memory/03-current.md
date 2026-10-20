@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M36 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M37 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -34,9 +34,10 @@
   26. **M33: Roughen Brush Localized Path Deformer (`roughen_path_segments`), Artistic Text Typography Properties (`SetArtisticTextProperties`), Page Objects & Layer Listing (`list_page_objects` & `list_layers`), and 116 MCP Tools (`commit 9437435`)**.
   27. **M34: Smooth Tool Localized Laplacian Path Deformer (`smooth_path_around_point`), Parametric Rectangle & Ellipse MCP Tools (`update_rect_corners`, `update_ellipse_parameters`), Document Pages Listing (`list_pages`), and 120 MCP Tools (`commit 20f68c9`)**.
   28. **M35: Knife Tool (`knife_cut_path_by_line`), Crop Tool (`CropToRect`), Polygon/Star Live Updates (`update_polygon_parameters`), Cross-Layer Object Transfer (`MoveObjectToLayer`), and 124 MCP Tools (`commit c49412c`)**.
-  29. **M36: Eraser Tool (`erase_path_within_circle` / `X`), Snap Settings (`SetSnapSettings`), Viewport Zoom/Pan (`set_viewport`), Active Tool Switcher (`set_active_tool`), and 128 MCP Tools**:
-      - `coralcraft-geom`: Added `erase_path_within_circle`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `EraseObjectCircle`, `SetSnapSettings`, `erase_object_circle`, `set_snap_settings`, `set_viewport`, `set_active_tool`, and expanded MCP server to **128 tools**.
+  29. **M36: Eraser Tool (`erase_path_within_circle` / `X`), Snap Settings (`SetSnapSettings`), Viewport Zoom/Pan (`set_viewport`), Active Tool Switcher (`set_active_tool`), and 128 MCP Tools (`commit a736bdc`)**.
+  30. **M37: Virtual Segment Delete (`delete_segment_at_index`), Smart Fill Tool (`SmartFillAtPoint`), CMX1 & CDRX ZIP Export MCP Tools (`export_cmx1_byte_len`, `export_cdrx_zip_byte_len`), and 132 MCP Tools**:
+      - `coralcraft-geom`: Added `delete_segment_at_index`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `VirtualSegmentDelete`, `SmartFillAtPoint`, `virtual_segment_delete`, `smart_fill_at_point`, `export_cmx1_byte_len`, `export_cdrx_zip_byte_len`, and expanded MCP server to **132 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

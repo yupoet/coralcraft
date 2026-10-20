@@ -1321,6 +1321,56 @@ pub fn smooth_path_around_point(path: &Path, center: Point, radius_pt: f64, stre
     Ok(out)
 }
 
+/// Removes the segment at `element_index` from `path` (`CorelDRAW Virtual Segment Delete Tool`),
+/// replacing a curve/line segment with a `MoveTo` jump (and converting a trailing `Close` in the
+/// same subpath into a `LineTo` back to the original subpath start so remaining segments stay intact).
+pub fn delete_segment_at_index(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    let Some(target_el) = path.elements.get(element_index).copied() else {
+        return Err(GeomError::InvalidShapeParameter("element_index out of range"));
+    };
+    if matches!(target_el, PathElement::MoveTo(_)) {
+        return Err(GeomError::InvalidShapeParameter("cannot delete MoveTo anchor with Virtual Segment Delete"));
+    }
+    if matches!(target_el, PathElement::Close) {
+        let mut elems = path.elements.clone();
+        elems.remove(element_index);
+        return Path::from_elements(elems, path.fill_rule);
+    }
+    let seg_end = match target_el {
+        PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => p,
+        PathElement::MoveTo(_) | PathElement::Close => unreachable!(),
+    };
+    let mut subpath_start = seg_end;
+    for el in path.elements[..element_index].iter().rev() {
+        if let PathElement::MoveTo(p) = *el {
+            subpath_start = p;
+            break;
+        }
+    }
+    let mut elems = Vec::with_capacity(path.elements.len());
+    let mut convert_next_close = true;
+    for (idx, &el) in path.elements.iter().enumerate() {
+        if idx == element_index {
+            elems.push(PathElement::MoveTo(seg_end));
+        } else if idx > element_index && convert_next_close {
+            match el {
+                PathElement::MoveTo(_) => {
+                    convert_next_close = false;
+                    elems.push(el);
+                }
+                PathElement::Close => {
+                    convert_next_close = false;
+                    elems.push(PathElement::LineTo(subpath_start));
+                }
+                _ => elems.push(el),
+            }
+        } else {
+            elems.push(el);
+        }
+    }
+    Path::from_elements(elems, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1353,5 +1403,7 @@ mod m26_tests {
         assert!(roughened.elements.len() > 2);
         let smoothed = smooth_path_around_point(&roughened, Point::new(45.0, 30.0).unwrap(), 60.0, 0.6, 3).unwrap();
         assert_eq!(smoothed.elements.len(), roughened.elements.len());
+        let vsd = delete_segment_at_index(&roughened, 1).unwrap();
+        assert!(matches!(vsd.elements[1], PathElement::MoveTo(_)));
     }
 }

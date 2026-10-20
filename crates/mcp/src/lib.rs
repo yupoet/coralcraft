@@ -2,7 +2,7 @@
 //! for agent-driven multi-page CorelDRAW illustration and vector export.
 #![recursion_limit = "512"]
 
-use coralcraft_cdr::write_cdr7;
+use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
@@ -738,6 +738,26 @@ impl McpServer {
                         {
                             "name": "set_active_tool",
                             "description": "Switches the active CorelDRAW toolbox tool (pick, shape, crop, zoom, freehand, rectangle, ellipse, polygon, artistic_text, interactive_fill).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "virtual_segment_delete",
+                            "description": "Removes the path segment at element_index on an object, splitting the subpath at that segment (Virtual Segment Delete Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "smart_fill_at_point",
+                            "description": "Creates a new filled Path object from the enclosed region of overlapping closed shapes containing (x, y) (Smart Fill Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_cmx1_byte_len",
+                            "description": "Serializes the document to a clean-room RIFF CMX1 Exchange file and returns its byte length.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_cdrx_zip_byte_len",
+                            "description": "Serializes the document to a modern CorelDRAW X4+ ZIP container (content/riffData.cdr) and returns its byte length.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2128,6 +2148,32 @@ impl McpServer {
                 self.engine.tool_state.active_tool = tool;
                 Ok(json!({ "active_tool": format!("{tool:?}") }))
             }
+            "virtual_segment_delete" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::VirtualSegmentDelete { object_id: target, element_index });
+                Ok(json!({ "segment_deleted": ok, "object_id": target.0, "element_index": element_index }))
+            }
+            "smart_fill_at_point" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+                let point = Point::new(x, y).map_err(|e| e.to_string())?;
+                let r = args.get("r").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let g = args.get("g").and_then(Value::as_u64).unwrap_or(180) as u8;
+                let b = args.get("b").and_then(Value::as_u64).unwrap_or(120) as u8;
+                let fill = FillStyle::uniform(Color::rgb8(r, g, b));
+                let outline = self.engine.default_outline.clone();
+                let ok = self.engine.execute(EngineCommand::SmartFillAtPoint { point, fill, outline });
+                Ok(json!({ "smart_filled": ok, "selected_id": self.engine.selection.first().map(|i| i.0) }))
+            }
+            "export_cmx1_byte_len" => {
+                let bytes = write_cmx1(&self.engine.document).map_err(|e| e.to_string())?;
+                Ok(json!({ "cmx1_bytes": bytes.len() }))
+            }
+            "export_cdrx_zip_byte_len" => {
+                let bytes = write_cdrx_zip(&self.engine.document).map_err(|e| e.to_string())?;
+                Ok(json!({ "cdrx_zip_bytes": bytes.len() }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2157,7 +2203,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 128);
+        assert_eq!(tools, 132);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

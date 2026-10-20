@@ -9,9 +9,9 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
-    erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, radial_push_path_around_point, reference_point,
-    reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path,
-    twirl_path_around_point,
+    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
+    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
+    smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -246,6 +246,10 @@ pub enum EngineCommand {
     EraseObjectCircle { object_id: ObjectId, center: Point, radius_pt: F64 },
     /// Updates `snap_to_objects` and/or `snap_to_page` preferences (`View -> Snap To`).
     SetSnapSettings { snap_to_objects: Option<bool>, snap_to_page: Option<bool> },
+    /// Removes the path segment at `element_index` on `object_id` (`Virtual Segment Delete Tool`).
+    VirtualSegmentDelete { object_id: ObjectId, element_index: usize },
+    /// Creates a new filled `ObjectKind::Path` from the enclosed region of overlapping closed shapes containing `point` (`Smart Fill Tool`).
+    SmartFillAtPoint { point: Point, fill: FillStyle, outline: Option<OutlineStyle> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1020,6 +1024,29 @@ impl EditorEngine {
             }
             EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
                 if snap_to_objects.is_none() && snap_to_page.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_segment_at_index(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmartFillAtPoint { point, .. } => {
+                let px = point.x.get();
+                let py = point.y.get();
+                let has_enclosing = self.current_target_objects().iter().any(|o| {
+                    !o.locked
+                        && o.visible
+                        && object_to_path(o)
+                            .and_then(|p| p.transform(o.transform).ok())
+                            .and_then(|wp| wp.bounds())
+                            .is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get())
+                });
+                if !has_enclosing {
                     return false;
                 }
             }
@@ -2789,6 +2816,42 @@ impl EditorEngine {
                     self.snap_to_page = sp;
                 }
             }
+            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = delete_segment_at_index(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SmartFillAtPoint { point, fill, outline } => {
+                let px = point.x.get();
+                let py = point.y.get();
+                let hits: Vec<Path> = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| !o.locked && o.visible)
+                    .filter_map(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                    .filter(|wp| wp.bounds().is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get()))
+                    .collect();
+                if let Some(first) = hits.first() {
+                    let mut region = first.clone();
+                    for other in hits.iter().skip(1) {
+                        if let Ok(inter) = boolean_paths(&region, other, BooleanOp::Intersect)
+                            && !inter.elements.is_empty()
+                        {
+                            region = inter;
+                        }
+                    }
+                    let id = self.document.allocate_object_id();
+                    let node = ObjectNode::new(id, Some("Smart Fill".to_owned()), ObjectKind::Path(region), Some(fill), outline);
+                    self.target_layer_mut().objects.push(node);
+                    self.selection = vec![id];
+                }
+            }
         }
         true
     }
@@ -3573,5 +3636,11 @@ mod tests {
         }));
         assert!(engine.execute(EngineCommand::SetSnapSettings { snap_to_objects: Some(false), snap_to_page: Some(true) }));
         assert!(!engine.snap_to_objects && engine.snap_to_page);
+        assert!(engine.execute(EngineCommand::VirtualSegmentDelete { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::SmartFillAtPoint {
+            point: Point::new(100.0, 100.0).unwrap(),
+            fill: FillStyle::uniform(Color::rgb8(0, 180, 120)),
+            outline: None,
+        }));
     }
 }
