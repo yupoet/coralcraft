@@ -1258,6 +1258,69 @@ pub fn roughen_path_segments(path: &Path, tooth_height_pt: f64, frequency: u32) 
     Ok(out)
 }
 
+/// Applies localized Jacobi Laplacian vertex smoothing within `radius_pt` around `center`
+/// (`CorelDRAW Smooth Tool`).
+///
+/// Each pass moves interior vertices within `radius_pt` toward the midpoint of their adjacent
+/// subpath neighbors weighted by `strength * (1 - d / radius_pt)^2`, preserving C1 boundary
+/// continuity at `d == radius_pt` and pinning open-subpath endpoints.
+pub fn smooth_path_around_point(path: &Path, center: Point, radius_pt: f64, strength: f64, iterations: u32) -> Result<Path, GeomError> {
+    let r = crate::F64::new(radius_pt)?.get();
+    let s = crate::F64::new(strength)?.get().clamp(0.0, 1.0);
+    if r <= crate::EPS {
+        return Err(GeomError::InvalidShapeParameter("smooth radius must be positive"));
+    }
+    let passes = iterations.min(64);
+    if passes == 0 || s <= crate::EPS {
+        return Ok(path.clone());
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+    for poly in polylines {
+        if poly.points.is_empty() {
+            continue;
+        }
+        let mut pts = poly.points;
+        let n = pts.len();
+        if n >= 3 {
+            let mut buf = pts.clone();
+            for _ in 0..passes {
+                for i in 0..n {
+                    if !poly.closed && (i == 0 || i + 1 == n) {
+                        buf[i] = pts[i];
+                        continue;
+                    }
+                    let px = pts[i].x.get();
+                    let py = pts[i].y.get();
+                    let d = (px - cx).hypot(py - cy);
+                    if d >= r {
+                        buf[i] = pts[i];
+                        continue;
+                    }
+                    let u = 1.0 - d / r;
+                    let w = s * u * u;
+                    let prev = pts[(i + n - 1) % n];
+                    let next = pts[(i + 1) % n];
+                    let avg_x = 0.5 * (prev.x.get() + next.x.get());
+                    let avg_y = 0.5 * (prev.y.get() + next.y.get());
+                    buf[i] = Point::new(px + w * (avg_x - px), py + w * (avg_y - py))?;
+                }
+                std::mem::swap(&mut pts, &mut buf);
+            }
+        }
+        out.move_to(pts[0])?;
+        for pt in pts.iter().skip(1) {
+            out.line_to(*pt)?;
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1288,5 +1351,7 @@ mod m26_tests {
         assert_eq!(smeared.elements.len(), 2);
         let roughened = roughen_path_segments(&linear, 3.0, 4).unwrap();
         assert!(roughened.elements.len() > 2);
+        let smoothed = smooth_path_around_point(&roughened, Point::new(45.0, 30.0).unwrap(), 60.0, 0.6, 3).unwrap();
+        assert_eq!(smoothed.elements.len(), roughened.elements.len());
     }
 }

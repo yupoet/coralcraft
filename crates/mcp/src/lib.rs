@@ -10,7 +10,7 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path,
     build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path,
     build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
@@ -678,6 +678,26 @@ impl McpServer {
                         {
                             "name": "list_layers",
                             "description": "Lists all layers on page_index with id, name, role, visible, locked, printable, opacity, and object_count (Objects Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "smooth_path",
+                            "description": "Applies localized Jacobi Laplacian vertex smoothing within radius_pt around (center_x, center_y) with strength and iterations (Smooth Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "update_rect_corners",
+                            "description": "Updates corner_kind (round, scalloped, chamfered) and radii_pt on selected rectangles without converting them to curves (Property Bar).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "update_ellipse_parameters",
+                            "description": "Updates ellipse mode (full, pie, arc) and start_deg/end_deg on selected ellipses without converting them to curves (Property Bar).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "list_pages",
+                            "description": "Lists all pages in the document with index, id, name, width_pt, height_pt, bleed_pt, and layer_count (Pages Docker).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1909,6 +1929,75 @@ impl McpServer {
                     .collect();
                 Ok(json!({ "page_index": page_index, "layers": layers }))
             }
+            "smooth_path" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(0.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(40.0)).map_err(|e| e.to_string())?;
+                let strength = F64::new(args.get("strength").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let ok = self.engine.execute(EngineCommand::SmoothObjectPath { object_id: target, center, radius_pt, strength, iterations });
+                Ok(json!({ "smoothed": ok, "object_id": target.0 }))
+            }
+            "update_rect_corners" => {
+                if let Some(id_raw) = args.get("object_id").and_then(Value::as_u64) {
+                    self.engine.set_selection(vec![ObjectId(id_raw)]);
+                }
+                let corner_kind = match args.get("corner_kind").and_then(Value::as_str).unwrap_or("round") {
+                    "scalloped" => CornerKind::Scalloped,
+                    "chamfered" => CornerKind::Chamfered,
+                    _ => CornerKind::Round,
+                };
+                let uniform = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(0.0).max(0.0)).map_err(|e| e.to_string())?;
+                let mut radii = [uniform; 4];
+                let mut corners_locked = args.get("corners_locked").and_then(Value::as_bool).unwrap_or(true);
+                if let Some(arr) = args.get("radii_pt").and_then(Value::as_array)
+                    && arr.len() == 4
+                {
+                    for (idx, val) in arr.iter().enumerate() {
+                        radii[idx] = F64::new(val.as_f64().unwrap_or(0.0).max(0.0)).map_err(|e| e.to_string())?;
+                    }
+                    corners_locked = args.get("corners_locked").and_then(Value::as_bool).unwrap_or(false);
+                }
+                let ok = self.engine.execute(EngineCommand::UpdateRectCorners { corner_kind, radii, corners_locked });
+                Ok(json!({ "rect_corners_updated": ok, "selection": self.engine.selection.iter().map(|i| i.0).collect::<Vec<_>>() }))
+            }
+            "update_ellipse_parameters" => {
+                if let Some(id_raw) = args.get("object_id").and_then(Value::as_u64) {
+                    self.engine.set_selection(vec![ObjectId(id_raw)]);
+                }
+                let mode = match args.get("mode").and_then(Value::as_str).unwrap_or("full") {
+                    "pie" => EllipseMode::Pie,
+                    "arc" => EllipseMode::Arc,
+                    _ => EllipseMode::Full,
+                };
+                let start_deg = F64::new(args.get("start_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let end_deg = F64::new(args.get("end_deg").and_then(Value::as_f64).unwrap_or(270.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::UpdateEllipseParameters { mode, start_deg, end_deg });
+                Ok(json!({ "ellipse_parameters_updated": ok, "selection": self.engine.selection.iter().map(|i| i.0).collect::<Vec<_>>() }))
+            }
+            "list_pages" => {
+                let pages: Vec<Value> = self
+                    .engine
+                    .document
+                    .pages
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, p)| {
+                        json!({
+                            "index": idx,
+                            "id": p.id.0,
+                            "name": p.name,
+                            "width_pt": p.size.width.get(),
+                            "height_pt": p.size.height.get(),
+                            "bleed_pt": p.bleed.get(),
+                            "layer_count": p.layers.len()
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "page_count": pages.len(), "active_page_index": self.engine.current_page_index(), "pages": pages }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1938,7 +2027,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 116);
+        assert_eq!(tools, 120);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

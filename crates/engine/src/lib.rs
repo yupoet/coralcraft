@@ -10,7 +10,7 @@ use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
     boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
     join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
-    smear_path_from_point, trace_bitmap_to_path, twirl_path_around_point,
+    smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -233,6 +233,8 @@ pub enum EngineCommand {
     RoughenObjectPath { object_id: ObjectId, tooth_height_pt: F64, frequency: u32 },
     /// Updates `text`, `font_family`, and/or `size_pt` on an `ArtisticText` or `ParagraphText` object (`Text -> Edit Text` / `Ctrl+Shift+T`).
     SetArtisticTextProperties { object_id: ObjectId, text: Option<String>, font_family: Option<String>, size_pt: Option<F64> },
+    /// Applies localized Jacobi Laplacian vertex smoothing within `radius_pt` around `center` on `object_id` (`Smooth Tool`).
+    SmoothObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64, iterations: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -957,6 +959,16 @@ impl EditorEngine {
                 let valid = self
                     .selected_or_all_node(*object_id)
                     .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o)
+                            .is_some_and(|p| smooth_path_around_point(&p, *center, radius_pt.get(), strength.get(), *iterations).is_ok())
+                });
                 if !valid {
                     return false;
                 }
@@ -2636,6 +2648,19 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
+                let r = radius_pt.get();
+                let s = strength.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smooth_path_around_point(&base_path, center, r, s, iterations)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
         }
         true
     }
@@ -3398,5 +3423,12 @@ mod tests {
         } else {
             panic!("expected ParagraphText");
         }
+        assert!(engine.execute(EngineCommand::SmoothObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            strength: F64::new(0.5).unwrap(),
+            iterations: 3,
+        }));
     }
 }
