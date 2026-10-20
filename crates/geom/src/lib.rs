@@ -16,7 +16,7 @@ pub mod shapes;
 pub mod units;
 
 pub use affine::Affine2;
-pub use boolean::{BooleanOp, artistic_text_to_path, boolean_paths};
+pub use boolean::{BooleanOp, artistic_text_to_path, boolean_paths, fit_text_to_path};
 pub use f64_canon::{BBox, EPS, F64, GeomError, Point, Rect, Size, constrain_angle, constrain_angle_from, normalize_deg, reference_point, union_opt};
 pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,

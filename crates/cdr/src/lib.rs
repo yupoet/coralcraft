@@ -755,4 +755,37 @@ mod tests {
             panic!("expected ParagraphText, got {:?}", objs[0].kind);
         }
     }
+
+    #[test]
+    fn write_cdr7_roundtrip_envelope_effect_chunk() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode, VectorEffect};
+        use coralcraft_geom::{Point, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let mut node = ObjectNode::new(
+            ObjectId(22),
+            Some("Envelope Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 120.0, 80.0).unwrap())),
+            None,
+            None,
+        );
+        let corners =
+            [Point::new(15.0, 18.0).unwrap(), Point::new(130.0, 25.0).unwrap(), Point::new(125.0, 90.0).unwrap(), Point::new(10.0, 82.0).unwrap()];
+        node.effects.push(VectorEffect::Envelope { corners });
+        doc.pages[0].layers[0].objects.push(node);
+
+        let cdr_bytes = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr_bytes).expect("parse cdr7");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 1);
+        assert_eq!(objs[0].effects.len(), 1);
+        if let VectorEffect::Envelope { corners: parsed_corners } = &objs[0].effects[0] {
+            for i in 0..4 {
+                assert!((parsed_corners[i].x.get() - corners[i].x.get()).abs() < 1e-2);
+                assert!((parsed_corners[i].y.get() - corners[i].y.get()).abs() < 1e-2);
+            }
+        } else {
+            panic!("expected Envelope effect");
+        }
+    }
 }

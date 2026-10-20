@@ -220,6 +220,15 @@ fn render_object_node(
                     local_bbox = bb;
                 }
             }
+            VectorEffect::TextOnPath { spine, offset_pt } => {
+                if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &node.kind
+                    && let Ok(curved) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
+                    && let Some(bb) = curved.bounds()
+                {
+                    local_path = curved;
+                    local_bbox = bb;
+                }
+            }
             _ => {}
         }
     }

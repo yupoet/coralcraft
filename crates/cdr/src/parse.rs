@@ -520,6 +520,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
     let mut bmp_payload: Option<&[u8]> = None;
     let mut txtd_payload: Option<&[u8]> = None;
+    let mut effects = Vec::new();
     let mut residual = Residual::default();
 
     for (slot_idx, ch) in flat_children.iter().enumerate() {
@@ -550,6 +551,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
             b"txtd" | b"txts" => {
                 if txtd_payload.is_none() && !ch.payload.is_empty() {
                     txtd_payload = Some(&ch.payload);
+                }
+            }
+            b"enve" => {
+                if let Some(corners) = decode_enve(&ch.payload, ctx.endian, ctx.version, page_size) {
+                    effects.push(coralcraft_doc::VectorEffect::Envelope { corners });
                 }
             }
             b"loda" | b"lobj" => {
@@ -628,6 +634,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
 
     let mut node = ObjectNode::new(obj_id, None, kind, fill, outline);
     node.transform = transform;
+    node.effects = effects;
     node.residual = residual;
     Some(node)
 }
@@ -693,6 +700,23 @@ fn decode_bbox(payload: &[u8], endian: Endian, version: u16, page_size: Size) ->
         return None;
     }
     Rect::new(min_x, min_y, max_x, max_y).ok()
+}
+
+/// Decodes a 32-byte `enve` 4-corner Envelope cage chunk (`[TL, TR, BR, BL]` in `CdrUnit` ticks).
+fn decode_enve(payload: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<[Point; 4]> {
+    if payload.len() < 32 {
+        return None;
+    }
+    let cx = page_size.width.get() * 0.5;
+    let cy = page_size.height.get() * 0.5;
+    let mut pts = [Point::ZERO; 4];
+    for (i, slot) in pts.iter_mut().enumerate() {
+        let base = i * 8;
+        let (x_cdr, step) = cdr_coord_to_pt(endian, payload, base, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, payload, base + step, version)?;
+        *slot = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
+    }
+    Some(pts)
 }
 
 fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
@@ -1385,6 +1409,17 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         *next_style_id += 1;
         let op = encode_outl_payload(oid, outl);
         append_riff_chunk(&mut obj_children, *b"outl", &op);
+    }
+
+    for effect in &node.effects {
+        if let coralcraft_doc::VectorEffect::Envelope { corners } = effect {
+            let mut enve = Vec::with_capacity(32);
+            for pt in corners {
+                enve.extend_from_slice(&pt_to_cdr_i32(pt.x.get() - cx).to_le_bytes());
+                enve.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
+            }
+            append_riff_chunk(&mut obj_children, *b"enve", &enve);
+        }
     }
 
     let mut loda = Vec::new();

@@ -238,6 +238,16 @@ impl McpServer {
                             "inputSchema": { "type": "object" }
                         },
                         {
+                            "name": "fit_text_to_path",
+                            "description": "Flows an Artistic Text object (text_object_id) along a spine path object (spine_object_id) with optional offset_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "step_and_repeat",
+                            "description": "Duplicates selected objects in a parametric array (count, offset_x_pt, offset_y_pt).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
                             "name": "expand_effects",
                             "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
                             "inputSchema": { "type": "object" }
@@ -576,6 +586,29 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ApplyArtisticBrush { object_id: target, start_width_pt: start_w, end_width_pt: end_w });
                 Ok(json!({ "artistic_brush_applied": ok, "object_id": target.0 }))
             }
+            "fit_text_to_path" => {
+                let text_raw = args.get("text_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing text_object_id".to_owned())?;
+                let spine_raw = args.get("spine_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing spine_object_id".to_owned())?;
+                let offset_pt = F64::new(args.get("offset_pt").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::FitTextToPath {
+                    text_object_id: ObjectId(text_raw),
+                    spine_object_id: ObjectId(spine_raw),
+                    offset_pt,
+                });
+                Ok(json!({ "text_fitted": ok, "text_object_id": text_raw, "spine_object_id": spine_raw }))
+            }
+            "step_and_repeat" => {
+                if let Some(arr) = args.get("selection").and_then(Value::as_array) {
+                    let ids: Vec<ObjectId> = arr.iter().filter_map(Value::as_u64).map(ObjectId).collect();
+                    self.engine.set_selection(ids);
+                }
+                let count = args.get("count").and_then(Value::as_u64).unwrap_or(1) as u32;
+                let ox = F64::new(args.get("offset_x_pt").and_then(Value::as_f64).unwrap_or(20.0)).map_err(|e| e.to_string())?;
+                let oy = F64::new(args.get("offset_y_pt").and_then(Value::as_f64).unwrap_or(20.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::StepAndRepeat { count, offset_x_pt: ox, offset_y_pt: oy });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "step_and_repeat_executed": ok, "created_selection": ids }))
+            }
             "expand_effects" => {
                 let target = self.resolve_target_id(args)?;
                 let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
@@ -628,7 +661,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 31);
+        assert_eq!(tools, 33);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

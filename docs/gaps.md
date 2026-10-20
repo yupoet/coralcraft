@@ -25,7 +25,9 @@
 - [x] 20. **[M10] Envelope & Perspective 4-Corner Cage Distortion (`VectorEffect::Envelope`)**: Bilinear/Coons patch warp of vector paths in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
 - [x] 21. **[M10] Calligraphic & Artistic Media Brush Stroke Profiles**: Variable-width stroke outlines along `Path` spines in `coralcraft-geom` and `coralcraft-render`.
 - [x] 22. **[M10] Paragraph Text Frame Canvas Overlay & Red Overflow Indicator**: Dashed frame outline and bottom-center overflow handle in `coralcraft-ui-egui`.
-- [ ] 23. **[M11] Fit Text to Path (`Text -> Fit Text to Path`)**: Per-glyph placement and tangent rotation along an arbitrary `Path` spine using `ArcLengthTable` in `coralcraft-geom`, `coralcraft-engine`, `coralcraft-render`, and `coralcraft-mcp`.
-- [ ] 24. **[M11] Step and Repeat (`Edit -> Step and Repeat` / `Ctrl+Shift+D`)**: Parametric array duplication (`count`, `offset_x_pt`, `offset_y_pt`) with full undo/redo in `coralcraft-engine` and `coralcraft-mcp`.
-- [ ] 25. **[M11] CDR `enve` Envelope Chunk Round-Trip (`write_cdr7` & `parse_document`)**: Persist and restore `VectorEffect::Envelope` 4-corner cage coordinates in RIFF `CDR7` object streams.
+- [x] 23. **[M11] Fit Text to Path (`Text -> Fit Text to Path`)**: Per-glyph placement and tangent rotation along an arbitrary `Path` spine using `ArcLengthTable` in `coralcraft-geom`, `coralcraft-engine`, `coralcraft-render`, and `coralcraft-mcp`.
+- [x] 24. **[M11] Step and Repeat (`Edit -> Step and Repeat` / `Ctrl+Shift+D`)**: Parametric array duplication (`count`, `offset_x_pt`, `offset_y_pt`) with full undo/redo in `coralcraft-engine` and `coralcraft-mcp`.
+- [x] 25. **[M11] CDR `enve` Envelope Chunk Round-Trip (`write_cdr7` & `parse_document`)**: Persist and restore `VectorEffect::Envelope` 4-corner cage coordinates in RIFF `CDR7` object streams.
+- [ ] 26. **[M12] Dimension Lines (`LinearDimension`) & Technical Callouts**: Parametric horizontal/vertical/slanted engineering dimension lines with extension ticks, arrows, and centered measurement labels in `coralcraft-doc`, `coralcraft-render`, `coralcraft-engine`, and `coralcraft-mcp`.
+- [ ] 27. **[M12] Smart Distribute (`DistributeSelection`)**: Equal spacing distribution (`DistributeLeft`, `DistributeCenterHorizontal`, `DistributeRight`, `DistributeSpacingHorizontal`, `DistributeTop`, `DistributeCenterVertical`, `DistributeBottom`, `DistributeSpacingVertical`) across `>= 3` selected objects in `coralcraft-tools`, `coralcraft-engine`, and `coralcraft-mcp`.
 

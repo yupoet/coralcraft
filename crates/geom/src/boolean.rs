@@ -310,6 +310,49 @@ pub fn artistic_text_to_path(text: &str, _font_family: &str, size_pt: f64, posit
     path
 }
 
+/// Lays out `text` glyph-by-glyph along `spine` (`Text -> Fit Text to Path`) using arc-length
+/// parameterization and tangent rotation, with perpendicular baseline offset `offset_pt`.
+pub fn fit_text_to_path(text: &str, font_family: &str, size_pt: f64, spine: &Path, offset_pt: f64) -> Result<Path, GeomError> {
+    let lut = crate::path::ArcLengthTable::from_path(spine)?;
+    if lut.total_length() <= 1e-6 {
+        return Ok(artistic_text_to_path(text, font_family, size_pt, Point::ZERO));
+    }
+    let scale = (size_pt / 10.0).max(0.1);
+    let total_len = lut.total_length();
+    let mut out = Path::new();
+    let mut s_cur = 0.0_f64;
+
+    for ch in text.chars() {
+        let (w, glyph_ops) = glyph_outline(ch);
+        let u = (s_cur / total_len).clamp(0.0, 1.0);
+        if let Some(sample) = lut.sample_normalized(u) {
+            let nx = sample.tangent.1;
+            let ny = -sample.tangent.0;
+            let px = sample.point.x.get() + offset_pt * nx;
+            let py = sample.point.y.get() + offset_pt * ny;
+            let tf = crate::affine::Affine2::rotation_deg(sample.angle_deg)?.then(crate::affine::Affine2::translation(px, py)?)?;
+            for op in glyph_ops {
+                match *op {
+                    GlyphOp::MoveTo(x, y) => {
+                        let pt = tf.apply_point(Point::new(x * scale, -y * scale)?)?;
+                        out.move_to(pt)?;
+                    }
+                    GlyphOp::LineTo(x, y) => {
+                        let pt = tf.apply_point(Point::new(x * scale, -y * scale)?)?;
+                        out.line_to(pt)?;
+                    }
+                    GlyphOp::Close => {
+                        out.close()?;
+                    }
+                }
+            }
+        }
+        s_cur += (w + 1.5) * scale;
+    }
+
+    Ok(out)
+}
+
 #[derive(Clone, Copy)]
 enum GlyphOp {
     MoveTo(f64, f64),
@@ -425,5 +468,13 @@ mod tests {
         let bounds = path.bounds().expect("text bounds");
         assert!(bounds.width() > 20.0);
         assert!(bounds.height() > 10.0);
+
+        let mut spine = Path::new();
+        spine.move_to(Point::new(0.0, 50.0).unwrap()).unwrap();
+        spine.line_to(Point::new(200.0, 150.0).unwrap()).unwrap();
+        let curved_text = fit_text_to_path("CORAL", "Sans", 18.0, &spine, 2.0).unwrap();
+        let cb = curved_text.bounds().unwrap();
+        assert!(cb.width() > 20.0);
+        assert!(cb.height() > 15.0);
     }
 }

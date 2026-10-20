@@ -106,6 +106,10 @@ pub enum EngineCommand {
     ApplyEnvelope { object_id: ObjectId, corners: [Point; 4] },
     /// Applies a non-destructive Artistic Media variable-width calligraphic brush stroke to `object_id`.
     ApplyArtisticBrush { object_id: ObjectId, start_width_pt: F64, end_width_pt: F64 },
+    /// Flows an Artistic Text object (`text_object_id`) along a spine path object (`spine_object_id`) (`Text -> Fit Text to Path`).
+    FitTextToPath { text_object_id: ObjectId, spine_object_id: ObjectId, offset_pt: F64 },
+    /// Parametric array duplication of selected objects (`Edit -> Step and Repeat` / `Ctrl+Shift+D`).
+    StepAndRepeat { count: u32, offset_x_pt: F64, offset_y_pt: F64 },
     /// Bakes (expands) all live vector effects on the specified object into static geometry.
     ExpandEffects { object_id: ObjectId },
     /// Sets or removes object-level transparency on selected objects.
@@ -505,6 +509,21 @@ impl EditorEngine {
                     .is_some_and(|o| !o.locked && o.effects.iter().any(|e| matches!(e, VectorEffect::Blend { .. })));
                 let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
                 if !has_blend || !has_spine || blend_object_id == spine_object_id {
+                    return false;
+                }
+            }
+            EngineCommand::FitTextToPath { text_object_id, spine_object_id, .. } => {
+                let has_text =
+                    self.selected_or_all_node(*text_object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. }));
+                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
+                if !has_text || !has_spine || text_object_id == spine_object_id {
+                    return false;
+                }
+            }
+            EngineCommand::StepAndRepeat { count, .. } => {
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if *count == 0 || !has_unlocked {
                     return false;
                 }
             }
@@ -1092,6 +1111,45 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::FitTextToPath { text_object_id, spine_object_id, offset_pt } => {
+                let Some(spine_path) =
+                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                else {
+                    return false;
+                };
+                let effect = VectorEffect::TextOnPath { spine: spine_path, offset_pt };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == text_object_id && !obj.locked {
+                        obj.effects.retain(|e| !matches!(e, VectorEffect::TextOnPath { .. }));
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::StepAndRepeat { count, offset_x_pt, offset_y_pt } => {
+                let sel = self.selection.clone();
+                let clamped_count = count.min(100);
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for step in 1..=clamped_count {
+                    let dx = f64::from(step) * offset_x_pt.get();
+                    let dy = f64::from(step) * offset_y_pt.get();
+                    let Ok(step_tf) = Affine2::translation(dx, dy) else {
+                        continue;
+                    };
+                    for orig in &templates {
+                        let mut copy = orig.clone();
+                        reallocate_object_ids_recursive(&mut copy, &mut self.document);
+                        if let Ok(composed) = copy.transform.then(step_tf) {
+                            copy.transform = composed;
+                        }
+                        new_selection.push(copy.id);
+                        self.target_layer_mut().objects.push(copy);
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
             EngineCommand::ExpandEffects { object_id } => {
                 self.for_each_node_mut(|obj| {
                     if obj.id == object_id && !obj.locked && !obj.effects.is_empty() {
@@ -1108,6 +1166,13 @@ impl EditorEngine {
                                     VectorEffect::Envelope { corners } => {
                                         if let Some(bbox) = base_path.bounds()
                                             && let Ok(p) = coralcraft_geom::warp_path_bilinear(&base_path, bbox, *corners)
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::TextOnPath { spine, offset_pt } => {
+                                        if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &obj.kind
+                                            && let Ok(p) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
                                         {
                                             base_path = p;
                                         }
@@ -1603,5 +1668,18 @@ mod tests {
             end_width_pt: F64::new(2.0).unwrap(),
         }));
         assert_eq!(engine.selected_or_all_node(text_id).unwrap().effects.len(), 1);
+
+        // 10. Step and Repeat creates 3 offset duplicates and supports undo
+        engine.set_selection(vec![welded_id]);
+        let before_count = engine.current_target_objects().len();
+        assert!(engine.execute(EngineCommand::StepAndRepeat {
+            count: 3,
+            offset_x_pt: F64::new(25.0).unwrap(),
+            offset_y_pt: F64::new(15.0).unwrap(),
+        }));
+        assert_eq!(engine.current_target_objects().len(), before_count + 3);
+        assert_eq!(engine.selection.len(), 3);
+        assert!(engine.undo());
+        assert_eq!(engine.current_target_objects().len(), before_count);
     }
 }

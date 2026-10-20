@@ -257,6 +257,13 @@ pub enum VectorEffect {
         /// Ending ribbon width in typographic points.
         end_width_pt: F64,
     },
+    /// Fit Text to Path (`Text -> Fit Text to Path`): flows an Artistic Text string along `spine`.
+    TextOnPath {
+        /// Spine path in page/local coordinates along which glyphs advance and rotate.
+        spine: Path,
+        /// Signed perpendicular baseline offset in typographic points.
+        offset_pt: F64,
+    },
 }
 
 /// Object-level transparency and lens compositing (`Uniform` or `Fountain`).
