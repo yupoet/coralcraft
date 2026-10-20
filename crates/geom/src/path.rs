@@ -1371,6 +1371,82 @@ pub fn delete_segment_at_index(path: &Path, element_index: usize) -> Result<Path
     Path::from_elements(elems, path.fill_rule)
 }
 
+/// Computes a parallel offset path shifted by signed `distance_pt` (`CorelDRAW Parallel Drawing / Offset Curve`).
+///
+/// Closed subpaths orient `distance_pt > 0` outward using signed polygon area; open subpaths shift
+/// along the left-hand unit normal with miter clamping at sharp joints.
+pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path, GeomError> {
+    let d = crate::F64::new(distance_pt)?.get();
+    if d.abs() <= crate::EPS {
+        return Ok(path.clone());
+    }
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+    let seg_normal = |a: Point, b: Point| -> (f64, f64) {
+        let dx = b.x.get() - a.x.get();
+        let dy = b.y.get() - a.y.get();
+        let len = dx.hypot(dy);
+        if len <= 1e-9 { (0.0, 0.0) } else { (-dy / len, dx / len) }
+    };
+    for poly in polylines {
+        let n = poly.points.len();
+        if n < 2 {
+            continue;
+        }
+        let mut sign = 1.0;
+        if poly.closed && n >= 3 {
+            let mut area2 = 0.0;
+            for i in 0..n {
+                let p0 = poly.points[i];
+                let p1 = poly.points[(i + 1) % n];
+                area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+            }
+            if area2 > 0.0 {
+                sign = -1.0;
+            }
+        }
+        let eff_d = d * sign;
+        let mut shifted = Vec::with_capacity(n);
+        for i in 0..n {
+            let (n1, n2) = if poly.closed {
+                let prev = poly.points[(i + n - 1) % n];
+                let curr = poly.points[i];
+                let next = poly.points[(i + 1) % n];
+                (seg_normal(prev, curr), seg_normal(curr, next))
+            } else if i == 0 {
+                let n0 = seg_normal(poly.points[0], poly.points[1]);
+                (n0, n0)
+            } else if i + 1 == n {
+                let nl = seg_normal(poly.points[n - 2], poly.points[n - 1]);
+                (nl, nl)
+            } else {
+                (seg_normal(poly.points[i - 1], poly.points[i]), seg_normal(poly.points[i], poly.points[i + 1]))
+            };
+            let bx = n1.0 + n2.0;
+            let by = n1.1 + n2.1;
+            let blen = bx.hypot(by);
+            let (ox, oy) = if blen <= 1e-6 {
+                (n1.0 * eff_d, n1.1 * eff_d)
+            } else {
+                let ux = bx / blen;
+                let uy = by / blen;
+                let dot = (ux * n1.0 + uy * n1.1).max(0.4);
+                let miter = (eff_d / dot).clamp(-2.5 * eff_d.abs(), 2.5 * eff_d.abs());
+                (ux * miter, uy * miter)
+            };
+            shifted.push(Point::new(poly.points[i].x.get() + ox, poly.points[i].y.get() + oy)?);
+        }
+        out.move_to(shifted[0])?;
+        for pt in shifted.iter().skip(1) {
+            out.line_to(*pt)?;
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1405,5 +1481,7 @@ mod m26_tests {
         assert_eq!(smoothed.elements.len(), roughened.elements.len());
         let vsd = delete_segment_at_index(&roughened, 1).unwrap();
         assert!(matches!(vsd.elements[1], PathElement::MoveTo(_)));
+        let offset = offset_open_or_closed_path(&linear, 10.0).unwrap();
+        assert_eq!(offset.elements.len(), 2);
     }
 }

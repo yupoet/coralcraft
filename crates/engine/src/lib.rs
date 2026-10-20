@@ -9,7 +9,7 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
-    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
+    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, offset_open_or_closed_path,
     radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
     smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
 };
@@ -250,6 +250,10 @@ pub enum EngineCommand {
     VirtualSegmentDelete { object_id: ObjectId, element_index: usize },
     /// Creates a new filled `ObjectKind::Path` from the enclosed region of overlapping closed shapes containing `point` (`Smart Fill Tool`).
     SmartFillAtPoint { point: Point, fill: FillStyle, outline: Option<OutlineStyle> },
+    /// Offsets `object_id`'s path by `distance_pt` (`Parallel Drawing`), either replacing in place or creating a parallel copy.
+    OffsetObjectPath { object_id: ObjectId, distance_pt: F64, copy: bool },
+    /// Updates the winding fill rule (`FillRule::NonZero` or `FillRule::EvenOdd`) of `object_id` (`Properties` Docker).
+    SetPathFillRule { object_id: ObjectId, fill_rule: FillRule },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1047,6 +1051,20 @@ impl EditorEngine {
                             .is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get())
                 });
                 if !has_enclosing {
+                    return false;
+                }
+            }
+            EngineCommand::OffsetObjectPath { object_id, distance_pt, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| offset_open_or_closed_path(&p, distance_pt.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetPathFillRule { object_id, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
                     return false;
                 }
             }
@@ -2852,6 +2870,43 @@ impl EditorEngine {
                     self.selection = vec![id];
                 }
             }
+            EngineCommand::OffsetObjectPath { object_id, distance_pt, copy } => {
+                let d = distance_pt.get();
+                if copy {
+                    if let Some(src) = self.selected_or_all_node(object_id).cloned()
+                        && let Some(base_path) = object_to_path(&src)
+                        && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
+                    {
+                        let mut dup = src;
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        dup.kind = ObjectKind::Path(updated);
+                        let new_id = dup.id;
+                        self.target_layer_mut().objects.push(dup);
+                        self.selection = vec![new_id];
+                    }
+                } else {
+                    self.for_each_node_mut(|obj| {
+                        if obj.id == object_id
+                            && !obj.locked
+                            && let Some(base_path) = object_to_path(obj)
+                            && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
+                        {
+                            obj.kind = ObjectKind::Path(updated);
+                        }
+                    });
+                }
+            }
+            EngineCommand::SetPathFillRule { object_id, fill_rule } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(mut base_path) = object_to_path(obj)
+                    {
+                        base_path.fill_rule = fill_rule;
+                        obj.kind = ObjectKind::Path(base_path);
+                    }
+                });
+            }
         }
         true
     }
@@ -3642,5 +3697,8 @@ mod tests {
             fill: FillStyle::uniform(Color::rgb8(0, 180, 120)),
             outline: None,
         }));
+        let sf_id = engine.selection[0];
+        assert!(engine.execute(EngineCommand::OffsetObjectPath { object_id: sf_id, distance_pt: F64::new(5.0).unwrap(), copy: true }));
+        assert!(engine.execute(EngineCommand::SetPathFillRule { object_id: sf_id, fill_rule: FillRule::EvenOdd }));
     }
 }

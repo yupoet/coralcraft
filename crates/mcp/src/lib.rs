@@ -10,9 +10,9 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path,
-    build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path,
-    build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
+    build_angular_dimension_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path,
+    build_impact_rays_path, build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -758,6 +758,26 @@ impl McpServer {
                         {
                             "name": "export_cdrx_zip_byte_len",
                             "description": "Serializes the document to a modern CorelDRAW X4+ ZIP container (content/riffData.cdr) and returns its byte length.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "offset_object_path",
+                            "description": "Offsets an object's path by distance_pt (Parallel Drawing / Offset Curve), either replacing in place or creating a parallel copy.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_path_fill_rule",
+                            "description": "Updates the winding fill rule (non_zero or even_odd) of an object's path (Object Properties -> Fill).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_style_cmyk",
+                            "description": "Sets fill or outline color in CMYK (c, m, y, k in 0.0..=1.0) on selected objects or creation defaults.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_style_hsb",
+                            "description": "Sets fill or outline color in HSB (h_deg in 0..360, s and b in 0.0..=1.0) on selected objects or creation defaults.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2174,6 +2194,47 @@ impl McpServer {
                 let bytes = write_cdrx_zip(&self.engine.document).map_err(|e| e.to_string())?;
                 Ok(json!({ "cdrx_zip_bytes": bytes.len() }))
             }
+            "offset_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let distance_pt = F64::new(args.get("distance_pt").and_then(Value::as_f64).unwrap_or(5.0)).map_err(|e| e.to_string())?;
+                let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::OffsetObjectPath { object_id: target, distance_pt, copy });
+                Ok(json!({ "offset_applied": ok, "selected_id": self.engine.selection.first().map(|i| i.0) }))
+            }
+            "set_path_fill_rule" => {
+                let target = self.resolve_target_id(args)?;
+                let fill_rule = match args.get("fill_rule").and_then(Value::as_str).unwrap_or("non_zero") {
+                    "even_odd" | "evenodd" => FillRule::EvenOdd,
+                    _ => FillRule::NonZero,
+                };
+                let ok = self.engine.execute(EngineCommand::SetPathFillRule { object_id: target, fill_rule });
+                Ok(json!({ "fill_rule_updated": ok, "object_id": target.0, "fill_rule": format!("{fill_rule:?}") }))
+            }
+            "set_style_cmyk" => {
+                let channel = match args.get("channel").and_then(Value::as_str).unwrap_or("fill") {
+                    "outline" | "stroke" => PaletteChannel::Outline,
+                    _ => PaletteChannel::Fill,
+                };
+                let c = args.get("c").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let m = args.get("m").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let k = args.get("k").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let color = Color::cmyk(c, m, y, k).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color: Some(color) });
+                Ok(json!({ "cmyk_style_applied": ok }))
+            }
+            "set_style_hsb" => {
+                let channel = match args.get("channel").and_then(Value::as_str).unwrap_or("fill") {
+                    "outline" | "stroke" => PaletteChannel::Outline,
+                    _ => PaletteChannel::Fill,
+                };
+                let h = args.get("h_deg").and_then(Value::as_f64).unwrap_or(0.0).rem_euclid(360.0);
+                let s = args.get("s").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
+                let b = args.get("b").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
+                let color = Color::hsb(h, s, b).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color: Some(color) });
+                Ok(json!({ "hsb_style_applied": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2203,7 +2264,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 132);
+        assert_eq!(tools, 136);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
