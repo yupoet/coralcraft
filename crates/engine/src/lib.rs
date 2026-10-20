@@ -4,11 +4,12 @@
 use coralcraft_color::Color;
 use coralcraft_doc::{
     Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, ParagraphTextSpec, Residual,
-    TextAlignment, TransparencyStyle, VectorEffect,
+    TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, close_open_subpaths, join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
+    boolean_paths, close_open_subpaths, delete_curve_node_at, insert_curve_node_at, join_open_subpaths, reference_point, reverse_path_direction,
+    simplify_path_nodes, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -177,6 +178,12 @@ pub enum EngineCommand {
     ToggleTextKind { object_id: ObjectId },
     /// Replaces all occurrences of `find` with `replace` across all unlocked text objects (`Edit -> Find and Replace -> Replace Text`).
     FindAndReplaceText { find: String, replace: String },
+    /// Changes the letter case of `object_id` (`Text -> Change Case` / `Shift+F3`).
+    ChangeTextCase { object_id: ObjectId, case_kind: TextCaseKind },
+    /// Subdivides the path segment at `element_index` on `object_id`, inserting a new node at `t = 0.5` (`Shape Tool -> Add Nodes` / `+`).
+    InsertCurveNode { object_id: ObjectId, element_index: usize },
+    /// Deletes the path node at `element_index` on `object_id` (`Shape Tool -> Delete Nodes` / `-`).
+    DeleteCurveNode { object_id: ObjectId, element_index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -783,6 +790,30 @@ impl EditorEngine {
             }
             EngineCommand::FindAndReplaceText { find, .. } => {
                 if find.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::ChangeTextCase { object_id, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::InsertCurveNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| insert_curve_node_at(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::DeleteCurveNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_curve_node_at(&p, *element_index).is_ok()));
+                if !valid {
                     return false;
                 }
             }
@@ -2143,6 +2174,44 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ChangeTextCase { object_id, case_kind } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text, .. } => {
+                            *text = apply_text_case(text, case_kind);
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            spec.text = apply_text_case(&spec.text, case_kind);
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::InsertCurveNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = insert_curve_node_at(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::DeleteCurveNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = delete_curve_node_at(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
         }
         true
     }
@@ -2792,5 +2861,15 @@ mod tests {
         } else {
             panic!("expected ParagraphText after ToggleTextKind");
         }
+
+        // 19. ChangeTextCase (Shift+F3), InsertCurveNode (+), and DeleteCurveNode (-)
+        assert!(engine.execute(EngineCommand::ChangeTextCase { object_id: art_id, case_kind: TextCaseKind::Uppercase }));
+        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
+            assert_eq!(pt.text, "HELLO CORALCRAFT");
+        } else {
+            panic!("expected ParagraphText after ChangeTextCase");
+        }
+        assert!(engine.execute(EngineCommand::InsertCurveNode { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::DeleteCurveNode { object_id: boundary_id, element_index: 1 }));
     }
 }

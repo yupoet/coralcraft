@@ -17,7 +17,7 @@ pub use style::{
     ArrowheadKind, ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind, RawChunk, RawPayload, Residual, decode_hex,
     encode_hex,
 };
-pub use text_layout::{ParagraphLayout, PositionedTextLine, advance_pt, layout_paragraph_text};
+pub use text_layout::{ParagraphLayout, PositionedTextLine, TextCaseKind, advance_pt, apply_text_case, layout_paragraph_text};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

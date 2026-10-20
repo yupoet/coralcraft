@@ -1,6 +1,90 @@
 //! Clean-room paragraph text word-wrapping, multi-column flow, and alignment engine.
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{ParagraphTextSpec, TextAlignment};
+
+/// Text case transformation mode in CorelDRAW's Change Case dialog (`Text -> Change Case` / `Shift+F3`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextCaseKind {
+    /// Capitalizes the first letter of each sentence (`Sentence case`).
+    #[default]
+    SentenceCase,
+    /// Converts all letters to lowercase (`lowercase`).
+    Lowercase,
+    /// Converts all letters to uppercase (`UPPERCASE`).
+    Uppercase,
+    /// Capitalizes the first letter of every word (`Title Case`).
+    TitleCase,
+    /// Inverts uppercase and lowercase on every letter (`tOGGLE cASE`).
+    ToggleCase,
+}
+
+/// Applies `kind` (`Shift+F3` Change Case) to `text`.
+#[must_use]
+pub fn apply_text_case(text: &str, kind: TextCaseKind) -> String {
+    match kind {
+        TextCaseKind::Lowercase => text.to_lowercase(),
+        TextCaseKind::Uppercase => text.to_uppercase(),
+        TextCaseKind::ToggleCase => text
+            .chars()
+            .flat_map(|c| {
+                if c.is_uppercase() {
+                    c.to_lowercase().collect::<Vec<char>>()
+                } else if c.is_lowercase() {
+                    c.to_uppercase().collect::<Vec<char>>()
+                } else {
+                    vec![c]
+                }
+            })
+            .collect(),
+        TextCaseKind::TitleCase => {
+            let mut out = String::with_capacity(text.len());
+            let mut start_word = true;
+            for c in text.chars() {
+                if c.is_whitespace() || c == '-' || c == '/' {
+                    out.push(c);
+                    start_word = true;
+                } else if start_word {
+                    for u in c.to_uppercase() {
+                        out.push(u);
+                    }
+                    start_word = false;
+                } else {
+                    for l in c.to_lowercase() {
+                        out.push(l);
+                    }
+                }
+            }
+            out
+        }
+        TextCaseKind::SentenceCase => {
+            let mut out = String::with_capacity(text.len());
+            let mut cap_next = true;
+            for c in text.chars() {
+                if matches!(c, '.' | '!' | '?' | '\n') {
+                    out.push(c);
+                    cap_next = true;
+                } else if c.is_alphabetic() {
+                    if cap_next {
+                        for u in c.to_uppercase() {
+                            out.push(u);
+                        }
+                        cap_next = false;
+                    } else {
+                        for l in c.to_lowercase() {
+                            out.push(l);
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
+    }
+}
 
 /// Average character advance factor as a fraction of font point size.
 pub const AVG_CHAR_EM: f64 = 0.55;

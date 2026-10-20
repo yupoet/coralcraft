@@ -6,12 +6,12 @@ use coralcraft_cdr::write_cdr7;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
-    TextAlignment, TransparencyStyle, import_dxf, import_svg,
+    TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg,
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
-    build_callout_path, build_connector_path, build_graph_paper_path, build_spiral_path,
+    build_callout_path, build_connector_path, build_graph_paper_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -497,6 +497,26 @@ impl McpServer {
                         {
                             "name": "find_and_replace_text",
                             "description": "Replaces all occurrences of find with replace across all unlocked text objects (Edit -> Find and Replace -> Replace Text).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_three_point_curve",
+                            "description": "Adds a 3-Point Curve cubic Bezier arc passing through (through_x, through_y) at t = 0.5 between (x1, y1) and (x2, y2).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "change_text_case",
+                            "description": "Changes the letter case of a text object (sentence, lowercase, uppercase, title, toggle) (Text -> Change Case / Shift+F3).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "insert_curve_node",
+                            "description": "Subdivides a path segment at element_index on an object, inserting a new node at t = 0.5 (Shape Tool -> Add Nodes / +).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "delete_curve_node",
+                            "description": "Deletes a path node at element_index on an object (Shape Tool -> Delete Nodes / -).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1375,6 +1395,44 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::FindAndReplaceText { find, replace });
                 Ok(json!({ "text_replaced": ok }))
             }
+            "add_three_point_curve" => {
+                let x1 = args.get("x1").and_then(Value::as_f64).unwrap_or(20.0);
+                let y1 = args.get("y1").and_then(Value::as_f64).unwrap_or(100.0);
+                let x2 = args.get("x2").and_then(Value::as_f64).unwrap_or(180.0);
+                let y2 = args.get("y2").and_then(Value::as_f64).unwrap_or(100.0);
+                let tx = args.get("through_x").and_then(Value::as_f64).unwrap_or(100.0);
+                let ty = args.get("through_y").and_then(Value::as_f64).unwrap_or(30.0);
+                let start = Point::new(x1, y1).map_err(|e| e.to_string())?;
+                let end = Point::new(x2, y2).map_err(|e| e.to_string())?;
+                let through = Point::new(tx, ty).map_err(|e| e.to_string())?;
+                let path = build_three_point_curve_path(start, end, through).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("3-Point Curve".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "three_point_curve", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "change_text_case" => {
+                let target = self.resolve_target_id(args)?;
+                let case_kind = match args.get("case").and_then(Value::as_str).unwrap_or("uppercase") {
+                    "sentence" => TextCaseKind::SentenceCase,
+                    "lowercase" => TextCaseKind::Lowercase,
+                    "title" => TextCaseKind::TitleCase,
+                    "toggle" => TextCaseKind::ToggleCase,
+                    _ => TextCaseKind::Uppercase,
+                };
+                let ok = self.engine.execute(EngineCommand::ChangeTextCase { object_id: target, case_kind });
+                Ok(json!({ "case_changed": ok, "object_id": target.0 }))
+            }
+            "insert_curve_node" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::InsertCurveNode { object_id: target, element_index });
+                Ok(json!({ "node_inserted": ok, "object_id": target.0 }))
+            }
+            "delete_curve_node" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::DeleteCurveNode { object_id: target, element_index });
+                Ok(json!({ "node_deleted": ok, "object_id": target.0 }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1404,7 +1462,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 80);
+        assert_eq!(tools, 84);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -569,3 +569,16 @@ pub fn build_bspline_path(control_points: &[Point], closed: bool) -> Result<Path
     }
     Ok(path)
 }
+
+/// Builds a 3-Point Curve [`Path`] starting at `start`, ending at `end`, and passing exactly
+/// through `through` at parameter `t = 0.5` (`3-Point Curve Tool`).
+pub fn build_three_point_curve_path(start: Point, end: Point, through: Point) -> Result<Path, GeomError> {
+    let qx = 2.0 * through.x.get() - 0.5 * (start.x.get() + end.x.get());
+    let qy = 2.0 * through.y.get() - 0.5 * (start.y.get() + end.y.get());
+    let c1 = Point::new(start.x.get() + (2.0 / 3.0) * (qx - start.x.get()), start.y.get() + (2.0 / 3.0) * (qy - start.y.get()))?;
+    let c2 = Point::new(end.x.get() + (2.0 / 3.0) * (qx - end.x.get()), end.y.get() + (2.0 / 3.0) * (qy - end.y.get()))?;
+    let mut path = Path::new();
+    path.move_to(start)?;
+    path.cubic_to(c1, c2, end)?;
+    Ok(path)
+}

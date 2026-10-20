@@ -22,13 +22,13 @@ pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths, distort_path,
-    expand_artistic_brush_stroke, fillet_path_corners, join_open_subpaths, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
-    warp_path_bilinear, warp_path_perspective,
+    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths, delete_curve_node_at,
+    distort_path, expand_artistic_brush_stroke, fillet_path_corners, insert_curve_node_at, join_open_subpaths, reverse_path_direction,
+    simplify_path_nodes, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{
     CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_bspline_path, build_callout_path, build_connector_path,
-    build_graph_paper_path, build_spiral_path,
+    build_graph_paper_path, build_spiral_path, build_three_point_curve_path,
 };
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 

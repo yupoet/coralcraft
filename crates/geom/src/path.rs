@@ -988,3 +988,71 @@ pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomE
     }
     Ok(out)
 }
+
+/// Subdivides the segment at `element_index` of `path` at its midpoint `t = 0.5` using exact
+/// de Casteljau subdivision (`F10` Shape Tool `+` Add Node).
+pub fn insert_curve_node_at(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    if element_index == 0 || element_index >= path.elements.len() {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for insert_curve_node_at"));
+    }
+    let mut prev_pt = Point::ZERO;
+    for &el in &path.elements[..element_index] {
+        match el {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => {
+                prev_pt = p;
+            }
+            PathElement::Close => {}
+        }
+    }
+
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len() + 1), fill_rule: path.fill_rule };
+    for (idx, &el) in path.elements.iter().enumerate() {
+        if idx != element_index {
+            out.push(el)?;
+            continue;
+        }
+        match el {
+            PathElement::LineTo(end) => {
+                let mid = Point::new(0.5 * (prev_pt.x.get() + end.x.get()), 0.5 * (prev_pt.y.get() + end.y.get()))?;
+                out.line_to(mid)?;
+                out.line_to(end)?;
+            }
+            PathElement::QuadTo { ctrl, end } => {
+                let q0 = Point::new(0.5 * (prev_pt.x.get() + ctrl.x.get()), 0.5 * (prev_pt.y.get() + ctrl.y.get()))?;
+                let q1 = Point::new(0.5 * (ctrl.x.get() + end.x.get()), 0.5 * (ctrl.y.get() + end.y.get()))?;
+                let mid = Point::new(0.5 * (q0.x.get() + q1.x.get()), 0.5 * (q0.y.get() + q1.y.get()))?;
+                out.quad_to(q0, mid)?;
+                out.quad_to(q1, end)?;
+            }
+            PathElement::CubicTo { c1, c2, end } => {
+                let p01 = Point::new(0.5 * (prev_pt.x.get() + c1.x.get()), 0.5 * (prev_pt.y.get() + c1.y.get()))?;
+                let p12 = Point::new(0.5 * (c1.x.get() + c2.x.get()), 0.5 * (c1.y.get() + c2.y.get()))?;
+                let p23 = Point::new(0.5 * (c2.x.get() + end.x.get()), 0.5 * (c2.y.get() + end.y.get()))?;
+                let p012 = Point::new(0.5 * (p01.x.get() + p12.x.get()), 0.5 * (p01.y.get() + p12.y.get()))?;
+                let p123 = Point::new(0.5 * (p12.x.get() + p23.x.get()), 0.5 * (p12.y.get() + p23.y.get()))?;
+                let mid = Point::new(0.5 * (p012.x.get() + p123.x.get()), 0.5 * (p012.y.get() + p123.y.get()))?;
+                out.cubic_to(p01, p012, mid)?;
+                out.cubic_to(p123, p23, end)?;
+            }
+            _ => out.push(el)?,
+        }
+    }
+    Ok(out)
+}
+
+/// Removes the segment node at `element_index` of `path` (`F10` Shape Tool `-` Delete Node).
+pub fn delete_curve_node_at(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    if element_index == 0 || element_index >= path.elements.len() {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for delete_curve_node_at"));
+    }
+    if matches!(path.elements[element_index], PathElement::MoveTo(_) | PathElement::Close) {
+        return Err(GeomError::InvalidShapeParameter("cannot delete MoveTo or Close element"));
+    }
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for (idx, &el) in path.elements.iter().enumerate() {
+        if idx != element_index {
+            out.push(el)?;
+        }
+    }
+    Ok(out)
+}
