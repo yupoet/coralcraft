@@ -363,14 +363,14 @@ impl DesktopWorkspace {
         let menu_bar = MenuBarCategory::ALL.iter().map(|m| m.label().to_owned()).collect();
         let property_bar = self.engine.property_bar_schema();
 
-        let mut palette_cells = Vec::with_capacity(self.engine.document.palette.swatches.len() + 1);
+        let mut palette_cells = Vec::with_capacity(self.engine.document.palette.swatches.len().saturating_add(1));
         palette_cells.push(PaletteCell::NoColor);
         for sw in &self.engine.document.palette.swatches {
             palette_cells.push(PaletteCell::Color { name: Some(sw.name.clone()), color: sw.color.clone() });
         }
 
         let can_delete_page = self.engine.document.pages.len() > 1;
-        let mut page_tabs = Vec::with_capacity(self.engine.document.pages.len() + 2);
+        let mut page_tabs = Vec::with_capacity(self.engine.document.pages.len().saturating_add(2));
         for (idx, page) in self.engine.document.pages.iter().enumerate() {
             page_tabs.push(PageNavigatorTab {
                 target: ActivePageTarget::Page(idx),
@@ -611,13 +611,18 @@ impl DesktopWorkspace {
         workspace_render::render_workspace_frame(self)
     }
 
+    #[allow(clippy::option_option)]
     fn palette_color_at(&self, cell_index: usize) -> Option<Option<Color>> {
-        if cell_index == 0 { Some(None) } else { self.engine.document.palette.swatches.get(cell_index - 1).map(|s| Some(s.color.clone())) }
+        if cell_index == 0 {
+            Some(None)
+        } else {
+            self.engine.document.palette.swatches.get(cell_index.saturating_sub(1)).map(|s| Some(s.color.clone()))
+        }
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use coralcraft_tools::PropertyContext;
@@ -679,7 +684,7 @@ mod tests {
         // 5. Render active page frame
         let rendered = ws.render_active_page(72.0).unwrap();
         assert!(rendered.surface.width > 0 && rendered.surface.height > 0);
-        assert!(!rendered.png_bytes.is_empty());
+        assert!(rendered.png_bytes.len() > 8);
     }
 
     #[test]
@@ -729,8 +734,8 @@ mod tests {
         // Clear guidelines
         ws.dispatch(UiAction::ClearGuidelines);
         let snap_cleared = ws.snapshot();
-        assert!(snap_cleared.horizontal_guidelines.is_empty());
-        assert!(snap_cleared.vertical_guidelines.is_empty());
+        assert_eq!(snap_cleared.horizontal_guidelines, [] as [coralcraft_geom::F64; 0]);
+        assert_eq!(snap_cleared.vertical_guidelines, [] as [coralcraft_geom::F64; 0]);
     }
 
     #[test]

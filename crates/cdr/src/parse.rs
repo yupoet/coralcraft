@@ -498,9 +498,13 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
     }
 }
 
-fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>, Vec<f64>, Vec<(u16, u16)>) {
+type CmxStyleTables = (Vec<Color>, Vec<f64>, Vec<(u8, u8)>, Vec<Vec<u16>>, Vec<(u16, u16, u16, u16)>);
+
+fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> CmxStyleTables {
     let mut colors = Vec::new();
     let mut pens_pt = Vec::new();
+    let mut line_styles = Vec::new();
+    let mut dots = Vec::new();
     let mut outlines = Vec::new();
 
     for ch in chunks {
@@ -546,6 +550,62 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>
                     colors.push(col);
                 }
             }
+            b"rott" if ch.payload.len() >= 2 => {
+                let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    let mut spec = 0x02u8;
+                    let mut cap_and_join = 0x00u8;
+                    while pos < ch.payload.len() {
+                        let Some(&tag_id) = ch.payload.get(pos) else { break };
+                        if tag_id == 255 {
+                            pos = pos.saturating_add(1);
+                            break;
+                        }
+                        if pos.saturating_add(3) > ch.payload.len() {
+                            break;
+                        }
+                        let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 1 && pos.saturating_add(5) <= ch.payload.len() {
+                            spec = ch.payload.get(pos.saturating_add(3)).copied().unwrap_or(0x02);
+                            cap_and_join = ch.payload.get(pos.saturating_add(4)).copied().unwrap_or(0x00);
+                        }
+                        pos = pos.saturating_add(tag_len);
+                    }
+                    line_styles.push((spec, cap_and_join));
+                }
+            }
+            b"rdot" if ch.payload.len() >= 2 => {
+                let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    let mut arr = Vec::new();
+                    while pos < ch.payload.len() {
+                        let Some(&tag_id) = ch.payload.get(pos) else { break };
+                        if tag_id == 255 {
+                            pos = pos.saturating_add(1);
+                            break;
+                        }
+                        if pos.saturating_add(3) > ch.payload.len() {
+                            break;
+                        }
+                        let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 1 && pos.saturating_add(5) <= ch.payload.len() {
+                            let dot_count = (read_u16(endian, &ch.payload, pos.saturating_add(3)).unwrap_or(0) as usize).min(11);
+                            for idx in 0..dot_count {
+                                let off = pos.saturating_add(5).saturating_add(idx.saturating_mul(2));
+                                if let Some(v) = read_u16(endian, &ch.payload, off)
+                                    && v > 0
+                                {
+                                    arr.push(v);
+                                }
+                            }
+                        }
+                        pos = pos.saturating_add(tag_len);
+                    }
+                    dots.push(arr);
+                }
+            }
             b"rpen" if ch.payload.len() >= 2 => {
                 let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
                 let mut pos = 2usize;
@@ -563,7 +623,8 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>
                         let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
                         if tag_id == 1 && pos.saturating_add(7) <= ch.payload.len() {
                             let w_cdr = read_i32(endian, &ch.payload, pos.saturating_add(3)).unwrap_or(0);
-                            w_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(0.1, 288.0);
+                            let raw_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(0.1, 288.0);
+                            w_pt = (raw_pt * 1000.0).round() / 1000.0;
                         }
                         pos = pos.saturating_add(tag_len);
                     }
@@ -574,8 +635,10 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>
                 let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
                 let mut pos = 2usize;
                 for _ in 0..count {
+                    let mut ls_idx = 1u16;
                     let mut c_idx = 1u16;
                     let mut p_idx = 1u16;
+                    let mut dash_idx = 0u16;
                     while pos < ch.payload.len() {
                         let Some(&tag_id) = ch.payload.get(pos) else { break };
                         if tag_id == 255 {
@@ -587,22 +650,24 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>
                         }
                         let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
                         if tag_id == 1 && pos.saturating_add(15) <= ch.payload.len() {
+                            ls_idx = read_u16(endian, &ch.payload, pos.saturating_add(3)).unwrap_or(1);
                             c_idx = read_u16(endian, &ch.payload, pos.saturating_add(7)).unwrap_or(1);
                             p_idx = read_u16(endian, &ch.payload, pos.saturating_add(11)).unwrap_or(1);
+                            dash_idx = read_u16(endian, &ch.payload, pos.saturating_add(13)).unwrap_or(0);
                         }
                         pos = pos.saturating_add(tag_len);
                     }
-                    outlines.push((c_idx, p_idx));
+                    outlines.push((ls_idx, c_idx, p_idx, dash_idx));
                 }
             }
             _ => {}
         }
     }
-    (colors, pens_pt, outlines)
+    (colors, pens_pt, line_styles, dots, outlines)
 }
 
 fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, page: &mut Page) {
-    let (cmx_colors, cmx_pens, cmx_outlines) = parse_cmx_style_tables(chunks, ctx.endian);
+    let (cmx_colors, cmx_pens, cmx_line_styles, cmx_dots, cmx_outlines) = parse_cmx_style_tables(chunks, ctx.endian);
     for ch in chunks {
         if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
             let mut pos = 0usize;
@@ -675,10 +740,35 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                                 }
                                 if (mask & 0x02) != 0 && sub_pos.saturating_add(5) <= attr_slice.len() {
                                     let o_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(1) as usize;
-                                    if let Some(&(c_idx, p_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
+                                    if let Some(&(ls_idx, c_idx, p_idx, dash_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
                                         let col = cmx_colors.get(usize::from(c_idx).saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
                                         let w_pt = cmx_pens.get(usize::from(p_idx).saturating_sub(1)).copied().unwrap_or(1.0);
-                                        decoded_outline = Some(OutlineStyle::with_width(col, F64::new(w_pt).unwrap_or(F64::ONE)));
+                                        let mut outl = OutlineStyle::with_width(col, F64::new(w_pt).unwrap_or(F64::ONE));
+                                        if let Some(&(spec, cap_and_join)) = cmx_line_styles.get(usize::from(ls_idx).saturating_sub(1)) {
+                                            outl.behind_fill = (spec & 0x08) != 0;
+                                            outl.scale_with_object = (spec & 0x20) != 0;
+                                            outl.cap = match cap_and_join & 0x0f {
+                                                1 => LineCap::Round,
+                                                2 => LineCap::Square,
+                                                _ => LineCap::Butt,
+                                            };
+                                            outl.join = match (cap_and_join >> 4) & 0x0f {
+                                                1 => LineJoin::Round,
+                                                2 => LineJoin::Bevel,
+                                                _ => LineJoin::Miter,
+                                            };
+                                            if (spec & 0x04) != 0
+                                                && dash_idx > 0
+                                                && let Some(arr) = cmx_dots.get(usize::from(dash_idx).saturating_sub(1))
+                                            {
+                                                let base_w = w_pt.max(0.25);
+                                                outl.dash_pattern = arr
+                                                    .iter()
+                                                    .filter_map(|&m| F64::new(((f64::from(m) * base_w) * 1000.0).round() / 1000.0).ok())
+                                                    .collect();
+                                            }
+                                        }
+                                        decoded_outline = Some(outl);
                                     } else {
                                         decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
                                     }
@@ -2518,15 +2608,15 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     Ok(out)
 }
 
-fn encode_cmx_node(
-    node: &ObjectNode,
-    cx: f64,
-    cy: f64,
-    colors: &mut Vec<Color>,
-    pens: &mut Vec<i32>,
-    outlines: &mut Vec<(u16, u16)>,
-    page_cmds: &mut Vec<u8>,
-) -> Result<(), ProbeError> {
+struct CmxWriteTables {
+    colors: Vec<Color>,
+    pens: Vec<i32>,
+    line_styles: Vec<(u8, u8)>,
+    dots: Vec<Vec<u16>>,
+    outlines: Vec<(u16, u16, u16, u16)>,
+}
+
+fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTables, page_cmds: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         // CMX_Command_BeginGroup (code = 14)
         let bbox = node_bbox_for_export(node);
@@ -2547,7 +2637,7 @@ fn encode_cmx_node(
         page_cmds.extend_from_slice(&cmd);
 
         for child in children {
-            encode_cmx_node(child, cx, cy, colors, pens, outlines, page_cmds)?;
+            encode_cmx_node(child, cx, cy, tables, page_cmds)?;
         }
 
         // CMX_Command_EndGroup (code = 15)
@@ -2575,18 +2665,49 @@ fn encode_cmx_node(
             FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
             FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
         };
-        colors.push(c);
-        fill_color_idx = colors.len() as u16;
+        tables.colors.push(c);
+        fill_color_idx = tables.colors.len() as u16;
     }
     let mut outl_idx = 1u16;
     if let Some(outl) = &node.outline {
         mask |= 0x02;
-        colors.push(outl.color.clone());
-        let c_idx = colors.len() as u16;
-        pens.push(pt_to_cdr_i32(outl.width_pt.get().max(0.25)));
-        let p_idx = pens.len() as u16;
-        outlines.push((c_idx, p_idx));
-        outl_idx = outlines.len() as u16;
+        tables.colors.push(outl.color.clone());
+        let c_idx = tables.colors.len() as u16;
+        let base_w = outl.width_pt.get().max(0.25);
+        tables.pens.push(pt_to_cdr_i32(base_w));
+        let p_idx = tables.pens.len() as u16;
+        let mut spec = 0x02u8;
+        if !outl.dash_pattern.is_empty() {
+            spec |= 0x04;
+        }
+        if outl.behind_fill {
+            spec |= 0x08;
+        }
+        if outl.scale_with_object {
+            spec |= 0x20;
+        }
+        let cap_code: u8 = match outl.cap {
+            LineCap::Butt => 0,
+            LineCap::Round => 1,
+            LineCap::Square => 2,
+        };
+        let join_code: u8 = match outl.join {
+            LineJoin::Miter => 0,
+            LineJoin::Round => 1,
+            LineJoin::Bevel => 2,
+        };
+        tables.line_styles.push((spec, (join_code << 4) | cap_code));
+        let ls_idx = tables.line_styles.len() as u16;
+        let dash_idx = if outl.dash_pattern.is_empty() {
+            0u16
+        } else {
+            let arr: Vec<u16> =
+                outl.dash_pattern.iter().take(11).map(|d| (d.get() / base_w).round().clamp(1.0, f64::from(u16::MAX)) as u16).collect();
+            tables.dots.push(arr);
+            tables.dots.len() as u16
+        };
+        tables.outlines.push((ls_idx, c_idx, p_idx, dash_idx));
+        outl_idx = tables.outlines.len() as u16;
     }
     render_attr.push(mask);
     if (mask & 0x01) != 0 {
@@ -2658,9 +2779,13 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let neg_half_w = half_w.saturating_neg();
     let neg_half_h = half_h.saturating_neg();
 
-    let mut colors: Vec<Color> = vec![Color::BLACK, Color::WHITE];
-    let mut pens: Vec<i32> = vec![pt_to_cdr_i32(1.0)];
-    let mut outlines: Vec<(u16, u16)> = vec![(1, 1)]; // (color_idx_1based, pen_idx_1based)
+    let mut tables = CmxWriteTables {
+        colors: vec![Color::BLACK, Color::WHITE],
+        pens: vec![pt_to_cdr_i32(1.0)],
+        line_styles: vec![(0x02, 0x00)],
+        dots: vec![vec![1, 1]],
+        outlines: vec![(1, 1, 1, 0)],
+    };
 
     let mut page_cmds = Vec::new();
     // 1. CMX_Command_BeginPage (code = 9)
@@ -2682,7 +2807,7 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
 
     for layer in &first_page.layers {
         for node in &layer.objects {
-            encode_cmx_node(node, cx, cy, &mut colors, &mut pens, &mut outlines, &mut page_cmds)?;
+            encode_cmx_node(node, cx, cy, &mut tables, &mut page_cmds)?;
         }
     }
 
@@ -2692,8 +2817,8 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
 
     // Build `rclr` payload (CMX_COLOR_DESCRIPTION_SECTION = 21)
     let mut rclr = Vec::new();
-    rclr.extend_from_slice(&(colors.len() as u16).to_le_bytes());
-    for col in &colors {
+    rclr.extend_from_slice(&(tables.colors.len() as u16).to_le_bytes());
+    for col in &tables.colors {
         rclr.push(1u8); // CMX_Tag_DescrSection_Color_Base
         rclr.extend_from_slice(&5u16.to_le_bytes());
         match col {
@@ -2724,17 +2849,33 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
 
     // Build `rott` payload (CMX_LINE_STYLE_DESCRIPTION_SECTION = 16)
     let mut rott = Vec::new();
-    rott.extend_from_slice(&1u16.to_le_bytes());
-    rott.push(1u8); // CMX_Tag_DescrSection_LineStyle
-    rott.extend_from_slice(&5u16.to_le_bytes());
-    rott.push(0x02u8); // solid line spec
-    rott.push(0x00u8); // cap & join
-    rott.push(255u8);
+    rott.extend_from_slice(&(tables.line_styles.len() as u16).to_le_bytes());
+    for &(spec, cap_and_join) in &tables.line_styles {
+        rott.push(1u8); // CMX_Tag_DescrSection_LineStyle
+        rott.extend_from_slice(&5u16.to_le_bytes());
+        rott.push(spec);
+        rott.push(cap_and_join);
+        rott.push(255u8);
+    }
+
+    // Build `rdot` payload (CMX_DOT_DASH_DESCRIPTION_SECTION = 17)
+    let mut rdot = Vec::new();
+    rdot.extend_from_slice(&(tables.dots.len() as u16).to_le_bytes());
+    for arr in &tables.dots {
+        let tag_len = (5usize.saturating_add(arr.len().saturating_mul(2))) as u16;
+        rdot.push(1u8); // CMX_Tag_DescrSection_Dash
+        rdot.extend_from_slice(&tag_len.to_le_bytes());
+        rdot.extend_from_slice(&(arr.len() as u16).to_le_bytes());
+        for &m in arr {
+            rdot.extend_from_slice(&m.to_le_bytes());
+        }
+        rdot.push(255u8);
+    }
 
     // Build `rpen` payload (CMX_PEN_DESCRIPTION_SECTION = 19)
     let mut rpen = Vec::new();
-    rpen.extend_from_slice(&(pens.len() as u16).to_le_bytes());
-    for &w_cdr in &pens {
+    rpen.extend_from_slice(&(tables.pens.len() as u16).to_le_bytes());
+    for &w_cdr in &tables.pens {
         rpen.push(1u8); // CMX_Tag_DescrSection_Pen
         rpen.extend_from_slice(&15u16.to_le_bytes());
         rpen.extend_from_slice(&w_cdr.to_le_bytes());
@@ -2746,16 +2887,16 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
 
     // Build `rotl` payload (CMX_OUTLINE_DESCRIPTION_SECTION = 15)
     let mut rotl = Vec::new();
-    rotl.extend_from_slice(&(outlines.len() as u16).to_le_bytes());
-    for &(c_idx, p_idx) in &outlines {
+    rotl.extend_from_slice(&(tables.outlines.len() as u16).to_le_bytes());
+    for &(ls_idx, c_idx, p_idx, dash_idx) in &tables.outlines {
         rotl.push(1u8); // CMX_Tag_DescrSection_Outline
         rotl.extend_from_slice(&15u16.to_le_bytes());
-        rotl.extend_from_slice(&1u16.to_le_bytes()); // lineStyle = 1
+        rotl.extend_from_slice(&ls_idx.to_le_bytes()); // lineStyle
         rotl.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
         rotl.extend_from_slice(&c_idx.to_le_bytes()); // color
         rotl.extend_from_slice(&0u16.to_le_bytes()); // arrowHeads
         rotl.extend_from_slice(&p_idx.to_le_bytes()); // pen
-        rotl.extend_from_slice(&0u16.to_le_bytes()); // dashArray
+        rotl.extend_from_slice(&dash_idx.to_le_bytes()); // dashArray
         rotl.push(255u8);
     }
 
@@ -2768,7 +2909,9 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let rclr_chunk_total = 8usize.saturating_add(rclr.len()).saturating_add(rclr.len() & 1);
     let rott_offset = rclr_offset.saturating_add(rclr_chunk_total as u32);
     let rott_chunk_total = 8usize.saturating_add(rott.len()).saturating_add(rott.len() & 1);
-    let rpen_offset = rott_offset.saturating_add(rott_chunk_total as u32);
+    let rdot_offset = rott_offset.saturating_add(rott_chunk_total as u32);
+    let rdot_chunk_total = 8usize.saturating_add(rdot.len()).saturating_add(rdot.len() & 1);
+    let rpen_offset = rdot_offset.saturating_add(rdot_chunk_total as u32);
     let rpen_chunk_total = 8usize.saturating_add(rpen.len()).saturating_add(rpen.len() & 1);
     let rotl_offset = rpen_offset.saturating_add(rpen_chunk_total as u32);
     let rotl_chunk_total = 8usize.saturating_add(rotl.len()).saturating_add(rotl.len() & 1);
@@ -2786,11 +2929,13 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let ixmr_offset = ixpg_offset.saturating_add(ixpg_chunk_total as u32);
 
     // Build `ixmr` payload (master index table)
-    let mut ixmr = Vec::with_capacity(36);
+    let mut ixmr = Vec::with_capacity(42);
     ixmr.extend_from_slice(&1u16.to_le_bytes()); // master ID = 1
     ixmr.extend_from_slice(&6u16.to_le_bytes()); // size = 6
-    ixmr.extend_from_slice(&5u16.to_le_bytes()); // recordCount = 5
-    for (sec_id, sec_off) in [(2u16, ixpg_offset), (15u16, rotl_offset), (16u16, rott_offset), (19u16, rpen_offset), (21u16, rclr_offset)] {
+    ixmr.extend_from_slice(&6u16.to_le_bytes()); // recordCount = 6
+    for (sec_id, sec_off) in
+        [(2u16, ixpg_offset), (15u16, rotl_offset), (16u16, rott_offset), (17u16, rdot_offset), (19u16, rpen_offset), (21u16, rclr_offset)]
+    {
         ixmr.extend_from_slice(&sec_id.to_le_bytes());
         ixmr.extend_from_slice(&sec_off.to_le_bytes());
     }
@@ -2822,6 +2967,7 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     append_riff_chunk(&mut body, *b"page", &page_cmds);
     append_riff_chunk(&mut body, *b"rclr", &rclr);
     append_riff_chunk(&mut body, *b"rott", &rott);
+    append_riff_chunk(&mut body, *b"rdot", &rdot);
     append_riff_chunk(&mut body, *b"rpen", &rpen);
     append_riff_chunk(&mut body, *b"rotl", &rotl);
     append_riff_chunk(&mut body, *b"ixpg", &ixpg);

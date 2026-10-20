@@ -7,6 +7,8 @@
 //! Right `Objects`/`Properties` Docker, Bottom Page Navigator tabs, and Status Bar chips)
 //! using an embedded clean-room 5×7/6×9 1-bit ASCII bitmap font with zero system-font dependency.
 
+#![allow(clippy::arithmetic_side_effects)]
+
 use coralcraft_color::Color;
 use coralcraft_render::{RenderError, RenderOpts, RenderOutput, Surface, encode_png, premul_to_straight, render_page, straight_to_premul};
 use coralcraft_tools::ToolKind;
@@ -111,7 +113,7 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
                     draw_dashed_vline(&mut surface, fx1, fy0, fy1, 3, GUIDELINE_BLUE);
                     let layout = coralcraft_doc::layout_paragraph_text(pt);
                     if layout.overflow {
-                        let fmx = (fx0 + fx1) / 2;
+                        let fmx = i32::midpoint(fx0, fx1);
                         fill_rect(&mut surface, fmx - 4, fy1 - 3, 9, 7, SLASH_RED);
                         stroke_rect(&mut surface, fmx - 4, fy1 - 3, 9, 7, PAPER_WHITE);
                     }
@@ -126,8 +128,8 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
         let sy0 = page_y0 + (sel_bounds.y0.get() * fit_scale).round() as i32;
         let sx1 = page_x0 + (sel_bounds.x1.get() * fit_scale).round() as i32;
         let sy1 = page_y0 + (sel_bounds.y1.get() * fit_scale).round() as i32;
-        let smx = (sx0 + sx1) / 2;
-        let smy = (sy0 + sy1) / 2;
+        let smx = i32::midpoint(sx0, sx1);
+        let smy = i32::midpoint(sy0, sy1);
 
         let handles = [(sx0, sy0), (smx, sy0), (sx1, sy0), (sx1, smy), (sx1, sy1), (smx, sy1), (sx0, sy1), (sx0, smy)];
         for (hx, hy) in handles {
@@ -149,15 +151,15 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
                             | coralcraft_doc::FountainGeometry::Square { angle_deg, .. } => angle_deg.get(),
                             coralcraft_doc::FountainGeometry::Radial { .. } => 0.0,
                         };
-                        let c0 = stops.first().map(|s| s.color.to_rgba8(1.0)).unwrap_or([0, 120, 215, 255]);
-                        let c1 = stops.last().map(|s| s.color.to_rgba8(1.0)).unwrap_or(PAPER_WHITE);
+                        let c0 = stops.first().map_or([0, 120, 215, 255], |s| s.color.to_rgba8(1.0));
+                        let c1 = stops.last().map_or(PAPER_WHITE, |s| s.color.to_rgba8(1.0));
                         (ang, c0, c1)
                     }
                     Some(coralcraft_doc::FillStyle::Uniform { color }) => (0.0, color.to_rgba8(1.0), PAPER_WHITE),
                     _ => (0.0, [0, 120, 215, 255], PAPER_WHITE),
                 },
             );
-            let half_len = ((sx1 - sx0).abs().max(24) as f64) * 0.4;
+            let half_len = f64::from((sx1 - sx0).abs().max(24)) * 0.4;
             let rad = angle_deg.to_radians();
             let dx = (half_len * rad.cos()).round() as i32;
             let dy = (half_len * rad.sin()).round() as i32;
@@ -452,7 +454,9 @@ fn draw_bevel_box(surface: &mut Surface, x: i32, y: i32, w: i32, h: i32, bg: [u8
 fn put_pixel(surface: &mut Surface, x: i32, y: i32, rgba: [u8; 4]) {
     if x >= 0 && y >= 0 && (x as u32) < surface.width && (y as u32) < surface.height {
         let idx = (y as usize) * (surface.width as usize) + (x as usize);
-        surface.pixels[idx] = straight_to_premul(rgba);
+        if let Some(cell) = surface.pixels.get_mut(idx) {
+            *cell = straight_to_premul(rgba);
+        }
     }
 }
 
@@ -469,7 +473,9 @@ fn fill_rect(surface: &mut Surface, x: i32, y: i32, w: i32, h: i32, rgba: [u8; 4
     for py in y0..y1 {
         let row = (py as usize) * stride;
         for px in x0..x1 {
-            surface.pixels[row + (px as usize)] = premul;
+            if let Some(cell) = surface.pixels.get_mut(row + (px as usize)) {
+                *cell = premul;
+            }
         }
     }
 }
@@ -522,9 +528,10 @@ fn blit_surface(dst: &mut Surface, src: &Surface, dst_x0: i32, dst_y0: i32) {
             if dx < 0 || (dx as u32) >= dst.width {
                 continue;
             }
-            let src_px = src.pixels[(sy as usize) * (src.width as usize) + (sx as usize)];
-            let straight = premul_to_straight(src_px);
-            put_pixel(dst, dx, dy, straight);
+            if let Some(&src_px) = src.pixels.get((sy as usize) * (src.width as usize) + (sx as usize)) {
+                let straight = premul_to_straight(src_px);
+                put_pixel(dst, dx, dy, straight);
+            }
         }
     }
 }
@@ -638,7 +645,9 @@ fn draw_toolbox_glyph(surface: &mut Surface, tool: ToolKind, bx: i32, by: i32, _
             ];
             for i in 0..pts.len() {
                 let next = (i + 1) % pts.len();
-                draw_line(surface, pts[i].0, pts[i].1, pts[next].0, pts[next].1, TEXT_BLACK);
+                if let (Some(&p0), Some(&p1)) = (pts.get(i), pts.get(next)) {
+                    draw_line(surface, p0.0, p0.1, p1.0, p1.1, TEXT_BLACK);
+                }
             }
             fill_rect(surface, bx + 10, by + 10, 3, 5, PAPER_WHITE);
             fill_rect(surface, bx + 11, by + 15, 2, 2, PAPER_WHITE);
@@ -705,12 +714,12 @@ fn draw_toolbox_glyph(surface: &mut Surface, tool: ToolKind, bx: i32, by: i32, _
         }
         ToolKind::PolygonStar => {
             // 5-point star filled with gold
-            let pts = [(bx + 15, by + 7), (bx + 22, by + 12), (bx + 19, by + 21), (bx + 11, by + 21), (bx + 8, by + 12)];
-            draw_line(surface, pts[0].0, pts[0].1, pts[2].0, pts[2].1, TEXT_BLACK);
-            draw_line(surface, pts[2].0, pts[2].1, pts[4].0, pts[4].1, TEXT_BLACK);
-            draw_line(surface, pts[4].0, pts[4].1, pts[1].0, pts[1].1, TEXT_BLACK);
-            draw_line(surface, pts[1].0, pts[1].1, pts[3].0, pts[3].1, TEXT_BLACK);
-            draw_line(surface, pts[3].0, pts[3].1, pts[0].0, pts[0].1, TEXT_BLACK);
+            let [p0, p1, p2, p3, p4] = [(bx + 15, by + 7), (bx + 22, by + 12), (bx + 19, by + 21), (bx + 11, by + 21), (bx + 8, by + 12)];
+            draw_line(surface, p0.0, p0.1, p2.0, p2.1, TEXT_BLACK);
+            draw_line(surface, p2.0, p2.1, p4.0, p4.1, TEXT_BLACK);
+            draw_line(surface, p4.0, p4.1, p1.0, p1.1, TEXT_BLACK);
+            draw_line(surface, p1.0, p1.1, p3.0, p3.1, TEXT_BLACK);
+            draw_line(surface, p3.0, p3.1, p0.0, p0.1, TEXT_BLACK);
             fill_rect(surface, bx + 13, by + 13, 4, 4, STAR_GOLD);
         }
         ToolKind::ArtisticText => {

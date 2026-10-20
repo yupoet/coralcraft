@@ -177,7 +177,7 @@ impl CoralCraftApp {
     pub fn copy_selection(&mut self) {
         let selected: Vec<coralcraft_doc::ObjectNode> = self.workspace.engine.selected_nodes().into_iter().cloned().collect();
         if selected.is_empty() {
-            self.status_message = "Nothing selected to copy".to_owned();
+            "Nothing selected to copy".clone_into(&mut self.status_message);
             return;
         }
         if let Ok(json) = serde_json::to_string(&selected) {
@@ -296,7 +296,7 @@ impl CoralCraftApp {
                         self.workspace = DesktopWorkspace::new(Document::new_a4_portrait());
                         self.current_file_path = None;
                         self.doc_revision = self.doc_revision.wrapping_add(1);
-                        self.status_message = "Created new A4 document".to_owned();
+                        "Created new A4 document".clone_into(&mut self.status_message);
                     }
                     Key::O => self.trigger_open_dialog(),
                     Key::S => self.trigger_save_dialog(false),
@@ -370,7 +370,7 @@ impl CoralCraftApp {
                                 self.workspace = DesktopWorkspace::new(Document::new_a4_portrait());
                                 self.current_file_path = None;
                                 self.doc_revision = self.doc_revision.wrapping_add(1);
-                                self.status_message = "Created new A4 document".to_owned();
+                                "Created new A4 document".clone_into(&mut self.status_message);
                                 ui.close();
                             }
                             if ui.button("Open... (Ctrl+O)").clicked() {
@@ -1109,7 +1109,7 @@ impl CoralCraftApp {
                 DockerTab::Objects => {
                     ui.horizontal(|ui| {
                         if ui.small_button("+ Layer").clicked() {
-                            let next_num = self.workspace.engine.current_page().layers.len() + 1;
+                            let next_num = self.workspace.engine.current_page().layers.len().saturating_add(1);
                             self.execute_cmd(EngineCommand::AddLayer { name: format!("Layer {next_num}") });
                         }
                         ui.label(format!("{} object(s)", snap.object_tree.len()));
@@ -1241,7 +1241,7 @@ impl CoralCraftApp {
 
             // Update and draw cached rasterized page texture
             let dpi = (72.0 * f64::from(scale)).clamp(36.0, 216.0);
-            let dpi_bucket = (dpi / 18.0).round() as u32 * 18;
+            let dpi_bucket = ((dpi / 18.0).round() as u32).saturating_mul(18);
             let target = self.workspace.engine.active_target;
             let needs_re_render = match &self.cached_page {
                 Some(c) => c.revision != self.doc_revision || c.target != target || c.dpi_bucket != dpi_bucket,
@@ -1250,7 +1250,7 @@ impl CoralCraftApp {
             if needs_re_render && let Ok(rendered) = self.workspace.render_active_page(f64::from(dpi_bucket.max(36))) {
                 let w = rendered.surface.width as usize;
                 let h = rendered.surface.height as usize;
-                let mut rgba = Vec::with_capacity(w * h * 4);
+                let mut rgba = Vec::with_capacity(w.saturating_mul(h).saturating_mul(4));
                 for px in &rendered.surface.pixels {
                     rgba.extend_from_slice(px);
                 }
@@ -1400,7 +1400,7 @@ impl CoralCraftApp {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use coralcraft_tools::PropertyContext;
@@ -1459,7 +1459,11 @@ mod tests {
             pick_save: Some(Box::new({
                 let save_path = save_path.clone();
                 move |suggested| {
-                    if suggested.ends_with(".svg") { Some(svg_path_clone.clone()) } else { Some(save_path.clone()) }
+                    if std::path::Path::new(suggested).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("svg")) {
+                        Some(svg_path_clone.clone())
+                    } else {
+                        Some(save_path.clone())
+                    }
                 }
             })),
             clipboard_get_text: Some(Box::new(move || Some(cb_get.lock().unwrap().clone()))),

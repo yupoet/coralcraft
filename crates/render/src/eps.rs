@@ -223,20 +223,68 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
     }
 
     if let Some(fill) = &node.fill {
-        let color = match fill {
-            FillStyle::Uniform { color } => Some(color),
-            FillStyle::Fountain { stops, .. } => stops.first().map(|s| &s.color),
-            FillStyle::TwoColorPattern { fg_color, .. } => Some(fg_color),
-            FillStyle::Unknown { .. } => None,
-        };
-        if let Some(col) = color {
-            emit_ps_color(out, col);
-            emit_ps_path(out);
-            if world_path.fill_rule == FillRule::EvenOdd {
-                out.push_str("eofill\n");
-            } else {
-                out.push_str("fill\n");
+        match fill {
+            FillStyle::Fountain { geometry, blend_mode, stops } if !stops.is_empty() => {
+                out.push_str("gsave\n");
+                emit_ps_path(out);
+                if world_path.fill_rule == FillRule::EvenOdd {
+                    out.push_str("eoclip\nnewpath\n");
+                } else {
+                    out.push_str("clip\nnewpath\n");
+                }
+                let wb = world_path.bounds().unwrap_or(local_bbox);
+                let x0 = wb.x0.get();
+                let y0_ps = page_h - wb.y1.get();
+                let bw = wb.width().max(1e-6);
+                let bh = wb.height().max(1e-6);
+                let bands = 16usize;
+                match *geometry {
+                    coralcraft_doc::FountainGeometry::Linear { angle_deg, edge_pad } => {
+                        let cx = x0 + 0.5 * bw;
+                        let cy_ps = y0_ps + 0.5 * bh;
+                        let diag = bw.hypot(bh).max(1e-6);
+                        let rad = -angle_deg.get().to_radians();
+                        let (sin_a, cos_a) = rad.sin_cos();
+                        let pad = edge_pad.get().clamp(0.0, 0.49);
+                        let half_span = ((0.5 * bw * cos_a.abs() + 0.5 * bh * sin_a.abs()) * (1.0 - 2.0 * pad)).max(1e-6);
+                        let span = 2.0 * half_span;
+                        let step = span / (bands as f64);
+                        let _ = writeln!(out, "{} {} translate\n{} rotate", fmt_num(cx), fmt_num(cy_ps), fmt_num(-angle_deg.get()));
+                        for i in 0..bands {
+                            let t = ((i as f64) + 0.5) / (bands as f64);
+                            let rgb = coralcraft_color::interpolate_stops(stops, *blend_mode, t)?;
+                            emit_ps_color(out, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] });
+                            let bx = -half_span + (i as f64) * step;
+                            let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(bx), fmt_num(-0.5 * diag), fmt_num(step + 0.05), fmt_num(diag));
+                        }
+                    }
+                    coralcraft_doc::FountainGeometry::Radial { center_x, center_y, radius, .. }
+                    | coralcraft_doc::FountainGeometry::Square { center_x, center_y, radius, .. }
+                    | coralcraft_doc::FountainGeometry::Conical { center_x, center_y, angle_deg: radius } => {
+                        let cx = x0 + center_x.get() * bw;
+                        let cy_ps = page_h - (wb.y0.get() + center_y.get() * bh);
+                        let max_r = (radius.get().abs().max(0.5) * bw.hypot(bh)).max(1e-6);
+                        for i in (0..bands).rev() {
+                            let t = ((i as f64) + 0.5) / (bands as f64);
+                            let r = max_r * (i.saturating_add(1) as f64) / (bands as f64);
+                            let rgb = coralcraft_color::interpolate_stops(stops, *blend_mode, t)?;
+                            emit_ps_color(out, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] });
+                            let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(cx - r), fmt_num(cy_ps - r), fmt_num(2.0 * r), fmt_num(2.0 * r));
+                        }
+                    }
+                }
+                out.push_str("grestore\n");
             }
+            FillStyle::Uniform { color } | FillStyle::TwoColorPattern { fg_color: color, .. } => {
+                emit_ps_color(out, color);
+                emit_ps_path(out);
+                if world_path.fill_rule == FillRule::EvenOdd {
+                    out.push_str("eofill\n");
+                } else {
+                    out.push_str("fill\n");
+                }
+            }
+            FillStyle::Fountain { .. } | FillStyle::Unknown { .. } => {}
         }
     }
 
@@ -559,5 +607,56 @@ mod tests {
         let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf");
         let re_objs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
         assert_eq!(re_objs.len(), 3, "import_dxf should reconstruct 3 ArtisticText objects from DXF TEXT entities");
+    }
+
+    #[test]
+    fn export_eps_fountain_fill_emits_clipped_shading_bands_m69() {
+        let mut doc = Document::new_a4_portrait();
+        let stops = vec![
+            coralcraft_color::FountainStop::new(0.0, Color::rgb8(255, 0, 0)).unwrap(),
+            coralcraft_color::FountainStop::new(1.0, Color::rgb8(0, 0, 255)).unwrap(),
+        ];
+        let fountain = FillStyle::Fountain {
+            geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg: F64::ZERO, edge_pad: F64::ZERO },
+            blend_mode: coralcraft_color::FountainBlendMode::Direct,
+            stops,
+        };
+        let node = ObjectNode::new(
+            ObjectId(30),
+            Some("FountainRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 40.0, 180.0, 120.0).unwrap())),
+            Some(fountain),
+            None,
+        );
+        doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects.push(node);
+
+        let eps = export_eps(&doc, 0).expect("export_eps");
+        assert!(eps.contains("clip\nnewpath\n"), "Fountain fill in EPS should clip to object path: {eps}");
+        assert!(eps.contains("rectfill"), "Fountain fill in EPS should emit PostScript shading bands via rectfill: {eps}");
+    }
+
+    #[test]
+    fn import_svg_groups_and_transforms_roundtrip_m69() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="400pt" height="300pt">
+  <g id="layer-1" data-name="Layer 1">
+    <g id="badge-group" transform="translate(30, 45)">
+      <rect x="10" y="20" width="50" height="40" fill="#ff0000" transform="matrix(2 0 0 2 5 10)"/>
+      <circle cx="80" cy="60" r="15" fill="#00ff00"/>
+    </g>
+  </g>
+</svg>"##;
+        let doc = coralcraft_doc::import_svg(svg).expect("import_svg");
+        let objs = &doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 1, "top-level layer should contain 1 Group object");
+        let grp = objs.first().unwrap();
+        assert!((grp.transform.tx.get() - 30.0).abs() < 1e-6);
+        assert!((grp.transform.ty.get() - 45.0).abs() < 1e-6);
+        let ObjectKind::Group { children } = &grp.kind else {
+            panic!("expected ObjectKind::Group, got {:?}", grp.kind);
+        };
+        assert_eq!(children.len(), 2);
+        let first_child = children.first().unwrap();
+        assert!((first_child.transform.a.get() - 2.0).abs() < 1e-6);
+        assert!((first_child.transform.tx.get() - 5.0).abs() < 1e-6);
     }
 }

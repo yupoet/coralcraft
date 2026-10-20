@@ -2,7 +2,7 @@
 //! for `coralcraft-doc`.
 
 use coralcraft_color::Color;
-use coralcraft_geom::{EllipseSpec, F64, Path, Point, Rect, RectSpec, Size};
+use coralcraft_geom::{Affine2, EllipseSpec, F64, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, ObjectKind, ObjectNode};
 use crate::style::{FillStyle, OutlineStyle};
@@ -12,6 +12,14 @@ fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
         && let Some(layer) = page.layers.first_mut()
     {
         layer.objects.push(node);
+    }
+}
+
+fn push_svg_node(doc: &mut Document, group_stack: &mut [(Option<String>, Affine2, Vec<ObjectNode>)], node: ObjectNode) {
+    if let Some((_, _, children)) = group_stack.last_mut() {
+        children.push(node);
+    } else {
+        push_to_first_layer(doc, node);
     }
 }
 
@@ -32,6 +40,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     }
 
     let mut pos = 0usize;
+    let mut in_defs = false;
+    let mut passthrough_g_stack: Vec<bool> = Vec::new();
+    let mut group_stack: Vec<(Option<String>, Affine2, Vec<ObjectNode>)> = Vec::new();
+
     while let Some(rem) = svg_str.get(pos..) {
         let Some(lt_rel) = rem.find('<') else {
             break;
@@ -49,6 +61,40 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         };
         pos = end;
 
+        if tag_slice.starts_with("<defs") && !tag_slice.ends_with("/>") {
+            in_defs = true;
+            continue;
+        } else if tag_slice.starts_with("</defs>") {
+            in_defs = false;
+            continue;
+        }
+        if in_defs {
+            continue;
+        }
+
+        if (tag_slice.starts_with("<g ") || tag_slice.starts_with("<g\t") || tag_slice == "<g>") && !tag_slice.ends_with("/>") {
+            let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
+            if id_str.starts_with("layer-") || id_str == "prepress-marks" {
+                passthrough_g_stack.push(true);
+            } else {
+                passthrough_g_stack.push(false);
+                let name = if id_str.is_empty() { Some("SVG Group".to_owned()) } else { Some(id_str.to_owned()) };
+                let tf = parse_svg_transform(tag_slice);
+                group_stack.push((name, tf, Vec::new()));
+            }
+            continue;
+        } else if tag_slice.starts_with("</g>") {
+            if passthrough_g_stack.pop() == Some(false)
+                && let Some((name, tf, children)) = group_stack.pop()
+            {
+                let obj_id = doc.allocate_object_id();
+                let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+                grp.transform = tf;
+                push_svg_node(&mut doc, &mut group_stack, grp);
+            }
+            continue;
+        }
+
         if tag_slice.starts_with("<rect ") || tag_slice.starts_with("<rect\t") {
             let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
             if id_str == "page-background" {
@@ -64,10 +110,9 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                push_to_first_layer(
-                    &mut doc,
-                    ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(RectSpec::sharp(r)), fill, outline),
-                );
+                let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(RectSpec::sharp(r)), fill, outline);
+                node.transform = parse_svg_transform(tag_slice);
+                push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<ellipse ") || tag_slice.starts_with("<circle ") {
             let cx = parse_attr_f64(tag_slice, "cx").unwrap_or(0.0);
@@ -80,10 +125,9 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                push_to_first_layer(
-                    &mut doc,
-                    ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline),
-                );
+                let mut node = ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline);
+                node.transform = parse_svg_transform(tag_slice);
+                push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<path ") {
             let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
@@ -96,7 +140,9 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                push_to_first_layer(&mut doc, ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline));
+                let mut node = ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline);
+                node.transform = parse_svg_transform(tag_slice);
+                push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<text ")
             && let Some(after_open) = svg_str.get(pos..)
@@ -111,21 +157,64 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                push_to_first_layer(
-                    &mut doc,
-                    ObjectNode::new(
-                        obj_id,
-                        Some("SVG Text".to_owned()),
-                        ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position },
-                        fill,
-                        outline,
-                    ),
+                let mut node = ObjectNode::new(
+                    obj_id,
+                    Some("SVG Text".to_owned()),
+                    ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position },
+                    fill,
+                    outline,
                 );
+                node.transform = parse_svg_transform(tag_slice);
+                push_svg_node(&mut doc, &mut group_stack, node);
             }
         }
     }
 
+    while let Some((name, tf, children)) = group_stack.pop() {
+        let obj_id = doc.allocate_object_id();
+        let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+        grp.transform = tf;
+        push_svg_node(&mut doc, &mut group_stack, grp);
+    }
+
     Ok(doc)
+}
+
+fn parse_svg_transform(tag_slice: &str) -> Affine2 {
+    let Some(raw) = extract_attr_str(tag_slice, "transform") else {
+        return Affine2::IDENTITY;
+    };
+    let s = raw.trim();
+    if let Some(rest) = s.strip_prefix("matrix(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        let nums: Vec<f64> =
+            inner.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+        if let [a, b, c, d, tx, ty] = nums.as_slice() {
+            return Affine2::new(*a, *b, *c, *d, *tx, *ty).unwrap_or(Affine2::IDENTITY);
+        }
+    } else if let Some(rest) = s.strip_prefix("translate(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        let nums: Vec<f64> =
+            inner.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+        match nums.as_slice() {
+            [tx, ty] => return Affine2::translation(*tx, *ty).unwrap_or(Affine2::IDENTITY),
+            [tx] => return Affine2::translation(*tx, 0.0).unwrap_or(Affine2::IDENTITY),
+            _ => {}
+        }
+    } else if let Some(rest) = s.strip_prefix("scale(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        let nums: Vec<f64> =
+            inner.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+        match nums.as_slice() {
+            [sx, sy] => return Affine2::scaling(*sx, *sy).unwrap_or(Affine2::IDENTITY),
+            [sx] => return Affine2::scaling(*sx, *sx).unwrap_or(Affine2::IDENTITY),
+            _ => {}
+        }
+    }
+    Affine2::IDENTITY
 }
 
 fn token_f64(tokens: &[String], idx: usize) -> Option<f64> {

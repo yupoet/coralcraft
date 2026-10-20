@@ -248,9 +248,14 @@
     - `coralcraft-render` & `coralcraft-doc`: Emitted native PostScript text operators (`findfont`, `scalefont`, `setfont`, `moveto`, `show`) for `ArtisticText` and `ParagraphText` in `export_eps`, and DXF `TEXT` entities in `export_dxf` and `import_dxf`.
     - `coralcraft-cdr`: Encoded and decoded `OutlineStyle::dash_pattern` (11-entry `u16` dash table) and `start_arrow`/`end_arrow` (`ArrowheadKind`) in `write_cdr7` / `decode_outl`.
     - `coralcraft-mcp`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` across `coralcraft-mcp` (10 of 12 workspace crates now enforced).
+69. **M69 EPS Fountain Fill Shading Bands (`gsave`/`clip`/`rectfill`/`grestore`), SVG `<g>` Group Hierarchy & `transform` Import, CMX1 `rott` & `rdot` Line-Style/Dash Round-Trip, and `coralcraft-ui-egui` Strict Lints**:
+    - `coralcraft-render` & `coralcraft-doc`: Rendered `FillStyle::Fountain` in `export_eps` using clipped PostScript shading bands (`gsave`/`clip`/`eoclip`/`rectfill`/`grestore`), and imported `<g>` / `</g>` group hierarchy and `transform` (`matrix`, `translate`, `scale`) in `import_svg`.
+    - `coralcraft-cdr`: Encoded and decoded CMX1 `rott` (`CMX_LINE_STYLE_DESCRIPTION_SECTION = 16`, cap/join/behind_fill/scale_with_object) and `rdot` (`CMX_DOT_DASH_DESCRIPTION_SECTION = 17`, dash-pattern multipliers) in `write_cmx1` and `parse_cmx_commands_into_page`.
+    - `coralcraft-ui-egui`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` across `coralcraft-ui-egui` (11 of 12 workspace crates now enforced).
 
 ## Changelog
 
+- 2026-10-21: M69 delivered (EPS Fountain Fill clipped PostScript `rectfill` shading bands, SVG `<g>` group hierarchy & `transform` import, CMX1 `rott` & `rdot` line-style/dash-array round-trip, and strict clippy lints in `coralcraft-ui-egui`).
 - 2026-10-21: M68 delivered (EPS native PostScript text `findfont`/`scalefont`/`setfont`/`show`, DXF `TEXT` entity export & import, CDR7 `outl` `dash_pattern` & `ArrowheadKind` round-trip, and strict clippy lints in `coralcraft-mcp`).
 - 2026-10-21: M67 delivered (EPS PowerClip `clip`/`eoclip`, `behind_fill`, `scale_with_object` & `setlinecap`/`setlinejoin`, SVG/EPS/DXF output budget guards, CMX1 `rclr`/`rpen`/`rotl` & `RenderingAttr` style parsing in `coralcraft-cdr`, and strict clippy lints in `apps/coralcraft`).
 - 2026-10-21: M66 delivered (`OffsetJoinKind` & `offset_path_with_join` circular arc-fan / bevel joins in `coralcraft-geom`, CMX1 `BeginGroup`/`EndGroup` round-trip in `coralcraft-cdr`, `MAX_PDF_EXPORT_BYTES` guard in `coralcraft-render`, and strict clippy lints in `coralcraft-cli` & `xtask`).

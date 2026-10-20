@@ -3,6 +3,8 @@
 //! and renders RGBA8 workspace frames for native OS windowing (Linux X11, Windows Win32,
 //! macOS AppKit/CoreGraphics, and Web HTML5 Canvas).
 
+#![allow(clippy::arithmetic_side_effects)]
+
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, FillStyle, ObjectKind, OutlineStyle};
 use coralcraft_engine::EngineCommand;

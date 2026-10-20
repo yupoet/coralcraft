@@ -938,4 +938,43 @@ mod tests {
         assert_eq!(decoded_outl.start_arrow, ArrowheadKind::Triangle);
         assert_eq!(decoded_outl.end_arrow, ArrowheadKind::Diamond);
     }
+
+    #[test]
+    fn write_cmx1_and_parse_pure_cmx_rott_and_rdot_dash_pattern_m69() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode, OutlineStyle};
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(30, 140, 90), F64::new(2.0).unwrap());
+        outl.cap = LineCap::Round;
+        outl.join = LineJoin::Bevel;
+        outl.behind_fill = true;
+        outl.scale_with_object = true;
+        outl.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()];
+
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(81),
+            Some("CmxDashedBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 40.0, 140.0, 100.0).unwrap())),
+            None,
+            Some(outl),
+        ));
+
+        let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
+        let pure_riff_sz = (pure_cmx.len() - 8) as u32;
+        pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
+
+        let parsed_pure = parse_document(&pure_cmx).expect("parse standalone CMX1 with rott and rdot");
+        let decoded_outl = parsed_pure.document.pages[0].layers[0].objects[0].outline.as_ref().expect("decoded CMX1 outline");
+        assert_eq!(decoded_outl.color, Color::rgb8(30, 140, 90));
+        assert!((decoded_outl.width_pt.get() - 2.0).abs() < 1e-2);
+        assert_eq!(decoded_outl.cap, LineCap::Round);
+        assert_eq!(decoded_outl.join, LineJoin::Bevel);
+        assert!(decoded_outl.behind_fill);
+        assert!(decoded_outl.scale_with_object);
+        assert_eq!(decoded_outl.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()]);
+    }
 }
