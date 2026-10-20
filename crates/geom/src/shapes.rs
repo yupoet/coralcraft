@@ -1510,6 +1510,63 @@ pub fn build_concentric_rings_path(center: Point, inner_radius_pt: f64, outer_ra
     Ok(path)
 }
 
+/// Builds a flat-top hexagonal honeycomb tessellation [`Path`] inside `bounds`
+/// (`Object -> Insert -> Honeycomb / Hexagonal Grid`) with circumradius `cell_radius_pt`
+/// and optional mortar separation `cell_gap_pt >= 0`.
+pub fn build_honeycomb_grid_path(bounds: Rect, cell_radius_pt: f64, cell_gap_pt: f64) -> Result<Path, GeomError> {
+    let r_full = F64::new(cell_radius_pt)?.get();
+    let gap = F64::new(cell_gap_pt)?.get();
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 || r_full <= 1.0 || gap < 0.0 || gap >= r_full * 1.5 {
+        return Err(GeomError::InvalidShapeParameter("invalid honeycomb grid parameters"));
+    }
+    let sqrt3 = 3.0_f64.sqrt();
+    // Flat-top hexagon center-to-center spacing: dx = 1.5 * R, dy = sqrt(3) * R
+    let step_x = 1.5 * r_full;
+    let step_y = sqrt3 * r_full;
+    let r_draw = (r_full - gap / sqrt3).max(0.5);
+
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+
+    let cols = ((w / step_x).ceil() as usize).clamp(1, 32);
+    let rows = ((h / step_y).ceil() as usize).clamp(1, 32);
+
+    let mut path = Path::new();
+    for col in 0..=cols {
+        let cx = x0 + r_full + (col as f64) * step_x;
+        if cx - r_draw > x1 {
+            break;
+        }
+        let y_offset = if col % 2 == 1 { 0.5 * step_y } else { 0.0 };
+        for row in 0..=rows {
+            let cy = y0 + 0.5 * step_y + y_offset + (row as f64) * step_y;
+            if cy - r_draw > y1 {
+                break;
+            }
+            if cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1 {
+                for k in 0..6 {
+                    let angle = (f64::from(k) * 60.0).to_radians();
+                    let pt = Point::new(cx + r_draw * angle.cos(), cy + r_draw * angle.sin())?;
+                    if k == 0 {
+                        path.move_to(pt)?;
+                    } else {
+                        path.line_to(pt)?;
+                    }
+                }
+                path.close()?;
+            }
+        }
+    }
+    if path.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("honeycomb grid produced no hexagons inside bounds"));
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1604,5 +1661,9 @@ mod m27_tests {
         let ring_closes = rings.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(ring_closes, 4);
         assert_eq!(rings.fill_rule, crate::path::FillRule::EvenOdd);
+
+        let honeycomb = build_honeycomb_grid_path(Rect::new(0.0, 0.0, 140.0, 120.0).unwrap(), 18.0, 2.0).unwrap();
+        let hex_closes = honeycomb.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert!(hex_closes >= 4);
     }
 }

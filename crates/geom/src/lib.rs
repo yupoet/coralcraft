@@ -26,7 +26,7 @@ pub use flatten::{
 };
 pub use path::{
     ArcLengthTable, AxonometricPlane, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, break_path_at_node,
-    build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
+    build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path,
     dash_path_to_open_subpaths, delete_curve_node_at, delete_segment_at_index, distort_path, divide_overlapping_paths, expand_artistic_brush_stroke,
     expand_tapered_stroke_profile, fillet_path_corners, hatch_path_region, insert_curve_node_at, join_open_subpaths, measure_path_length_and_area,
     morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point, reverse_path_direction,
@@ -37,9 +37,9 @@ pub use shapes::{
     BasicShapeKind, CornerKind, EllipseMode, EllipseSpec, FlowchartSymbolKind, KAPPA, PolygonSpec, RectSpec, build_banner_ribbon_path,
     build_barcode_path, build_basic_shape_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
     build_concentric_rings_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
-    build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
-    build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
-    build_voronoi_mosaic_path,
+    build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path,
+    build_three_point_curve_path, build_voronoi_mosaic_path,
 };
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 

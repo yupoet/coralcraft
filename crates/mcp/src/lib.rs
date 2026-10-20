@@ -13,9 +13,10 @@ use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
-    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path,
-    build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path,
-    build_superformula_path, build_three_point_curve_path, build_voronoi_mosaic_path,
+    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_honeycomb_grid_path, build_impact_rays_path,
+    build_isometric_box_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
+    build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
+    build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1102,6 +1103,62 @@ impl McpServer {
                             "name": "export_cdrx_zip_base64",
                             "description": "Exports the document to modern ZIP-based CDRX (content/riffData.cdr) format and returns its byte length and base64-encoded payload.",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_honeycomb_grid",
+                            "description": "Adds a hexagonal honeycomb lattice compound path filling a rectangular region.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "x": { "type": "number" },
+                                    "y": { "type": "number" },
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" },
+                                    "cell_radius_pt": { "type": "number" },
+                                    "cell_gap_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "convex_hull_selection",
+                            "description": "Creates a new closed convex-hull path enclosing all world-space vertices of the current selection (Object -> Shaping -> Convex Hull).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } }
+                                }
+                            }
+                        },
+                        {
+                            "name": "arrange_selection_on_circle",
+                            "description": "Places selected objects at equal angular intervals around a circle of radius_pt centered at (center_x, center_y), optionally rotating each object to align with the tangent.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "center_x": { "type": "number" },
+                                    "center_y": { "type": "number" },
+                                    "radius_pt": { "type": "number" },
+                                    "start_angle_deg": { "type": "number" },
+                                    "rotate_to_tangent": { "type": "boolean" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "export_pdf_imposed_base64",
+                            "description": "Exports the document to an N-up imposed print sheet PDF 1.4 with optional crop marks and returns its byte length and base64-encoded payload.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "sheet_width_pt": { "type": "number" },
+                                    "sheet_height_pt": { "type": "number" },
+                                    "rows": { "type": "integer" },
+                                    "cols": { "type": "integer" },
+                                    "margin_pt": { "type": "number" },
+                                    "gutter_pt": { "type": "number" },
+                                    "crop_marks": { "type": "boolean" }
+                                }
+                            }
                         }
                     ]
                 })),
@@ -3268,6 +3325,50 @@ impl McpServer {
                     "cdrx_zip_base64": b64
                 }))
             }
+            "add_honeycomb_grid" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(140.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(100.0);
+                let cell_radius_pt = args.get("cell_radius_pt").and_then(Value::as_f64).unwrap_or(18.0);
+                let cell_gap_pt = args.get("cell_gap_pt").and_then(Value::as_f64).unwrap_or(2.0);
+                let bounds = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_honeycomb_grid_path(bounds, cell_radius_pt, cell_gap_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Honeycomb Grid".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "honeycomb_grid", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "convex_hull_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::ConvexHullSelection);
+                Ok(json!({ "convex_hull_created": ok, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "arrange_selection_on_circle" => {
+                self.apply_optional_selection(args);
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(80.0)).map_err(|e| e.to_string())?;
+                let start_angle_deg = F64::new(args.get("start_angle_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let rotate_to_tangent = args.get("rotate_to_tangent").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::ArrangeSelectionOnCircle { center, radius_pt, start_angle_deg, rotate_to_tangent });
+                Ok(json!({ "arranged_on_circle": ok, "radius_pt": radius_pt.get() }))
+            }
+            "export_pdf_imposed_base64" => {
+                let sw = F64::new(args.get("sheet_width_pt").and_then(Value::as_f64).unwrap_or(612.0)).map_err(|e| e.to_string())?;
+                let sh = F64::new(args.get("sheet_height_pt").and_then(Value::as_f64).unwrap_or(792.0)).map_err(|e| e.to_string())?;
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let margin = F64::new(args.get("margin_pt").and_then(Value::as_f64).unwrap_or(18.0)).map_err(|e| e.to_string())?;
+                let gutter = F64::new(args.get("gutter_pt").and_then(Value::as_f64).unwrap_or(12.0)).map_err(|e| e.to_string())?;
+                let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
+                let spec = ImpositionSpec { sheet_width_pt: sw, sheet_height_pt: sh, rows, cols, margin_pt: margin, gutter_pt: gutter, crop_marks };
+                let pdf = export_pdf_imposed(&self.engine.document, &spec).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&pdf);
+                Ok(json!({
+                    "pdf_imposed_bytes": pdf.len(),
+                    "pdf_imposed_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3297,7 +3398,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 200);
+        assert_eq!(tools, 204);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3490,5 +3591,33 @@ mod tests {
         )
         .unwrap();
         assert!(cdrx_b64_resp.result.unwrap()["structuredContent"]["cdrx_zip_bytes"].as_u64().unwrap() > 80);
+
+        let hc_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"add_honeycomb_grid","arguments":{"x":30.0,"y":30.0,"width":120.0,"height":90.0,"cell_radius_pt":18.0,"cell_gap_pt":2.0}}}"#,
+            ),
+        )
+        .unwrap();
+        let hc_id = hc_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let chull_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{{"name":"convex_hull_selection","arguments":{{"selection":[{hc_id},{rings_id}]}}}}}}"#
+        )))
+        .unwrap();
+        assert!(chull_resp.result.unwrap()["structuredContent"]["convex_hull_created"].as_bool().unwrap());
+
+        let acirc_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{{"name":"arrange_selection_on_circle","arguments":{{"selection":[{hc_id},{rings_id},{sp_id}],"center_x":150.0,"center_y":150.0,"radius_pt":80.0,"start_angle_deg":0.0,"rotate_to_tangent":true}}}}}}"#
+        )))
+        .unwrap();
+        assert!(acirc_resp.result.unwrap()["structuredContent"]["arranged_on_circle"].as_bool().unwrap());
+
+        let pdf_imp_b64_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"export_pdf_imposed_base64","arguments":{"rows":2,"cols":2,"crop_marks":true}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(pdf_imp_b64_resp.result.unwrap()["structuredContent"]["pdf_imposed_bytes"].as_u64().unwrap() > 150);
     }
 }

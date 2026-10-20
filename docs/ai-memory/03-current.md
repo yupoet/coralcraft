@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M54 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M55 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -52,9 +52,10 @@
   44. **M51: Voronoi Stained-Glass / Mosaic Generator (`build_voronoi_mosaic_path`), Multi-Stop Variable-Width Stroke Profile (`expand_tapered_stroke_profile`), Chaikin Corner-Cutting Curve Smoother (`chaikin_smooth_path`), DXF Base64 Export (`export_dxf_base64`), and 188 MCP Tools (`commit cb2f84b`)**.
   45. **M52: Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools (`commit dc9b5c4`)**.
   46. **M53: Parametric Spirograph / Roulette Curves (`build_spirograph_path`), Dihedral $D_n$ Kaleidoscope Symmetry (`build_dihedral_symmetry_path`), Attractor Distance Falloff Scaling (`ScaleSelectionByDistance`), CMX1 Base64 Export (`export_cmx1_base64`), and 196 MCP Tools (`commit 7069354`)**.
-  47. **M54: Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools**:
-      - `coralcraft-geom`: Added `build_concentric_rings_path` and `dash_path_to_open_subpaths`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `DashObjectPath`, `QuantizeSelectionPositions`, `add_concentric_rings`, `dash_object_path`, `quantize_selection_positions`, `export_cdrx_zip_base64`, and expanded MCP server to **200 tools**.
+  47. **M54: Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools (`commit 6f24791`)**.
+  48. **M55: Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools**:
+      - `coralcraft-geom`: Added `build_honeycomb_grid_path` and `convex_hull_of_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `add_honeycomb_grid`, `convex_hull_selection`, `arrange_selection_on_circle`, `export_pdf_imposed_base64`, and expanded MCP server to **204 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

@@ -9,7 +9,7 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
-    close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, dash_path_to_open_subpaths, delete_curve_node_at,
+    close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
     insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
     project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
@@ -329,6 +329,10 @@ pub enum EngineCommand {
     DashObjectPath { object_id: ObjectId, dash_pattern_pt: Vec<F64> },
     /// Snaps each selected unlocked object's top-left world bounding corner to the nearest `(grid_x_pt, grid_y_pt)` grid multiple (`Object -> Align and Distribute -> Snap Selection to Grid`).
     QuantizeSelectionPositions { grid_x_pt: F64, grid_y_pt: F64 },
+    /// Creates a new closed convex-hull [`ObjectKind::Path`] enclosing all world-space vertices of the current selection (`Object -> Shaping -> Convex Hull`).
+    ConvexHullSelection,
+    /// Places all selected unlocked objects at equal angular intervals around a circle of `radius_pt` centered at `center` starting at `start_angle_deg`, optionally rotating each object to align with the circle tangent (`Object -> Align and Distribute -> Arrange on Circle`).
+    ArrangeSelectionOnCircle { center: Point, radius_pt: F64, start_angle_deg: F64, rotate_to_tangent: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4235,6 +4239,69 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ConvexHullSelection => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut agg = Path::new();
+                let mut first_fill = self.default_fill.clone();
+                let mut first_outline = self.default_outline.clone();
+                for (i, obj) in sel_nodes.into_iter().enumerate() {
+                    if i == 0 {
+                        first_fill = obj.fill.clone();
+                        first_outline = obj.outline.clone();
+                    }
+                    if let Some(wp) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok()) {
+                        agg.elements.extend(wp.elements);
+                    }
+                }
+                let Ok(hull) = convex_hull_of_path(&agg) else {
+                    return false;
+                };
+                let new_id = self.document.allocate_object_id();
+                let new_node = ObjectNode::new(new_id, Some("Convex Hull".to_owned()), ObjectKind::Path(hull), first_fill, first_outline);
+                self.target_layer_mut().objects.push(new_node);
+                self.selection = vec![new_id];
+            }
+            EngineCommand::ArrangeSelectionOnCircle { center, radius_pt, start_angle_deg, rotate_to_tangent } => {
+                let r = radius_pt.get();
+                if r <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let start_rad = start_angle_deg.get().to_radians();
+                let mut placements = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let theta = start_rad + std::f64::consts::TAU * (idx as f64) / (n as f64);
+                    let tx = cx + r * theta.cos();
+                    let ty = cy + r * theta.sin();
+                    let rot_rad = if rotate_to_tangent { theta + std::f64::consts::FRAC_PI_2 } else { 0.0 };
+                    placements.insert(obj.id, (oc, tx, ty, rot_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, tx, ty, rot_rad)) = placements.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_to_target) = Affine2::translation(tx, ty)
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_to_target))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5157,5 +5224,14 @@ mod tests {
                 .execute(EngineCommand::DashObjectPath { object_id: xor_id, dash_pattern_pt: vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()] })
         );
         assert!(engine.execute(EngineCommand::QuantizeSelectionPositions { grid_x_pt: F64::new(10.0).unwrap(), grid_y_pt: F64::new(10.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::ConvexHullSelection));
+        let hull_id = engine.selection[0];
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::ArrangeSelectionOnCircle {
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(50.0).unwrap(),
+            start_angle_deg: F64::new(0.0).unwrap(),
+            rotate_to_tangent: true,
+        }));
     }
 }

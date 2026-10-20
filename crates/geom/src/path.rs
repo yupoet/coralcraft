@@ -2174,6 +2174,64 @@ pub fn dash_path_to_open_subpaths(path: &Path, dash_pattern_pt: &[f64]) -> Resul
     Ok(out)
 }
 
+/// Computes the 2D Andrew monotone-chain convex hull polygon [`Path`] enclosing all flattened
+/// vertices of `path` (`Object -> Shaping -> Convex Hull`).
+pub fn convex_hull_of_path(path: &Path) -> Result<Path, GeomError> {
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for poly in polys {
+        for p in poly.points {
+            pts.push((p.x.get(), p.y.get()));
+        }
+    }
+    if pts.len() < 3 {
+        return Err(GeomError::InvalidShapeParameter("convex hull requires at least 3 vertices"));
+    }
+    pts.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    pts.dedup_by(|a, b| (a.0 - b.0).abs() <= 1e-9 && (a.1 - b.1).abs() <= 1e-9);
+    if pts.len() < 3 {
+        return Err(GeomError::InvalidShapeParameter("convex hull requires at least 3 non-coincident vertices"));
+    }
+
+    let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| -> f64 { (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0) };
+
+    let mut lower: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for &p in &pts {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 1e-9 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+
+    let mut upper: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for &p in pts.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 1e-9 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+
+    if lower.len() < 3 {
+        return Err(GeomError::InvalidShapeParameter("convex hull vertices are collinear"));
+    }
+
+    let mut out = Path::new();
+    for (idx, (x, y)) in lower.into_iter().enumerate() {
+        let pt = Point::new(x, y)?;
+        if idx == 0 {
+            out.move_to(pt)?;
+        } else {
+            out.line_to(pt)?;
+        }
+    }
+    out.close()?;
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2266,5 +2324,8 @@ mod m26_tests {
         let dashed = dash_path_to_open_subpaths(&rect_path, &[10.0, 5.0]).unwrap();
         let dash_moves = dashed.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
         assert!(dash_moves >= 8);
+
+        let hull = convex_hull_of_path(&sym).unwrap();
+        assert!(hull.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

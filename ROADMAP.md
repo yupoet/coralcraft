@@ -196,9 +196,13 @@
 54. **M54 Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools**:
     - `coralcraft-geom`: `build_concentric_rings_path` (concentric `EvenOdd` bullseye rings) and `dash_path_to_open_subpaths` (arc-length dash/gap path splitter).
     - `coralcraft-engine` & `coralcraft-mcp`: `DashObjectPath`, `QuantizeSelectionPositions`, `add_concentric_rings`, `dash_object_path`, `quantize_selection_positions`, `export_cdrx_zip_base64`, and **200 MCP tools**.
+55. **M55 Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools**:
+    - `coralcraft-geom`: `build_honeycomb_grid_path` (pointy-top hexagonal honeycomb lattice with optional mortar gap) and `convex_hull_of_path` (Andrew's monotone-chain convex hull).
+    - `coralcraft-engine` & `coralcraft-mcp`: `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `add_honeycomb_grid`, `convex_hull_selection`, `arrange_selection_on_circle`, `export_pdf_imposed_base64`, and **204 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M55 delivered (`build_honeycomb_grid_path` & `add_honeycomb_grid`, `convex_hull_of_path` & `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `export_pdf_imposed_base64`, 204 MCP tools).
 - 2026-10-20: M54 delivered (`build_concentric_rings_path` & `add_concentric_rings`, `dash_path_to_open_subpaths` & `DashObjectPath`, `QuantizeSelectionPositions`, `export_cdrx_zip_base64`, 200 MCP tools).
 - 2026-10-20: M53 delivered (`build_spirograph_path` & `add_spirograph`, `build_dihedral_symmetry_path` & `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `export_cmx1_base64`, 196 MCP tools).
 - 2026-10-20: M52 delivered (`build_isometric_box_path` & `add_isometric_box`, `wave_distort_path` & `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `export_cdr7_base64`, 192 MCP tools).
