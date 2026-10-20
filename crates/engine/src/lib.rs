@@ -198,6 +198,12 @@ pub enum EngineCommand {
     SetObjectVisible { object_id: ObjectId, visible: bool },
     /// Updates the user-assigned label of `object_id` in the `Objects` Docker.
     RenameObject { object_id: ObjectId, name: Option<String> },
+    /// Deletes `layer_id` from its page when the page has more than one layer (`Object -> Layer -> Delete Layer`).
+    DeleteLayer { layer_id: LayerId },
+    /// Reorders the layer at `from_index` to `to_index` on `page_index` (`Objects` Docker).
+    MoveLayer { page_index: usize, from_index: usize, to_index: usize },
+    /// Inverts the selection among unlocked, visible objects on the active target layer (`Edit -> Select All -> Invert Selection`).
+    InvertSelection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -849,6 +855,22 @@ impl EditorEngine {
             }
             EngineCommand::SetPageBackground { page_index, .. } | EngineCommand::SetPageBleed { page_index, .. } => {
                 if *page_index >= self.document.pages.len() {
+                    return false;
+                }
+            }
+            EngineCommand::DeleteLayer { layer_id } => {
+                let can_delete = self.document.pages.iter().any(|p| p.layers.len() > 1 && p.layers.iter().any(|l| l.id == *layer_id));
+                if !can_delete {
+                    return false;
+                }
+            }
+            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
+                let valid = self
+                    .document
+                    .pages
+                    .get(*page_index)
+                    .is_some_and(|p| *from_index < p.layers.len() && *to_index < p.layers.len() && *from_index != *to_index);
+                if !valid {
                     return false;
                 }
             }
@@ -2308,6 +2330,31 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::DeleteLayer { layer_id } => {
+                let mut removed_ids = Vec::new();
+                for page in &mut self.document.pages {
+                    if page.layers.len() > 1
+                        && let Some(pos) = page.layers.iter().position(|l| l.id == layer_id)
+                    {
+                        let removed = page.layers.remove(pos);
+                        for obj in removed.objects {
+                            removed_ids.push(obj.id);
+                        }
+                    }
+                }
+                self.selection.retain(|id| !removed_ids.contains(id));
+            }
+            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
+                if let Some(page) = self.document.pages.get_mut(page_index) {
+                    let layer = page.layers.remove(from_index);
+                    page.layers.insert(to_index, layer);
+                }
+            }
+            EngineCommand::InvertSelection => {
+                let cur = self.selection.clone();
+                self.selection =
+                    self.current_target_objects().iter().filter(|o| !o.locked && o.visible && !cur.contains(&o.id)).map(|o| o.id).collect();
+            }
         }
         true
     }
@@ -2983,5 +3030,15 @@ mod tests {
         assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: true }));
         assert!(engine.execute(EngineCommand::RenameObject { object_id: boundary_id, name: Some("Custom Silhouette".to_owned()) }));
         assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().name.as_deref(), Some("Custom Silhouette"));
+
+        // 22. InvertSelection, AddLayer + MoveLayer + DeleteLayer
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::InvertSelection));
+        assert!(!engine.selection.contains(&boundary_id));
+        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 3".to_owned() }));
+        let l3_id = engine.document.pages[1].layers.last().unwrap().id;
+        assert!(engine.execute(EngineCommand::MoveLayer { page_index: 1, from_index: 1, to_index: 0 }));
+        assert!(engine.execute(EngineCommand::DeleteLayer { layer_id: l3_id }));
+        assert_eq!(engine.document.pages[1].layers.len(), 1);
     }
 }

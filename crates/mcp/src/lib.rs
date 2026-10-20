@@ -11,7 +11,8 @@ use coralcraft_doc::{
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
-    build_callout_path, build_connector_path, build_graph_paper_path, build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
+    build_callout_path, build_connector_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_spiral_path,
+    build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -557,6 +558,26 @@ impl McpServer {
                         {
                             "name": "rename_object",
                             "description": "Updates the user-assigned label of an object in the Objects Docker.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_impact_rays",
+                            "description": "Adds a compound radial burst rays path around (cx, cy) from inner_radius to outer_radius (Impact Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "delete_layer",
+                            "description": "Deletes layer_id from its page when the page has more than one layer (Object -> Layer -> Delete Layer).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "move_layer",
+                            "description": "Reorders the layer at from_index to to_index on page_index (Objects Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "invert_selection",
+                            "description": "Inverts the selection among unlocked, visible objects on the active target layer (Edit -> Select All -> Invert Selection).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1536,6 +1557,34 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::RenameObject { object_id: target, name });
                 Ok(json!({ "object_renamed": ok, "object_id": target.0 }))
             }
+            "add_impact_rays" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let inner_radius = args.get("inner_radius").and_then(Value::as_f64).unwrap_or(20.0);
+                let outer_radius = args.get("outer_radius").and_then(Value::as_f64).unwrap_or(80.0);
+                let ray_count = args.get("ray_count").and_then(Value::as_u64).unwrap_or(12) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_impact_rays_path(center, inner_radius, outer_radius, ray_count).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Impact Rays".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "impact_rays", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "delete_layer" => {
+                let layer_raw = args.get("layer_id").and_then(Value::as_u64).unwrap_or(2);
+                let ok = self.engine.execute(EngineCommand::DeleteLayer { layer_id: LayerId(layer_raw) });
+                Ok(json!({ "layer_deleted": ok, "layer_id": layer_raw }))
+            }
+            "move_layer" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let from_index = args.get("from_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let to_index = args.get("to_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let ok = self.engine.execute(EngineCommand::MoveLayer { page_index, from_index, to_index });
+                Ok(json!({ "layer_moved": ok, "page_index": page_index }))
+            }
+            "invert_selection" => {
+                let ok = self.engine.execute(EngineCommand::InvertSelection);
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "inverted": ok, "selected_ids": ids }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1565,7 +1614,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 92);
+        assert_eq!(tools, 96);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -610,6 +610,36 @@ pub fn build_pointillizer_path(bounds: Rect, columns: u32, rows: u32, dot_scale:
     Ok(path)
 }
 
+/// Builds a compound radial burst rays [`Path`] around `center` from `inner_radius` to `outer_radius`
+/// (`Impact Tool`).
+pub fn build_impact_rays_path(center: Point, inner_radius: f64, outer_radius: f64, ray_count: u32) -> Result<Path, GeomError> {
+    let r_in = F64::new(inner_radius)?.get().max(0.0);
+    let r_out = F64::new(outer_radius)?.get();
+    if r_out <= r_in || r_out <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("outer_radius must exceed inner_radius and 0"));
+    }
+    let count = ray_count.clamp(3, 128);
+    let step = std::f64::consts::TAU / f64::from(count);
+    let half_wedge = 0.25 * step;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let mut path = Path::new();
+
+    for i in 0..count {
+        let theta = f64::from(i) * step;
+        let a0 = theta - half_wedge;
+        let a1 = theta + half_wedge;
+        let p_in = Point::new(cx + r_in * theta.cos(), cy + r_in * theta.sin())?;
+        let p_out0 = Point::new(cx + r_out * a0.cos(), cy + r_out * a0.sin())?;
+        let p_out1 = Point::new(cx + r_out * a1.cos(), cy + r_out * a1.sin())?;
+        path.move_to(p_in)?;
+        path.line_to(p_out0)?;
+        path.line_to(p_out1)?;
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -617,10 +647,14 @@ mod m27_tests {
     use crate::path::PathElement;
 
     #[test]
-    fn build_pointillizer_path_generates_closed_dot_subpaths() {
+    fn build_pointillizer_and_impact_rays_paths_generate_closed_subpaths() {
         let rect = Rect::new(0.0, 0.0, 100.0, 80.0).unwrap();
         let path = build_pointillizer_path(rect, 4, 3, 0.75).unwrap();
         let closes = path.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(closes, 12);
+
+        let rays = build_impact_rays_path(Point::new(50.0, 50.0).unwrap(), 10.0, 60.0, 8).unwrap();
+        let ray_closes = rays.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(ray_closes, 8);
     }
 }
