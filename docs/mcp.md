@@ -20,20 +20,16 @@ Other clients use the same command in their JSON config:
 
 ## Protocol
 
-- Methods: `initialize`, `tools/list`, `tools/call`.
-- The server advertises protocol version `2024-11-05`.
-- Tool failures are returned as tool results with `isError: true`.
+- Methods: `initialize`, `ping`, `tools/list`, `tools/call`.
+- Notifications (messages without an `id`, such as `notifications/initialized` and `notifications/cancelled`) produce no response on stdio.
+- The server negotiates protocol versions `2024-11-05` and `2025-03-26` (defaulting to `2024-11-05`).
+- Every tool in `tools/list` publishes a complete `inputSchema` (`{"type": "object", "properties": {...}}`).
+- Tool failures and engine command rejections are returned as tool results with `isError: true`.
 
 ## Known limitations
 
 These are tracked in the project review plan and [`docs/ai-memory/04-known-issues.md`](ai-memory/04-known-issues.md):
 
-- Most tools publish an empty `inputSchema` (`{"type": "object"}`), so clients cannot discover argument
-  names from the schema yet. The tool descriptions name the main arguments.
-- Notifications (for example `notifications/initialized`) currently receive an error response instead of
-  being ignored. `ping` is not implemented.
-- Some commands report success even when the engine rejected them.
-- There is no tool yet to delete the selection or move it by a delta.
 - Boolean tools (`boolean_selection`, `divide_selection`, `exclude_selection`) give wrong geometry for many
   inputs.
 - The CDR/CMX exporters (`export_cdr7_*`, `export_cdrx_zip_*`, `export_cmx1_*`) write a CoralCraft-specific
@@ -43,7 +39,7 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 
 <!-- BEGIN GENERATED TOOL LIST (cargo test -p coralcraft-mcp --test docs_sync) -->
 
-240 tools, sorted by name.
+244 tools, sorted by name.
 
 | Tool | Description |
 |---|---|
@@ -139,6 +135,7 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 | `delete_curve_node` | Deletes a path node at element_index on an object (Shape Tool -> Delete Nodes / -). |
 | `delete_layer` | Deletes layer_id from its page when the page has more than one layer (Object -> Layer -> Delete Layer). |
 | `delete_page` | Deletes the specified 0-based page when document.pages.len() > 1 (Layout -> Delete Page). |
+| `delete_selection` | Deletes all unlocked selected objects on the active layer (Edit -> Delete / Delete). |
 | `densify_object_path` | Densifies a vector path by subdividing every segment longer than max_len_pt into uniform sub-segments. |
 | `distribute_exact_gap` | Spaces all selected unlocked objects along the horizontal or vertical axis with an exact gap_pt between adjacent bounding boxes. |
 | `distribute_selection` | Distributes >= 3 selected objects evenly (left, center_horizontal, right, spacing_horizontal, top, center_vertical, bottom, spacing_vertical). |
@@ -204,6 +201,7 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 | `measure_object_geometry` | Computes total path length (length_pt) and signed/absolute area (area_sq_pt) of an object in world points (Object Properties -> Curve). |
 | `mirror_selection` | Mirrors selected objects horizontally and/or vertically around their center, optionally duplicating (copy=true). |
 | `morph_between_objects` | Topologically morphs start_id toward end_id at factor t (0.0..=1.0) with sample_count vertices and adds the resulting Path. |
+| `move_bezier_node` | Moves the on-curve anchor point at element_index on object_id to (x, y) in points (Shape Tool F10). |
 | `move_layer` | Reorders the layer at from_index to to_index on page_index (Objects Docker). |
 | `move_object_to_layer` | Moves object_id to target_layer_id on the active page (Objects Docker). |
 | `move_page` | Moves the 0-based page at from_index to to_index. |
@@ -278,10 +276,12 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 | `toggle_text_kind` | Converts a text object between Artistic Text and Paragraph Text (Text -> Convert to Paragraph/Artistic Text / Ctrl+F8). |
 | `trace_bitmap` | Traces an ObjectKind::Bitmap into a closed vector Path (PowerTrace / Outline Trace). |
 | `transform_curve_nodes` | Scales (scale_x, scale_y) and rotates (rotate_deg) the curve nodes at element_indices on an object around their centroid (Shape Tool F10). |
+| `translate_selection` | Translates all unlocked selected objects by (dx_pt, dy_pt) in points (Object -> Transformations -> Position). |
 | `twirl_path` | Applies a localized rotational swirl around (cx, cy) within radius_pt on an object (Twirl Tool). |
 | `undo` | Undoes the most recent editor command. |
 | `ungroup_all_selection` | Recursively ungroups all selected groups and nested subgroups down to leaf objects (Object -> Group -> Ungroup All). |
 | `ungroup_selection` | Ungroups selected ObjectKind::Group nodes one level (Ctrl+U). |
+| `unlock_all_objects` | Unlocks all locked objects across all layers on the active page (Object -> Lock -> Unlock All Objects). |
 | `update_ellipse_parameters` | Updates ellipse mode (full, pie, arc) and start_deg/end_deg on selected ellipses without converting them to curves (Property Bar). |
 | `update_polygon_parameters` | Updates polygon/star mode (polygon, star), points, and inner_radius_pt on selected polygons without converting them to curves (Property Bar). |
 | `update_rect_corners` | Updates corner_kind (round, scalloped, chamfered) and radii_pt on selected rectangles without converting them to curves (Property Bar). |

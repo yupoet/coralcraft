@@ -35,7 +35,7 @@
 - **CDR parse (partial).** Pages, layers, curves, rectangles, ellipses, text, fills, outlines and some bitmaps from real `.cdr` files are mapped into the CoralCraft document model. Anything not understood becomes an `Unsupported` object with a warning.
 - **Document model.** Multi-page documents with master and desktop layers, saved as native `.coralcraft` JSON or a stored-ZIP container.
 - **Headless rendering and export.** PNG raster output, plus SVG 1.1, PDF 1.4, EPS and DXF export, through the CLI and the MCP server.
-- **Editing engine.** About 150 engine commands with undo/redo, exposed to agents as 240 MCP tools: shapes, generators, path editing, transforms, styles, pages and layers, import and export.
+- **Editing engine.** Transactional undo/redo engine with object and history budgets, exposed to agents as 244 MCP tools: shapes, generators, path editing, transforms, styles, pages and layers, import and export.
 
 **Known major gaps** (being fixed in order; see [`docs/gaps.md`](docs/gaps.md)):
 
@@ -70,7 +70,7 @@ cargo xtask stats       # crate-by-crate file, line & test counts
 
 ## MCP server for agents
 
-`coralcraft-cli mcp` runs a Model Context Protocol server (newline-delimited JSON-RPC 2.0 on stdio) with **240 tools**. Register it with Claude Code:
+`coralcraft-cli mcp` runs a Model Context Protocol server (newline-delimited JSON-RPC 2.0 on stdio) with **244 tools**. Register it with Claude Code:
 
 ```sh
 cargo build --release -p coralcraft-cli

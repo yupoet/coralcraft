@@ -206,5 +206,5 @@ fn cli_mcp_subcommand_serves_stdio_initialize_and_tools_list() {
     let init: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(init["result"]["serverInfo"]["name"], "coralcraft-mcp");
     let list: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 240);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 244);
 }

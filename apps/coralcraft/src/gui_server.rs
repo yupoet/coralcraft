@@ -407,7 +407,7 @@ pub fn handle_http_connection(stream: &mut TcpStream, session: &mut InteractiveG
         }
         ("POST", "/api/mcp") => {
             let req_str = String::from_utf8_lossy(&body);
-            let mut mcp = McpServer { engine: session.workspace.engine.clone() };
+            let mut mcp = McpServer::with_engine(session.workspace.engine.clone());
             let resp_str = mcp.handle_json_str(&req_str);
             session.workspace.engine = mcp.engine;
             session.dirty = true;

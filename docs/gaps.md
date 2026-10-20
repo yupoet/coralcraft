@@ -44,8 +44,8 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [x] R3.2 Validate the `Selection` type and use one recursive node visitor. Add a document-wide object budget.
 
 **Phase 4: MCP correctness**
-- [ ] R4.1 Protocol: notifications get no response, add `ping`, use -32600/-32602 correctly, negotiate the protocol version, and make the stdio loop byte-safe.
-- [ ] R4.2 Give every tool a typed arguments struct, with a generated `inputSchema`. Return `isError` on engine rejection. Add `delete_selection` and `translate_selection`. Add a table-driven test over all tools.
+- [x] R4.1 Protocol: notifications get no response, add `ping`, use -32600/-32602 correctly, negotiate the protocol version, and make the stdio loop byte-safe.
+- [x] R4.2 Give every tool a typed arguments struct, with a generated `inputSchema`. Return `isError` on engine rejection. Add `delete_selection` and `translate_selection`. Add a table-driven test over all tools.
 
 **Phase 5: geometry and render correctness**
 - [ ] R5.1 Rewrite the boolean engine. Evaluate VectorCraft's `linesweeper` against a clean-room Martinez–Rueda implementation. Add area and point-membership property tests.
