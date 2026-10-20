@@ -54,8 +54,8 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [x] R5.4 Fix the XML palette unit round-trip (1% currently reads back as 100%).
 
 **Phase 6: packaging that installs**
-- [ ] R6.1 macOS universal `.app.zip`: `lipo`, ad-hoc `codesign`, `ditto`, plus a CLI zip. Build it in CI and verify on a real Mac. Add DMG and notarization later.
-- [ ] R6.2 Linux: glibc 2.17 baseline, with `nfpm` `.deb`/`.rpm`, a real AppImage, a Flatpak manifest, and container install tests. Windows: MSI or portable package and the GUI subsystem. FreeBSD: native build. Web: a real wasm egui build.
+- [x] R6.1 macOS universal `.app.zip`: `lipo`, ad-hoc `codesign`, `ditto`, plus a CLI zip. Build it in CI and verify on a real Mac. Add DMG and notarization later.
+- [x] R6.2 Linux: glibc 2.17 baseline, with `nfpm` `.deb`/`.rpm`, a real AppImage, a Flatpak manifest, and container install tests. Windows: MSI or portable package and the GUI subsystem. FreeBSD: native build. Web: a real wasm egui build.
 
 **Phase 7: format interop and fuzzing (D5)**
 - [x] R7.1 Rewrite the CDR `loda` and CMX writers to the Photopea/Kaitai specs. Add libcdr `cdr2raw` as a local differential oracle. Return `Err` on truncation instead of silently cutting data.

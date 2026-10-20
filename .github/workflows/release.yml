@@ -1,9 +1,5 @@
 # Release pipeline (modeled on refs/vectorcraft and storytold/craft-common-actions):
 # builds on native runners and uploads artifacts; a `v*` tag also creates a draft GitHub Release.
-#
-# Phase 1 ships only the macOS universal `.app.zip` (+ CLI zip), ad-hoc signed and not notarized
-# (operator decision D2). Signing and notarization use the same env as VectorCraft
-# (MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) once an Apple Developer ID exists.
 name: Release
 
 on:
@@ -52,10 +48,94 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  linux-x86_64:
+    name: Linux x86_64 (.deb, .rpm, .AppImage, .tar.gz)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-linux-x86_64
+      - name: Install zig, cargo-zigbuild, and nfpm
+        run: |
+          python3 -m pip install --user ziglang
+          cargo install --locked cargo-zigbuild
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update && sudo apt-get install -y nfpm
+      - name: Build Linux packages
+        run: bash packaging/linux/package.sh --formats "deb rpm appimage tar"
+      - name: Checksums
+        run: |
+          cd dist/release
+          sha256sum coralcraft-* > SHA256SUMS-linux-x86_64.txt
+          cat SHA256SUMS-linux-x86_64.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-linux-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-windows-${{ matrix.arch }}
+      - name: Install WiX v5
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+      - name: Build Windows MSI and portable zip
+        shell: pwsh
+        run: pwsh packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-windows-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  web:
+    name: Web (wasm32)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-web
+      - name: Build Web package
+        run: bash packaging/web/package.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-web
+          path: dist/release/*
+          if-no-files-found: error
+
   draft-release:
     name: Draft GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos-universal]
+    needs: [macos-universal, linux-x86_64, windows, web]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

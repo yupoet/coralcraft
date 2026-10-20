@@ -447,4 +447,46 @@ mod tests {
         fs::write(tmp.0.join("ASSETS.md"), "# Assets\n\n| assets/icons/pen.svg | Author | URL | MIT | Icon |\n").expect("register asset");
         assert!(assets(&tmp.0).is_ok());
     }
+
+    #[test]
+    fn packaging_manifests_and_scripts_are_valid_r6_1_r6_2() {
+        let root = repo_root();
+        for rel in [
+            "packaging/env.sh",
+            "packaging/package-all.sh",
+            "packaging/check-app-specific.sh",
+            "packaging/macos/package.sh",
+            "packaging/macos/Info.plist.in",
+            "packaging/macos/entitlements.plist",
+            "packaging/linux/package.sh",
+            "packaging/linux/postinst.sh",
+            "packaging/linux/nfpm.yaml",
+            "packaging/linux/ai.storyteller.coralcraft.desktop",
+            "packaging/linux/ai.storyteller.coralcraft.mime.xml",
+            "packaging/linux/ai.storyteller.coralcraft.metainfo.xml.in",
+            "packaging/linux/flatpak/ai.storyteller.coralcraft.yml",
+            "packaging/linux/flatpak/ai.storyteller.coralcraft.bundle.yml",
+            "packaging/linux/flatpak-bundle.sh",
+            "packaging/windows/package.sh",
+            "packaging/windows/package.ps1",
+            "packaging/windows/sign.ps1",
+            "packaging/windows/coralcraft.wxs",
+            "packaging/windows/coralcraft.en-us.wxl",
+            "packaging/windows/portable.txt",
+            "packaging/freebsd/package.sh",
+            "packaging/web/package.sh",
+            "packaging/web/_headers",
+            "packaging/web/.htaccess",
+            "packaging/web/README.md",
+        ] {
+            assert!(root.join(rel).is_file(), "missing packaging file: {rel}");
+        }
+
+        let plist = fs::read_to_string(root.join("packaging/macos/Info.plist.in")).unwrap();
+        assert!(plist.contains("ai.storyteller.coralcraft"));
+        let nfpm = fs::read_to_string(root.join("packaging/linux/nfpm.yaml")).unwrap();
+        assert!(nfpm.contains("name: coralcraft") && nfpm.contains("deb:") && nfpm.contains("rpm:"));
+        let wxs = fs::read_to_string(root.join("packaging/windows/coralcraft.wxs")).unwrap();
+        assert!(wxs.contains("coralcraft.exe") && wxs.contains("coralcraft-cli.exe"));
+    }
 }

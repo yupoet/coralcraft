@@ -1,0 +1,4 @@
+CoralCraft portable mode
+
+While this file sits next to coralcraft.exe, CoralCraft runs as a self-contained portable package
+alongside coralcraft-cli.exe (which also hosts the stdio MCP server via `coralcraft-cli.exe mcp`).

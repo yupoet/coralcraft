@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  CoralCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`, plus the UI and Util extensions:
+  `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`). Built by package.ps1.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+      Name="CoralCraft"
+      Manufacturer="CoralCraft Contributors"
+      Version="$(var.Version)"
+      UpgradeCode="94E4F812-3D2C-4A89-9E55-8B10C2F39A41"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="CoralCraft vector illustration and layout studio" Manufacturer="CoralCraft Contributors" />
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of CoralCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="CoralcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="CoralcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/yupoet/coralcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/yupoet/coralcraft/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/yupoet/coralcraft/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="CoralCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <StandardDirectory Id="DesktopFolder" />
+
+    <Property Id="INSTALLFOLDER">
+      <RegistrySearch Id="PreviousInstallFolder" Root="HKLM" Key="Software\CoralCraft" Name="InstallDir" Type="raw" />
+    </Property>
+
+    <Feature Id="Main" Title="CoralCraft" Level="1">
+      <ComponentGroupRef Id="CoralcraftFiles" />
+      <ComponentGroupRef Id="Documentation" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+
+    <Property Id="INSTALLDESKTOPSHORTCUT" Value="1" Secure="yes" />
+
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" />
+    </UI>
+
+    <WixVariable Id="WixUIBannerBmp" Value="$(var.BannerBmp)" />
+    <WixVariable Id="WixUIDialogBmp" Value="$(var.DialogBmp)" />
+
+    <Property Id="CoralcraftVersion" Value="$(var.DisplayVersion)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="CoralCraft $(var.DisplayVersion) is installed. You can start it any time from the Start menu." />
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="Documentation" Directory="INSTALLFOLDER">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
+    <ComponentGroup Id="CoralcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="CoralcraftApp" Guid="7C5A8D11-62B0-4F24-9C1E-3B8912D4E705">
+        <File Id="CoralcraftExe" Source="$(var.BinDir)\coralcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="CoralCraft"
+              Description="CoralCraft vector illustration and layout studio" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="CoralcraftIcon.ico" IconIndex="0" />
+        </File>
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\coralcraft.exe" Value="[#CoralcraftExe]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\CoralCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+
+      <Component Id="CoralcraftCli">
+        <File Id="CoralcraftCliExe" Source="$(var.BinDir)\coralcraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="8E92D14F-74A3-41B9-8D42-9A561F3E28C1" Condition="INSTALLDESKTOPSHORTCUT">
+      <Shortcut Id="DesktopShortcut" Name="CoralCraft" Description="CoralCraft vector illustration and layout studio"
+          Target="[#CoralcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="CoralcraftIcon.ico" IconIndex="0" />
+      <RegistryValue Root="HKLM" Key="Software\CoralCraft" Name="DesktopShortcut" Value="1" Type="integer" KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>
