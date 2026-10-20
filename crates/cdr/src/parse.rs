@@ -20,7 +20,7 @@ use coralcraft_doc::{
     ChunkTag, Document, FillStyle, FountainGeometry, Layer, LayerId, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId,
     ParagraphTextSpec, RawChunk, RawPayload, Residual, TextAlignment, UnsupportedObject,
 };
-use coralcraft_geom::{Affine2, CdrUnit, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size};
+use coralcraft_geom::{Affine2, CdrUnit, EllipseSpec, F64, Path, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
 
 use crate::error::ProbeError;
 use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_zlib};
@@ -451,6 +451,26 @@ fn walk_chunk_sequence(
 fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Document, warnings: &mut Vec<String>) {
     // Pass 1: Collect document-level configuration (`mcfg`), fills (`fild`), and outlines (`outl`)
     collect_resources_recursive(chunks, ctx, warnings);
+
+    for ch in chunks {
+        if &ch.fourcc == b"dmta" {
+            decode_dmta(&ch.payload, ctx.endian, doc);
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"mstr") {
+            doc.master_layers.clear();
+            let mut m_layers = Vec::new();
+            collect_layer_lists(&ch.children, &mut m_layers);
+            for (l_idx, l_chunk) in m_layers.iter().enumerate() {
+                let mut layer = Layer::new_normal(LayerId(ctx.alloc_id()), format!("Master Layer {}", l_idx.saturating_add(1)));
+                for sub in &l_chunk.children {
+                    if &sub.fourcc == b"lmta" {
+                        decode_lmta(&sub.payload, ctx.endian, &mut layer);
+                    }
+                }
+                collect_loose_objects_recursive(&l_chunk.children, ctx, ctx.default_page_size, &mut layer.objects, warnings);
+                doc.master_layers.push(layer);
+            }
+        }
+    }
 
     // Pass 2: Extract `LIST page` chunks into `Page`s (and any top-level `LIST obj ` if outside a page)
     let mut raw_pages: Vec<&ParsedChunk> = Vec::new();
@@ -984,8 +1004,25 @@ fn collect_loose_objects_recursive(
             collect_loose_objects_recursive(&ch.children, ctx, page_size, &mut group_children, warnings);
             if !group_children.is_empty() {
                 let grp_id = ObjectId(ctx.alloc_id());
-                out.push(ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children: group_children }, None, None));
+                let mut grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children: group_children }, None, None);
+                for sub in &ch.children {
+                    if &sub.fourcc == b"omta"
+                        && let Some((name, visible, locked, opacity)) = decode_omta(&sub.payload, ctx.endian)
+                    {
+                        grp_node.name = name;
+                        grp_node.visible = visible;
+                        grp_node.locked = locked;
+                        grp_node.opacity = opacity;
+                    } else if &sub.fourcc == b"trfd"
+                        && let Some(tf) = decode_trfd(&sub.payload, ctx.endian)
+                    {
+                        grp_node.transform = tf;
+                    }
+                }
+                out.push(grp_node);
             }
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"mstr") {
+            // Master layers are parsed separately by `process_chunk_tree`
         } else if !ch.children.is_empty() {
             collect_loose_objects_recursive(&ch.children, ctx, page_size, out, warnings);
         }
@@ -1369,6 +1406,48 @@ fn encode_trns_payload(trns: &coralcraft_doc::TransparencyStyle) -> Vec<u8> {
             p.extend_from_slice(&[0u8, 0, 0, 0]);
         }
     }
+    p
+}
+
+fn decode_dmta(payload: &[u8], endian: Endian, doc: &mut Document) {
+    if payload.len() < 6 {
+        return;
+    }
+    doc.units = match payload.first().copied().unwrap_or(0) {
+        1 => Unit::Pt,
+        2 => Unit::Inch,
+        3 => Unit::Px,
+        4 => Unit::CdrTick,
+        _ => Unit::Mm,
+    };
+    if let Some(title_len_u16) = read_u16(endian, payload, 4) {
+        let title_len = usize::from(title_len_u16);
+        if title_len > 0
+            && let Some(title_end) = 6usize.checked_add(title_len)
+            && let Some(title_slice) = payload.get(6..title_end)
+            && let Ok(title_str) = std::str::from_utf8(title_slice)
+            && !title_str.is_empty()
+        {
+            doc.title = title_str.to_owned();
+        }
+    }
+}
+
+fn encode_dmta_payload(doc: &Document) -> Vec<u8> {
+    let unit_code: u8 = match doc.units {
+        Unit::Mm => 0,
+        Unit::Pt => 1,
+        Unit::Inch => 2,
+        Unit::Px => 3,
+        Unit::CdrTick => 4,
+    };
+    let mut p = Vec::with_capacity(32);
+    p.extend_from_slice(&[unit_code, 0, 0, 0]);
+    let is_default_title = doc.title == "Untitled-1" || doc.title.starts_with("CDR (") || doc.title.starts_with("CDR ZIP (");
+    let title_bytes = if is_default_title { b"".as_slice() } else { doc.title.as_bytes() };
+    let title_len = title_bytes.len().min(4096);
+    p.extend_from_slice(&(title_len as u16).to_le_bytes());
+    p.extend_from_slice(title_bytes.get(..title_len).unwrap_or_default());
     p
 }
 
@@ -2939,6 +3018,28 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
 fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         let mut grp_children = Vec::new();
+        if node.transform != Affine2::IDENTITY {
+            let mut trfd = Vec::with_capacity(72);
+            trfd.extend_from_slice(&72u32.to_le_bytes());
+            trfd.extend_from_slice(&1u32.to_le_bytes());
+            trfd.extend_from_slice(&12u32.to_le_bytes());
+            trfd.extend_from_slice(&16u32.to_le_bytes());
+            trfd.extend_from_slice(&0x0008u16.to_le_bytes());
+            trfd.extend_from_slice(b"CCPT\0\0");
+            let x0_cdr = node.transform.tx.get() * 254_000.0 / 72.0;
+            let y0_cdr = -node.transform.ty.get() * 254_000.0 / 72.0;
+            trfd.extend_from_slice(&node.transform.a.get().to_le_bytes());
+            trfd.extend_from_slice(&node.transform.c.get().to_le_bytes());
+            trfd.extend_from_slice(&x0_cdr.to_le_bytes());
+            trfd.extend_from_slice(&node.transform.b.get().to_le_bytes());
+            trfd.extend_from_slice(&node.transform.d.get().to_le_bytes());
+            trfd.extend_from_slice(&y0_cdr.to_le_bytes());
+            append_riff_chunk(&mut grp_children, *b"trfd", &trfd);
+        }
+        if node.name.is_some() || !node.visible || node.locked || (node.opacity.get() - 1.0).abs() > 1e-6 {
+            let omta = encode_omta_payload(node);
+            append_riff_chunk(&mut grp_children, *b"omta", &omta);
+        }
         for child in children {
             encode_object_into_layer(child, page_size, next_style_id, &mut grp_children)?;
         }
@@ -3176,6 +3277,8 @@ fn node_bbox_for_export(node: &ObjectNode) -> Rect {
 fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Result<Vec<u8>, ProbeError> {
     let mut body = Vec::new();
     append_riff_chunk(&mut body, *b"vrsn", &version.to_le_bytes());
+    let dmta = encode_dmta_payload(doc);
+    append_riff_chunk(&mut body, *b"dmta", &dmta);
 
     let mcfg_off = if version >= 1300 {
         12usize
@@ -3185,6 +3288,20 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
         0usize
     };
     let mut next_style_id = 1u32;
+    if !doc.master_layers.is_empty() {
+        let master_page_size = doc.pages.first().map(|p| p.size).unwrap_or_else(|| default_a4_page(1).size);
+        let mut mstr_children = Vec::new();
+        for mlayer in &doc.master_layers {
+            let mut layer_children = Vec::new();
+            let lmta = encode_lmta_payload(mlayer);
+            append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for obj in &mlayer.objects {
+                encode_object_into_layer(obj, master_page_size, &mut next_style_id, &mut layer_children)?;
+            }
+            append_riff_list(&mut mstr_children, *b"layr", &layer_children);
+        }
+        append_riff_list(&mut body, *b"mstr", &mstr_children);
+    }
     for page in &doc.pages {
         let mut page_children = Vec::new();
         let mut mcfg = vec![0u8; mcfg_off];

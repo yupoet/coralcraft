@@ -1418,4 +1418,71 @@ mod tests {
             VectorEffect::Distortion { kind: DistortionKind::Zipper, amplitude: F64::new(8.0).unwrap(), frequency: F64::new(4.0).unwrap() }
         );
     }
+
+    #[test]
+    fn write_cdr7_document_title_units_master_layers_and_group_metadata_roundtrip_m77() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::{Affine2, EllipseSpec, F64, Rect, RectSpec, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "Annual Report 2026".to_owned();
+        doc.units = Unit::Inch;
+
+        let mut master_fg = Layer::new_normal(LayerId(50), "Header Master");
+        master_fg.role = LayerRole::MasterAllPages;
+        master_fg.master_in_front = true;
+        master_fg.opacity = F64::new(0.9).unwrap();
+        master_fg.objects.push(ObjectNode::new(
+            ObjectId(151),
+            Some("HeaderBar".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(0.0, 0.0, 595.0, 30.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(20, 40, 80))),
+            None,
+        ));
+        doc.master_layers[0].objects.push(ObjectNode::new(
+            ObjectId(152),
+            Some("PasteboardNote".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(620.0, 50.0, 680.0, 110.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(240, 200, 40))),
+            None,
+        ));
+        doc.master_layers.push(master_fg);
+
+        let child = ObjectNode::new(
+            ObjectId(153),
+            Some("BadgeRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 40.0, 120.0, 100.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(200, 60, 40))),
+            None,
+        );
+        let mut grp = ObjectNode::new(ObjectId(154), Some("LogoGroup".to_owned()), ObjectKind::Group { children: vec![child] }, None, None);
+        grp.visible = false;
+        grp.locked = true;
+        grp.opacity = F64::new(0.65).unwrap();
+        grp.transform = Affine2::translation(25.0, -15.0).unwrap();
+        doc.pages[0].layers[0].objects.push(grp);
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        assert_eq!(parsed.document.title, "Annual Report 2026");
+        assert_eq!(parsed.document.units, Unit::Inch);
+        assert_eq!(parsed.document.master_layers.len(), 2);
+        assert_eq!(parsed.document.master_layers[0].role, LayerRole::Desktop);
+        assert_eq!(parsed.document.master_layers[0].objects.len(), 1);
+        assert_eq!(parsed.document.master_layers[0].objects[0].name.as_deref(), Some("PasteboardNote"));
+        assert_eq!(parsed.document.master_layers[1].name, "Header Master");
+        assert_eq!(parsed.document.master_layers[1].role, LayerRole::MasterAllPages);
+        assert!(parsed.document.master_layers[1].master_in_front);
+        assert!((parsed.document.master_layers[1].opacity.get() - 0.9).abs() < 1e-6);
+        assert_eq!(parsed.document.master_layers[1].objects.len(), 1);
+
+        let g0 = &parsed.document.pages[0].layers[0].objects[0];
+        assert_eq!(g0.name.as_deref(), Some("LogoGroup"));
+        assert!(!g0.visible);
+        assert!(g0.locked);
+        assert!((g0.opacity.get() - 0.65).abs() < 1e-6);
+        assert!((g0.transform.tx.get() - 25.0).abs() < 1e-4);
+        assert!((g0.transform.ty.get() - (-15.0)).abs() < 1e-4);
+    }
 }

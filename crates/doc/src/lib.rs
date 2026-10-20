@@ -460,4 +460,76 @@ mod tests {
             other => panic!("expected Conical Fountain fill on path, got {other:?}"),
         }
     }
+
+    #[test]
+    fn import_svg_defs_patterns_and_tspan_text_roundtrip_m77() {
+        let svg = r##"<svg width="500" height="300" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="pat-chk" patternUnits="userSpaceOnUse" width="16" height="16">
+              <rect width="16" height="16" fill="#ffffff"/>
+              <rect width="8" height="8" fill="#112233"/>
+              <rect x="8" y="8" width="8" height="8" fill="#112233"/>
+            </pattern>
+            <pattern id="pat-dot" patternUnits="userSpaceOnUse" width="20" height="20">
+              <rect width="20" height="20" fill="#f0f0f0"/>
+              <circle cx="10" cy="10" r="7" fill="#cc2244"/>
+            </pattern>
+            <pattern id="pat-h" patternUnits="userSpaceOnUse" width="12" height="12">
+              <rect width="12" height="12" fill="#eeeeee"/>
+              <rect width="12" height="6" fill="#228844"/>
+            </pattern>
+            <pattern id="pat-v" patternUnits="userSpaceOnUse" width="14" height="14">
+              <rect width="14" height="14" fill="#dddddd"/>
+              <rect width="7" height="14" fill="#3344aa"/>
+            </pattern>
+            <pattern id="pat-x" patternUnits="userSpaceOnUse" width="18" height="18">
+              <rect width="18" height="18" fill="#fafafa"/>
+              <path d="M 0 0 L 18 18 M 0 18 L 18 0" stroke="#881122" stroke-width="2.7"/>
+            </pattern>
+          </defs>
+          <rect x="10" y="10" width="50" height="50" fill="url(#pat-chk)"/>
+          <rect x="70" y="10" width="50" height="50" fill="url(#pat-dot)"/>
+          <rect x="130" y="10" width="50" height="50" fill="url(#pat-h)"/>
+          <rect x="190" y="10" width="50" height="50" fill="url(#pat-v)"/>
+          <rect x="250" y="10" width="50" height="50" fill="url(#pat-x)"/>
+          <text font-family="Helvetica" font-size="14" fill="#222222">
+            <tspan x="20" y="140">First &amp; Line</tspan>
+            <tspan x="20" y="158">Second &lt;Line&gt;</tspan>
+          </text>
+        </svg>"##;
+
+        let doc = import_svg(svg).expect("import_svg with patterns and tspan");
+        let objs = &doc.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 6);
+
+        let expected = [
+            (PatternKind::Checkerboard, Color::rgb8(0x11, 0x22, 0x33), Color::WHITE, 16.0),
+            (PatternKind::PolkaDot, Color::rgb8(0xcc, 0x22, 0x44), Color::rgb8(0xf0, 0xf0, 0xf0), 20.0),
+            (PatternKind::HorizontalStripe, Color::rgb8(0x22, 0x88, 0x44), Color::rgb8(0xee, 0xee, 0xee), 12.0),
+            (PatternKind::VerticalStripe, Color::rgb8(0x33, 0x44, 0xaa), Color::rgb8(0xdd, 0xdd, 0xdd), 14.0),
+            (PatternKind::DiagonalCrosshatch, Color::rgb8(0x88, 0x11, 0x22), Color::rgb8(0xfa, 0xfa, 0xfa), 18.0),
+        ];
+        for (idx, (exp_kind, exp_fg, exp_bg, exp_ts)) in expected.iter().enumerate() {
+            match &objs[idx].fill {
+                Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }) => {
+                    assert_eq!(*kind, *exp_kind);
+                    assert_eq!(*fg_color, *exp_fg);
+                    assert_eq!(*bg_color, *exp_bg);
+                    assert!((tile_size_pt.get() - *exp_ts).abs() < 1e-6);
+                }
+                other => panic!("expected TwoColorPattern at {idx}, got {other:?}"),
+            }
+        }
+
+        match &objs[5].kind {
+            ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+                assert_eq!(text, "First & Line\nSecond <Line>");
+                assert_eq!(font_family, "Helvetica");
+                assert!((size_pt.get() - 14.0).abs() < 1e-6);
+                assert!((position.x.get() - 20.0).abs() < 1e-6);
+                assert!((position.y.get() - 140.0).abs() < 1e-6);
+            }
+            other => panic!("expected ArtisticText from <text><tspan>, got {other:?}"),
+        }
+    }
 }

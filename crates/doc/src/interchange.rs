@@ -7,7 +7,7 @@ use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, ObjectKind, ObjectNode, TransparencyStyle};
-use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle};
+use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
 fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
@@ -132,6 +132,17 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 if stops.len() >= 2 {
                     svg_gradients.insert(id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops });
                 }
+            }
+            continue;
+        } else if (tag_slice.starts_with("<pattern ") || tag_slice.starts_with("<pattern\t"))
+            && !tag_slice.ends_with("/>")
+            && let Some(after_open) = svg_str.get(pos..)
+            && let Some(close_rel) = after_open.find("</pattern>")
+        {
+            let pat_body = after_open.get(..close_rel).unwrap_or_default();
+            pos = pos.saturating_add(close_rel).saturating_add(10);
+            if let Some((id, pat_fill)) = parse_svg_pattern(tag_slice, pat_body) {
+                svg_gradients.insert(id, pat_fill);
             }
             continue;
         }
@@ -272,14 +283,13 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
-        } else if tag_slice.starts_with("<text ")
+        } else if (tag_slice.starts_with("<text ") || tag_slice.starts_with("<text\t") || tag_slice == "<text>")
             && let Some(after_open) = svg_str.get(pos..)
             && let Some(close_rel) = after_open.find("</text>")
         {
-            let text_content = after_open.get(..close_rel).unwrap_or_default().trim().to_owned();
+            let raw_inner = after_open.get(..close_rel).unwrap_or_default();
             pos = pos.saturating_add(close_rel).saturating_add(7);
-            let x = parse_attr_f64(tag_slice, "x").unwrap_or(0.0);
-            let y = parse_attr_f64(tag_slice, "y").unwrap_or(0.0);
+            let (text_content, x, y) = parse_svg_text_inner(tag_slice, raw_inner);
             let font_family = extract_attr_str(tag_slice, "font-family").unwrap_or("Arial").to_owned();
             let size_val = parse_attr_f64(tag_slice, "font-size").unwrap_or(12.0).max(1.0);
             if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
@@ -693,6 +703,105 @@ fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
         path.close().ok()?;
     }
     Some(path)
+}
+
+fn parse_svg_pattern(open_tag: &str, pat_body: &str) -> Option<(String, FillStyle)> {
+    let id = extract_attr_str(open_tag, "id")?.to_owned();
+    let tile_w = parse_attr_f64(open_tag, "width").or_else(|| parse_attr_f64(open_tag, "height")).unwrap_or(16.0).max(1.0);
+    let tile_size_pt = F64::new(tile_w).ok()?;
+    let mut rects: Vec<(f64, f64, Color)> = Vec::new();
+    let mut circle_color: Option<Color> = None;
+    let mut path_stroke_color: Option<Color> = None;
+
+    let mut p = 0usize;
+    while let Some(rem) = pat_body.get(p..) {
+        let Some(lt) = rem.find('<') else { break };
+        let s = p.saturating_add(lt);
+        let Some(from_s) = pat_body.get(s..) else { break };
+        let Some(gt) = from_s.find('>') else { break };
+        let e = s.saturating_add(gt).saturating_add(1);
+        let Some(sub_tag) = pat_body.get(s..e) else { break };
+        p = e;
+
+        if sub_tag.starts_with("<rect ") || sub_tag.starts_with("<rect\t") {
+            let w = parse_attr_f64(sub_tag, "width").unwrap_or(tile_w);
+            let h = parse_attr_f64(sub_tag, "height").unwrap_or(tile_w);
+            if let Some(c) = extract_style_or_attr_str(sub_tag, "fill").and_then(|v| parse_svg_color(v.trim())) {
+                rects.push((w, h, c));
+            }
+        } else if sub_tag.starts_with("<circle ") || sub_tag.starts_with("<ellipse ") {
+            if let Some(c) = extract_style_or_attr_str(sub_tag, "fill").and_then(|v| parse_svg_color(v.trim())) {
+                circle_color = Some(c);
+            }
+        } else if (sub_tag.starts_with("<path ") || sub_tag.starts_with("<line "))
+            && let Some(c) = extract_style_or_attr_str(sub_tag, "stroke")
+                .or_else(|| extract_style_or_attr_str(sub_tag, "fill"))
+                .and_then(|v| parse_svg_color(v.trim()))
+        {
+            path_stroke_color = Some(c);
+        }
+    }
+
+    let bg_color = rects.first().map(|r| r.2.clone()).unwrap_or(Color::WHITE);
+    let (kind, fg_color) = if let Some(fg) = circle_color {
+        (PatternKind::PolkaDot, fg)
+    } else if let Some(fg) = path_stroke_color {
+        (PatternKind::DiagonalCrosshatch, fg)
+    } else if rects.len() >= 3 {
+        let fg = rects.get(1).map(|r| r.2.clone()).unwrap_or(Color::BLACK);
+        (PatternKind::Checkerboard, fg)
+    } else if let [(bw, bh, _), (fw, fh, fg)] = rects.as_slice() {
+        let k = if (*fw - *bw).abs() < 1e-3 && *fh < *bh {
+            PatternKind::HorizontalStripe
+        } else if (*fh - *bh).abs() < 1e-3 && *fw < *bw {
+            PatternKind::VerticalStripe
+        } else {
+            PatternKind::Checkerboard
+        };
+        (k, fg.clone())
+    } else {
+        return None;
+    };
+
+    Some((id, FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }))
+}
+
+fn unescape_svg_xml(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+fn parse_svg_text_inner(open_tag: &str, raw_inner: &str) -> (String, f64, f64) {
+    let mut x_opt = parse_attr_f64(open_tag, "x");
+    let mut y_opt = parse_attr_f64(open_tag, "y");
+    if raw_inner.contains("<tspan") {
+        let mut lines = Vec::new();
+        let mut p = 0usize;
+        while let Some(rem) = raw_inner.get(p..) {
+            let Some(ts_rel) = rem.find("<tspan") else { break };
+            let ts_start = p.saturating_add(ts_rel);
+            let Some(from_ts) = raw_inner.get(ts_start..) else { break };
+            let Some(gt_rel) = from_ts.find('>') else { break };
+            let open_end = ts_start.saturating_add(gt_rel).saturating_add(1);
+            let Some(tspan_open) = raw_inner.get(ts_start..open_end) else { break };
+            if x_opt.is_none() {
+                x_opt = parse_attr_f64(tspan_open, "x");
+            }
+            if y_opt.is_none() {
+                y_opt = parse_attr_f64(tspan_open, "y");
+            }
+            if tspan_open.ends_with("/>") {
+                p = open_end;
+                continue;
+            }
+            let Some(after_tspan) = raw_inner.get(open_end..) else { break };
+            let Some(close_rel) = after_tspan.find("</tspan>") else { break };
+            let inner_txt = after_tspan.get(..close_rel).unwrap_or_default();
+            lines.push(unescape_svg_xml(inner_txt));
+            p = open_end.saturating_add(close_rel).saturating_add(8);
+        }
+        return (lines.join("\n"), x_opt.unwrap_or(0.0), y_opt.unwrap_or(0.0));
+    }
+    (unescape_svg_xml(raw_inner.trim()), x_opt.unwrap_or(0.0), y_opt.unwrap_or(0.0))
 }
 
 fn parse_svg_coord_or_pct(tag_slice: &str, attr_name: &str) -> Option<f64> {
