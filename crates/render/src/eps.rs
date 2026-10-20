@@ -1354,4 +1354,86 @@ mod tests {
         assert!((e_spec.rect.x0.get() - 360.0).abs() < 1e-3 && (e_spec.rect.y0.get() - 200.0).abs() < 1e-3);
         assert!((e_spec.rect.width() - 160.0).abs() < 1e-3 && (e_spec.rect.height() - 80.0).abs() < 1e-3);
     }
+
+    #[test]
+    fn export_svg_and_import_svg_roundtrip_paragraph_text_frame_and_group_metadata_m82() {
+        use coralcraft_doc::{ParagraphTextSpec, TextAlignment};
+
+        let mut doc = Document::new_a4_portrait();
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+
+        let ptxt_spec = ParagraphTextSpec::new(
+            Point::new(36.0, 48.0).unwrap(),
+            220.0,
+            120.0,
+            "First paragraph with soft wrapping words inside frame.\nSecond paragraph line.",
+            "Helvetica",
+            11.0,
+            1.35,
+            TextAlignment::Justify,
+            2,
+            12.0,
+        )
+        .unwrap();
+        let ptxt_node = ObjectNode::new(
+            ObjectId(1),
+            Some("ArticleColumnFrame".to_owned()),
+            ObjectKind::ParagraphText(Box::new(ptxt_spec.clone())),
+            Some(FillStyle::uniform(Color::rgb8(0x22, 0x33, 0x44))),
+            None,
+        );
+
+        let badge_rect = ObjectNode::new(
+            ObjectId(2),
+            Some("BadgeRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(36.0, 200.0, 136.0, 250.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(0xEE, 0x55, 0x22))),
+            None,
+        );
+
+        let mut grp = ObjectNode::new(
+            ObjectId(3),
+            Some("Editorial Group & Header".to_owned()),
+            ObjectKind::Group { children: vec![ptxt_node, badge_rect] },
+            None,
+            None,
+        );
+        grp.locked = true;
+        grp.opacity = F64::new(0.85).unwrap();
+        grp.transform = Affine2::translation(15.0, 25.0).unwrap();
+        objs.push(grp);
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg M82");
+        assert!(svg.contains("data-frame-width=\"220\""), "export_svg must emit ParagraphText frame metadata: {svg}");
+        assert!(svg.contains("data-name=\"Editorial Group &amp; Header\""), "export_svg must emit Group data-name: {svg}");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg M82");
+        let robjs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 1);
+        let rgrp = robjs.first().unwrap();
+        assert_eq!(rgrp.name.as_deref(), Some("Editorial Group & Header"));
+        assert!(rgrp.locked);
+        assert!((rgrp.opacity.get() - 0.85).abs() < 1e-6);
+        assert_eq!(rgrp.transform, Affine2::translation(15.0, 25.0).unwrap());
+
+        let ObjectKind::Group { children } = &rgrp.kind else {
+            panic!("expected ObjectKind::Group, got {:?}", rgrp.kind);
+        };
+        assert_eq!(children.len(), 2);
+        let rptxt = children.first().unwrap();
+        assert_eq!(rptxt.name.as_deref(), Some("ArticleColumnFrame"));
+        assert_eq!(rptxt.fill, Some(FillStyle::uniform(Color::rgb8(0x22, 0x33, 0x44))));
+        let ObjectKind::ParagraphText(r_spec) = &rptxt.kind else {
+            panic!("expected ObjectKind::ParagraphText, got {:?}", rptxt.kind);
+        };
+        assert!((r_spec.position.x.get() - 36.0).abs() < 1e-4 && (r_spec.position.y.get() - 48.0).abs() < 1e-4);
+        assert!((r_spec.frame_width_pt.get() - 220.0).abs() < 1e-4 && (r_spec.frame_height_pt.get() - 120.0).abs() < 1e-4);
+        assert_eq!(r_spec.text, ptxt_spec.text);
+        assert_eq!(r_spec.font_family, "Helvetica");
+        assert!((r_spec.font_size_pt.get() - 11.0).abs() < 1e-4);
+        assert!((r_spec.line_spacing_multiplier.get() - 1.35).abs() < 1e-4);
+        assert_eq!(r_spec.alignment, TextAlignment::Justify);
+        assert_eq!(r_spec.columns, 2);
+        assert!((r_spec.gutter_pt.get() - 12.0).abs() < 1e-4);
+    }
 }

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
-use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, TransparencyStyle};
+use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle};
 use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
 fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
@@ -17,10 +17,10 @@ fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
     }
 }
 
-type SvgGroupFrame = (Option<String>, Affine2, Option<String>, Option<TransparencyStyle>, Vec<ObjectNode>);
+type SvgGroupFrame = (Option<String>, bool, F64, Affine2, Option<String>, Option<TransparencyStyle>, Vec<ObjectNode>);
 
 fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: ObjectNode) {
-    if let Some((_, _, _, _, children)) = group_stack.last_mut() {
+    if let Some((_, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.push(node);
     } else {
         push_to_active_layer(doc, node);
@@ -28,7 +28,7 @@ fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: Ob
 }
 
 fn last_svg_sibling_mut<'a>(doc: &'a mut Document, group_stack: &'a mut [SvgGroupFrame]) -> Option<&'a mut ObjectNode> {
-    if let Some((_, _, _, _, children)) = group_stack.last_mut() {
+    if let Some((_, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.last_mut()
     } else {
         doc.pages.first_mut()?.layers.last_mut()?.objects.last_mut()
@@ -222,16 +222,20 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 passthrough_g_stack.push(true);
             } else {
                 passthrough_g_stack.push(false);
-                let name = if id_str.is_empty() { Some("SVG Group".to_owned()) } else { Some(id_str.to_owned()) };
+                let name = extract_attr_str(tag_slice, "data-name")
+                    .map(unescape_svg_xml)
+                    .or_else(|| if id_str.is_empty() { Some("SVG Group".to_owned()) } else { Some(id_str.to_owned()) });
+                let locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
+                let opacity = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()).unwrap_or(F64::ONE);
                 let tf = parse_svg_transform(tag_slice);
                 let clip_id = extract_url_ref_id(tag_slice, "clip-path");
                 let tr = parse_svg_transparency(tag_slice, &svg_masks);
-                group_stack.push((name, tf, clip_id, tr, Vec::new()));
+                group_stack.push((name, locked, opacity, tf, clip_id, tr, Vec::new()));
             }
             continue;
         } else if tag_slice.starts_with("</g>") {
             if passthrough_g_stack.pop() == Some(false)
-                && let Some((name, tf, clip_id_opt, tr, children)) = group_stack.pop()
+                && let Some((name, locked, opacity, tf, clip_id_opt, tr, children)) = group_stack.pop()
             {
                 if let Some(clip_id) = clip_id_opt {
                     if let Some(prev) = last_svg_sibling_mut(&mut doc, &mut group_stack)
@@ -249,6 +253,8 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 } else {
                     let obj_id = doc.allocate_object_id();
                     let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+                    grp.locked = locked;
+                    grp.opacity = opacity;
                     grp.transform = tf;
                     grp.transparency = tr;
                     push_svg_node(&mut doc, &mut group_stack, grp);
@@ -386,18 +392,38 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             let raw_inner = after_open.get(..close_rel).unwrap_or_default();
             pos = pos.saturating_add(close_rel).saturating_add(7);
             let (text_content, x, y) = parse_svg_text_inner(tag_slice, raw_inner);
-            let font_family = extract_attr_str(tag_slice, "font-family").unwrap_or("Arial").to_owned();
+            let font_family = extract_attr_str(tag_slice, "font-family").map(unescape_svg_xml).unwrap_or_else(|| "Arial".to_owned());
             let size_val = parse_attr_f64(tag_slice, "font-size").unwrap_or(12.0).max(1.0);
-            if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
+            let node_name = extract_attr_str(tag_slice, "data-name").map(unescape_svg_xml).unwrap_or_else(|| "SVG Text".to_owned());
+            let frame_w_opt = parse_attr_f64(tag_slice, "data-frame-width").filter(|&v| v > 0.0);
+            let frame_h_opt = parse_attr_f64(tag_slice, "data-frame-height").filter(|&v| v > 0.0);
+            let kind_opt = if let (Some(fw), Some(fh)) = (frame_w_opt, frame_h_opt) {
+                let fx = parse_attr_f64(tag_slice, "data-frame-x").unwrap_or(x);
+                let fy = parse_attr_f64(tag_slice, "data-frame-y").unwrap_or(y);
+                let line_spacing = parse_attr_f64(tag_slice, "data-line-spacing").unwrap_or(1.2).clamp(0.1, 10.0);
+                let align =
+                    match extract_attr_str(tag_slice, "data-align").or_else(|| extract_style_or_attr_str(tag_slice, "text-anchor")).map(str::trim) {
+                        Some("center" | "middle") => TextAlignment::Center,
+                        Some("right" | "end") => TextAlignment::Right,
+                        Some("justify") => TextAlignment::Justify,
+                        _ => TextAlignment::Left,
+                    };
+                let columns = parse_attr_f64(tag_slice, "data-columns").map(|v| (v.round() as u32).clamp(1, 64)).unwrap_or(1);
+                let gutter = parse_attr_f64(tag_slice, "data-gutter").unwrap_or(0.0).max(0.0);
+                let para_text = extract_attr_str(tag_slice, "data-raw-text").map(unescape_svg_xml).unwrap_or(text_content);
+                Point::new(fx, fy)
+                    .and_then(|pt_pos| ParagraphTextSpec::new(pt_pos, fw, fh, para_text, font_family, size_val, line_spacing, align, columns, gutter))
+                    .ok()
+                    .map(|spec| ObjectKind::ParagraphText(Box::new(spec)))
+            } else if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
+                Some(ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position })
+            } else {
+                None
+            };
+            if let Some(kind) = kind_opt {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
-                let mut node = ObjectNode::new(
-                    obj_id,
-                    Some("SVG Text".to_owned()),
-                    ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position },
-                    fill,
-                    outline,
-                );
+                let mut node = ObjectNode::new(obj_id, Some(node_name), kind, fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
                 push_svg_node(&mut doc, &mut group_stack, node);
@@ -405,9 +431,11 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         }
     }
 
-    while let Some((name, tf, _, tr, children)) = group_stack.pop() {
+    while let Some((name, locked, opacity, tf, _, tr, children)) = group_stack.pop() {
         let obj_id = doc.allocate_object_id();
         let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+        grp.locked = locked;
+        grp.opacity = opacity;
         grp.transform = tf;
         grp.transparency = tr;
         push_svg_node(&mut doc, &mut group_stack, grp);
@@ -864,7 +892,13 @@ fn parse_svg_pattern(open_tag: &str, pat_body: &str) -> Option<(String, FillStyl
 }
 
 fn unescape_svg_xml(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+    s.replace("&#10;", "\n")
+        .replace("&#13;", "\r")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 fn parse_svg_text_inner(open_tag: &str, raw_inner: &str) -> (String, f64, f64) {

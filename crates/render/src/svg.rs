@@ -377,7 +377,9 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
 
     match &node.kind {
         ObjectKind::Group { children } => {
-            let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}>", node.id.0);
+            let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+            let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
+            let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{name_attr}{locked_attr}{transform_attr}{opacity_attr}>", node.id.0);
             for ch in children {
                 emit_svg_node(defs, body, ch, indent_level.saturating_add(1))?;
             }
@@ -405,10 +407,11 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                 }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
+            let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
             let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
             let _ = writeln!(
                 body,
-                "{indent}<text id=\"obj-{}\" x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">{}</text>",
+                "{indent}<text id=\"obj-{}\"{name_attr} x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">{}</text>",
                 node.id.0,
                 fmt_num(position.x.get()),
                 fmt_num(position.y.get()),
@@ -440,11 +443,28 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                 }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
+            let align_str = match pt.alignment {
+                coralcraft_doc::TextAlignment::Left => "left",
+                coralcraft_doc::TextAlignment::Center => "center",
+                coralcraft_doc::TextAlignment::Right => "right",
+                coralcraft_doc::TextAlignment::Justify => "justify",
+            };
+            let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+            let escaped_raw_text = escape_xml(&pt.text).replace('\n', "&#10;").replace('\r', "&#13;");
             let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
             let _ = writeln!(
                 body,
-                "{indent}<text id=\"obj-{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">",
+                "{indent}<text id=\"obj-{}\"{name_attr} x=\"{}\" y=\"{}\" data-frame-x=\"{}\" data-frame-y=\"{}\" data-frame-width=\"{}\" data-frame-height=\"{}\" data-line-spacing=\"{}\" data-align=\"{align_str}\" data-columns=\"{}\" data-gutter=\"{}\" data-raw-text=\"{escaped_raw_text}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">",
                 node.id.0,
+                fmt_num(px),
+                fmt_num(py),
+                fmt_num(px),
+                fmt_num(py),
+                fmt_num(pt.frame_width_pt.get()),
+                fmt_num(pt.frame_height_pt.get()),
+                fmt_num(pt.line_spacing_multiplier.get()),
+                pt.columns,
+                fmt_num(pt.gutter_pt.get()),
                 escape_xml(&pt.font_family),
                 fmt_num(pt.font_size_pt.get())
             );

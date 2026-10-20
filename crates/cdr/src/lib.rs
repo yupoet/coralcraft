@@ -1883,4 +1883,96 @@ mod tests {
         assert_eq!(pt.alignment, TextAlignment::Center);
         assert_eq!(pt.columns, 2);
     }
+
+    #[test]
+    fn write_cmx1_outline_arrowheads_vector_effects_and_powerclip_roundtrip_m82() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{ArrowheadKind, Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle, VectorEffect};
+        use coralcraft_geom::{DistortionKind, EllipseSpec, F64, Path, Point, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let layer = &mut doc.pages[0].layers[0];
+
+        // 1. Open path with start and end arrowheads + DropShadow and Distortion effects
+        let mut arrow_path = Path::new();
+        arrow_path.move_to(Point::new(40.0, 80.0).unwrap()).unwrap();
+        arrow_path.line_to(Point::new(220.0, 80.0).unwrap()).unwrap();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(200, 30, 50), F64::new(3.0).unwrap());
+        outl.start_arrow = ArrowheadKind::Triangle;
+        outl.end_arrow = ArrowheadKind::Diamond;
+        let mut line_node = ObjectNode::new(ObjectId(1), Some("ArrowWithEffects".to_owned()), ObjectKind::Path(arrow_path), None, Some(outl));
+        line_node.effects.push(VectorEffect::DropShadow {
+            offset_x: F64::new(4.0).unwrap(),
+            offset_y: F64::new(6.0).unwrap(),
+            opacity: F64::new(0.5).unwrap(),
+            color: Color::rgb8(20, 20, 40),
+        });
+        line_node.effects.push(VectorEffect::Distortion {
+            kind: DistortionKind::Zipper,
+            amplitude: F64::new(5.0).unwrap(),
+            frequency: F64::new(3.0).unwrap(),
+        });
+        layer.objects.push(line_node);
+
+        // 2. PowerClip container rectangle with clipped child ellipse + Envelope effect
+        let pc_child = ObjectNode::new(
+            ObjectId(2),
+            Some("ClippedEllipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(80.0, 160.0, 180.0, 260.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(30, 140, 220))),
+            None,
+        );
+        let mut container = ObjectNode::new(
+            ObjectId(3),
+            Some("PowerClipFrame".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(60.0, 140.0, 240.0, 280.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(240, 240, 245))),
+            Some(OutlineStyle::hairline(Color::BLACK)),
+        );
+        container.powerclip_children.push(pc_child);
+        container.effects.push(VectorEffect::Envelope {
+            corners: [
+                Point::new(60.0, 140.0).unwrap(),
+                Point::new(240.0, 145.0).unwrap(),
+                Point::new(235.0, 280.0).unwrap(),
+                Point::new(65.0, 275.0).unwrap(),
+            ],
+        });
+        layer.objects.push(container);
+
+        let bytes = write_cmx1(&doc).expect("write_cmx1 M82");
+        let parsed = parse_document(&bytes).expect("parse_document M82");
+        let p_lyr = &parsed.document.pages[0].layers[0];
+        assert_eq!(p_lyr.objects.len(), 2);
+
+        let o0 = &p_lyr.objects[0];
+        assert_eq!(o0.name.as_deref(), Some("ArrowWithEffects"));
+        let o0_outl = o0.outline.as_ref().expect("outline on ArrowWithEffects");
+        assert_eq!(o0_outl.start_arrow, ArrowheadKind::Triangle);
+        assert_eq!(o0_outl.end_arrow, ArrowheadKind::Diamond);
+        assert_eq!(o0.effects.len(), 2);
+        assert_eq!(
+            o0.effects[0],
+            VectorEffect::DropShadow {
+                offset_x: F64::new(4.0).unwrap(),
+                offset_y: F64::new(6.0).unwrap(),
+                opacity: F64::new(0.5).unwrap(),
+                color: Color::rgb8(20, 20, 40),
+            }
+        );
+        assert_eq!(
+            o0.effects[1],
+            VectorEffect::Distortion { kind: DistortionKind::Zipper, amplitude: F64::new(5.0).unwrap(), frequency: F64::new(3.0).unwrap() }
+        );
+
+        let o1 = &p_lyr.objects[1];
+        assert_eq!(o1.name.as_deref(), Some("PowerClipFrame"));
+        assert_eq!(o1.effects.len(), 1);
+        assert!(matches!(o1.effects[0], VectorEffect::Envelope { .. }));
+        assert_eq!(o1.powerclip_children.len(), 1);
+        let pc = &o1.powerclip_children[0];
+        assert_eq!(pc.name.as_deref(), Some("ClippedEllipse"));
+        assert_eq!(pc.fill, Some(FillStyle::uniform(Color::rgb8(30, 140, 220))));
+        assert!(matches!(pc.kind, ObjectKind::Ellipse(_)));
+    }
 }
