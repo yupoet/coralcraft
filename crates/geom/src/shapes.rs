@@ -1433,6 +1433,55 @@ pub fn build_isometric_box_path(center: Point, width_pt: f64, depth_pt: f64, hei
     Ok(path)
 }
 
+/// Builds a parametric hypotrochoid (`epitrochoid = false`) or epitrochoid (`epitrochoid = true`)
+/// spirograph roulette [`Path`] centered at `center` (`Object -> Insert -> Spirograph / Guilloche`).
+///
+/// - `r_fixed_pt`: Fixed ring radius $R > 0$.
+/// - `r_rolling_pt`: Rolling wheel radius $r > 0$.
+/// - `pen_offset_pt`: Pen distance $d \ge 0$ from the rolling wheel center.
+/// - `revolutions`: Number of $2\pi$ revolutions (`1..=32`).
+/// - `steps`: Total sample steps (`16..=2048`).
+pub fn build_spirograph_path(
+    center: Point,
+    r_fixed_pt: f64,
+    r_rolling_pt: f64,
+    pen_offset_pt: f64,
+    epitrochoid: bool,
+    revolutions: u32,
+    steps: u32,
+) -> Result<Path, GeomError> {
+    let r_big = F64::new(r_fixed_pt)?.get();
+    let r_small = F64::new(r_rolling_pt)?.get();
+    let d = F64::new(pen_offset_pt)?.get();
+    if r_big <= 0.0 || r_small <= 0.0 || d < 0.0 || !(1..=32).contains(&revolutions) || !(16..=2048).contains(&steps) {
+        return Err(GeomError::InvalidShapeParameter("invalid spirograph parameters"));
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let total_angle = std::f64::consts::TAU * f64::from(revolutions);
+    let mut path = Path::new();
+    for i in 0..=steps {
+        let t = total_angle * (f64::from(i) / f64::from(steps));
+        let (x, y) = if epitrochoid {
+            let sum = r_big + r_small;
+            let k = sum / r_small;
+            (cx + sum * t.cos() - d * (k * t).cos(), cy + sum * t.sin() - d * (k * t).sin())
+        } else {
+            let diff = r_big - r_small;
+            let k = diff / r_small;
+            (cx + diff * t.cos() + d * (k * t).cos(), cy + diff * t.sin() - d * (k * t).sin())
+        };
+        let pt = Point::new(x, y)?;
+        if i == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1519,5 +1568,8 @@ mod m27_tests {
         let iso_box = build_isometric_box_path(Point::new(100.0, 100.0).unwrap(), 50.0, 40.0, 60.0).unwrap();
         let box_closes = iso_box.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(box_closes, 3);
+
+        let spiro = build_spirograph_path(Point::new(100.0, 100.0).unwrap(), 60.0, 20.0, 15.0, false, 3, 96).unwrap();
+        assert!(spiro.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

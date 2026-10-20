@@ -2060,6 +2060,47 @@ pub fn wave_distort_path(path: &Path, amplitude_pt: f64, frequency: f64, phase_d
     Ok(out)
 }
 
+/// Builds a cyclic ($C_n$, `reflect = false`) or dihedral ($D_n$, `reflect = true`) radial
+/// kaleidoscope symmetry compound [`Path`] around `center` with `folds` (`2..=32`) symmetry sectors
+/// (`Object -> Symmetry -> Create New Symmetry`).
+pub fn build_dihedral_symmetry_path(path: &Path, center: Point, folds: u32, reflect: bool) -> Result<Path, GeomError> {
+    if !(2..=32).contains(&folds) || path.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("symmetry folds must be in 2..=32 and path must be non-empty"));
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let t_to_origin = Affine2::translation(-cx, -cy)?;
+    let t_back = Affine2::translation(cx, cy)?;
+    let mirror_y = Affine2::scaling(1.0, -1.0)?;
+
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for k in 0..folds {
+        let angle_deg = 360.0 * (f64::from(k) / f64::from(folds));
+        let rot = Affine2::rotation_deg(angle_deg)?;
+        let tf_rot = t_to_origin.then(rot)?.then(t_back)?;
+        let rotated = path.transform(tf_rot)?;
+        for elem in rotated.elements {
+            if out.elements.len() >= MAX_PATH_ELEMENTS {
+                return Ok(out);
+            }
+            out.elements.push(elem);
+        }
+        if reflect {
+            let tf_ref = t_to_origin.then(mirror_y)?.then(rot)?.then(t_back)?;
+            let reflected = path.transform(tf_ref)?;
+            for elem in reflected.elements {
+                if out.elements.len() >= MAX_PATH_ELEMENTS {
+                    return Ok(out);
+                }
+                out.elements.push(elem);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2145,5 +2186,8 @@ mod m26_tests {
 
         let waved = wave_distort_path(&rect_path, 4.0, 3.0, 0.0).unwrap();
         assert!(waved.elements.len() > rect_path.elements.len());
+
+        let sym = build_dihedral_symmetry_path(&rect_path, Point::new(50.0, 50.0).unwrap(), 4, true).unwrap();
+        assert_eq!(sym.elements.len(), rect_path.elements.len() * 8);
     }
 }

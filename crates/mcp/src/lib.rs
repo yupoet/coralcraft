@@ -14,7 +14,7 @@ use coralcraft_geom::{
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
     build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path,
-    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path,
     build_three_point_curve_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
@@ -1061,6 +1061,26 @@ impl McpServer {
                         {
                             "name": "export_cdr7_base64",
                             "description": "Exports the document to RIFF CDR7 binary format and returns its byte length and base64-encoded payload.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_spirograph",
+                            "description": "Adds a parametric hypotrochoid or epitrochoid spirograph roulette path centered at (cx, cy).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "apply_dihedral_symmetry",
+                            "description": "Replaces an object with a Cn rotational or Dn dihedral radial kaleidoscope symmetry compound path around (center_x, center_y).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "scale_selection_by_distance",
+                            "description": "Scales each selected object around its own center based on its radial distance from an attractor center within falloff_radius_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_cmx1_base64",
+                            "description": "Exports the document to Corel Presentation Exchange (RIFF CMX1) binary format and returns its byte length and base64-encoded payload.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -3141,6 +3161,51 @@ impl McpServer {
                     "cdr7_base64": b64
                 }))
             }
+            "add_spirograph" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let r_fixed_pt = args.get("r_fixed_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let r_rolling_pt = args.get("r_rolling_pt").and_then(Value::as_f64).unwrap_or(20.0);
+                let pen_offset_pt = args.get("pen_offset_pt").and_then(Value::as_f64).unwrap_or(15.0);
+                let epitrochoid = args.get("epitrochoid").and_then(Value::as_bool).unwrap_or(false);
+                let revolutions = args.get("revolutions").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(120) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_spirograph_path(center, r_fixed_pt, r_rolling_pt, pen_offset_pt, epitrochoid, revolutions, steps)
+                    .map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Spirograph".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "spirograph", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "apply_dihedral_symmetry" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let folds = args.get("folds").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let reflect = args.get("reflect").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::ApplyDihedralSymmetry { object_id: target, center, folds, reflect });
+                Ok(json!({ "symmetry_applied": ok, "object_id": target.0, "folds": folds, "reflect": reflect }))
+            }
+            "scale_selection_by_distance" => {
+                self.apply_optional_selection(args);
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let min_scale = F64::new(args.get("min_scale").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                let max_scale = F64::new(args.get("max_scale").and_then(Value::as_f64).unwrap_or(1.5)).map_err(|e| e.to_string())?;
+                let falloff_radius_pt =
+                    F64::new(args.get("falloff_radius_pt").and_then(Value::as_f64).unwrap_or(200.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ScaleSelectionByDistance { center, min_scale, max_scale, falloff_radius_pt });
+                Ok(json!({ "scaled_by_distance": ok }))
+            }
+            "export_cmx1_base64" => {
+                let bytes = write_cmx1(&self.engine.document).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&bytes);
+                Ok(json!({
+                    "cmx1_bytes": bytes.len(),
+                    "cmx1_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3170,7 +3235,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 192);
+        assert_eq!(tools, 196);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3311,5 +3376,31 @@ mod tests {
         )
         .unwrap();
         assert!(cdr_b64_resp.result.unwrap()["structuredContent"]["cdr7_bytes"].as_u64().unwrap() > 60);
+
+        let sp_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"add_spirograph","arguments":{"cx":120.0,"cy":120.0,"r_fixed_pt":60.0,"r_rolling_pt":20.0,"pen_offset_pt":15.0,"epitrochoid":false,"revolutions":3,"steps":96}}}"#,
+            ),
+        )
+        .unwrap();
+        let sp_id = sp_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let dsym_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{{"name":"apply_dihedral_symmetry","arguments":{{"object_id":{sp_id},"center_x":120.0,"center_y":120.0,"folds":4,"reflect":true}}}}}}"#
+        )))
+        .unwrap();
+        assert!(dsym_resp.result.unwrap()["structuredContent"]["symmetry_applied"].as_bool().unwrap());
+
+        let sdist_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{{"name":"scale_selection_by_distance","arguments":{{"selection":[{sp_id},{ibox_id}],"center_x":100.0,"center_y":100.0,"min_scale":0.6,"max_scale":1.4,"falloff_radius_pt":150.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(sdist_resp.result.unwrap()["structuredContent"]["scaled_by_distance"].as_bool().unwrap());
+
+        let cmx_b64_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"export_cmx1_base64","arguments":{}}}"#),
+        )
+        .unwrap();
+        assert!(cmx_b64_resp.result.unwrap()["structuredContent"]["cmx1_bytes"].as_u64().unwrap() > 40);
     }
 }

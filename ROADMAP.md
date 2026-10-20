@@ -190,9 +190,13 @@
 52. **M52 Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools**:
     - `coralcraft-geom`: `build_isometric_box_path` (3-face Top/Left/Right $30^\circ$ isometric box) and `wave_distort_path` (normal-directed sinusoidal wave displacement over normalized arc length).
     - `coralcraft-engine` & `coralcraft-mcp`: `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `add_isometric_box`, `wave_distort_path`, `radial_scale_selection_positions`, `export_cdr7_base64`, and **192 MCP tools**.
+53. **M53 Parametric Spirograph / Roulette Curves (`build_spirograph_path`), Dihedral $D_n$ Kaleidoscope Symmetry (`build_dihedral_symmetry_path`), Attractor Distance Falloff Scaling (`ScaleSelectionByDistance`), CMX1 Base64 Export (`export_cmx1_base64`), and 196 MCP Tools**:
+    - `coralcraft-geom`: `build_spirograph_path` (hypotrochoid and epitrochoid roulette curves) and `build_dihedral_symmetry_path` ($C_n$ rotational and $D_n$ reflection kaleidoscope symmetry).
+    - `coralcraft-engine` & `coralcraft-mcp`: `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `add_spirograph`, `apply_dihedral_symmetry`, `scale_selection_by_distance`, `export_cmx1_base64`, and **196 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M53 delivered (`build_spirograph_path` & `add_spirograph`, `build_dihedral_symmetry_path` & `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `export_cmx1_base64`, 196 MCP tools).
 - 2026-10-20: M52 delivered (`build_isometric_box_path` & `add_isometric_box`, `wave_distort_path` & `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `export_cdr7_base64`, 192 MCP tools).
 - 2026-10-20: M51 delivered (`build_voronoi_mosaic_path` & `add_voronoi_mosaic`, `expand_tapered_stroke_profile` & `ApplyVariableWidthStroke`, `chaikin_smooth_path` & `ChaikinSmoothObjectPath`, `export_dxf_base64`, 188 MCP tools).
 - 2026-10-20: M50 delivered (`BasicShapeKind` & `build_basic_shape_path`, `build_lsystem_path` & `add_lsystem_path`, `BooleanOp::Exclude` & `ExcludeSelection`, `ResolveSelectionOverlaps`, 184 MCP tools).

@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M52 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M53 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -50,9 +50,10 @@
   42. **M49: Parametric Gielis Superformula Shapes (`build_superformula_path`), $30^\circ$ Axonometric / Isometric Projection (`project_path_axonometric`), Pack Selection in Grid (`PackSelectionInGrid`), EPS Base64 Export (`export_eps_base64`), and 180 MCP Tools (`commit d784804`)**.
   43. **M50: CorelDRAW Basic Shapes (`BasicShapeKind` & `build_basic_shape_path`), L-System Fractal & Organic Coral/Plant Path Generator (`build_lsystem_path`), Boolean Exclude / XOR (`BooleanOp::Exclude` & `ExcludeSelection`), Force-Directed Overlap Resolution (`ResolveSelectionOverlaps`), and 184 MCP Tools (`commit c0c92d3`)**.
   44. **M51: Voronoi Stained-Glass / Mosaic Generator (`build_voronoi_mosaic_path`), Multi-Stop Variable-Width Stroke Profile (`expand_tapered_stroke_profile`), Chaikin Corner-Cutting Curve Smoother (`chaikin_smooth_path`), DXF Base64 Export (`export_dxf_base64`), and 188 MCP Tools (`commit cb2f84b`)**.
-  45. **M52: Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools**:
-      - `coralcraft-geom`: Added `build_isometric_box_path` and `wave_distort_path`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `add_isometric_box`, `wave_distort_path`, `radial_scale_selection_positions`, `export_cdr7_base64`, and expanded MCP server to **192 tools**.
+  45. **M52: Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools (`commit dc9b5c4`)**.
+  46. **M53: Parametric Spirograph / Roulette Curves (`build_spirograph_path`), Dihedral $D_n$ Kaleidoscope Symmetry (`build_dihedral_symmetry_path`), Attractor Distance Falloff Scaling (`ScaleSelectionByDistance`), CMX1 Base64 Export (`export_cmx1_base64`), and 196 MCP Tools**:
+      - `coralcraft-geom`: Added `build_spirograph_path` and `build_dihedral_symmetry_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `add_spirograph`, `apply_dihedral_symmetry`, `scale_selection_by_distance`, `export_cmx1_base64`, and expanded MCP server to **196 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

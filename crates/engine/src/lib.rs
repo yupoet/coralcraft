@@ -8,8 +8,8 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
-    RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, chaikin_smooth_path, close_open_subpaths,
-    convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths,
+    RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
+    close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths,
     erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
     reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
@@ -320,6 +320,10 @@ pub enum EngineCommand {
     WaveDistortObjectPath { object_id: ObjectId, amplitude_pt: F64, frequency: F64, phase_deg: F64 },
     /// Scales the radial distance of each selected unlocked object's center from `center` by `radial_scale` and rotates its angular position around `center` by `twist_deg` (`Object -> Transformations -> Polar Scatter / Radial Scale`).
     RadialScaleSelectionPositions { center: Point, radial_scale: F64, twist_deg: F64 },
+    /// Replaces `object_id` with a cyclic ($C_n$) or dihedral ($D_n$) radial kaleidoscope symmetry compound path around `center` (`Object -> Symmetry -> Create New Symmetry`).
+    ApplyDihedralSymmetry { object_id: ObjectId, center: Point, folds: u32, reflect: bool },
+    /// Scales each selected unlocked object around its own center based on its radial distance from `center` within `falloff_radius_pt` (`Object -> Transformations -> Falloff Scale by Distance`).
+    ScaleSelectionByDistance { center: Point, min_scale: F64, max_scale: F64, falloff_radius_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4126,6 +4130,57 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ApplyDihedralSymmetry { object_id, center, folds, reflect } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(sym) = build_dihedral_symmetry_path(&world_path, center, folds, reflect)
+                    {
+                        obj.kind = ObjectKind::Path(sym);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelectionByDistance { center, min_scale, max_scale, falloff_radius_pt } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let s_min = min_scale.get().max(0.05);
+                let s_max = max_scale.get().max(0.05);
+                let r_falloff = falloff_radius_pt.get().max(1e-6);
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut scales = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let d = (oc.x.get() - cx).hypot(oc.y.get() - cy);
+                    let t = (d / r_falloff).clamp(0.0, 1.0);
+                    let s = s_max + (s_min - s_max) * t;
+                    scales.insert(obj.id, (oc, s));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, s)) = scales.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(s, s)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(scale_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5030,6 +5085,18 @@ mod tests {
             center: Point::new(100.0, 100.0).unwrap(),
             radial_scale: F64::new(1.25).unwrap(),
             twist_deg: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ApplyDihedralSymmetry {
+            object_id: xor_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            folds: 4,
+            reflect: true,
+        }));
+        assert!(engine.execute(EngineCommand::ScaleSelectionByDistance {
+            center: Point::new(100.0, 100.0).unwrap(),
+            min_scale: F64::new(0.5).unwrap(),
+            max_scale: F64::new(1.5).unwrap(),
+            falloff_radius_pt: F64::new(120.0).unwrap(),
         }));
     }
 }
