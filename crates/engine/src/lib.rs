@@ -3,8 +3,8 @@
 
 use coralcraft_color::Color;
 use coralcraft_doc::{
-    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, ParagraphTextSpec, Residual,
-    TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
+    Document, FillStyle, Layer, LayerId, LayerRole, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId,
+    ParagraphTextSpec, Residual, TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
@@ -267,6 +267,12 @@ pub enum EngineCommand {
     AddGuideline { horizontal: bool, position_pt: F64 },
     /// Removes all guidelines from the active page's `Guides` layer (`View -> Guidelines -> Clear Guidelines`).
     ClearGuidelines,
+    /// Duplicates the current selection `count` times in a polar/radial circle around `center` over `total_angle_deg` (`Object -> Transformations -> Rotate`).
+    CircularDuplicateSelection { count: u32, center: Point, total_angle_deg: F64, rotate_objects: bool },
+    /// Resizes the active page and translates page objects so the selection (or all unlocked visible objects) is framed with `margin_pt` (`Layout -> Fit Page to Drawing`).
+    FitPageToSelection { margin_pt: F64 },
+    /// Updates `cap`, `join`, and/or `miter_limit` on selected objects' `OutlineStyle` or creation defaults (`F12` Outline Pen).
+    SetOutlineCapAndJoin { cap: Option<LineCap>, join: Option<LineJoin>, miter_limit: Option<F64> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1125,6 +1131,33 @@ impl EditorEngine {
             EngineCommand::ClearGuidelines => {
                 let has_guides = self.current_page().layers.iter().any(|l| l.role == LayerRole::Guides && !l.objects.is_empty());
                 if !has_guides {
+                    return false;
+                }
+            }
+            EngineCommand::CircularDuplicateSelection { count, total_angle_deg, .. } => {
+                if *count == 0 || total_angle_deg.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::FitPageToSelection { margin_pt } => {
+                if margin_pt.get() < 0.0 || !margin_pt.get().is_finite() {
+                    return false;
+                }
+                let has_targets = if self.selection.is_empty() {
+                    self.current_target_objects().iter().any(|o| !o.locked && o.visible)
+                } else {
+                    self.selected_nodes().iter().any(|o| !o.locked)
+                };
+                if !has_targets {
+                    return false;
+                }
+            }
+            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
+                if cap.is_none() && join.is_none() && miter_limit.is_none() {
                     return false;
                 }
             }
@@ -3102,6 +3135,105 @@ impl EditorEngine {
                 }
                 self.selection.retain(|id| !removed_ids.contains(id));
             }
+            EngineCommand::CircularDuplicateSelection { count, center, total_angle_deg, rotate_objects } => {
+                let n = count.clamp(1, 72);
+                let step_deg = total_angle_deg.get() / f64::from(n);
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let sel = self.selection.clone();
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for k in 1..=n {
+                    let angle_rad = (f64::from(k) * step_deg).to_radians();
+                    for mut dup in templates.clone() {
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        if rotate_objects {
+                            if let Ok(t1) = Affine2::translation(-cx, -cy)
+                                && let Ok(rot) = Affine2::rotation_rad(angle_rad)
+                                && let Ok(t2) = Affine2::translation(cx, cy)
+                                && let Ok(around_center) = t1.then(rot).and_then(|m| m.then(t2))
+                                && let Ok(composed) = dup.transform.then(around_center)
+                            {
+                                dup.transform = composed;
+                            }
+                        } else if let Ok(obj_center) = combined_selection_bounds(&[&dup]).center() {
+                            let vx = obj_center.x.get() - cx;
+                            let vy = obj_center.y.get() - cy;
+                            let cos_a = angle_rad.cos();
+                            let sin_a = angle_rad.sin();
+                            let nx = cx + vx * cos_a - vy * sin_a;
+                            let ny = cy + vx * sin_a + vy * cos_a;
+                            if let Ok(tf) = Affine2::translation(nx - obj_center.x.get(), ny - obj_center.y.get())
+                                && let Ok(composed) = dup.transform.then(tf)
+                            {
+                                dup.transform = composed;
+                            }
+                        }
+                        new_selection.push(dup.id);
+                        self.target_layer_mut().objects.push(dup);
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
+            EngineCommand::FitPageToSelection { margin_pt } => {
+                let m = margin_pt.get().max(0.0);
+                let bounds = if self.selection.is_empty() {
+                    let refs: Vec<&ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).collect();
+                    combined_selection_bounds(&refs)
+                } else {
+                    let refs: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                    combined_selection_bounds(&refs)
+                };
+                let new_w = (bounds.width() + 2.0 * m).max(1.0);
+                let new_h = (bounds.height() + 2.0 * m).max(1.0);
+                let dx = m - bounds.x0.get();
+                let dy = m - bounds.y0.get();
+                let page_idx = self.current_page_index();
+                if let Ok(sz) = Size::new(new_w, new_h)
+                    && let Ok(tf) = Affine2::translation(dx, dy)
+                {
+                    self.document.pages[page_idx].size = sz;
+                    for layer in &mut self.document.pages[page_idx].layers {
+                        if !layer.locked {
+                            for obj in &mut layer.objects {
+                                if !obj.locked
+                                    && let Ok(composed) = obj.transform.then(tf)
+                                {
+                                    obj.transform = composed;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
+                let update_outline = |opt: &mut Option<OutlineStyle>| {
+                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
+                    if let Some(c) = cap {
+                        st.cap = c;
+                    }
+                    if let Some(j) = join {
+                        st.join = j;
+                    }
+                    if let Some(ml) = miter_limit
+                        && let Ok(clamped) = F64::new(ml.get().clamp(1.0, 100.0))
+                    {
+                        st.miter_limit = clamped;
+                    }
+                    *opt = Some(st);
+                };
+                if self.selection.is_empty() {
+                    update_outline(&mut self.default_outline);
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked {
+                            update_outline(&mut obj.outline);
+                        }
+                    });
+                }
+            }
         }
         true
     }
@@ -3918,5 +4050,17 @@ mod tests {
         assert_eq!(engine.selection.len(), 3);
         assert!(engine.execute(EngineCommand::AddGuideline { horizontal: true, position_pt: F64::new(120.0).unwrap() }));
         assert!(engine.execute(EngineCommand::ClearGuidelines));
+        assert!(engine.execute(EngineCommand::CircularDuplicateSelection {
+            count: 3,
+            center: Point::new(100.0, 100.0).unwrap(),
+            total_angle_deg: F64::new(360.0).unwrap(),
+            rotate_objects: true,
+        }));
+        assert!(engine.execute(EngineCommand::SetOutlineCapAndJoin {
+            cap: Some(LineCap::Round),
+            join: Some(LineJoin::Round),
+            miter_limit: Some(F64::new(8.0).unwrap()),
+        }));
+        assert!(engine.execute(EngineCommand::FitPageToSelection { margin_pt: F64::new(10.0).unwrap() }));
     }
 }

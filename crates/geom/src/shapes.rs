@@ -680,6 +680,22 @@ pub fn build_complex_star_path(center: Point, radius: f64, points: u32, sharpnes
     Ok(path)
 }
 
+/// Builds an open or closed polyline [`Path`] from `points` (`Freehand / Polyline Tool F5`).
+pub fn build_polyline_path(points: &[Point], closed: bool) -> Result<Path, GeomError> {
+    if points.len() < 2 {
+        return Err(GeomError::InvalidShapeParameter("polyline requires at least 2 points"));
+    }
+    let mut path = Path::new();
+    path.move_to(points[0])?;
+    for &pt in &points[1..] {
+        path.line_to(pt)?;
+    }
+    if closed {
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -699,5 +715,9 @@ mod m27_tests {
 
         let star = build_complex_star_path(Point::new(50.0, 50.0).unwrap(), 40.0, 7, 3).unwrap();
         assert_eq!(star.elements.len(), 8);
+
+        let poly =
+            build_polyline_path(&[Point::new(0.0, 0.0).unwrap(), Point::new(40.0, 0.0).unwrap(), Point::new(20.0, 30.0).unwrap()], true).unwrap();
+        assert_eq!(poly.elements.len(), 4);
     }
 }

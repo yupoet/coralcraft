@@ -5,14 +5,14 @@
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
-    ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
-    TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg,
+    ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
+    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg,
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
     build_angular_dimension_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path,
-    build_impact_rays_path, build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
+    build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -818,6 +818,26 @@ impl McpServer {
                         {
                             "name": "clear_guidelines",
                             "description": "Removes all guidelines from the active page's Guides layer.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_polyline",
+                            "description": "Adds an open or closed multi-point polyline Path from points [[x,y], ...] (Freehand / Polyline Tool F5).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "circular_duplicate_selection",
+                            "description": "Duplicates the current selection count times in a polar/radial circle around (center_x, center_y) over total_angle_deg.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "fit_page_to_selection",
+                            "description": "Resizes the active page and translates page objects so the selection (or all unlocked visible objects) is framed with margin_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_outline_cap_join",
+                            "description": "Updates line cap (butt, round, square), line join (miter, round, bevel), and/or miter_limit on selected objects' OutlineStyle (F12 Outline Pen).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2341,6 +2361,61 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ClearGuidelines);
                 Ok(json!({ "guidelines_cleared": ok }))
             }
+            "add_polyline" => {
+                let closed = args.get("closed").and_then(Value::as_bool).unwrap_or(false);
+                let mut pts = Vec::new();
+                if let Some(arr) = args.get("points").and_then(Value::as_array) {
+                    for item in arr {
+                        if let Some(pair) = item.as_array()
+                            && pair.len() >= 2
+                            && let (Some(x), Some(y)) = (pair[0].as_f64(), pair[1].as_f64())
+                        {
+                            pts.push(Point::new(x, y).map_err(|e| e.to_string())?);
+                        }
+                    }
+                }
+                if pts.len() < 2 {
+                    pts = vec![Point::new(20.0, 20.0).map_err(|e| e.to_string())?, Point::new(120.0, 80.0).map_err(|e| e.to_string())?];
+                }
+                let path = build_polyline_path(&pts, closed).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Polyline".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "polyline", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "circular_duplicate_selection" => {
+                self.apply_optional_selection(args);
+                let count = args.get("count").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let total_angle_deg = F64::new(args.get("total_angle_deg").and_then(Value::as_f64).unwrap_or(360.0)).map_err(|e| e.to_string())?;
+                let rotate_objects = args.get("rotate_objects").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::CircularDuplicateSelection { count, center, total_angle_deg, rotate_objects });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|i| i.0).collect();
+                Ok(json!({ "circular_duplicated": ok, "created_ids": ids }))
+            }
+            "fit_page_to_selection" => {
+                self.apply_optional_selection(args);
+                let margin_pt = F64::new(args.get("margin_pt").and_then(Value::as_f64).unwrap_or(10.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::FitPageToSelection { margin_pt });
+                let sz = self.engine.current_page().size;
+                Ok(json!({ "page_fitted": ok, "width_pt": sz.width.get(), "height_pt": sz.height.get() }))
+            }
+            "set_outline_cap_join" => {
+                self.apply_optional_selection(args);
+                let cap = args.get("cap").and_then(Value::as_str).map(|s| match s {
+                    "round" => LineCap::Round,
+                    "square" => LineCap::Square,
+                    _ => LineCap::Butt,
+                });
+                let join = args.get("join").and_then(Value::as_str).map(|s| match s {
+                    "round" => LineJoin::Round,
+                    "bevel" => LineJoin::Bevel,
+                    _ => LineJoin::Miter,
+                });
+                let miter_limit = args.get("miter_limit").and_then(Value::as_f64).and_then(|v| F64::new(v).ok());
+                let ok = self.engine.execute(EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit });
+                Ok(json!({ "outline_cap_join_updated": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2370,7 +2445,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 144);
+        assert_eq!(tools, 148);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
