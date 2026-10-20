@@ -461,6 +461,7 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         // if it has no drawable objects or only Master/Grid/Guides layers; we still include all numbered pages.
         let page_num = (doc.pages.len().saturating_add(1)) as u64;
         let mut page = default_a4_page(page_num);
+        page.name.clear();
         page.size = ctx.default_page_size;
         page.layers.clear();
 
@@ -476,7 +477,9 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         }
         let final_num = (doc.pages.len().saturating_add(1)) as u64;
         page.id = PageId(final_num);
-        page.name = format!("Page {final_num}");
+        if page.name.is_empty() {
+            page.name = format!("Page {final_num}");
+        }
         doc.pages.push(page);
     }
 
@@ -995,6 +998,8 @@ fn parse_page_chunk(page_chunk: &ParsedChunk, ctx: &mut ParserCtx, page: &mut Pa
             && let Some(sz) = decode_mcfg(&ch.payload, ctx.endian, ctx.version)
         {
             page.size = sz;
+        } else if &ch.fourcc == b"pmta" {
+            decode_pmta(&ch.payload, ctx.endian, ctx.version, page, warnings);
         }
     }
 
@@ -1009,6 +1014,11 @@ fn parse_page_chunk(page_chunk: &ParsedChunk, ctx: &mut ParserCtx, page: &mut Pa
         for (l_idx, l_chunk) in layer_chunks.iter().enumerate() {
             let layer_name = format!("Layer {}", l_idx.saturating_add(1));
             let mut layer = Layer::new_normal(LayerId(ctx.alloc_id()), layer_name);
+            for ch in &l_chunk.children {
+                if &ch.fourcc == b"lmta" {
+                    decode_lmta(&ch.payload, ctx.endian, &mut layer);
+                }
+            }
             collect_loose_objects_recursive(&l_chunk.children, ctx, page.size, &mut layer.objects, warnings);
             page.layers.push(layer);
         }
@@ -1035,6 +1045,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut fill: Option<FillStyle> = None;
     let mut outline: Option<OutlineStyle> = None;
     let mut transparency: Option<coralcraft_doc::TransparencyStyle> = None;
+    let mut obj_meta: Option<(Option<String>, bool, bool, F64)> = None;
     let mut powerclip_children: Vec<ObjectNode> = Vec::new();
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
     let mut bmp_payload: Option<&[u8]> = None;
@@ -1071,6 +1082,14 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
             b"trns" => {
                 if let Some(tr) = decode_trns(&ch.payload, ctx.endian, ctx.version, warnings) {
                     transparency = Some(tr);
+                }
+            }
+            b"omta" => {
+                obj_meta = decode_omta(&ch.payload, ctx.endian);
+            }
+            b"vefx" => {
+                if let Some(fx) = decode_vefx(&ch.payload, ctx.endian, ctx.version, page_size, warnings) {
+                    effects.push(fx);
                 }
             }
             b"bmp " | b"CDIB" => {
@@ -1176,6 +1195,12 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     }
 
     let mut node = ObjectNode::new(obj_id, None, kind, fill, outline);
+    if let Some((name, visible, locked, opacity)) = obj_meta {
+        node.name = name;
+        node.visible = visible;
+        node.locked = locked;
+        node.opacity = opacity;
+    }
     node.transform = transform;
     node.transparency = transparency;
     node.powerclip_children = powerclip_children;
@@ -1345,6 +1370,282 @@ fn encode_trns_payload(trns: &coralcraft_doc::TransparencyStyle) -> Vec<u8> {
         }
     }
     p
+}
+
+fn decode_pmta(payload: &[u8], endian: Endian, version: u16, page: &mut Page, warnings: &mut Vec<String>) {
+    if payload.len() < 11 {
+        return;
+    }
+    if let Some(bleed_raw) = read_f64(endian, payload, 0)
+        && let Ok(bleed) = F64::new(bleed_raw.max(0.0))
+    {
+        page.bleed = bleed;
+    }
+    let Some(name_len_u16) = read_u16(endian, payload, 8) else {
+        return;
+    };
+    let name_len = usize::from(name_len_u16);
+    let Some(name_end) = 10usize.checked_add(name_len) else {
+        return;
+    };
+    if let Some(name_slice) = payload.get(10..name_end)
+        && let Ok(name_str) = std::str::from_utf8(name_slice)
+        && !name_str.is_empty()
+    {
+        page.name = name_str.to_owned();
+    }
+    if let Some(&has_bg) = payload.get(name_end) {
+        if has_bg == 1 {
+            if let Some(fild_slice) = payload.get(name_end.saturating_add(1)..)
+                && let Some((_id, bg_fill)) = decode_fild(fild_slice, endian, version, warnings)
+            {
+                page.background = Some(bg_fill);
+            }
+        } else {
+            page.background = None;
+        }
+    }
+}
+
+fn encode_pmta_payload(page: &Page) -> Vec<u8> {
+    let mut p = Vec::new();
+    p.extend_from_slice(&page.bleed.get().to_le_bytes());
+    let name_bytes = page.name.as_bytes();
+    let name_len = name_bytes.len().min(4096);
+    p.extend_from_slice(&(name_len as u16).to_le_bytes());
+    p.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
+    if let Some(bg) = &page.background {
+        p.push(1u8);
+        p.extend_from_slice(&encode_fild_payload(0, bg));
+    } else {
+        p.push(0u8);
+    }
+    p
+}
+
+fn decode_lmta(payload: &[u8], endian: Endian, layer: &mut Layer) {
+    if payload.len() < 14 {
+        return;
+    }
+    let flags = payload.first().copied().unwrap_or(0x03);
+    layer.visible = (flags & 0x01) != 0;
+    layer.printable = (flags & 0x02) != 0;
+    layer.locked = (flags & 0x04) != 0;
+    layer.master_in_front = (flags & 0x08) != 0;
+    layer.role = match payload.get(1).copied().unwrap_or(0) {
+        1 => coralcraft_doc::LayerRole::MasterAllPages,
+        2 => coralcraft_doc::LayerRole::MasterEvenPages,
+        3 => coralcraft_doc::LayerRole::MasterOddPages,
+        4 => coralcraft_doc::LayerRole::Desktop,
+        5 => coralcraft_doc::LayerRole::Guides,
+        6 => coralcraft_doc::LayerRole::Grid,
+        _ => coralcraft_doc::LayerRole::Normal,
+    };
+    if let Some(op_raw) = read_f64(endian, payload, 4)
+        && let Ok(op) = F64::new(op_raw.clamp(0.0, 1.0))
+    {
+        layer.opacity = op;
+    }
+    if let Some(name_len_u16) = read_u16(endian, payload, 12) {
+        let name_len = usize::from(name_len_u16);
+        if let Some(name_end) = 14usize.checked_add(name_len)
+            && let Some(name_slice) = payload.get(14..name_end)
+            && let Ok(name_str) = std::str::from_utf8(name_slice)
+            && !name_str.is_empty()
+        {
+            layer.name = name_str.to_owned();
+        }
+    }
+}
+
+fn encode_lmta_payload(layer: &Layer) -> Vec<u8> {
+    let mut flags = 0u8;
+    if layer.visible {
+        flags |= 0x01;
+    }
+    if layer.printable {
+        flags |= 0x02;
+    }
+    if layer.locked {
+        flags |= 0x04;
+    }
+    if layer.master_in_front {
+        flags |= 0x08;
+    }
+    let role_code: u8 = match layer.role {
+        coralcraft_doc::LayerRole::Normal | coralcraft_doc::LayerRole::Unknown => 0,
+        coralcraft_doc::LayerRole::MasterAllPages => 1,
+        coralcraft_doc::LayerRole::MasterEvenPages => 2,
+        coralcraft_doc::LayerRole::MasterOddPages => 3,
+        coralcraft_doc::LayerRole::Desktop => 4,
+        coralcraft_doc::LayerRole::Guides => 5,
+        coralcraft_doc::LayerRole::Grid => 6,
+    };
+    let mut p = Vec::with_capacity(32);
+    p.push(flags);
+    p.push(role_code);
+    p.extend_from_slice(&0u16.to_le_bytes());
+    p.extend_from_slice(&layer.opacity.get().to_le_bytes());
+    let name_bytes = layer.name.as_bytes();
+    let name_len = name_bytes.len().min(4096);
+    p.extend_from_slice(&(name_len as u16).to_le_bytes());
+    p.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
+    p
+}
+
+fn decode_omta(payload: &[u8], endian: Endian) -> Option<(Option<String>, bool, bool, F64)> {
+    if payload.len() < 14 {
+        return None;
+    }
+    let flags = *payload.first()?;
+    let visible = (flags & 0x01) != 0;
+    let locked = (flags & 0x02) != 0;
+    let opacity = F64::new(read_f64(endian, payload, 4)?.clamp(0.0, 1.0)).ok()?;
+    let name_len = usize::from(read_u16(endian, payload, 12)?);
+    let name_end = 14usize.checked_add(name_len)?;
+    let name = if name_len > 0 {
+        let s = std::str::from_utf8(payload.get(14..name_end)?).ok()?;
+        Some(s.to_owned())
+    } else {
+        None
+    };
+    Some((name, visible, locked, opacity))
+}
+
+fn encode_omta_payload(node: &ObjectNode) -> Vec<u8> {
+    let mut flags = 0u8;
+    if node.visible {
+        flags |= 0x01;
+    }
+    if node.locked {
+        flags |= 0x02;
+    }
+    let mut p = Vec::with_capacity(32);
+    p.extend_from_slice(&[flags, 0, 0, 0]);
+    p.extend_from_slice(&node.opacity.get().to_le_bytes());
+    let name_bytes = node.name.as_deref().unwrap_or_default().as_bytes();
+    let name_len = name_bytes.len().min(4096);
+    p.extend_from_slice(&(name_len as u16).to_le_bytes());
+    p.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
+    p
+}
+
+fn decode_vefx(payload: &[u8], endian: Endian, version: u16, page_size: Size, warnings: &mut Vec<String>) -> Option<coralcraft_doc::VectorEffect> {
+    let tag = *payload.first()?;
+    match tag {
+        1 if payload.len() >= 16 => {
+            let inside = payload.get(1).copied().unwrap_or(0) != 0;
+            let steps = read_u32(endian, payload, 4)?;
+            let offset_pt = F64::new(read_f64(endian, payload, 8)?).ok()?;
+            Some(coralcraft_doc::VectorEffect::Contour { steps, offset_pt, inside })
+        }
+        2 if payload.len() >= 40 => {
+            let offset_x = F64::new(read_f64(endian, payload, 4)?).ok()?;
+            let offset_y = F64::new(read_f64(endian, payload, 12)?).ok()?;
+            let opacity = F64::new(read_f64(endian, payload, 20)?.clamp(0.0, 1.0)).ok()?;
+            let color = decode_cdr_color_v500(payload.get(28..40)?, endian, warnings).unwrap_or(Color::BLACK);
+            Some(coralcraft_doc::VectorEffect::DropShadow { offset_x, offset_y, opacity, color })
+        }
+        3 if payload.len() >= 20 => {
+            let depth_pt = F64::new(read_f64(endian, payload, 4)?).ok()?;
+            let angle_deg = F64::new(read_f64(endian, payload, 12)?).ok()?;
+            Some(coralcraft_doc::VectorEffect::Extrude { depth_pt, angle_deg })
+        }
+        4 if payload.len() >= 16 => {
+            let has_spine = payload.get(1).copied().unwrap_or(0) != 0;
+            let target_low = u64::from(read_u32(endian, payload, 4)?);
+            let target_high = u64::from(read_u32(endian, payload, 8)?);
+            let target_id = ObjectId(target_low | (target_high << 32));
+            let steps = read_u32(endian, payload, 12)?;
+            let spine = if has_spine && payload.len() > 20 { decode_cdr_curve(payload.get(20..)?, endian, version, page_size) } else { None };
+            Some(coralcraft_doc::VectorEffect::Blend { target_id, steps, spine })
+        }
+        5 if payload.len() >= 20 => {
+            let start_width_pt = F64::new(read_f64(endian, payload, 4)?).ok()?;
+            let end_width_pt = F64::new(read_f64(endian, payload, 12)?).ok()?;
+            Some(coralcraft_doc::VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt })
+        }
+        6 if payload.len() > 16 => {
+            let offset_pt = F64::new(read_f64(endian, payload, 4)?).ok()?;
+            let spine = decode_cdr_curve(payload.get(16..)?, endian, version, page_size)?;
+            Some(coralcraft_doc::VectorEffect::TextOnPath { spine, offset_pt })
+        }
+        7 if payload.len() >= 36 => {
+            let corners = decode_enve(payload.get(4..)?, endian, version, page_size)?;
+            Some(coralcraft_doc::VectorEffect::Perspective { corners })
+        }
+        8 if payload.len() >= 20 => {
+            let kind = match payload.get(1).copied().unwrap_or(0) {
+                1 => coralcraft_geom::DistortionKind::Zipper,
+                2 => coralcraft_geom::DistortionKind::Twister,
+                _ => coralcraft_geom::DistortionKind::PushPull,
+            };
+            let amplitude = F64::new(read_f64(endian, payload, 4)?).ok()?;
+            let frequency = F64::new(read_f64(endian, payload, 12)?).ok()?;
+            Some(coralcraft_doc::VectorEffect::Distortion { kind, amplitude, frequency })
+        }
+        _ => None,
+    }
+}
+
+fn encode_vefx_payload(effect: &coralcraft_doc::VectorEffect, cx: f64, cy: f64) -> Option<Vec<u8>> {
+    let mut p = Vec::new();
+    match effect {
+        coralcraft_doc::VectorEffect::Contour { steps, offset_pt, inside } => {
+            p.extend_from_slice(&[1u8, u8::from(*inside), 0, 0]);
+            p.extend_from_slice(&steps.to_le_bytes());
+            p.extend_from_slice(&offset_pt.get().to_le_bytes());
+        }
+        coralcraft_doc::VectorEffect::DropShadow { offset_x, offset_y, opacity, color } => {
+            p.extend_from_slice(&[2u8, 0, 0, 0]);
+            p.extend_from_slice(&offset_x.get().to_le_bytes());
+            p.extend_from_slice(&offset_y.get().to_le_bytes());
+            p.extend_from_slice(&opacity.get().to_le_bytes());
+            p.extend_from_slice(&encode_cdr_color_v500(color));
+        }
+        coralcraft_doc::VectorEffect::Extrude { depth_pt, angle_deg } => {
+            p.extend_from_slice(&[3u8, 0, 0, 0]);
+            p.extend_from_slice(&depth_pt.get().to_le_bytes());
+            p.extend_from_slice(&angle_deg.get().to_le_bytes());
+        }
+        coralcraft_doc::VectorEffect::Blend { target_id, steps, spine } => {
+            p.extend_from_slice(&[4u8, u8::from(spine.is_some()), 0, 0]);
+            p.extend_from_slice(&target_id.0.to_le_bytes());
+            p.extend_from_slice(&steps.to_le_bytes());
+            if let Some(sp) = spine {
+                encode_path_as_loda_1e(sp, cx, cy, &mut p);
+            }
+        }
+        coralcraft_doc::VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
+            p.extend_from_slice(&[5u8, 0, 0, 0]);
+            p.extend_from_slice(&start_width_pt.get().to_le_bytes());
+            p.extend_from_slice(&end_width_pt.get().to_le_bytes());
+        }
+        coralcraft_doc::VectorEffect::TextOnPath { spine, offset_pt } => {
+            p.extend_from_slice(&[6u8, 0, 0, 0]);
+            p.extend_from_slice(&offset_pt.get().to_le_bytes());
+            encode_path_as_loda_1e(spine, cx, cy, &mut p);
+        }
+        coralcraft_doc::VectorEffect::Perspective { corners } => {
+            p.extend_from_slice(&[7u8, 0, 0, 0]);
+            for pt in corners {
+                p.extend_from_slice(&pt_to_cdr_i32(pt.x.get() - cx).to_le_bytes());
+                p.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
+            }
+        }
+        coralcraft_doc::VectorEffect::Distortion { kind, amplitude, frequency } => {
+            let k_code = match kind {
+                coralcraft_geom::DistortionKind::PushPull => 0u8,
+                coralcraft_geom::DistortionKind::Zipper => 1u8,
+                coralcraft_geom::DistortionKind::Twister => 2u8,
+            };
+            p.extend_from_slice(&[8u8, k_code, 0, 0]);
+            p.extend_from_slice(&amplitude.get().to_le_bytes());
+            p.extend_from_slice(&frequency.get().to_le_bytes());
+        }
+        coralcraft_doc::VectorEffect::Envelope { .. } | coralcraft_doc::VectorEffect::Unknown => return None,
+    }
+    Some(p)
 }
 
 fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
@@ -2697,6 +2998,11 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         append_riff_chunk(&mut obj_children, *b"trns", &tp);
     }
 
+    if node.name.is_some() || !node.visible || node.locked || (node.opacity.get() - 1.0).abs() > 1e-6 {
+        let omta = encode_omta_payload(node);
+        append_riff_chunk(&mut obj_children, *b"omta", &omta);
+    }
+
     if !node.powerclip_children.is_empty() {
         let mut pclp_children = Vec::new();
         for child in &node.powerclip_children {
@@ -2713,6 +3019,8 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
                 enve.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
             }
             append_riff_chunk(&mut obj_children, *b"enve", &enve);
+        } else if let Some(vefx) = encode_vefx_payload(effect, cx, cy) {
+            append_riff_chunk(&mut obj_children, *b"vefx", &vefx);
         }
     }
 
@@ -2883,9 +3191,13 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
         mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
         mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
         append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
+        let pmta = encode_pmta_payload(page);
+        append_riff_chunk(&mut page_children, *b"pmta", &pmta);
 
         for layer in &page.layers {
             let mut layer_children = Vec::new();
+            let lmta = encode_lmta_payload(layer);
+            append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
             for obj in &layer.objects {
                 encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children)?;
             }

@@ -403,4 +403,61 @@ mod tests {
         let lens_unknown: LensKind = serde_json::from_str(r#"{"lens_type":"future_chromatic_aberration"}"#).unwrap();
         assert_eq!(lens_unknown, LensKind::Unknown);
     }
+
+    #[test]
+    fn import_svg_defs_linear_and_radial_gradients_roundtrip_m76() {
+        let svg = r##"<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="lin1" x1="0" y1="0" x2="100" y2="100">
+              <stop offset="0%" stop-color="#ff0000"/>
+              <stop offset="50%" style="stop-color: #00ff00"/>
+              <stop offset="1" stop-color="#0000ff"/>
+            </linearGradient>
+            <radialGradient id="rad1" cx="50" cy="50" r="40">
+              <stop offset="0" stop-color="#ffffff"/>
+              <stop offset="100%" stop-color="#112233"/>
+            </radialGradient>
+            <radialGradient id="con1" data-fountain-type="conical" data-angle="30" cx="50" cy="50" r="40">
+              <stop offset="0" stop-color="#aa0000"/>
+              <stop offset="1" stop-color="#0000aa"/>
+            </radialGradient>
+          </defs>
+          <rect x="10" y="10" width="100" height="80" fill="url(#lin1)"/>
+          <circle cx="200" cy="60" r="40" style="fill: url(#rad1)"/>
+          <path d="M 20 150 L 120 150 L 70 230 Z" fill="url('#con1')"/>
+        </svg>"##;
+
+        let doc = import_svg(svg).expect("import_svg with gradients");
+        let objs = &doc.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 3);
+
+        match &objs[0].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Linear { angle_deg, .. }, stops, .. }) => {
+                assert!((angle_deg.get() - 45.0).abs() < 1e-3);
+                assert_eq!(stops.len(), 3);
+                assert_eq!(stops[0].color, Color::rgb8(255, 0, 0));
+                assert!((stops[1].offset.get() - 0.5).abs() < 1e-6);
+                assert_eq!(stops[1].color, Color::rgb8(0, 255, 0));
+                assert_eq!(stops[2].color, Color::rgb8(0, 0, 255));
+            }
+            other => panic!("expected Linear Fountain fill on rect, got {other:?}"),
+        }
+
+        match &objs[1].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Radial { .. }, stops, .. }) => {
+                assert_eq!(stops.len(), 2);
+                assert_eq!(stops[0].color, Color::rgb8(255, 255, 255));
+                assert_eq!(stops[1].color, Color::rgb8(0x11, 0x22, 0x33));
+            }
+            other => panic!("expected Radial Fountain fill on circle, got {other:?}"),
+        }
+
+        match &objs[2].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Conical { angle_deg, .. }, stops, .. }) => {
+                assert!((angle_deg.get() - 30.0).abs() < 1e-3);
+                assert_eq!(stops.len(), 2);
+            }
+            other => panic!("expected Conical Fountain fill on path, got {other:?}"),
+        }
+    }
 }

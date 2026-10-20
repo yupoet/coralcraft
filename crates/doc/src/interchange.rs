@@ -1,11 +1,13 @@
 //! Clean-room SVG 1.1 (`import_svg`) and AutoCAD ASCII DXF (`import_dxf`) vector importers
 //! for `coralcraft-doc`.
 
-use coralcraft_color::Color;
+use std::collections::BTreeMap;
+
+use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, ObjectKind, ObjectNode, TransparencyStyle};
-use crate::style::{FillStyle, LineCap, LineJoin, OutlineStyle};
+use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle};
 
 fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
@@ -46,6 +48,8 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
 
     let mut pos = 0usize;
     let mut in_defs = false;
+    let mut svg_gradients: BTreeMap<String, FillStyle> = BTreeMap::new();
+    let mut active_grad: Option<(String, FountainGeometry, Vec<FountainStop>)> = None;
     let mut passthrough_g_stack: Vec<bool> = Vec::new();
     let mut group_stack: Vec<(Option<String>, Affine2, Vec<ObjectNode>)> = Vec::new();
 
@@ -65,6 +69,72 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             break;
         };
         pos = end;
+
+        if tag_slice.starts_with("<linearGradient ") || tag_slice.starts_with("<linearGradient\t") {
+            if let Some(id) = extract_attr_str(tag_slice, "id") {
+                let x1 = parse_svg_coord_or_pct(tag_slice, "x1").unwrap_or(0.0);
+                let y1 = parse_svg_coord_or_pct(tag_slice, "y1").unwrap_or(0.0);
+                let x2 = parse_svg_coord_or_pct(tag_slice, "x2").unwrap_or(1.0);
+                let y2 = parse_svg_coord_or_pct(tag_slice, "y2").unwrap_or(0.0);
+                let dx = x2 - x1;
+                let dy = y2 - y1;
+                let ang = if dx.abs() < 1e-9 && dy.abs() < 1e-9 { 0.0 } else { dy.atan2(dx).to_degrees() };
+                let geom = FountainGeometry::Linear { angle_deg: F64::new(ang).unwrap_or(F64::ZERO), edge_pad: F64::ZERO };
+                if !tag_slice.ends_with("/>") {
+                    active_grad = Some((id.to_owned(), geom, Vec::new()));
+                }
+            }
+            continue;
+        } else if tag_slice.starts_with("<radialGradient ") || tag_slice.starts_with("<radialGradient\t") {
+            if let Some(id) = extract_attr_str(tag_slice, "id") {
+                let ftype = extract_attr_str(tag_slice, "data-fountain-type").unwrap_or("radial");
+                let ang = F64::new(parse_attr_f64(tag_slice, "data-angle").unwrap_or(0.0)).unwrap_or(F64::ZERO);
+                let geom = match ftype {
+                    "conical" => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: ang },
+                    "square" => FountainGeometry::Square { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, angle_deg: ang },
+                    _ => FountainGeometry::Radial {
+                        center_x: F64::HALF,
+                        center_y: F64::HALF,
+                        radius: F64::HALF,
+                        focal_x: F64::HALF,
+                        focal_y: F64::HALF,
+                    },
+                };
+                if !tag_slice.ends_with("/>") {
+                    active_grad = Some((id.to_owned(), geom, Vec::new()));
+                }
+            }
+            continue;
+        } else if (tag_slice.starts_with("<stop ") || tag_slice.starts_with("<stop\t"))
+            && let Some((_, _, stops)) = &mut active_grad
+        {
+            let off_raw = extract_style_or_attr_str(tag_slice, "offset").unwrap_or("0");
+            let off_t = off_raw.trim();
+            let off_val = if let Some(pct) = off_t.strip_suffix('%') {
+                pct.trim().parse::<f64>().map(|v| v / 100.0).unwrap_or(0.0)
+            } else {
+                off_t.parse::<f64>().unwrap_or(0.0)
+            }
+            .clamp(0.0, 1.0);
+            let col = extract_style_or_attr_str(tag_slice, "stop-color").and_then(|s| parse_svg_color(s.trim())).unwrap_or(Color::BLACK);
+            if let Ok(st) = FountainStop::new(off_val, col) {
+                stops.push(st);
+            }
+            continue;
+        } else if tag_slice.starts_with("</linearGradient>") || tag_slice.starts_with("</radialGradient>") {
+            if let Some((id, geometry, mut stops)) = active_grad.take() {
+                if stops.len() == 1
+                    && let Some(first) = stops.first().cloned()
+                    && let Ok(dup) = FountainStop::new(1.0, first.color)
+                {
+                    stops.push(dup);
+                }
+                if stops.len() >= 2 {
+                    svg_gradients.insert(id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops });
+                }
+            }
+            continue;
+        }
 
         if tag_slice.starts_with("<defs") && !tag_slice.ends_with("/>") {
             in_defs = true;
@@ -124,7 +194,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 .clamp(0.0, 0.5 * w.min(h));
                 let rspec =
                     if rad > 0.0 { RectSpec::uniform(r, rad, CornerKind::Round).unwrap_or_else(|_| RectSpec::sharp(r)) } else { RectSpec::sharp(r) };
-                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(rspec), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
@@ -140,7 +210,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 && ry > 0.0
                 && let Ok(r) = Rect::new(cx - rx, cy - ry, cx + rx, cy + ry)
             {
-                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
@@ -155,7 +225,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             if let (Ok(p1), Ok(p2)) = (Point::new(x1, y1), Point::new(x2, y2)) {
                 let mut path = Path::new();
                 if path.move_to(p1).is_ok() && path.line_to(p2).is_ok() {
-                    let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                    let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                     let obj_id = doc.allocate_object_id();
                     let mut node = ObjectNode::new(obj_id, Some("SVG Line".to_owned()), ObjectKind::Path(path), fill, outline);
                     node.transform = parse_svg_transform(tag_slice);
@@ -175,7 +245,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 if extract_style_or_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
                     path.fill_rule = FillRule::EvenOdd;
                 }
-                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let label = if is_polygon { "SVG Polygon" } else { "SVG Polyline" };
                 let mut node = ObjectNode::new(obj_id, Some(label.to_owned()), ObjectKind::Path(path), fill, outline);
@@ -195,7 +265,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 if extract_style_or_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
                     path.fill_rule = FillRule::EvenOdd;
                 }
-                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
@@ -213,7 +283,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             let font_family = extract_attr_str(tag_slice, "font-family").unwrap_or("Arial").to_owned();
             let size_val = parse_attr_f64(tag_slice, "font-size").unwrap_or(12.0).max(1.0);
             if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
-                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(
                     obj_id,
@@ -625,10 +695,28 @@ fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
     Some(path)
 }
 
-fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineStyle>) {
-    let fill = match extract_style_or_attr_str(tag_slice, "fill") {
+fn parse_svg_coord_or_pct(tag_slice: &str, attr_name: &str) -> Option<f64> {
+    let raw = extract_attr_str(tag_slice, attr_name)?.trim();
+    if let Some(pct) = raw.strip_suffix('%') {
+        pct.trim().parse::<f64>().ok().map(|v| v / 100.0)
+    } else {
+        raw.trim_end_matches("pt").trim_end_matches("px").parse::<f64>().ok()
+    }
+}
+
+fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillStyle>) -> (Option<FillStyle>, Option<OutlineStyle>) {
+    let fill = match extract_style_or_attr_str(tag_slice, "fill").map(str::trim) {
         Some("none") | Some("transparent") | None => None,
-        Some(raw) => parse_svg_color(raw.trim()).map(FillStyle::uniform),
+        Some(raw) => {
+            if let Some(rest) = raw.strip_prefix("url(")
+                && let Some(inner) = rest.strip_suffix(')')
+            {
+                let grad_id = inner.trim().trim_matches(|c| c == '\'' || c == '"').strip_prefix('#').unwrap_or_default();
+                svg_gradients.get(grad_id).cloned()
+            } else {
+                parse_svg_color(raw).map(FillStyle::uniform)
+            }
+        }
     };
     let outline = match extract_style_or_attr_str(tag_slice, "stroke") {
         Some("none") | Some("transparent") | None => None,

@@ -1302,4 +1302,120 @@ mod tests {
             other => panic!("expected Tinted Lens transparency, got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_cdr7_all_vector_effects_and_object_layer_page_metadata_roundtrip_m76() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, LayerRole, ObjectId, ObjectKind, ObjectNode, VectorEffect};
+        use coralcraft_geom::{DistortionKind, F64, Path, Point, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].name = "Cover Spread".to_owned();
+        doc.pages[0].bleed = F64::new(9.0).unwrap();
+        doc.pages[0].background = Some(FillStyle::uniform(Color::rgb8(245, 240, 230)));
+
+        let layer = &mut doc.pages[0].layers[0];
+        layer.name = "Artwork Layer".to_owned();
+        layer.role = LayerRole::MasterAllPages;
+        layer.printable = false;
+        layer.locked = true;
+        layer.master_in_front = true;
+        layer.opacity = F64::new(0.85).unwrap();
+
+        let mut spine = Path::new();
+        spine.move_to(Point::new(20.0, 20.0).unwrap()).unwrap();
+        spine.line_to(Point::new(180.0, 60.0).unwrap()).unwrap();
+
+        let corners =
+            [Point::new(25.0, 25.0).unwrap(), Point::new(155.0, 30.0).unwrap(), Point::new(160.0, 115.0).unwrap(), Point::new(20.0, 110.0).unwrap()];
+
+        let mut obj = ObjectNode::new(
+            ObjectId(141),
+            Some("HeroFX".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 160.0, 120.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(220, 50, 70))),
+            None,
+        );
+        obj.visible = false;
+        obj.locked = true;
+        obj.opacity = F64::new(0.75).unwrap();
+        obj.effects = vec![
+            VectorEffect::Contour { steps: 3, offset_pt: F64::new(4.5).unwrap(), inside: true },
+            VectorEffect::DropShadow {
+                offset_x: F64::new(6.0).unwrap(),
+                offset_y: F64::new(-5.0).unwrap(),
+                opacity: F64::new(0.6).unwrap(),
+                color: Color::rgb8(30, 40, 50),
+            },
+            VectorEffect::Extrude { depth_pt: F64::new(18.0).unwrap(), angle_deg: F64::new(35.0).unwrap() },
+            VectorEffect::Blend { target_id: ObjectId(999), steps: 5, spine: Some(spine.clone()) },
+            VectorEffect::ArtisticMediaBrush { start_width_pt: F64::new(2.0).unwrap(), end_width_pt: F64::new(10.0).unwrap() },
+            VectorEffect::TextOnPath { spine: spine.clone(), offset_pt: F64::new(3.5).unwrap() },
+            VectorEffect::Perspective { corners },
+            VectorEffect::Distortion { kind: DistortionKind::Zipper, amplitude: F64::new(8.0).unwrap(), frequency: F64::new(4.0).unwrap() },
+        ];
+        layer.objects.push(obj);
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        let p0 = &parsed.document.pages[0];
+        assert_eq!(p0.name, "Cover Spread");
+        assert!((p0.bleed.get() - 9.0).abs() < 1e-6);
+        assert_eq!(p0.background, Some(FillStyle::uniform(Color::rgb8(245, 240, 230))));
+
+        let l0 = &p0.layers[0];
+        assert_eq!(l0.name, "Artwork Layer");
+        assert_eq!(l0.role, LayerRole::MasterAllPages);
+        assert!(!l0.printable);
+        assert!(l0.locked);
+        assert!(l0.master_in_front);
+        assert!((l0.opacity.get() - 0.85).abs() < 1e-6);
+
+        let o0 = &l0.objects[0];
+        assert_eq!(o0.name.as_deref(), Some("HeroFX"));
+        assert!(!o0.visible);
+        assert!(o0.locked);
+        assert!((o0.opacity.get() - 0.75).abs() < 1e-6);
+        assert_eq!(o0.effects.len(), 8);
+        assert_eq!(o0.effects[0], VectorEffect::Contour { steps: 3, offset_pt: F64::new(4.5).unwrap(), inside: true });
+        assert_eq!(
+            o0.effects[1],
+            VectorEffect::DropShadow {
+                offset_x: F64::new(6.0).unwrap(),
+                offset_y: F64::new(-5.0).unwrap(),
+                opacity: F64::new(0.6).unwrap(),
+                color: Color::rgb8(30, 40, 50),
+            }
+        );
+        assert_eq!(o0.effects[2], VectorEffect::Extrude { depth_pt: F64::new(18.0).unwrap(), angle_deg: F64::new(35.0).unwrap() });
+        match &o0.effects[3] {
+            VectorEffect::Blend { target_id, steps, spine: Some(sp) } => {
+                assert_eq!(*target_id, ObjectId(999));
+                assert_eq!(*steps, 5);
+                assert_eq!(sp.elements.len(), 2);
+            }
+            other => panic!("expected Blend with spine, got {other:?}"),
+        }
+        assert_eq!(o0.effects[4], VectorEffect::ArtisticMediaBrush { start_width_pt: F64::new(2.0).unwrap(), end_width_pt: F64::new(10.0).unwrap() });
+        match &o0.effects[5] {
+            VectorEffect::TextOnPath { spine: sp, offset_pt } => {
+                assert_eq!(sp.elements.len(), 2);
+                assert!((offset_pt.get() - 3.5).abs() < 1e-6);
+            }
+            other => panic!("expected TextOnPath, got {other:?}"),
+        }
+        match &o0.effects[6] {
+            VectorEffect::Perspective { corners: parsed_c } => {
+                for i in 0..4 {
+                    assert!((parsed_c[i].x.get() - corners[i].x.get()).abs() < 1e-2);
+                    assert!((parsed_c[i].y.get() - corners[i].y.get()).abs() < 1e-2);
+                }
+            }
+            other => panic!("expected Perspective, got {other:?}"),
+        }
+        assert_eq!(
+            o0.effects[7],
+            VectorEffect::Distortion { kind: DistortionKind::Zipper, amplitude: F64::new(8.0).unwrap(), frequency: F64::new(4.0).unwrap() }
+        );
+    }
 }
