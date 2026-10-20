@@ -204,6 +204,12 @@ pub enum EngineCommand {
     MoveLayer { page_index: usize, from_index: usize, to_index: usize },
     /// Inverts the selection among unlocked, visible objects on the active target layer (`Edit -> Select All -> Invert Selection`).
     InvertSelection,
+    /// Updates `width_pt`, `behind_fill`, and/or `scale_with_object` on selected objects' `OutlineStyle` (`F12` Outline Pen).
+    SetOutlineProperties { width_pt: Option<F64>, behind_fill: Option<bool>, scale_with_object: Option<bool> },
+    /// Selects all unlocked, visible objects on the active layer matching `kind` (`"rect"`, `"ellipse"`, `"polygon"`, `"path"`, `"text"`, `"bitmap"`, `"group"`).
+    SelectByKind { kind: String },
+    /// Updates the document title metadata (`File -> Document Properties`).
+    SetDocumentTitle { title: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -871,6 +877,16 @@ impl EditorEngine {
                     .get(*page_index)
                     .is_some_and(|p| *from_index < p.layers.len() && *to_index < p.layers.len() && *from_index != *to_index);
                 if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
+                if width_pt.is_none() && behind_fill.is_none() && scale_with_object.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::SetDocumentTitle { title } => {
+                if title.trim().is_empty() {
                     return false;
                 }
             }
@@ -2355,6 +2371,57 @@ impl EditorEngine {
                 self.selection =
                     self.current_target_objects().iter().filter(|o| !o.locked && o.visible && !cur.contains(&o.id)).map(|o| o.id).collect();
             }
+            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
+                let update_outline = |opt: &mut Option<OutlineStyle>| {
+                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
+                    if let Some(w) = width_pt
+                        && let Ok(clamped) = F64::new(w.get().max(0.0))
+                    {
+                        st.width_pt = clamped;
+                    }
+                    if let Some(bf) = behind_fill {
+                        st.behind_fill = bf;
+                    }
+                    if let Some(swo) = scale_with_object {
+                        st.scale_with_object = swo;
+                    }
+                    *opt = Some(st);
+                };
+                if self.selection.is_empty() {
+                    update_outline(&mut self.default_outline);
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked {
+                            update_outline(&mut obj.outline);
+                        }
+                    });
+                }
+            }
+            EngineCommand::SelectByKind { kind } => {
+                let k = kind.trim().to_ascii_lowercase();
+                self.selection = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| {
+                        !o.locked
+                            && o.visible
+                            && match k.as_str() {
+                                "rect" | "rectangle" => matches!(o.kind, ObjectKind::Rect(_)),
+                                "ellipse" => matches!(o.kind, ObjectKind::Ellipse(_)),
+                                "polygon" | "star" => matches!(o.kind, ObjectKind::Polygon(_)),
+                                "path" | "curve" => matches!(o.kind, ObjectKind::Path(_)),
+                                "text" => matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)),
+                                "bitmap" | "image" => matches!(o.kind, ObjectKind::Bitmap { .. }),
+                                "group" => matches!(o.kind, ObjectKind::Group { .. }),
+                                _ => false,
+                            }
+                    })
+                    .map(|o| o.id)
+                    .collect();
+            }
+            EngineCommand::SetDocumentTitle { title } => {
+                self.document.title = title.trim().to_owned();
+            }
         }
         true
     }
@@ -3040,5 +3107,19 @@ mod tests {
         assert!(engine.execute(EngineCommand::MoveLayer { page_index: 1, from_index: 1, to_index: 0 }));
         assert!(engine.execute(EngineCommand::DeleteLayer { layer_id: l3_id }));
         assert_eq!(engine.document.pages[1].layers.len(), 1);
+
+        // 23. SetOutlineProperties, SelectByKind, and SetDocumentTitle
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::SetOutlineProperties {
+            width_pt: Some(F64::new(3.0).unwrap()),
+            behind_fill: Some(true),
+            scale_with_object: Some(true),
+        }));
+        let outl = engine.selected_or_all_node(boundary_id).unwrap().outline.as_ref().unwrap();
+        assert!(outl.behind_fill && outl.scale_with_object);
+        assert!(engine.execute(EngineCommand::SelectByKind { kind: "path".to_owned() }));
+        assert!(engine.selection.contains(&boundary_id));
+        assert!(engine.execute(EngineCommand::SetDocumentTitle { title: "CoralCraft Masterpiece".to_owned() }));
+        assert_eq!(engine.document.title, "CoralCraft Masterpiece");
     }
 }

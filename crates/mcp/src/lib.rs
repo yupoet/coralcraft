@@ -11,8 +11,8 @@ use coralcraft_doc::{
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
-    build_callout_path, build_connector_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_spiral_path,
-    build_three_point_curve_path,
+    build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path,
+    build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -578,6 +578,26 @@ impl McpServer {
                         {
                             "name": "invert_selection",
                             "description": "Inverts the selection among unlocked, visible objects on the active target layer (Edit -> Select All -> Invert Selection).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_complex_star",
+                            "description": "Adds a Complex Star {n/k} Schlafli star polygon around (cx, cy) with points and sharpness (Complex Star Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_outline_properties",
+                            "description": "Updates width_pt, behind_fill, and/or scale_with_object on selected objects' OutlineStyle (F12 Outline Pen).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "select_by_kind",
+                            "description": "Selects all unlocked, visible objects on the active layer matching kind (rect, ellipse, polygon, path, text, bitmap, group).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_document_title",
+                            "description": "Updates the document title metadata (File -> Document Properties).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1585,6 +1605,36 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "inverted": ok, "selected_ids": ids }))
             }
+            "add_complex_star" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius = args.get("radius").and_then(Value::as_f64).unwrap_or(60.0);
+                let points = args.get("points").and_then(Value::as_u64).unwrap_or(7) as u32;
+                let sharpness = args.get("sharpness").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_complex_star_path(center, radius, points, sharpness).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Complex Star".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "complex_star", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "set_outline_properties" => {
+                self.apply_optional_selection(args);
+                let width_pt = args.get("width_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let behind_fill = args.get("behind_fill").and_then(Value::as_bool);
+                let scale_with_object = args.get("scale_with_object").and_then(Value::as_bool);
+                let ok = self.engine.execute(EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object });
+                Ok(json!({ "outline_properties_set": ok }))
+            }
+            "select_by_kind" => {
+                let kind = args.get("kind").and_then(Value::as_str).unwrap_or("path").to_owned();
+                let ok = self.engine.execute(EngineCommand::SelectByKind { kind });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "selected_by_kind": ok, "selected_ids": ids }))
+            }
+            "set_document_title" => {
+                let title = args.get("title").and_then(Value::as_str).unwrap_or("Untitled").to_owned();
+                let ok = self.engine.execute(EngineCommand::SetDocumentTitle { title });
+                Ok(json!({ "title_set": ok, "title": self.engine.document.title }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1614,7 +1664,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 96);
+        assert_eq!(tools, 100);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

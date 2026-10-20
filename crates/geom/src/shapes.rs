@@ -640,6 +640,46 @@ pub fn build_impact_rays_path(center: Point, inner_radius: f64, outer_radius: f6
     Ok(path)
 }
 
+fn gcd_u32(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a.max(1)
+}
+
+/// Builds a Complex Star (`{n/k}` Schläfli star polygon) [`Path`] around `center` (`Complex Star Tool`).
+pub fn build_complex_star_path(center: Point, radius: f64, points: u32, sharpness: u32) -> Result<Path, GeomError> {
+    let r = F64::new(radius)?.get();
+    if r <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("radius must be positive"));
+    }
+    let n = points.clamp(5, 256);
+    let max_k = (n - 1) / 2;
+    let k = sharpness.clamp(2, max_k.max(2));
+    let cycles = gcd_u32(n, k);
+    let steps_per_cycle = n / cycles;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let mut path = Path { elements: Vec::new(), fill_rule: crate::path::FillRule::EvenOdd };
+
+    for c in 0..cycles {
+        for s in 0..steps_per_cycle {
+            let v_idx = (c + s * k) % n;
+            let angle = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * (f64::from(v_idx) / f64::from(n));
+            let pt = Point::new(cx + r * angle.cos(), cy + r * angle.sin())?;
+            if s == 0 {
+                path.move_to(pt)?;
+            } else {
+                path.line_to(pt)?;
+            }
+        }
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -656,5 +696,8 @@ mod m27_tests {
         let rays = build_impact_rays_path(Point::new(50.0, 50.0).unwrap(), 10.0, 60.0, 8).unwrap();
         let ray_closes = rays.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(ray_closes, 8);
+
+        let star = build_complex_star_path(Point::new(50.0, 50.0).unwrap(), 40.0, 7, 3).unwrap();
+        assert_eq!(star.elements.len(), 8);
     }
 }
