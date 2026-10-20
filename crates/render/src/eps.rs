@@ -1063,4 +1063,58 @@ mod tests {
         };
         assert!(sp_path.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })), "SPLINE must emit cubic segments");
     }
+
+    #[test]
+    fn export_svg_and_pdf_arrowheads_and_pdf_two_color_pattern_kinds_m75() {
+        use coralcraft_doc::{ArrowheadKind, PatternKind};
+
+        let mut doc = Document::new_a4_portrait();
+        let mut arrow_path = Path::new();
+        arrow_path.move_to(Point::new(30.0, 100.0).unwrap()).unwrap();
+        arrow_path.line_to(Point::new(180.0, 100.0).unwrap()).unwrap();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(200, 30, 50), F64::new(3.0).unwrap());
+        outl.start_arrow = ArrowheadKind::Triangle;
+        outl.end_arrow = ArrowheadKind::Diamond;
+        doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects.push(ObjectNode::new(
+            ObjectId(1),
+            Some("ArrowLine".to_owned()),
+            ObjectKind::Path(arrow_path),
+            None,
+            Some(outl),
+        ));
+
+        let pat_fill = FillStyle::TwoColorPattern {
+            kind: PatternKind::PolkaDot,
+            fg_color: Color::rgb8(20, 100, 180),
+            bg_color: Color::rgb8(240, 240, 250),
+            tile_size_pt: F64::new(20.0).unwrap(),
+        };
+        doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects.push(ObjectNode::new(
+            ObjectId(2),
+            Some("PolkaBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 140.0, 130.0, 220.0).unwrap())),
+            Some(pat_fill),
+            None,
+        ));
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg with arrowheads");
+        assert!(svg.contains("class=\"arrowhead-marker\""), "SVG must emit arrowhead-marker polygon elements");
+
+        let pdf_bytes = crate::export_pdf(&doc).expect("export_pdf with arrowheads");
+        let pdf_str = String::from_utf8_lossy(&pdf_bytes);
+        assert!(pdf_str.contains("h f\n"), "PDF must emit closed filled arrowhead polygons (h f)");
+
+        let imposed_spec = crate::ImpositionSpec {
+            sheet_width_pt: F64::new(841.89).unwrap(),
+            sheet_height_pt: F64::new(595.276).unwrap(),
+            rows: 1,
+            cols: 1,
+            margin_pt: F64::new(10.0).unwrap(),
+            gutter_pt: F64::ZERO,
+            crop_marks: false,
+        };
+        let imposed_bytes = crate::export_pdf_imposed(&doc, &imposed_spec).expect("export_pdf_imposed with PolkaDot");
+        let imposed_str = String::from_utf8_lossy(&imposed_bytes);
+        assert!(imposed_str.contains(" c\n"), "PolkaDot pattern in emit_pdf_fill must emit cubic circle arcs");
+    }
 }

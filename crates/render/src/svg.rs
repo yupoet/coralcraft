@@ -560,7 +560,11 @@ fn emit_path_node(
         defs.push_str("    </clipPath>\n");
     }
 
-    let needs_wrapper = has_powerclip || behind_fill || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
+    let has_arrows = node
+        .outline
+        .as_ref()
+        .is_some_and(|o| o.start_arrow != coralcraft_doc::ArrowheadKind::None || o.end_arrow != coralcraft_doc::ArrowheadKind::None);
+    let needs_wrapper = has_powerclip || behind_fill || has_arrows || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
     if needs_wrapper {
         let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}{mask_attr}>", node.id.0);
         let child_indent = "  ".repeat(indent_level.saturating_add(1));
@@ -569,6 +573,7 @@ fn emit_path_node(
         if behind_fill && let Some(outline) = &node.outline {
             let stroke_attrs = format_stroke_attrs(outline, node.transform);
             let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+            emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
         }
 
         // 2. Fill
@@ -579,6 +584,7 @@ fn emit_path_node(
             {
                 let stroke_attrs = format_stroke_attrs(outline, node.transform);
                 let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr} {stroke_attrs}/>");
+                emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
             } else {
                 let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}/>");
             }
@@ -600,6 +606,7 @@ fn emit_path_node(
         {
             let stroke_attrs = format_stroke_attrs(outline, node.transform);
             let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+            emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
         }
 
         let _ = writeln!(body, "{indent}</g>");
@@ -609,4 +616,28 @@ fn emit_path_node(
     }
 
     Ok(())
+}
+
+fn emit_svg_arrowheads(body: &mut String, local_path: &Path, outline: &OutlineStyle, obj_transform: Affine2, indent: &str) {
+    if outline.start_arrow == coralcraft_doc::ArrowheadKind::None && outline.end_arrow == coralcraft_doc::ArrowheadKind::None {
+        return;
+    }
+    let mut w = if outline.is_hairline() { 0.25 } else { outline.width_pt.get() };
+    if !outline.scale_with_object {
+        let scale = obj_transform.determinant().abs().sqrt();
+        if scale > 1e-6 {
+            w /= scale;
+        }
+    }
+    if let Ok(polys) = coralcraft_geom::flatten_path(local_path, &coralcraft_geom::FlattenOpts::default())
+        && let Ok(arrow_polys) = crate::build_arrowhead_polylines(&polys, 0.5 * w, outline.start_arrow, outline.end_arrow)
+    {
+        let col = svg_hex_color(&outline.color);
+        for ap in &arrow_polys {
+            if ap.points.len() >= 3 {
+                let pts_str: Vec<String> = ap.points.iter().map(|p| format!("{},{}", fmt_num(p.x.get()), fmt_num(p.y.get()))).collect();
+                let _ = writeln!(body, "{indent}<polygon class=\"arrowhead-marker\" points=\"{}\" fill=\"{col}\"/>", pts_str.join(" "));
+            }
+        }
+    }
 }

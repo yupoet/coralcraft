@@ -512,20 +512,83 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
             }
             s.push_str("Q\n");
         }
-        FillStyle::TwoColorPattern { bg_color, fg_color, tile_size_pt, .. } => {
+        FillStyle::TwoColorPattern { kind, bg_color, fg_color, tile_size_pt } => {
             s.push_str("q\n");
             emit_pdf_path_ops(s, path);
             let _ = writeln!(s, "{clip_op} n");
             emit_pdf_color(s, bg_color, false);
             let _ = writeln!(s, "{} {} {} {} re f", fmt_num(bbox.x0.get()), fmt_num(bbox.y0.get()), fmt_num(bbox.width()), fmt_num(bbox.height()));
             emit_pdf_color(s, fg_color, false);
+            emit_pdf_color(s, fg_color, true);
             let ts = tile_size_pt.get().max(2.0);
             let half = ts * 0.5;
             let mut ty = bbox.y0.get();
             while ty < bbox.y1.get() {
                 let mut tx = bbox.x0.get();
                 while tx < bbox.x1.get() {
-                    let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(half));
+                    match kind {
+                        coralcraft_doc::PatternKind::Checkerboard | coralcraft_doc::PatternKind::Unknown => {
+                            let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(half));
+                            let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx + half), fmt_num(ty + half), fmt_num(half), fmt_num(half));
+                        }
+                        coralcraft_doc::PatternKind::PolkaDot => {
+                            let cx = tx + half;
+                            let cy = ty + half;
+                            let r = ts * 0.35;
+                            let k = r * coralcraft_geom::KAPPA;
+                            let _ = writeln!(
+                                s,
+                                "{} {} m\n{} {} {} {} {} {} c\n{} {} {} {} {} {} c\n{} {} {} {} {} {} c\n{} {} {} {} {} {} c\nh f",
+                                fmt_num(cx + r),
+                                fmt_num(cy),
+                                fmt_num(cx + r),
+                                fmt_num(cy + k),
+                                fmt_num(cx + k),
+                                fmt_num(cy + r),
+                                fmt_num(cx),
+                                fmt_num(cy + r),
+                                fmt_num(cx - k),
+                                fmt_num(cy + r),
+                                fmt_num(cx - r),
+                                fmt_num(cy + k),
+                                fmt_num(cx - r),
+                                fmt_num(cy),
+                                fmt_num(cx - r),
+                                fmt_num(cy - k),
+                                fmt_num(cx - k),
+                                fmt_num(cy - r),
+                                fmt_num(cx),
+                                fmt_num(cy - r),
+                                fmt_num(cx + k),
+                                fmt_num(cy - r),
+                                fmt_num(cx + r),
+                                fmt_num(cy - k),
+                                fmt_num(cx + r),
+                                fmt_num(cy)
+                            );
+                        }
+                        coralcraft_doc::PatternKind::HorizontalStripe => {
+                            let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx), fmt_num(ty), fmt_num(ts), fmt_num(half));
+                        }
+                        coralcraft_doc::PatternKind::VerticalStripe => {
+                            let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(ts));
+                        }
+                        coralcraft_doc::PatternKind::DiagonalCrosshatch => {
+                            let _ = writeln!(
+                                s,
+                                "{} w {} {} m {} {} l {} {} m {} {} l S",
+                                fmt_num(ts * 0.15),
+                                fmt_num(tx),
+                                fmt_num(ty),
+                                fmt_num(tx + ts),
+                                fmt_num(ty + ts),
+                                fmt_num(tx),
+                                fmt_num(ty + ts),
+                                fmt_num(tx + ts),
+                                fmt_num(ty)
+                            );
+                        }
+                    }
                     tx += ts;
                 }
                 ty += ts;
@@ -565,6 +628,24 @@ fn emit_pdf_stroke(s: &mut String, path: &Path, outline: &OutlineStyle, obj_tran
     }
     emit_pdf_path_ops(s, path);
     s.push_str("S\n");
+    if (outline.start_arrow != coralcraft_doc::ArrowheadKind::None || outline.end_arrow != coralcraft_doc::ArrowheadKind::None)
+        && let Ok(polys) = coralcraft_geom::flatten_path(path, &coralcraft_geom::FlattenOpts::default())
+        && let Ok(arrow_polys) = crate::build_arrowhead_polylines(&polys, 0.5 * w, outline.start_arrow, outline.end_arrow)
+        && !arrow_polys.is_empty()
+    {
+        emit_pdf_color(s, &outline.color, false);
+        for ap in &arrow_polys {
+            if let (Some(&first), Some(rest)) = (ap.points.first(), ap.points.get(1..))
+                && rest.len() >= 2
+            {
+                let _ = write!(s, "{} {} m", fmt_num(first.x.get()), fmt_num(first.y.get()));
+                for pt in rest {
+                    let _ = write!(s, " {} {} l", fmt_num(pt.x.get()), fmt_num(pt.y.get()));
+                }
+                s.push_str(" h f\n");
+            }
+        }
+    }
 }
 
 fn escape_pdf_string(text: &str) -> String {

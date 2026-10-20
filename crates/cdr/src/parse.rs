@@ -1034,11 +1034,19 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut transform = Affine2::IDENTITY;
     let mut fill: Option<FillStyle> = None;
     let mut outline: Option<OutlineStyle> = None;
+    let mut transparency: Option<coralcraft_doc::TransparencyStyle> = None;
+    let mut powerclip_children: Vec<ObjectNode> = Vec::new();
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
     let mut bmp_payload: Option<&[u8]> = None;
     let mut txtd_payload: Option<&[u8]> = None;
     let mut effects = Vec::new();
     let mut residual = Residual::default();
+
+    for ch in &obj_chunk.children {
+        if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"pclp") {
+            collect_loose_objects_recursive(&ch.children, ctx, page_size, &mut powerclip_children, warnings);
+        }
+    }
 
     for (slot_idx, ch) in flat_children.iter().enumerate() {
         match &ch.fourcc {
@@ -1058,6 +1066,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
             b"outl" => {
                 if let Some((_id, o)) = decode_outl(&ch.payload, ctx.endian, ctx.version, warnings) {
                     outline = Some(o);
+                }
+            }
+            b"trns" => {
+                if let Some(tr) = decode_trns(&ch.payload, ctx.endian, ctx.version, warnings) {
+                    transparency = Some(tr);
                 }
             }
             b"bmp " | b"CDIB" => {
@@ -1164,6 +1177,8 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
 
     let mut node = ObjectNode::new(obj_id, None, kind, fill, outline);
     node.transform = transform;
+    node.transparency = transparency;
+    node.powerclip_children = powerclip_children;
     node.effects = effects;
     node.residual = residual;
     Some(node)
@@ -1180,6 +1195,9 @@ fn contains_u32(haystack: &[u8], needle: u32, endian: Endian) -> bool {
 fn flatten_obj_subchunks<'a>(chunks: &'a [ParsedChunk], out: &mut Vec<&'a ParsedChunk>) {
     for ch in chunks {
         if &ch.fourcc == b"LIST" {
+            if ch.list_type == Some(*b"pclp") {
+                continue;
+            }
             flatten_obj_subchunks(&ch.children, out);
         } else {
             out.push(ch);
@@ -1247,6 +1265,86 @@ fn decode_enve(payload: &[u8], endian: Endian, version: u16, page_size: Size) ->
         *slot = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
     }
     Some(pts)
+}
+
+fn decode_trns(payload: &[u8], endian: Endian, version: u16, warnings: &mut Vec<String>) -> Option<coralcraft_doc::TransparencyStyle> {
+    let mode = *payload.first()?;
+    match mode {
+        1 if payload.len() >= 12 => {
+            let op = read_f64(endian, payload, 4)?.clamp(0.0, 1.0);
+            Some(coralcraft_doc::TransparencyStyle::Uniform { opacity: F64::new(op).ok()? })
+        }
+        2 if payload.len() >= 10 => {
+            let (_id, fill) = decode_fild(payload.get(4..)?, endian, version, warnings)?;
+            if let FillStyle::Fountain { geometry, blend_mode, stops } = fill {
+                Some(coralcraft_doc::TransparencyStyle::Fountain { geometry, blend_mode, stops })
+            } else {
+                None
+            }
+        }
+        3 if payload.len() >= 4 => {
+            let l_code = *payload.get(1)?;
+            let kind = match l_code {
+                1 => coralcraft_doc::LensKind::Invert,
+                2 if payload.len() >= 12 => {
+                    let rate = F64::new(read_f64(endian, payload, 4)?.clamp(-1.0, 1.0)).ok()?;
+                    coralcraft_doc::LensKind::Brighten { rate }
+                }
+                3 if payload.len() >= 24 => {
+                    let rate = F64::new(read_f64(endian, payload, 4)?.clamp(0.0, 1.0)).ok()?;
+                    let color = decode_cdr_color_v500(payload.get(12..24)?, endian, warnings).unwrap_or(Color::BLACK);
+                    coralcraft_doc::LensKind::Tinted { color, rate }
+                }
+                4 if payload.len() >= 12 => {
+                    let factor = F64::new(read_f64(endian, payload, 4)?.max(1.0)).ok()?;
+                    coralcraft_doc::LensKind::Magnify { factor }
+                }
+                _ => coralcraft_doc::LensKind::Unknown,
+            };
+            Some(coralcraft_doc::TransparencyStyle::Lens { kind })
+        }
+        _ => None,
+    }
+}
+
+fn encode_trns_payload(trns: &coralcraft_doc::TransparencyStyle) -> Vec<u8> {
+    let mut p = Vec::new();
+    match trns {
+        coralcraft_doc::TransparencyStyle::Uniform { opacity } => {
+            p.extend_from_slice(&[1u8, 0, 0, 0]);
+            p.extend_from_slice(&opacity.get().to_le_bytes());
+        }
+        coralcraft_doc::TransparencyStyle::Fountain { geometry, blend_mode, stops } => {
+            p.extend_from_slice(&[2u8, 0, 0, 0]);
+            let fild = encode_fild_payload(0, &FillStyle::Fountain { geometry: *geometry, blend_mode: *blend_mode, stops: stops.clone() });
+            p.extend_from_slice(&fild);
+        }
+        coralcraft_doc::TransparencyStyle::Lens { kind } => match kind {
+            coralcraft_doc::LensKind::Invert => {
+                p.extend_from_slice(&[3u8, 1u8, 0, 0]);
+            }
+            coralcraft_doc::LensKind::Brighten { rate } => {
+                p.extend_from_slice(&[3u8, 2u8, 0, 0]);
+                p.extend_from_slice(&rate.get().to_le_bytes());
+            }
+            coralcraft_doc::LensKind::Tinted { color, rate } => {
+                p.extend_from_slice(&[3u8, 3u8, 0, 0]);
+                p.extend_from_slice(&rate.get().to_le_bytes());
+                p.extend_from_slice(&encode_cdr_color_v500(color));
+            }
+            coralcraft_doc::LensKind::Magnify { factor } => {
+                p.extend_from_slice(&[3u8, 4u8, 0, 0]);
+                p.extend_from_slice(&factor.get().to_le_bytes());
+            }
+            coralcraft_doc::LensKind::Unknown => {
+                p.extend_from_slice(&[3u8, 0u8, 0, 0]);
+            }
+        },
+        coralcraft_doc::TransparencyStyle::Unknown => {
+            p.extend_from_slice(&[0u8, 0, 0, 0]);
+        }
+    }
+    p
 }
 
 fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
@@ -2592,6 +2690,19 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         *next_style_id = next_style_id.saturating_add(1);
         let op = encode_outl_payload(outl_id, outl);
         append_riff_chunk(&mut obj_children, *b"outl", &op);
+    }
+
+    if let Some(trns) = &node.transparency {
+        let tp = encode_trns_payload(trns);
+        append_riff_chunk(&mut obj_children, *b"trns", &tp);
+    }
+
+    if !node.powerclip_children.is_empty() {
+        let mut pclp_children = Vec::new();
+        for child in &node.powerclip_children {
+            encode_object_into_layer(child, page_size, next_style_id, &mut pclp_children)?;
+        }
+        append_riff_list(&mut obj_children, *b"pclp", &pclp_children);
     }
 
     for effect in &node.effects {

@@ -1231,4 +1231,75 @@ mod tests {
             other => panic!("expected ObjectKind::Polygon, got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_cdr7_transparency_lens_and_powerclip_children_roundtrip_m75() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, LensKind, ObjectId, ObjectKind, ObjectNode, TransparencyStyle};
+        use coralcraft_geom::{EllipseSpec, F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let mut obj_uniform = ObjectNode::new(
+            ObjectId(131),
+            Some("UniformTrns".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 120.0, 80.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(200, 40, 60))),
+            None,
+        );
+        obj_uniform.transparency = Some(TransparencyStyle::uniform(0.45));
+        obj_uniform.powerclip_children.push(ObjectNode::new(
+            ObjectId(132),
+            Some("ClipChild".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(30.0, 30.0, 90.0, 70.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(40, 180, 90))),
+            None,
+        ));
+
+        let mut obj_fountain_trns = ObjectNode::new(
+            ObjectId(133),
+            Some("FountainTrns".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(140.0, 20.0, 240.0, 80.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(30, 90, 210))),
+            None,
+        );
+        obj_fountain_trns.transparency = Some(TransparencyStyle::fountain_linear(60.0, 0.1, 0.9));
+
+        let mut obj_lens = ObjectNode::new(
+            ObjectId(134),
+            Some("TintedLens".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(20.0, 100.0, 120.0, 200.0).unwrap())),
+            None,
+            None,
+        );
+        obj_lens.transparency =
+            Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color: Color::rgb8(20, 120, 220), rate: F64::new(0.6).unwrap() } });
+
+        doc.pages[0].layers[0].objects.push(obj_uniform);
+        doc.pages[0].layers[0].objects.push(obj_fountain_trns);
+        doc.pages[0].layers[0].objects.push(obj_lens);
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 3);
+
+        assert_eq!(objs[0].transparency, Some(TransparencyStyle::uniform(0.45)));
+        assert_eq!(objs[0].powerclip_children.len(), 1);
+        assert!(matches!(objs[0].powerclip_children[0].kind, ObjectKind::Ellipse(_)));
+
+        match &objs[1].transparency {
+            Some(TransparencyStyle::Fountain { stops, .. }) => {
+                assert_eq!(stops.len(), 2);
+            }
+            other => panic!("expected Fountain transparency, got {other:?}"),
+        }
+
+        match &objs[2].transparency {
+            Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color, rate } }) => {
+                assert_eq!(*color, Color::rgb8(20, 120, 220));
+                assert!((rate.get() - 0.6).abs() < 1e-6);
+            }
+            other => panic!("expected Tinted Lens transparency, got {other:?}"),
+        }
+    }
 }
