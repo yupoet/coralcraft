@@ -14,9 +14,9 @@ use coralcraft_geom::{
     flatten_path_to_polylines, hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line,
     laplacian_relax_closed_path, measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path,
     pinch_punch_warp_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments,
-    simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path,
-    subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
-    wave_distort_path,
+    shear_warp_path_along_axis, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point,
+    spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes,
+    twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -367,6 +367,10 @@ pub enum EngineCommand {
     FlattenObjectPathToPolylines { object_id: ObjectId, tolerance_pt: F64 },
     /// Scales each selected unlocked object around its own center by a linearly interpolated scale factor from `start_scale` to `end_scale` in selection order (`Object -> Transformations -> Progressive Scale`).
     ScaleSelectionProgressively { start_scale: F64, end_scale: F64 },
+    /// Applies a bounding-box-normalized oblique shear warp (`shear_x_pt`, `shear_y_pt`) to `object_id`'s path (`Object -> Envelope / Shear Warp`).
+    ShearWarpObjectPath { object_id: ObjectId, shear_x_pt: F64, shear_y_pt: F64 },
+    /// Rotates each selected unlocked object around its own center by a linearly interpolated angle from `start_angle_deg` to `end_angle_deg` in selection order (`Object -> Transformations -> Progressive Rotate`).
+    RotateSelectionProgressively { start_angle_deg: F64, end_angle_deg: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4765,6 +4769,58 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ShearWarpObjectPath { object_id, shear_x_pt, shear_y_pt } => {
+                let sx = shear_x_pt.get();
+                let sy = shear_y_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                    {
+                        let wb = combined_selection_bounds(&[obj]);
+                        if let Ok(warped) = shear_warp_path_along_axis(&world_path, wb, sx, sy) {
+                            obj.kind = ObjectKind::Path(warped);
+                            obj.transform = Affine2::IDENTITY;
+                            changed = true;
+                        }
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::RotateSelectionProgressively { start_angle_deg, end_angle_deg } => {
+                let a0 = start_angle_deg.get();
+                let a1 = end_angle_deg.get();
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let mut angles = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let ang_rad = ((1.0 - t) * a0 + t * a1).to_radians();
+                    angles.insert(obj.id, (oc, ang_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, ang_rad)) = angles.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(ang_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5750,5 +5806,14 @@ mod tests {
         assert!(
             engine.execute(EngineCommand::ScaleSelectionProgressively { start_scale: F64::new(0.8).unwrap(), end_scale: F64::new(1.25).unwrap() })
         );
+        assert!(engine.execute(EngineCommand::ShearWarpObjectPath {
+            object_id: xor_id,
+            shear_x_pt: F64::new(10.0).unwrap(),
+            shear_y_pt: F64::new(-5.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::RotateSelectionProgressively {
+            start_angle_deg: F64::new(-15.0).unwrap(),
+            end_angle_deg: F64::new(45.0).unwrap(),
+        }));
     }
 }

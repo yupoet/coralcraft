@@ -1881,6 +1881,47 @@ pub fn build_koch_snowflake_path(center: Point, radius_pt: f64, iterations: u32)
     Ok(path)
 }
 
+/// Builds a Heighway Dragon fractal polyline [`Path`] between `start` and `end`
+/// over `iterations` (`0..=11`, producing $2^{\text{iterations}}$ segments)
+/// (`Object -> Insert -> Heighway Dragon Fractal`).
+pub fn build_dragon_curve_path(start: Point, end: Point, iterations: u32) -> Result<Path, GeomError> {
+    let dist = start.distance(end);
+    if dist <= 1e-3 || iterations > 11 {
+        return Err(GeomError::InvalidShapeParameter("invalid Heighway dragon curve parameters"));
+    }
+    let mut pts = Vec::with_capacity((1_usize << iterations) + 1);
+    pts.push((start.x.get(), start.y.get()));
+    pts.push((end.x.get(), end.y.get()));
+
+    for _ in 0..iterations {
+        let mut next = Vec::with_capacity(pts.len() * 2 - 1);
+        for (i, seg) in pts.windows(2).enumerate() {
+            let (x1, y1) = seg[0];
+            let (x2, y2) = seg[1];
+            let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let mx = 0.5 * (x1 + x2 + sign * (y1 - y2));
+            let my = 0.5 * (y1 + y2 + sign * (x2 - x1));
+            next.push((x1, y1));
+            next.push((mx, my));
+        }
+        if let Some(&last) = pts.last() {
+            next.push(last);
+        }
+        pts = next;
+    }
+
+    let mut path = Path::new();
+    for (idx, (x, y)) in pts.into_iter().enumerate() {
+        let pt = Point::new(x, y)?;
+        if idx == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -2008,5 +2049,8 @@ mod m27_tests {
 
         let koch = build_koch_snowflake_path(Point::new(100.0, 100.0).unwrap(), 50.0, 2).unwrap();
         assert_eq!(koch.elements.len(), 3 * 16 + 1);
+
+        let dragon = build_dragon_curve_path(Point::new(20.0, 80.0).unwrap(), Point::new(140.0, 80.0).unwrap(), 6).unwrap();
+        assert_eq!(dragon.elements.len(), 65);
     }
 }

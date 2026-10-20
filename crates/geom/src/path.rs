@@ -2630,6 +2630,41 @@ pub fn flatten_path_to_polylines(path: &Path, tolerance_pt: f64) -> Result<Path,
     Ok(out)
 }
 
+/// Applies a center-anchored linear shear warp (`shear_x_pt`, `shear_y_pt`) to `path`
+/// normalized across `bounds` (`Effects -> Envelope -> Linear Shear Warp`).
+pub fn shear_warp_path_along_axis(path: &Path, bounds: Rect, shear_x_pt: f64, shear_y_pt: f64) -> Result<Path, GeomError> {
+    let sx = crate::f64_canon::F64::new(shear_x_pt)?.get();
+    let sy = crate::f64_canon::F64::new(shear_y_pt)?.get();
+    let w = bounds.width();
+    let h = bounds.height();
+    if path.elements.is_empty() || w <= 1e-6 || h <= 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("invalid linear shear warp parameters"));
+    }
+    let center = bounds.center()?;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let half_w = 0.5 * w;
+    let half_h = 0.5 * h;
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let u = (p.x.get() - cx) / half_w;
+        let v = (p.y.get() - cy) / half_h;
+        Point::new(p.x.get() + sx * v, p.y.get() + sy * u)
+    };
+    let mut out_elems = Vec::with_capacity(path.elements.len());
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => out_elems.push(PathElement::MoveTo(warp_pt(p)?)),
+            PathElement::LineTo(p) => out_elems.push(PathElement::LineTo(warp_pt(p)?)),
+            PathElement::QuadTo { ctrl, end } => out_elems.push(PathElement::QuadTo { ctrl: warp_pt(ctrl)?, end: warp_pt(end)? }),
+            PathElement::CubicTo { c1, c2, end } => {
+                out_elems.push(PathElement::CubicTo { c1: warp_pt(c1)?, c2: warp_pt(c2)?, end: warp_pt(end)? });
+            }
+            PathElement::Close => out_elems.push(PathElement::Close),
+        }
+    }
+    Path::from_elements(out_elems, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2752,5 +2787,8 @@ mod m26_tests {
 
         let poly_flat = flatten_path_to_polylines(&fitted_circle, 0.5).unwrap();
         assert!(!poly_flat.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })));
+
+        let sheared = shear_warp_path_along_axis(&rect_path, crate::Rect::new(0.0, 0.0, 50.0, 40.0).unwrap(), 10.0, 5.0).unwrap();
+        assert_eq!(sheared.elements.len(), rect_path.elements.len());
     }
 }

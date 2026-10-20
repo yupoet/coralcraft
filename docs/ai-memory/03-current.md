@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M63 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M64 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -61,9 +61,10 @@
   53. **M60: Braided Celtic Knot Ring (`build_celtic_knot_ring_path`), Least-Squares Kåsa Circle Fit (`fit_circle_to_path_points` & `FitCircleToObjectPath`), Snap Selection to Circle Radius (`SnapSelectionToCircleRadius`), Prepress SVG Export (`export_svg_with_prepress`), and 224 MCP Tools (`commit ee19379`)**.
   54. **M61: Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools (`commit 0e65dfb`)**.
   55. **M62: Sierpinski Gasket Fractal (`build_sierpinski_triangle_path`), Radial Pinch/Punch Warp (`pinch_punch_warp_path` & `PinchPunchObjectPath`), Edge-to-Edge Stack Selection (`StackSelection`), Document Summary Inspection (`get_document_summary`), and 232 MCP Tools (`commit 27a1dac`)**.
-  56. **M63: Koch Snowflake Fractal (`build_koch_snowflake_path`), Curve-to-Polyline Polygonization (`flatten_path_to_polylines` & `FlattenObjectPathToPolylines`), Progressive Selection Scaling (`ScaleSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Export (`export_coralcraft_zip_base64`), and 236 MCP Tools**:
-      - `coralcraft-geom`: Added `build_koch_snowflake_path` and `flatten_path_to_polylines`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `add_koch_snowflake`, `flatten_object_path_to_polylines`, `scale_selection_progressively`, `export_coralcraft_zip_base64`, and expanded MCP server to **236 tools**.
+  56. **M63: Koch Snowflake Fractal (`build_koch_snowflake_path`), Curve-to-Polyline Polygonization (`flatten_path_to_polylines` & `FlattenObjectPathToPolylines`), Progressive Selection Scaling (`ScaleSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Export (`export_coralcraft_zip_base64`), and 236 MCP Tools (`commit 2e80a61`)**.
+  57. **M64: Heighway Dragon Fractal Curve (`build_dragon_curve_path`), Bounding-Box Shear Warp (`shear_warp_path_along_axis` & `ShearWarpObjectPath`), Progressive Selection Rotation (`RotateSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Import (`import_coralcraft_zip_base64`), and 240 MCP Tools**:
+      - `coralcraft-geom`: Added `build_dragon_curve_path` and `shear_warp_path_along_axis`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ShearWarpObjectPath`, `RotateSelectionProgressively`, `add_dragon_curve`, `shear_warp_object_path`, `rotate_selection_progressively`, `import_coralcraft_zip_base64`, and expanded MCP server to **240 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

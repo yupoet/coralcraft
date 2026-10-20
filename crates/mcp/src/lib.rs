@@ -15,11 +15,12 @@ use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_celtic_knot_ring_path, build_complex_star_path,
-    build_concentric_rings_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
-    build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path,
-    build_koch_snowflake_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path,
-    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_sierpinski_triangle_path, build_spiral_path,
-    build_spirograph_path, build_superformula_path, build_three_point_curve_path, build_truchet_tiles_path, build_voronoi_mosaic_path,
+    build_concentric_rings_path, build_connector_path, build_dragon_curve_path, build_flowchart_symbol_path, build_gear_wheel_path,
+    build_graph_paper_path, build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path,
+    build_isometric_box_path, build_koch_snowflake_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path,
+    build_phyllotaxis_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_sierpinski_triangle_path,
+    build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path, build_truchet_tiles_path,
+    build_voronoi_mosaic_path,
 };
 use coralcraft_render::{
     ImpositionSpec, PrepressOptions, RenderOpts, base64_decode, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed,
@@ -1569,6 +1570,55 @@ impl McpServer {
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
+                            }
+                        },
+                        {
+                            "name": "add_dragon_curve",
+                            "description": "Adds a Heighway Dragon fractal curve between (start_x, start_y) and (end_x, end_y) with recursive folding iterations (1..=12).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "start_x": { "type": "number" },
+                                    "start_y": { "type": "number" },
+                                    "end_x": { "type": "number" },
+                                    "end_y": { "type": "number" },
+                                    "iterations": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "shear_warp_object_path",
+                            "description": "Applies a bounding-box-normalized oblique shear warp (shear_x_pt, shear_y_pt) to the target object's path.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "shear_x_pt": { "type": "number" },
+                                    "shear_y_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "rotate_selection_progressively",
+                            "description": "Rotates each selected unlocked object around its own center by a linearly interpolated angle from start_angle_deg to end_angle_deg in selection order.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "start_angle_deg": { "type": "number" },
+                                    "end_angle_deg": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "import_coralcraft_zip_base64",
+                            "description": "Loads a base64-encoded .coralcraft Stored ZIP container (or raw JSON document) into the active workspace.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "coralcraft_zip_base64": { "type": "string" }
+                                },
+                                "required": ["coralcraft_zip_base64"]
                             }
                         }
                     ]
@@ -4212,6 +4262,51 @@ impl McpServer {
                     "coralcraft_zip_base64": b64
                 }))
             }
+            "add_dragon_curve" => {
+                let sx = args.get("start_x").and_then(Value::as_f64).unwrap_or(60.0);
+                let sy = args.get("start_y").and_then(Value::as_f64).unwrap_or(140.0);
+                let ex = args.get("end_x").and_then(Value::as_f64).unwrap_or(220.0);
+                let ey = args.get("end_y").and_then(Value::as_f64).unwrap_or(140.0);
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let start = Point::new(sx, sy).map_err(|e| e.to_string())?;
+                let end = Point::new(ex, ey).map_err(|e| e.to_string())?;
+                let path = build_dragon_curve_path(start, end, iterations).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Dragon Curve".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "dragon_curve", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "shear_warp_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let shear_x_pt = F64::new(args.get("shear_x_pt").and_then(Value::as_f64).unwrap_or(12.0)).map_err(|e| e.to_string())?;
+                let shear_y_pt = F64::new(args.get("shear_y_pt").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ShearWarpObjectPath { object_id: target, shear_x_pt, shear_y_pt });
+                Ok(json!({ "shear_warped": ok, "object_id": target.0, "shear_x_pt": shear_x_pt.get(), "shear_y_pt": shear_y_pt.get() }))
+            }
+            "rotate_selection_progressively" => {
+                self.apply_optional_selection(args);
+                let start_angle_deg = F64::new(args.get("start_angle_deg").and_then(Value::as_f64).unwrap_or(-15.0)).map_err(|e| e.to_string())?;
+                let end_angle_deg = F64::new(args.get("end_angle_deg").and_then(Value::as_f64).unwrap_or(45.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::RotateSelectionProgressively { start_angle_deg, end_angle_deg });
+                Ok(json!({ "rotated_progressively": ok, "start_angle_deg": start_angle_deg.get(), "end_angle_deg": end_angle_deg.get() }))
+            }
+            "import_coralcraft_zip_base64" => {
+                let b64 =
+                    args.get("coralcraft_zip_base64").and_then(Value::as_str).ok_or_else(|| "Missing coralcraft_zip_base64 string".to_owned())?;
+                let bytes = base64_decode(b64)?;
+                let doc = load_bytes(&bytes).map_err(|e| e.to_string())?;
+                let page_count = doc.pages.len();
+                let mut total_objects = 0usize;
+                for page in &doc.pages {
+                    for layer in &page.layers {
+                        total_objects += layer.objects.len();
+                    }
+                }
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({
+                    "imported_coralcraft": true,
+                    "page_count": page_count,
+                    "total_object_count": total_objects
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -4241,7 +4336,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 236);
+        assert_eq!(tools, 240);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4699,6 +4794,42 @@ mod tests {
                 r#"{"jsonrpc":"2.0","id":68,"method":"tools/call","params":{"name":"export_coralcraft_zip_base64","arguments":{}}}"#,
             ))
             .unwrap();
-        assert!(cz_resp.result.unwrap()["structuredContent"]["coralcraft_zip_bytes"].as_u64().unwrap() > 100);
+        let cz_result = cz_resp.result.unwrap();
+        assert!(cz_result["structuredContent"]["coralcraft_zip_bytes"].as_u64().unwrap() > 100);
+        let cz_b64 = cz_result["structuredContent"]["coralcraft_zip_base64"].as_str().unwrap().to_owned();
+
+        let drag_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":69,"method":"tools/call","params":{"name":"add_dragon_curve","arguments":{"start_x":60.0,"start_y":120.0,"end_x":200.0,"end_y":120.0,"iterations":5}}}"#,
+            ),
+        )
+        .unwrap();
+        let drag_id = drag_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let sw_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{{"name":"shear_warp_object_path","arguments":{{"object_id":{drag_id},"shear_x_pt":12.0,"shear_y_pt":-4.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(sw_resp.result.unwrap()["structuredContent"]["shear_warped"].as_bool().unwrap());
+
+        let rotp_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{{"name":"rotate_selection_progressively","arguments":{{"selection":[{drag_id},{koch_id}],"start_angle_deg":-15.0,"end_angle_deg":45.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(rotp_resp.result.unwrap()["structuredContent"]["rotated_progressively"].as_bool().unwrap());
+
+        let imp_cz_req = json!({
+            "jsonrpc": "2.0",
+            "id": 72,
+            "method": "tools/call",
+            "params": {
+                "name": "import_coralcraft_zip_base64",
+                "arguments": {
+                    "coralcraft_zip_base64": cz_b64
+                }
+            }
+        });
+        let imp_cz_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_cz_req.to_string())).unwrap();
+        assert!(imp_cz_resp.result.unwrap()["structuredContent"]["imported_coralcraft"].as_bool().unwrap());
     }
 }

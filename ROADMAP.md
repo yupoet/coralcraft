@@ -223,9 +223,13 @@
 63. **M63 Koch Snowflake Fractal (`build_koch_snowflake_path`), Curve-to-Polyline Polygonization (`flatten_path_to_polylines` & `FlattenObjectPathToPolylines`), Progressive Selection Scaling (`ScaleSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Export (`export_coralcraft_zip_base64`), and 236 MCP Tools**:
     - `coralcraft-geom`: `build_koch_snowflake_path` (closed Koch snowflake fractal polygon of $3 \times 4^{\text{iterations}}$ edges) and `flatten_path_to_polylines` (adaptive de Casteljau curve-to-polyline polygonization).
     - `coralcraft-engine` & `coralcraft-mcp`: `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `add_koch_snowflake`, `flatten_object_path_to_polylines`, `scale_selection_progressively`, `export_coralcraft_zip_base64`, and **236 MCP tools**.
+64. **M64 Heighway Dragon Fractal Curve (`build_dragon_curve_path`), Bounding-Box Shear Warp (`shear_warp_path_along_axis` & `ShearWarpObjectPath`), Progressive Selection Rotation (`RotateSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Import (`import_coralcraft_zip_base64`), and 240 MCP Tools**:
+    - `coralcraft-geom`: `build_dragon_curve_path` (recursive paper-folding Heighway Dragon fractal curve of $2^{\text{iterations}}$ segments) and `shear_warp_path_along_axis` (bounding-box-normalized oblique shear warp).
+    - `coralcraft-engine` & `coralcraft-mcp`: `ShearWarpObjectPath`, `RotateSelectionProgressively`, `add_dragon_curve`, `shear_warp_object_path`, `rotate_selection_progressively`, `import_coralcraft_zip_base64`, and **240 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M64 delivered (`build_dragon_curve_path` & `add_dragon_curve`, `shear_warp_path_along_axis` & `ShearWarpObjectPath`, `RotateSelectionProgressively`, `import_coralcraft_zip_base64`, 240 MCP tools).
 - 2026-10-20: M63 delivered (`build_koch_snowflake_path` & `add_koch_snowflake`, `flatten_path_to_polylines` & `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `export_coralcraft_zip_base64`, 236 MCP tools).
 - 2026-10-20: M62 delivered (`build_sierpinski_triangle_path` & `add_sierpinski_triangle`, `pinch_punch_warp_path` & `PinchPunchObjectPath`, `StackSelection`, `get_document_summary`, 232 MCP tools).
 - 2026-10-20: M61 delivered (`build_truchet_tiles_path` & `add_truchet_tiles`, `interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `base64_decode` & `import_cpl_palette_base64`, 228 MCP tools).
