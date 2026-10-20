@@ -1117,4 +1117,59 @@ mod tests {
         let imposed_str = String::from_utf8_lossy(&imposed_bytes);
         assert!(imposed_str.contains(" c\n"), "PolkaDot pattern in emit_pdf_fill must emit cubic circle arcs");
     }
+
+    #[test]
+    fn export_svg_with_prepress_roundtrips_multilayer_and_page_background_via_import_svg_m79() {
+        use coralcraft_doc::{ArrowheadKind, Layer, LayerId};
+
+        let mut doc = Document::new_a4_portrait();
+        let page = doc.pages.first_mut().unwrap();
+        page.background = Some(FillStyle::uniform(Color::rgb8(0xF4, 0xF8, 0xFF)));
+        page.layers.first_mut().unwrap().name = "Base Layer".to_owned();
+        page.layers.first_mut().unwrap().opacity = F64::new(0.8).unwrap();
+
+        let mut arrow_path = Path::new();
+        arrow_path.move_to(Point::new(20.0, 50.0).unwrap()).unwrap();
+        arrow_path.line_to(Point::new(140.0, 50.0).unwrap()).unwrap();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(180, 20, 40), F64::new(2.0).unwrap());
+        outl.end_arrow = ArrowheadKind::Triangle;
+        page.layers.first_mut().unwrap().objects.push(ObjectNode::new(
+            ObjectId(1),
+            Some("ArrowPath".to_owned()),
+            ObjectKind::Path(arrow_path),
+            None,
+            Some(outl),
+        ));
+
+        let mut layer2 = Layer::new_normal(LayerId(2), "Overlay Layer");
+        layer2.opacity = F64::new(0.6).unwrap();
+        layer2.objects.push(ObjectNode::new(
+            ObjectId(2),
+            Some("OverlayRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 80.0, 120.0, 140.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(0x10, 0x90, 0x50))),
+            None,
+        ));
+        page.layers.push(layer2);
+
+        let prepress = crate::PrepressOptions {
+            bleed_pt: F64::new(9.0).unwrap(),
+            crop_marks: true,
+            registration_marks: true,
+            ..crate::PrepressOptions::default()
+        };
+        let svg = crate::export_svg_with_prepress(&doc, 0, &prepress).expect("export_svg_with_prepress");
+        assert!(svg.contains("id=\"page-background\""), "export_svg must tag page-background rect");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg from export_svg_with_prepress");
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.background, Some(FillStyle::uniform(Color::rgb8(0xF4, 0xF8, 0xFF))));
+        assert_eq!(rpage.layers.len(), 2);
+        assert_eq!(rpage.layers.first().unwrap().name, "Base Layer");
+        assert!((rpage.layers.first().unwrap().opacity.get() - 0.8).abs() < 1e-6);
+        assert_eq!(rpage.layers.first().unwrap().objects.len(), 1);
+        assert_eq!(rpage.layers.get(1).unwrap().name, "Overlay Layer");
+        assert!((rpage.layers.get(1).unwrap().opacity.get() - 0.6).abs() < 1e-6);
+        assert_eq!(rpage.layers.get(1).unwrap().objects.len(), 1);
+    }
 }

@@ -615,4 +615,32 @@ mod tests {
         assert!((objs[2].transform.tx.get() - 20.0).abs() < 1e-6);
         assert!((objs[2].transform.ty.get() - 30.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn import_svg_multilayer_page_background_and_decorative_marker_filtering_m79() {
+        let svg = r##"<svg width="500" height="400" xmlns="http://www.w3.org/2000/svg">
+          <rect id="page-background" x="0" y="0" width="500" height="400" fill="#f4f8ff"/>
+          <g id="layer-2" data-name="Base Layer">
+            <rect x="20" y="20" width="100" height="60" fill="#114488"/>
+            <polygon class="arrowhead-marker" points="10,10 20,15 10,20" fill="#000000"/>
+          </g>
+          <g id="layer-3" data-name="Overlay Layer" opacity="0.75">
+            <circle cx="200" cy="150" r="40" fill="#ee5522"/>
+          </g>
+          <g id="prepress-marks">
+            <path class="crop-marks" d="M 0 0 L 10 0"/>
+            <circle class="registration-target" cx="-10" cy="200" r="3.5"/>
+            <path class="registration-crosshair" d="M -15 200 L -5 200"/>
+          </g>
+        </svg>"##;
+
+        let doc = import_svg(svg).expect("import_svg with multilayer and page-background");
+        assert_eq!(doc.pages[0].background, Some(FillStyle::uniform(Color::rgb8(0xf4, 0xf8, 0xff))));
+        assert_eq!(doc.pages[0].layers.len(), 2);
+        assert_eq!(doc.pages[0].layers[0].name, "Base Layer");
+        assert_eq!(doc.pages[0].layers[0].objects.len(), 1);
+        assert_eq!(doc.pages[0].layers[1].name, "Overlay Layer");
+        assert!((doc.pages[0].layers[1].opacity.get() - 0.75).abs() < 1e-6);
+        assert_eq!(doc.pages[0].layers[1].objects.len(), 1);
+    }
 }

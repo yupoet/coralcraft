@@ -546,11 +546,23 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
             if let Some(layer) = page.layers.first_mut() {
                 layer.objects.extend(loose_objs);
             }
+            doc.pages.push(page);
         } else {
             // Also check for standalone CMX `page` instruction streams when no `LIST page` is present
-            parse_cmx_commands_into_page(chunks, ctx, &mut page);
+            let style_tables = parse_cmx_style_tables(chunks, ctx.endian);
+            let cmx_page_chunks: Vec<&ParsedChunk> = chunks.iter().filter(|ch| &ch.fourcc == b"page" && ch.payload.len() >= 8).collect();
+            if cmx_page_chunks.is_empty() {
+                doc.pages.push(page);
+            } else {
+                for (idx, ch) in cmx_page_chunks.iter().enumerate() {
+                    let pnum = (idx.saturating_add(1)) as u64;
+                    let mut cpage = default_a4_page(pnum);
+                    cpage.size = ctx.default_page_size;
+                    parse_single_cmx_page_chunk(&ch.payload, &style_tables, ctx, &mut cpage);
+                    doc.pages.push(cpage);
+                }
+            }
         }
-        doc.pages.push(page);
     }
 }
 
@@ -722,263 +734,296 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> CmxStyleTab
     (colors, pens_pt, line_styles, dots, outlines)
 }
 
-fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, page: &mut Page) {
-    let (cmx_colors, cmx_pens, cmx_line_styles, cmx_dots, cmx_outlines) = parse_cmx_style_tables(chunks, ctx.endian);
-    for ch in chunks {
-        if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
-            let mut pos = 0usize;
-            let mut group_stack: Vec<Vec<ObjectNode>> = Vec::new();
-            while pos.saturating_add(4) <= ch.payload.len() {
-                let sz_i16 = read_i16(ctx.endian, &ch.payload, pos).unwrap_or(0);
-                let (inst_size, header_len) = if sz_i16 < 0 {
-                    let sz_i32 = read_i32(ctx.endian, &ch.payload, pos.saturating_add(2)).unwrap_or(0);
-                    (sz_i32.unsigned_abs() as usize, 8usize)
-                } else {
-                    (sz_i16 as usize, 4usize)
+fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mut ParserCtx, page: &mut Page) {
+    let (cmx_colors, cmx_pens, cmx_line_styles, cmx_dots, cmx_outlines) = tables;
+    let mut pos = 0usize;
+    let mut group_stack: Vec<Vec<ObjectNode>> = Vec::new();
+    let mut has_explicit_layers = false;
+    while pos.saturating_add(4) <= payload.len() {
+        let sz_i16 = read_i16(ctx.endian, payload, pos).unwrap_or(0);
+        let (inst_size, header_len) = if sz_i16 < 0 {
+            let sz_i32 = read_i32(ctx.endian, payload, pos.saturating_add(2)).unwrap_or(0);
+            (sz_i32.unsigned_abs() as usize, 8usize)
+        } else {
+            (sz_i16 as usize, 4usize)
+        };
+        if inst_size < header_len || pos.saturating_add(inst_size) > payload.len() {
+            break;
+        }
+        let code_off = if sz_i16 < 0 { pos.saturating_add(6) } else { pos.saturating_add(2) };
+        let code = read_i16(ctx.endian, payload, code_off).unwrap_or(0).unsigned_abs();
+        if code == 9 {
+            // CMX_Command_BeginPage
+            let tag_start = pos.saturating_add(header_len);
+            if tag_start.saturating_add(25) <= pos.saturating_add(inst_size) && payload.get(tag_start) == Some(&1) {
+                let x0 = read_i32(ctx.endian, payload, tag_start.saturating_add(9)).unwrap_or(0);
+                let y0 = read_i32(ctx.endian, payload, tag_start.saturating_add(13)).unwrap_or(0);
+                let x1 = read_i32(ctx.endian, payload, tag_start.saturating_add(17)).unwrap_or(0);
+                let y1 = read_i32(ctx.endian, payload, tag_start.saturating_add(21)).unwrap_or(0);
+                let w_pt = ((CdrUnit(i64::from(x1).saturating_sub(i64::from(x0))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
+                let h_pt = ((CdrUnit(i64::from(y0).saturating_sub(i64::from(y1))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
+                if w_pt > 1.0
+                    && h_pt > 1.0
+                    && let Ok(sz) = Size::new(w_pt, h_pt)
+                {
+                    page.size = sz;
+                }
+            }
+        } else if code == 11 {
+            // CMX_Command_BeginLayer
+            let tag_start = pos.saturating_add(header_len);
+            if tag_start.saturating_add(17) <= pos.saturating_add(inst_size) && payload.get(tag_start) == Some(&1) {
+                let flags = read_u32(ctx.endian, payload, tag_start.saturating_add(7)).unwrap_or(0x03);
+                let name_len = usize::from(read_u16(ctx.endian, payload, tag_start.saturating_add(15)).unwrap_or(0));
+                let name_start = tag_start.saturating_add(17);
+                let name_end = name_start.saturating_add(name_len).min(pos.saturating_add(inst_size));
+                let layer_name = payload
+                    .get(name_start..name_end)
+                    .and_then(|s| std::str::from_utf8(s).ok())
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("Layer {}", page.layers.len().saturating_add(1)), str::to_owned);
+                if !has_explicit_layers {
+                    has_explicit_layers = true;
+                    page.layers.clear();
+                }
+                let mut lyr = Layer::new_normal(LayerId(ctx.alloc_id()), layer_name);
+                lyr.visible = (flags & 0x01) != 0;
+                lyr.printable = (flags & 0x02) != 0;
+                lyr.locked = (flags & 0x04) != 0;
+                page.layers.push(lyr);
+            }
+        } else if code == 14 {
+            // CMX_Command_BeginGroup
+            if group_stack.len() < 64 {
+                group_stack.push(Vec::new());
+            }
+        } else if code == 15 {
+            // CMX_Command_EndGroup
+            if let Some(children) = group_stack.pop()
+                && !children.is_empty()
+            {
+                let grp_id = ObjectId(ctx.alloc_id());
+                let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                if let Some(parent) = group_stack.last_mut() {
+                    parent.push(grp_node);
+                } else if let Some(layer) = page.layers.last_mut() {
+                    layer.objects.push(grp_node);
+                }
+            }
+        } else if code == 67 {
+            // CMX_Command_PolyCurve
+            let mut tag_pos = pos.saturating_add(header_len);
+            let inst_end = pos.saturating_add(inst_size);
+            let mut decoded_path: Option<Path> = None;
+            let mut decoded_fill: Option<FillStyle> = None;
+            let mut decoded_outline: Option<OutlineStyle> = None;
+            let mut has_render_attr = false;
+            while tag_pos < inst_end {
+                let Some(&tag_id) = payload.get(tag_pos) else {
+                    break;
                 };
-                if inst_size < header_len || pos.saturating_add(inst_size) > ch.payload.len() {
+                if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
                     break;
                 }
-                let code_off = if sz_i16 < 0 { pos.saturating_add(6) } else { pos.saturating_add(2) };
-                let code = read_i16(ctx.endian, &ch.payload, code_off).unwrap_or(0).unsigned_abs();
-                if code == 14 {
-                    // CMX_Command_BeginGroup
-                    if group_stack.len() < 64 {
-                        group_stack.push(Vec::new());
-                    }
-                } else if code == 15 {
-                    // CMX_Command_EndGroup
-                    if let Some(children) = group_stack.pop()
-                        && !children.is_empty()
-                    {
-                        let grp_id = ObjectId(ctx.alloc_id());
-                        let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
-                        if let Some(parent) = group_stack.last_mut() {
-                            parent.push(grp_node);
-                        } else if let Some(layer) = page.layers.first_mut() {
-                            layer.objects.push(grp_node);
-                        }
-                    }
-                } else if code == 67 {
-                    // CMX_Command_PolyCurve
-                    let mut tag_pos = pos.saturating_add(header_len);
-                    let inst_end = pos.saturating_add(inst_size);
-                    let mut decoded_path: Option<Path> = None;
-                    let mut decoded_fill: Option<FillStyle> = None;
-                    let mut decoded_outline: Option<OutlineStyle> = None;
-                    let mut has_render_attr = false;
-                    while tag_pos < inst_end {
-                        let Some(&tag_id) = ch.payload.get(tag_pos) else {
-                            break;
-                        };
-                        if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
-                            break;
-                        }
-                        let tag_len = (read_u16(ctx.endian, &ch.payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                        if tag_id == 1 && tag_pos.saturating_add(tag_len) <= inst_end {
-                            has_render_attr = true;
-                            let attr_slice = ch.payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
-                            if let Some(&mask) = attr_slice.first() {
-                                let mut sub_pos = 1usize;
-                                if (mask & 0x01) != 0 && sub_pos.saturating_add(3) <= attr_slice.len() {
-                                    let fill_spec_len = (read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                                    let fill_type = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(0);
-                                    if fill_type == 1 && sub_pos.saturating_add(10) <= attr_slice.len() {
-                                        let c_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(8)).unwrap_or(1) as usize;
-                                        if let Some(col) = cmx_colors.get(c_idx.saturating_sub(1)) {
-                                            decoded_fill = Some(FillStyle::uniform(col.clone()));
-                                        }
-                                    } else if fill_type == 2 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
-                                        let ftn_end = sub_pos.saturating_add(fill_spec_len);
-                                        let mut ftn_pos = sub_pos.saturating_add(5);
-                                        let mut f_type = 0u16;
-                                        let mut pad_pct = 0u16;
-                                        let mut angle_micro = 0i32;
-                                        let mut x_off = 0i32;
-                                        let mut y_off = 0i32;
-                                        let mut mode_raw = 0u16;
-                                        let mut stops = Vec::new();
-                                        while ftn_pos < ftn_end {
-                                            let Some(&ftn_tag) = attr_slice.get(ftn_pos) else {
-                                                break;
-                                            };
-                                            if ftn_tag == 255 || ftn_pos.saturating_add(3) > ftn_end {
-                                                break;
-                                            }
-                                            let ftn_len = (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                                            if ftn_tag == 1 && ftn_pos.saturating_add(25) <= ftn_end {
-                                                f_type = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0);
-                                                pad_pct = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(7)).unwrap_or(0);
-                                                angle_micro = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(9)).unwrap_or(0);
-                                                x_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(13)).unwrap_or(0);
-                                                y_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(17)).unwrap_or(0);
-                                                mode_raw = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(23)).unwrap_or(0);
-                                            } else if ftn_tag == 2 && ftn_pos.saturating_add(5) <= ftn_end {
-                                                let color_count =
-                                                    (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0) as usize).min(64);
-                                                for idx in 0..color_count {
-                                                    let base = ftn_pos.saturating_add(5).saturating_add(idx.saturating_mul(4));
-                                                    if base.saturating_add(4) > ftn_end {
-                                                        break;
-                                                    }
-                                                    let c_idx = read_u16(ctx.endian, attr_slice, base).unwrap_or(1) as usize;
-                                                    let pos_pct = read_u16(ctx.endian, attr_slice, base.saturating_add(2)).unwrap_or(0);
-                                                    let col = cmx_colors.get(c_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
-                                                    let off = (f64::from(pos_pct) / 100.0).clamp(0.0, 1.0);
-                                                    if let Ok(st) = FountainStop::new(off, col) {
-                                                        stops.push(st);
-                                                    }
-                                                }
-                                            }
-                                            ftn_pos = ftn_pos.saturating_add(ftn_len);
-                                        }
-                                        if stops.len() >= 2 {
-                                            let angle_deg = (f64::from(angle_micro) / 1_000_000.0).clamp(-360.0, 360.0);
-                                            let cx_f = F64::new((0.5 + f64::from(x_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
-                                            let cy_f = F64::new((0.5 - f64::from(y_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
-                                            let geometry = match f_type {
-                                                1 => FountainGeometry::Radial {
-                                                    center_x: cx_f,
-                                                    center_y: cy_f,
-                                                    radius: F64::HALF,
-                                                    focal_x: cx_f,
-                                                    focal_y: cy_f,
-                                                },
-                                                2 => FountainGeometry::Conical {
-                                                    center_x: cx_f,
-                                                    center_y: cy_f,
-                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
-                                                },
-                                                3 => FountainGeometry::Square {
-                                                    center_x: cx_f,
-                                                    center_y: cy_f,
-                                                    radius: F64::HALF,
-                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
-                                                },
-                                                _ => FountainGeometry::Linear {
-                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
-                                                    edge_pad: F64::new(f64::from(pad_pct.min(49))).unwrap_or(F64::ZERO),
-                                                },
-                                            };
-                                            let blend_mode = match mode_raw {
-                                                1 => FountainBlendMode::RainbowCw,
-                                                2 => FountainBlendMode::RainbowCcw,
-                                                _ => FountainBlendMode::Direct,
-                                            };
-                                            decoded_fill = Some(FillStyle::Fountain { geometry, blend_mode, stops });
-                                        }
-                                    } else if fill_type == 7 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
-                                        let mono_end = sub_pos.saturating_add(fill_spec_len);
-                                        let mut mono_pos = sub_pos.saturating_add(5);
-                                        while mono_pos < mono_end {
-                                            let Some(&mono_tag) = attr_slice.get(mono_pos) else {
-                                                break;
-                                            };
-                                            if mono_tag == 255 || mono_pos.saturating_add(3) > mono_end {
-                                                break;
-                                            }
-                                            let mono_len =
-                                                (read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                                            if mono_tag == 1 && mono_pos.saturating_add(25) <= mono_end {
-                                                let bm_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(3)).unwrap_or(1);
-                                                let w_cdr = read_i32(ctx.endian, attr_slice, mono_pos.saturating_add(5)).unwrap_or(254_000);
-                                                let fg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(21)).unwrap_or(1) as usize;
-                                                let bg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(23)).unwrap_or(1) as usize;
-                                                let kind = match bm_idx {
-                                                    2 => coralcraft_doc::PatternKind::PolkaDot,
-                                                    3 => coralcraft_doc::PatternKind::HorizontalStripe,
-                                                    4 => coralcraft_doc::PatternKind::VerticalStripe,
-                                                    5 => coralcraft_doc::PatternKind::DiagonalCrosshatch,
-                                                    _ => coralcraft_doc::PatternKind::Checkerboard,
-                                                };
-                                                let fg_color = cmx_colors.get(fg_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
-                                                let bg_color = cmx_colors.get(bg_idx.saturating_sub(1)).cloned().unwrap_or(Color::WHITE);
-                                                let raw_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
-                                                let tile_size_pt = F64::new((raw_pt * 1000.0).round() / 1000.0).unwrap_or(F64::ONE);
-                                                decoded_fill = Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt });
-                                            }
-                                            mono_pos = mono_pos.saturating_add(mono_len);
-                                        }
-                                    }
-                                    sub_pos = sub_pos.saturating_add(fill_spec_len);
-                                    if attr_slice.get(sub_pos) == Some(&255) {
-                                        sub_pos = sub_pos.saturating_add(1);
-                                    }
+                let tag_len = (read_u16(ctx.endian, payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                if tag_id == 1 && tag_pos.saturating_add(tag_len) <= inst_end {
+                    has_render_attr = true;
+                    let attr_slice = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                    if let Some(&mask) = attr_slice.first() {
+                        let mut sub_pos = 1usize;
+                        if (mask & 0x01) != 0 && sub_pos.saturating_add(3) <= attr_slice.len() {
+                            let fill_spec_len = (read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                            let fill_type = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(0);
+                            if fill_type == 1 && sub_pos.saturating_add(10) <= attr_slice.len() {
+                                let c_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(8)).unwrap_or(1) as usize;
+                                if let Some(col) = cmx_colors.get(c_idx.saturating_sub(1)) {
+                                    decoded_fill = Some(FillStyle::uniform(col.clone()));
                                 }
-                                if (mask & 0x02) != 0 && sub_pos.saturating_add(5) <= attr_slice.len() {
-                                    let o_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(1) as usize;
-                                    if let Some(&(ls_idx, c_idx, p_idx, dash_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
-                                        let col = cmx_colors.get(usize::from(c_idx).saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
-                                        let w_pt = cmx_pens.get(usize::from(p_idx).saturating_sub(1)).copied().unwrap_or(1.0);
-                                        let mut outl = OutlineStyle::with_width(col, F64::new(w_pt).unwrap_or(F64::ONE));
-                                        if let Some(&(spec, cap_and_join)) = cmx_line_styles.get(usize::from(ls_idx).saturating_sub(1)) {
-                                            outl.behind_fill = (spec & 0x08) != 0;
-                                            outl.scale_with_object = (spec & 0x20) != 0;
-                                            outl.cap = match cap_and_join & 0x0f {
-                                                1 => LineCap::Round,
-                                                2 => LineCap::Square,
-                                                _ => LineCap::Butt,
-                                            };
-                                            outl.join = match (cap_and_join >> 4) & 0x0f {
-                                                1 => LineJoin::Round,
-                                                2 => LineJoin::Bevel,
-                                                _ => LineJoin::Miter,
-                                            };
-                                            if (spec & 0x04) != 0
-                                                && dash_idx > 0
-                                                && let Some(arr) = cmx_dots.get(usize::from(dash_idx).saturating_sub(1))
-                                            {
-                                                let base_w = w_pt.max(0.25);
-                                                outl.dash_pattern = arr
-                                                    .iter()
-                                                    .filter_map(|&m| F64::new(((f64::from(m) * base_w) * 1000.0).round() / 1000.0).ok())
-                                                    .collect();
+                            } else if fill_type == 2 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
+                                let ftn_end = sub_pos.saturating_add(fill_spec_len);
+                                let mut ftn_pos = sub_pos.saturating_add(5);
+                                let mut f_type = 0u16;
+                                let mut pad_pct = 0u16;
+                                let mut angle_micro = 0i32;
+                                let mut x_off = 0i32;
+                                let mut y_off = 0i32;
+                                let mut mode_raw = 0u16;
+                                let mut stops = Vec::new();
+                                while ftn_pos < ftn_end {
+                                    let Some(&ftn_tag) = attr_slice.get(ftn_pos) else {
+                                        break;
+                                    };
+                                    if ftn_tag == 255 || ftn_pos.saturating_add(3) > ftn_end {
+                                        break;
+                                    }
+                                    let ftn_len = (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                    if ftn_tag == 1 && ftn_pos.saturating_add(25) <= ftn_end {
+                                        f_type = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0);
+                                        pad_pct = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(7)).unwrap_or(0);
+                                        angle_micro = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(9)).unwrap_or(0);
+                                        x_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(13)).unwrap_or(0);
+                                        y_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(17)).unwrap_or(0);
+                                        mode_raw = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(23)).unwrap_or(0);
+                                    } else if ftn_tag == 2 && ftn_pos.saturating_add(5) <= ftn_end {
+                                        let color_count = (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0) as usize).min(64);
+                                        for idx in 0..color_count {
+                                            let base = ftn_pos.saturating_add(5).saturating_add(idx.saturating_mul(4));
+                                            if base.saturating_add(4) > ftn_end {
+                                                break;
+                                            }
+                                            let c_idx = read_u16(ctx.endian, attr_slice, base).unwrap_or(1) as usize;
+                                            let pos_pct = read_u16(ctx.endian, attr_slice, base.saturating_add(2)).unwrap_or(0);
+                                            let col = cmx_colors.get(c_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                            let off = (f64::from(pos_pct) / 100.0).clamp(0.0, 1.0);
+                                            if let Ok(st) = FountainStop::new(off, col) {
+                                                stops.push(st);
                                             }
                                         }
-                                        decoded_outline = Some(outl);
-                                    } else {
-                                        decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
                                     }
+                                    ftn_pos = ftn_pos.saturating_add(ftn_len);
+                                }
+                                if stops.len() >= 2 {
+                                    let angle_deg = (f64::from(angle_micro) / 1_000_000.0).clamp(-360.0, 360.0);
+                                    let cx_f = F64::new((0.5 + f64::from(x_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                                    let cy_f = F64::new((0.5 - f64::from(y_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                                    let geometry = match f_type {
+                                        1 => FountainGeometry::Radial {
+                                            center_x: cx_f,
+                                            center_y: cy_f,
+                                            radius: F64::HALF,
+                                            focal_x: cx_f,
+                                            focal_y: cy_f,
+                                        },
+                                        2 => FountainGeometry::Conical {
+                                            center_x: cx_f,
+                                            center_y: cy_f,
+                                            angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                        },
+                                        3 => FountainGeometry::Square {
+                                            center_x: cx_f,
+                                            center_y: cy_f,
+                                            radius: F64::HALF,
+                                            angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                        },
+                                        _ => FountainGeometry::Linear {
+                                            angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                            edge_pad: F64::new(f64::from(pad_pct.min(49))).unwrap_or(F64::ZERO),
+                                        },
+                                    };
+                                    let blend_mode = match mode_raw {
+                                        1 => FountainBlendMode::RainbowCw,
+                                        2 => FountainBlendMode::RainbowCcw,
+                                        _ => FountainBlendMode::Direct,
+                                    };
+                                    decoded_fill = Some(FillStyle::Fountain { geometry, blend_mode, stops });
+                                }
+                            } else if fill_type == 7 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
+                                let mono_end = sub_pos.saturating_add(fill_spec_len);
+                                let mut mono_pos = sub_pos.saturating_add(5);
+                                while mono_pos < mono_end {
+                                    let Some(&mono_tag) = attr_slice.get(mono_pos) else {
+                                        break;
+                                    };
+                                    if mono_tag == 255 || mono_pos.saturating_add(3) > mono_end {
+                                        break;
+                                    }
+                                    let mono_len = (read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                    if mono_tag == 1 && mono_pos.saturating_add(25) <= mono_end {
+                                        let bm_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(3)).unwrap_or(1);
+                                        let w_cdr = read_i32(ctx.endian, attr_slice, mono_pos.saturating_add(5)).unwrap_or(254_000);
+                                        let fg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(21)).unwrap_or(1) as usize;
+                                        let bg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(23)).unwrap_or(1) as usize;
+                                        let kind = match bm_idx {
+                                            2 => coralcraft_doc::PatternKind::PolkaDot,
+                                            3 => coralcraft_doc::PatternKind::HorizontalStripe,
+                                            4 => coralcraft_doc::PatternKind::VerticalStripe,
+                                            5 => coralcraft_doc::PatternKind::DiagonalCrosshatch,
+                                            _ => coralcraft_doc::PatternKind::Checkerboard,
+                                        };
+                                        let fg_color = cmx_colors.get(fg_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                        let bg_color = cmx_colors.get(bg_idx.saturating_sub(1)).cloned().unwrap_or(Color::WHITE);
+                                        let raw_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
+                                        let tile_size_pt = F64::new((raw_pt * 1000.0).round() / 1000.0).unwrap_or(F64::ONE);
+                                        decoded_fill = Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt });
+                                    }
+                                    mono_pos = mono_pos.saturating_add(mono_len);
                                 }
                             }
-                        } else if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
-                            let pt_slice = ch.payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
-                            if pt_slice.len() >= 2 {
-                                let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
-                                let mut with_pad = Vec::with_capacity(4usize.saturating_add(pt_slice.len()));
-                                with_pad.extend_from_slice(&(count as u16).to_le_bytes());
-                                with_pad.extend_from_slice(&0u16.to_le_bytes());
-                                with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
-                                decoded_path = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size);
+                            sub_pos = sub_pos.saturating_add(fill_spec_len);
+                            if attr_slice.get(sub_pos) == Some(&255) {
+                                sub_pos = sub_pos.saturating_add(1);
                             }
                         }
-                        tag_pos = tag_pos.saturating_add(tag_len);
+                        if (mask & 0x02) != 0 && sub_pos.saturating_add(5) <= attr_slice.len() {
+                            let o_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(1) as usize;
+                            if let Some(&(ls_idx, c_idx, p_idx, dash_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
+                                let col = cmx_colors.get(usize::from(c_idx).saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                let w_pt = cmx_pens.get(usize::from(p_idx).saturating_sub(1)).copied().unwrap_or(1.0);
+                                let mut outl = OutlineStyle::with_width(col, F64::new(w_pt).unwrap_or(F64::ONE));
+                                if let Some(&(spec, cap_and_join)) = cmx_line_styles.get(usize::from(ls_idx).saturating_sub(1)) {
+                                    outl.behind_fill = (spec & 0x08) != 0;
+                                    outl.scale_with_object = (spec & 0x20) != 0;
+                                    outl.cap = match cap_and_join & 0x0f {
+                                        1 => LineCap::Round,
+                                        2 => LineCap::Square,
+                                        _ => LineCap::Butt,
+                                    };
+                                    outl.join = match (cap_and_join >> 4) & 0x0f {
+                                        1 => LineJoin::Round,
+                                        2 => LineJoin::Bevel,
+                                        _ => LineJoin::Miter,
+                                    };
+                                    if (spec & 0x04) != 0
+                                        && dash_idx > 0
+                                        && let Some(arr) = cmx_dots.get(usize::from(dash_idx).saturating_sub(1))
+                                    {
+                                        let base_w = w_pt.max(0.25);
+                                        outl.dash_pattern =
+                                            arr.iter().filter_map(|&m| F64::new(((f64::from(m) * base_w) * 1000.0).round() / 1000.0).ok()).collect();
+                                    }
+                                }
+                                decoded_outline = Some(outl);
+                            } else {
+                                decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
+                            }
+                        }
                     }
-                    if let Some(path) = decoded_path {
-                        if !has_render_attr || (decoded_fill.is_none() && decoded_outline.is_none()) {
-                            decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
-                        }
-                        let obj_id = ObjectId(ctx.alloc_id());
-                        let obj_node = ObjectNode::new(obj_id, None, ObjectKind::Path(path), decoded_fill, decoded_outline);
-                        if let Some(parent) = group_stack.last_mut() {
-                            parent.push(obj_node);
-                        } else if let Some(layer) = page.layers.first_mut() {
-                            layer.objects.push(obj_node);
-                        }
+                } else if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
+                    let pt_slice = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                    if pt_slice.len() >= 2 {
+                        let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
+                        let mut with_pad = Vec::with_capacity(4usize.saturating_add(pt_slice.len()));
+                        with_pad.extend_from_slice(&(count as u16).to_le_bytes());
+                        with_pad.extend_from_slice(&0u16.to_le_bytes());
+                        with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
+                        decoded_path = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size);
                     }
                 }
-                pos = pos.saturating_add(inst_size);
+                tag_pos = tag_pos.saturating_add(tag_len);
             }
-            while let Some(children) = group_stack.pop() {
-                if !children.is_empty() {
-                    let grp_id = ObjectId(ctx.alloc_id());
-                    let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
-                    if let Some(parent) = group_stack.last_mut() {
-                        parent.push(grp_node);
-                    } else if let Some(layer) = page.layers.first_mut() {
-                        layer.objects.push(grp_node);
-                    }
+            if let Some(path) = decoded_path {
+                if !has_render_attr || (decoded_fill.is_none() && decoded_outline.is_none()) {
+                    decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
                 }
+                let obj_id = ObjectId(ctx.alloc_id());
+                let obj_node = ObjectNode::new(obj_id, None, ObjectKind::Path(path), decoded_fill, decoded_outline);
+                if let Some(parent) = group_stack.last_mut() {
+                    parent.push(obj_node);
+                } else if let Some(layer) = page.layers.last_mut() {
+                    layer.objects.push(obj_node);
+                }
+            }
+        }
+        pos = pos.saturating_add(inst_size);
+    }
+    while let Some(children) = group_stack.pop() {
+        if !children.is_empty() {
+            let grp_id = ObjectId(ctx.alloc_id());
+            let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+            if let Some(parent) = group_stack.last_mut() {
+                parent.push(grp_node);
+            } else if let Some(layer) = page.layers.last_mut() {
+                layer.objects.push(grp_node);
             }
         }
     }
@@ -3687,14 +3732,14 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
 
 fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let default_page = default_a4_page(1);
-    let first_page = doc.pages.first().unwrap_or(&default_page);
-    let page_size = first_page.size;
-    let cx = page_size.width.get() * 0.5;
-    let cy = page_size.height.get() * 0.5;
-    let half_w = pt_to_cdr_i32(cx);
-    let half_h = pt_to_cdr_i32(cy);
-    let neg_half_w = half_w.saturating_neg();
-    let neg_half_h = half_h.saturating_neg();
+    let pages_slice = if doc.pages.is_empty() { std::slice::from_ref(&default_page) } else { doc.pages.as_slice() };
+    let first_page = pages_slice.first().unwrap_or(&default_page);
+    let first_cx = first_page.size.width.get() * 0.5;
+    let first_cy = first_page.size.height.get() * 0.5;
+    let first_half_w = pt_to_cdr_i32(first_cx);
+    let first_half_h = pt_to_cdr_i32(first_cy);
+    let first_neg_half_w = first_half_w.saturating_neg();
+    let first_neg_half_h = first_half_h.saturating_neg();
 
     let mut tables = CmxWriteTables {
         colors: vec![Color::BLACK, Color::WHITE],
@@ -3704,33 +3749,76 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         outlines: vec![(1, 1, 1, 0)],
     };
 
-    let mut page_cmds = Vec::new();
-    // 1. CMX_Command_BeginPage (code = 9)
-    {
-        let mut cmd = Vec::with_capacity(30);
-        cmd.extend_from_slice(&30i16.to_le_bytes()); // instructionSize
-        cmd.extend_from_slice(&9i16.to_le_bytes()); // CMX_Command_BeginPage
-        cmd.push(1u8); // CMX_Tag_BeginPage_PageSpecification
-        cmd.extend_from_slice(&25u16.to_le_bytes()); // tagLength = 25
-        cmd.extend_from_slice(&1u16.to_le_bytes()); // page_number = 1
-        cmd.extend_from_slice(&0u32.to_le_bytes()); // flags = 0
-        cmd.extend_from_slice(&neg_half_w.to_le_bytes());
-        cmd.extend_from_slice(&half_h.to_le_bytes());
-        cmd.extend_from_slice(&half_w.to_le_bytes());
-        cmd.extend_from_slice(&neg_half_h.to_le_bytes());
-        cmd.push(255u8); // CMX_Tag_EndTag
-        page_cmds.extend_from_slice(&cmd);
-    }
+    let mut page_cmd_chunks = Vec::with_capacity(pages_slice.len());
+    for (p_idx, page) in pages_slice.iter().enumerate() {
+        let cx = page.size.width.get() * 0.5;
+        let cy = page.size.height.get() * 0.5;
+        let half_w = pt_to_cdr_i32(cx);
+        let half_h = pt_to_cdr_i32(cy);
+        let neg_half_w = half_w.saturating_neg();
+        let neg_half_h = half_h.saturating_neg();
+        let page_num = (p_idx.saturating_add(1).min(usize::from(u16::MAX))) as u16;
 
-    for layer in &first_page.layers {
-        for node in &layer.objects {
-            encode_cmx_node(node, cx, cy, &mut tables, &mut page_cmds)?;
+        let mut page_cmds = Vec::new();
+        // 1. CMX_Command_BeginPage (code = 9)
+        {
+            let mut cmd = Vec::with_capacity(30);
+            cmd.extend_from_slice(&30i16.to_le_bytes()); // instructionSize
+            cmd.extend_from_slice(&9i16.to_le_bytes()); // CMX_Command_BeginPage
+            cmd.push(1u8); // CMX_Tag_BeginPage_PageSpecification
+            cmd.extend_from_slice(&25u16.to_le_bytes()); // tagLength = 25
+            cmd.extend_from_slice(&page_num.to_le_bytes());
+            cmd.extend_from_slice(&0u32.to_le_bytes()); // flags = 0
+            cmd.extend_from_slice(&neg_half_w.to_le_bytes());
+            cmd.extend_from_slice(&half_h.to_le_bytes());
+            cmd.extend_from_slice(&half_w.to_le_bytes());
+            cmd.extend_from_slice(&neg_half_h.to_le_bytes());
+            cmd.push(255u8); // CMX_Tag_EndTag
+            page_cmds.extend_from_slice(&cmd);
         }
-    }
 
-    // CMX_Command_EndPage (code = 10)
-    page_cmds.extend_from_slice(&4i16.to_le_bytes());
-    page_cmds.extend_from_slice(&10i16.to_le_bytes());
+        for (l_idx, layer) in page.layers.iter().enumerate() {
+            let layer_num = (l_idx.saturating_add(1).min(usize::from(u16::MAX))) as u16;
+            let mut l_flags = 0u32;
+            if layer.visible {
+                l_flags |= 0x01;
+            }
+            if layer.printable {
+                l_flags |= 0x02;
+            }
+            if layer.locked {
+                l_flags |= 0x04;
+            }
+            let name_bytes = layer.name.as_bytes();
+            let name_len = name_bytes.len().min(256);
+            let tag_len = (17usize.saturating_add(name_len)) as u16;
+            let inst_len = (22usize.saturating_add(name_len)) as i16;
+            page_cmds.extend_from_slice(&inst_len.to_le_bytes());
+            page_cmds.extend_from_slice(&11i16.to_le_bytes()); // CMX_Command_BeginLayer
+            page_cmds.push(1u8); // CMX_Tag_BeginLayer_LayerSpecification
+            page_cmds.extend_from_slice(&tag_len.to_le_bytes());
+            page_cmds.extend_from_slice(&page_num.to_le_bytes());
+            page_cmds.extend_from_slice(&layer_num.to_le_bytes());
+            page_cmds.extend_from_slice(&l_flags.to_le_bytes());
+            page_cmds.extend_from_slice(&(layer.objects.len() as u32).to_le_bytes()); // tally
+            page_cmds.extend_from_slice(&(name_len as u16).to_le_bytes());
+            page_cmds.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
+            page_cmds.push(255u8); // CMX_Tag_EndTag
+
+            for node in &layer.objects {
+                encode_cmx_node(node, cx, cy, &mut tables, &mut page_cmds)?;
+            }
+
+            // CMX_Command_EndLayer (code = 12)
+            page_cmds.extend_from_slice(&4i16.to_le_bytes());
+            page_cmds.extend_from_slice(&12i16.to_le_bytes());
+        }
+
+        // CMX_Command_EndPage (code = 10)
+        page_cmds.extend_from_slice(&4i16.to_le_bytes());
+        page_cmds.extend_from_slice(&10i16.to_le_bytes());
+        page_cmd_chunks.push(page_cmds);
+    }
 
     // Build `rclr` payload (CMX_COLOR_DESCRIPTION_SECTION = 21)
     let mut rclr = Vec::new();
@@ -3820,9 +3908,14 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     // Compute exact RIFF stream offsets:
     // 0..12: `RIFF` + size + `CMX1`
     // 12..148: `cont` chunk (8B header + 128B payload = 136B -> ends at 148)
-    let page_offset = 148u32;
-    let page_chunk_total = 8usize.saturating_add(page_cmds.len()).saturating_add(page_cmds.len() & 1);
-    let rclr_offset = page_offset.saturating_add(page_chunk_total as u32);
+    let mut cur_offset = 148u32;
+    let mut page_offsets = Vec::with_capacity(page_cmd_chunks.len());
+    for p_cmds in &page_cmd_chunks {
+        page_offsets.push(cur_offset);
+        let p_total = 8usize.saturating_add(p_cmds.len()).saturating_add(p_cmds.len() & 1);
+        cur_offset = cur_offset.saturating_add(p_total as u32);
+    }
+    let rclr_offset = cur_offset;
     let rclr_chunk_total = 8usize.saturating_add(rclr.len()).saturating_add(rclr.len() & 1);
     let rott_offset = rclr_offset.saturating_add(rclr_chunk_total as u32);
     let rott_chunk_total = 8usize.saturating_add(rott.len()).saturating_add(rott.len() & 1);
@@ -3834,14 +3927,16 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let rotl_chunk_total = 8usize.saturating_add(rotl.len()).saturating_add(rotl.len() & 1);
     let ixpg_offset = rotl_offset.saturating_add(rotl_chunk_total as u32);
 
-    // Build `ixpg` payload (CMX_PAGE_INDEX_TABLE = 2, 20 bytes)
-    let mut ixpg = Vec::with_capacity(20);
-    ixpg.extend_from_slice(&1u16.to_le_bytes()); // numRecords = 1
+    // Build `ixpg` payload (CMX_PAGE_INDEX_TABLE = 2)
+    let mut ixpg = Vec::with_capacity(4usize.saturating_add(page_offsets.len().saturating_mul(16)));
+    ixpg.extend_from_slice(&(page_offsets.len() as u16).to_le_bytes()); // numRecords
     ixpg.extend_from_slice(&16u16.to_le_bytes()); // sizeInFile = 16
-    ixpg.extend_from_slice(&page_offset.to_le_bytes());
-    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // layerTableOffset
-    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
-    ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // refListOffset
+    for &p_off in &page_offsets {
+        ixpg.extend_from_slice(&p_off.to_le_bytes());
+        ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // layerTableOffset
+        ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
+        ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // refListOffset
+    }
     let ixpg_chunk_total = 8usize.saturating_add(ixpg.len());
     let ixmr_offset = ixpg_offset.saturating_add(ixpg_chunk_total as u32);
 
@@ -3873,15 +3968,17 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     cont.extend_from_slice(&ixmr_offset.to_le_bytes()); // 84..88: indexSectionOffset
     cont.extend_from_slice(&u32::MAX.to_le_bytes()); // 88..92: infoSectionOffset
     cont.extend_from_slice(&u32::MAX.to_le_bytes()); // 92..96: thumbnailOffset
-    cont.extend_from_slice(&neg_half_w.to_le_bytes()); // 96..100
-    cont.extend_from_slice(&half_h.to_le_bytes()); // 100..104
-    cont.extend_from_slice(&half_w.to_le_bytes()); // 104..108
-    cont.extend_from_slice(&neg_half_h.to_le_bytes()); // 108..112
+    cont.extend_from_slice(&first_neg_half_w.to_le_bytes()); // 96..100
+    cont.extend_from_slice(&first_half_h.to_le_bytes()); // 100..104
+    cont.extend_from_slice(&first_half_w.to_le_bytes()); // 104..108
+    cont.extend_from_slice(&first_neg_half_h.to_le_bytes()); // 108..112
     cont.resize(128, 0);
 
     let mut body = Vec::new();
     append_riff_chunk(&mut body, *b"cont", &cont);
-    append_riff_chunk(&mut body, *b"page", &page_cmds);
+    for p_cmds in &page_cmd_chunks {
+        append_riff_chunk(&mut body, *b"page", p_cmds);
+    }
     append_riff_chunk(&mut body, *b"rclr", &rclr);
     append_riff_chunk(&mut body, *b"rott", &rott);
     append_riff_chunk(&mut body, *b"rdot", &rdot);

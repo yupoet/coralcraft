@@ -169,7 +169,8 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
         svg.push_str(&defs);
         svg.push_str("  </defs>\n");
     }
-    let _ = writeln!(svg, "  <rect x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"/>", fmt_num(w), fmt_num(h));
+    let _ =
+        writeln!(svg, "  <rect id=\"page-background\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"/>", fmt_num(w), fmt_num(h));
     svg.push_str(&body);
     svg.push_str("</svg>\n");
 

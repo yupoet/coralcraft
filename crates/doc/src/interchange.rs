@@ -6,12 +6,20 @@ use std::collections::BTreeMap;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
-use crate::model::{DocError, Document, ObjectKind, ObjectNode, TransparencyStyle};
+use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, TransparencyStyle};
 use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
 fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
         && let Some(layer) = page.layers.first_mut()
+    {
+        layer.objects.push(node);
+    }
+}
+
+fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
+    if let Some(page) = doc.pages.first_mut()
+        && let Some(layer) = page.layers.last_mut()
     {
         layer.objects.push(node);
     }
@@ -23,7 +31,7 @@ fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: Ob
     if let Some((_, _, _, _, children)) = group_stack.last_mut() {
         children.push(node);
     } else {
-        push_to_first_layer(doc, node);
+        push_to_active_layer(doc, node);
     }
 }
 
@@ -31,7 +39,7 @@ fn last_svg_sibling_mut<'a>(doc: &'a mut Document, group_stack: &'a mut [SvgGrou
     if let Some((_, _, _, _, children)) = group_stack.last_mut() {
         children.last_mut()
     } else {
-        doc.pages.first_mut()?.layers.first_mut()?.objects.last_mut()
+        doc.pages.first_mut()?.layers.last_mut()?.objects.last_mut()
     }
 }
 
@@ -64,6 +72,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     let mut active_grad: Option<(String, FountainGeometry, Vec<FountainStop>)> = None;
     let mut passthrough_g_stack: Vec<bool> = Vec::new();
     let mut group_stack: Vec<SvgGroupFrame> = Vec::new();
+    let mut saw_layer_group = false;
 
     while let Some(rem) = svg_str.get(pos..) {
         let Some(lt_rel) = rem.find('<') else {
@@ -198,7 +207,26 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
 
         if (tag_slice.starts_with("<g ") || tag_slice.starts_with("<g\t") || tag_slice == "<g>") && !tag_slice.ends_with("/>") {
             let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
-            if id_str.starts_with("layer-") || id_str == "prepress-marks" {
+            if id_str.starts_with("layer-") {
+                passthrough_g_stack.push(true);
+                let layer_name = extract_attr_str(tag_slice, "data-name").unwrap_or(id_str).to_owned();
+                let layer_opacity = parse_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()).unwrap_or(F64::ONE);
+                if let Some(page) = doc.pages.first_mut() {
+                    if !saw_layer_group
+                        && let Some(first_layer) = page.layers.first_mut()
+                        && first_layer.objects.is_empty()
+                    {
+                        first_layer.name = layer_name;
+                        first_layer.opacity = layer_opacity;
+                    } else {
+                        let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
+                        let mut new_layer = Layer::new_normal(next_lid, layer_name);
+                        new_layer.opacity = layer_opacity;
+                        page.layers.push(new_layer);
+                    }
+                    saw_layer_group = true;
+                }
+            } else if id_str == "prepress-marks" {
                 passthrough_g_stack.push(true);
             } else {
                 passthrough_g_stack.push(false);
@@ -240,6 +268,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         if tag_slice.starts_with("<rect ") || tag_slice.starts_with("<rect\t") {
             let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
             if id_str == "page-background" {
+                let (fill, _) = parse_svg_style_attrs(tag_slice, &svg_gradients);
+                if let Some(page) = doc.pages.first_mut() {
+                    page.background = fill;
+                }
                 continue;
             }
             let x = parse_attr_f64(tag_slice, "x").unwrap_or(0.0);
@@ -269,6 +301,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<ellipse ") || tag_slice.starts_with("<circle ") {
+            let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
+            if class_str == "registration-target" {
+                continue;
+            }
             let cx = parse_attr_f64(tag_slice, "cx").unwrap_or(0.0);
             let cy = parse_attr_f64(tag_slice, "cy").unwrap_or(0.0);
             let rx = parse_attr_f64(tag_slice, "rx").or_else(|| parse_attr_f64(tag_slice, "r")).unwrap_or(0.0);
@@ -305,6 +341,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             || tag_slice.starts_with("<polygon ")
             || tag_slice.starts_with("<polygon\t")
         {
+            let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
+            if class_str == "arrowhead-marker" {
+                continue;
+            }
             let is_polygon = tag_slice.starts_with("<polygon");
             if let Some(pts_str) = extract_attr_str(tag_slice, "points")
                 && let Some(mut path) = parse_svg_points_path(pts_str, is_polygon)
@@ -322,7 +362,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             }
         } else if tag_slice.starts_with("<path ") {
             let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
-            if class_str == "crop-marks" {
+            if class_str == "crop-marks" || class_str == "registration-crosshair" || class_str == "arrowhead-marker" {
                 continue;
             }
             if let Some(d_str) = extract_attr_str(tag_slice, "d")
@@ -1249,10 +1289,19 @@ fn extract_tag_slice<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 
 fn extract_attr_str<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
     let needle = format!("{attr}=\"");
-    let start = tag.find(&needle)?.saturating_add(needle.len());
-    let from_start = tag.get(start..)?;
-    let end = from_start.find('"')?;
-    from_start.get(..end)
+    let mut search_from = 0usize;
+    while let Some(rel) = tag.get(search_from..)?.find(&needle) {
+        let idx = search_from.saturating_add(rel);
+        let prev_ok = idx > 0 && tag.as_bytes().get(idx.saturating_sub(1)).is_some_and(|b| matches!(b, b' ' | b'\t' | b'\n' | b'\r'));
+        let val_start = idx.saturating_add(needle.len());
+        if prev_ok {
+            let from_start = tag.get(val_start..)?;
+            let end = from_start.find('"')?;
+            return from_start.get(..end);
+        }
+        search_from = val_start;
+    }
+    None
 }
 
 fn parse_attr_f64(tag: &str, attr: &str) -> Option<f64> {

@@ -1538,4 +1538,76 @@ mod tests {
         let obj0 = &parsed.document.pages[0].layers[0].objects[0];
         assert!(obj0.residual.chunks.iter().any(|c| c.tag == ChunkTag(*b"uobj") && c.payload.0 == vec![1, 2, 3, 4, 5]));
     }
+
+    #[test]
+    fn write_cmx1_and_parse_pure_cmx_multipage_and_begin_end_layer_m79() {
+        use std::collections::BTreeMap;
+
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, Layer, LayerId, ObjectId, ObjectKind, ObjectNode, Page, PageId, Residual};
+        use coralcraft_geom::{EllipseSpec, F64, Rect, RectSpec, Size};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(500.0, 400.0).unwrap();
+        doc.pages[0].layers[0].name = "Background".to_owned();
+        doc.pages[0].layers[0].locked = true;
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(170),
+            Some("BgBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 10.0, 110.0, 90.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(30, 60, 120))),
+            None,
+        ));
+        let mut layer2 = Layer::new_normal(LayerId(171), "Artwork");
+        layer2.objects.push(ObjectNode::new(
+            ObjectId(172),
+            Some("ArtCircle".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(150.0, 100.0, 250.0, 200.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(220, 80, 40))),
+            None,
+        ));
+        doc.pages[0].layers.push(layer2);
+
+        let mut notes_layer = Layer::new_normal(LayerId(173), "Notes");
+        notes_layer.objects.push(ObjectNode::new(
+            ObjectId(174),
+            Some("NoteRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 100.0, 80.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(40, 160, 80))),
+            None,
+        ));
+        doc.pages.push(Page {
+            id: PageId(2),
+            name: "Page 2".to_owned(),
+            size: Size::new(300.0, 600.0).unwrap(),
+            bleed: F64::ZERO,
+            background: Some(FillStyle::uniform(Color::WHITE)),
+            layers: vec![notes_layer],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        });
+
+        let cmx = write_cmx1(&doc).expect("write_cmx1");
+        let list_pos = cmx.windows(8).position(|w| &w[0..4] == b"LIST" && &w[4..8] != b"CMX1").unwrap_or(cmx.len());
+        let mut pure_cmx = cmx[..list_pos].to_vec();
+        let new_riff_len = (pure_cmx.len() - 8) as u32;
+        pure_cmx[4..8].copy_from_slice(&new_riff_len.to_le_bytes());
+
+        let parsed = parse_document(&pure_cmx).expect("parse pure multipage CMX1");
+        assert_eq!(parsed.document.pages.len(), 2);
+        assert!((parsed.document.pages[0].size.width.get() - 500.0).abs() < 1e-2);
+        assert!((parsed.document.pages[0].size.height.get() - 400.0).abs() < 1e-2);
+        assert_eq!(parsed.document.pages[0].layers.len(), 2);
+        assert_eq!(parsed.document.pages[0].layers[0].name, "Background");
+        assert!(parsed.document.pages[0].layers[0].locked);
+        assert_eq!(parsed.document.pages[0].layers[0].objects.len(), 1);
+        assert_eq!(parsed.document.pages[0].layers[1].name, "Artwork");
+        assert_eq!(parsed.document.pages[0].layers[1].objects.len(), 1);
+
+        assert!((parsed.document.pages[1].size.width.get() - 300.0).abs() < 1e-2);
+        assert!((parsed.document.pages[1].size.height.get() - 600.0).abs() < 1e-2);
+        assert_eq!(parsed.document.pages[1].layers.len(), 1);
+        assert_eq!(parsed.document.pages[1].layers[0].name, "Notes");
+        assert_eq!(parsed.document.pages[1].layers[0].objects.len(), 1);
+    }
 }
