@@ -10,11 +10,11 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect, RectSpec, Unit,
-    build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_block_arrow_path, build_bspline_path, build_callout_path,
-    build_complex_star_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
+    AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect,
+    RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_block_arrow_path, build_bspline_path,
+    build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
     build_impact_rays_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path,
-    build_three_point_curve_path,
+    build_superformula_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -980,6 +980,26 @@ impl McpServer {
                         {
                             "name": "export_svg_base64",
                             "description": "Exports page_index to clean-room SVG 1.1 and returns svg_bytes length and RFC 4648 svg_base64 string.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_superformula_shape",
+                            "description": "Adds a closed Gielis Superformula Path centered at (cx, cy) with radius, symmetry m, exponents (n1, n2, n3), and steps.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "project_selection_axonometric",
+                            "description": "Projects all selected unlocked objects onto one of the 30-degree isometric planes (top, left, right).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "pack_selection_in_grid",
+                            "description": "Packs all selected unlocked objects into a multi-column grid starting at (origin_x, origin_y) with cols columns and gap_pt spacing.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_eps_base64",
+                            "description": "Exports page_index to clean-room EPSF-3.0 Encapsulated PostScript and returns eps_bytes length and RFC 4648 eps_base64 string.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2866,6 +2886,50 @@ impl McpServer {
                     "svg_base64": b64
                 }))
             }
+            "add_superformula_shape" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius = args.get("radius").and_then(Value::as_f64).unwrap_or(60.0);
+                let m = args.get("m").and_then(Value::as_f64).unwrap_or(6.0);
+                let n1 = args.get("n1").and_then(Value::as_f64).unwrap_or(1.0);
+                let n2 = args.get("n2").and_then(Value::as_f64).unwrap_or(7.0);
+                let n3 = args.get("n3").and_then(Value::as_f64).unwrap_or(8.0);
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(96) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_superformula_path(center, radius, m, n1, n2, n3, steps).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Superformula Shape".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "superformula_shape", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "project_selection_axonometric" => {
+                self.apply_optional_selection(args);
+                let plane_str = args.get("plane").and_then(Value::as_str).unwrap_or("top");
+                let plane = match plane_str.to_ascii_lowercase().as_str() {
+                    "left" => AxonometricPlane::IsometricLeft,
+                    "right" => AxonometricPlane::IsometricRight,
+                    _ => AxonometricPlane::IsometricTop,
+                };
+                let ok = self.engine.execute(EngineCommand::ProjectSelectionAxonometric { plane });
+                Ok(json!({ "projected_axonometric": ok, "plane": plane_str }))
+            }
+            "pack_selection_in_grid" => {
+                self.apply_optional_selection(args);
+                let ox = args.get("origin_x").and_then(Value::as_f64).unwrap_or(40.0);
+                let oy = args.get("origin_y").and_then(Value::as_f64).unwrap_or(40.0);
+                let origin = Point::new(ox, oy).map_err(|e| e.to_string())?;
+                let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let gap_pt = F64::new(args.get("gap_pt").and_then(Value::as_f64).unwrap_or(12.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::PackSelectionInGrid { origin, cols, gap_pt });
+                Ok(json!({ "packed_in_grid": ok, "cols": cols, "gap_pt": gap_pt.get() }))
+            }
+            "export_eps_base64" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let eps = export_eps(&self.engine.document, page_index).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(eps.as_bytes());
+                Ok(json!({
+                    "eps_bytes": eps.len(),
+                    "eps_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2895,7 +2959,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 176);
+        assert_eq!(tools, 180);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

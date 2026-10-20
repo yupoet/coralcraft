@@ -7,12 +7,12 @@ use coralcraft_doc::{
     ParagraphTextSpec, Residual, TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
 };
 use coralcraft_geom::{
-    Affine2, ArcLengthTable, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
-    artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
-    delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, hatch_path_region, insert_curve_node_at,
-    join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
-    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
-    smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
+    Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
+    RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve,
+    convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, hatch_path_region,
+    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
+    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
+    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
     twirl_path_around_point,
 };
 use coralcraft_tools::{
@@ -304,6 +304,10 @@ pub enum EngineCommand {
     HatchObjectPath { object_id: ObjectId, angle_deg: F64, spacing_pt: F64, cross_hatch: bool },
     /// Generates `steps` (`1..=32`) standalone intermediate morphed vector [`ObjectKind::Path`] objects between `start_id` and `end_id` with interpolated fill and outline colors (`Effects -> Blend -> Break Blend Apart`).
     CreateIntermediateBlendPaths { start_id: ObjectId, end_id: ObjectId, steps: u32, sample_count: usize },
+    /// Projects all selected unlocked objects onto one of the three $30^\circ$ axonometric/isometric planes (`Object -> Transformations -> Isometric Projection`).
+    ProjectSelectionAxonometric { plane: AxonometricPlane },
+    /// Packs all selected unlocked objects into a multi-column grid starting at `origin` with `cols` columns and `gap_pt` horizontal and vertical spacing (`Object -> Align and Distribute -> Pack in Grid`).
+    PackSelectionInGrid { origin: Point, cols: u32, gap_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1321,6 +1325,21 @@ impl EditorEngine {
                 let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
                 let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
                 if !valid_a || !valid_b {
+                    return false;
+                }
+            }
+            EngineCommand::ProjectSelectionAxonometric { .. } => {
+                let has_valid = self.selected_nodes().iter().any(|o| !o.locked && object_to_path(o).is_some());
+                if !has_valid {
+                    return false;
+                }
+            }
+            EngineCommand::PackSelectionInGrid { cols, gap_pt, .. } => {
+                if *cols == 0 || !gap_pt.get().is_finite() {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
                     return false;
                 }
             }
@@ -3857,6 +3876,46 @@ impl EditorEngine {
                     }
                 }
             }
+            EngineCommand::ProjectSelectionAxonometric { plane } => {
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(projected) = project_path_axonometric(&world_path, plane)
+                    {
+                        obj.kind = ObjectKind::Path(projected);
+                        obj.transform = Affine2::IDENTITY;
+                    }
+                });
+            }
+            EngineCommand::PackSelectionInGrid { origin, cols, gap_pt } => {
+                let c_count = cols.clamp(1, 32) as usize;
+                let gap = gap_pt.get();
+                let items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                let mut deltas = BTreeMap::new();
+                let mut cur_x = origin.x.get();
+                let mut cur_y = origin.y.get();
+                let mut row_h = 0.0_f64;
+                for (idx, (id, b)) in items.into_iter().enumerate() {
+                    if idx > 0 && idx % c_count == 0 {
+                        cur_x = origin.x.get();
+                        cur_y += row_h + gap;
+                        row_h = 0.0;
+                    }
+                    deltas.insert(id, (cur_x - b.x0.get(), cur_y - b.y0.get()));
+                    cur_x += b.width() + gap;
+                    row_h = row_h.max(b.height());
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -4736,6 +4795,12 @@ mod tests {
             angle_deg: F64::new(45.0).unwrap(),
             spacing_pt: F64::new(6.0).unwrap(),
             cross_hatch: true,
+        }));
+        assert!(engine.execute(EngineCommand::ProjectSelectionAxonometric { plane: AxonometricPlane::IsometricTop }));
+        assert!(engine.execute(EngineCommand::PackSelectionInGrid {
+            origin: Point::new(30.0, 30.0).unwrap(),
+            cols: 2,
+            gap_pt: F64::new(10.0).unwrap(),
         }));
     }
 }

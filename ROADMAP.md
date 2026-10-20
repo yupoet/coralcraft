@@ -178,9 +178,13 @@
 48. **M48 2-Point Perspective Grid (`build_perspective_grid_path`), Vector Hatch / Engraving Fill (`hatch_path_region`), Intermediate Morphed Blend Steps (`CreateIntermediateBlendPaths`), SVG Base64 Export (`export_svg_base64`), and 176 MCP Tools**:
     - `coralcraft-geom`: `build_perspective_grid_path` (`Object -> Perspective -> Perspective Grid`) and `hatch_path_region` (`Object -> Hatch / Engraving Fill`).
     - `coralcraft-engine` & `coralcraft-mcp`: `HatchObjectPath`, `CreateIntermediateBlendPaths`, `add_perspective_grid`, `hatch_object_path`, `create_intermediate_blend_paths`, `export_svg_base64`, and **176 MCP tools**.
+49. **M49 Parametric Gielis Superformula Shapes (`build_superformula_path`), $30^\circ$ Axonometric / Isometric Projection (`project_path_axonometric`), Pack Selection in Grid (`PackSelectionInGrid`), EPS Base64 Export (`export_eps_base64`), and 180 MCP Tools**:
+    - `coralcraft-geom`: `build_superformula_path` and `AxonometricPlane` / `project_path_axonometric`.
+    - `coralcraft-engine` & `coralcraft-mcp`: `ProjectSelectionAxonometric`, `PackSelectionInGrid`, `add_superformula_shape`, `project_selection_axonometric`, `pack_selection_in_grid`, `export_eps_base64`, and **180 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M49 delivered (`build_superformula_path` & `add_superformula_shape`, `project_path_axonometric` & `ProjectSelectionAxonometric`, `PackSelectionInGrid`, `export_eps_base64`, 180 MCP tools).
 - 2026-10-20: M48 delivered (`build_perspective_grid_path` & `add_perspective_grid`, `hatch_path_region` & `HatchObjectPath`, `CreateIntermediateBlendPaths`, `export_svg_base64`, 176 MCP tools).
 - 2026-10-20: M47 delivered (`build_barcode_path` & `add_barcode`, `divide_overlapping_paths` & `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, 172 MCP tools).
 - 2026-10-20: M46 delivered (`build_rose_guilloche_path` & `add_rose_guilloche`, `morph_paths_linear` & `MorphBetweenObjects`, `DistributeExactGap`, `extract_document_palette`, 168 MCP tools).

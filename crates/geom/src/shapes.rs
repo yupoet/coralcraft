@@ -1023,6 +1023,50 @@ pub fn build_perspective_grid_path(bounds: Rect, horizon_y_pt: f64, subdivisions
     Ok(path)
 }
 
+/// Builds a closed Gielis Superformula [`Path`]
+/// ($r(\theta) = \left(|\cos(m\theta/4)|^{n_2} + |\sin(m\theta/4)|^{n_3}\right)^{-1/n_1}$)
+/// centered at `center` with outer `radius`, symmetry `m`, exponents `(n1, n2, n3)`, and `steps` (`12..=1024`).
+pub fn build_superformula_path(center: Point, radius: f64, m: f64, n1: f64, n2: f64, n3: f64, steps: u32) -> Result<Path, GeomError> {
+    let r_scale = F64::new(radius)?.get();
+    if r_scale <= 0.0 || !m.is_finite() || !n1.is_finite() || !n2.is_finite() || !n3.is_finite() || n1.abs() < 1e-3 || steps < 12 {
+        return Err(GeomError::InvalidShapeParameter("invalid superformula parameters"));
+    }
+    let count = steps.clamp(12, 1024);
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let mut raw_pts = Vec::with_capacity(count as usize);
+    let mut max_r = 0.0_f64;
+
+    for i in 0..count {
+        let theta = std::f64::consts::TAU * (f64::from(i) / f64::from(count));
+        let phi = 0.25 * m * theta;
+        let t1 = phi.cos().abs().powf(n2);
+        let t2 = phi.sin().abs().powf(n3);
+        let sum = t1 + t2;
+        let r = if sum > 1e-12 { sum.powf(-1.0 / n1) } else { 0.0 };
+        if r.is_finite() {
+            max_r = max_r.max(r);
+            raw_pts.push((theta, r));
+        }
+    }
+    if max_r <= 1e-12 || raw_pts.len() < 3 {
+        return Err(GeomError::InvalidShapeParameter("degenerate superformula curve"));
+    }
+    let norm = r_scale / max_r;
+    let mut path = Path::new();
+    for (idx, (theta, r)) in raw_pts.into_iter().enumerate() {
+        let (s, c) = theta.sin_cos();
+        let pt = Point::new(cx + r * norm * c, cy + r * norm * s)?;
+        if idx == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1078,5 +1122,8 @@ mod m27_tests {
 
         let pgrid = build_perspective_grid_path(Rect::new(0.0, 0.0, 200.0, 120.0).unwrap(), 50.0, 4).unwrap();
         assert!(pgrid.elements.len() > 20);
+
+        let sf = build_superformula_path(Point::new(100.0, 100.0).unwrap(), 50.0, 6.0, 1.0, 7.0, 8.0, 64).unwrap();
+        assert!(sf.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

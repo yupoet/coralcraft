@@ -1829,6 +1829,43 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
     Ok(out)
 }
 
+/// Standard $30^\circ$ axonometric / isometric projection planes (`Object -> Transformations -> Isometric Projection`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AxonometricPlane {
+    /// Top horizontal isometric plane (rotate $45^\circ$, scale Y by $\tan(30^\circ) \approx 0.57735$).
+    IsometricTop,
+    /// Left vertical isometric plane (scale X by $\cos(30^\circ) \approx 0.866025$, shear Y by $+30^\circ$).
+    IsometricLeft,
+    /// Right vertical isometric plane (scale X by $\cos(30^\circ) \approx 0.866025$, shear Y by $-30^\circ$).
+    IsometricRight,
+}
+
+/// Projects `path` around its bounding-box center onto one of the three standard $30^\circ$
+/// isometric planes (`AxonometricPlane`).
+pub fn project_path_axonometric(path: &Path, plane: AxonometricPlane) -> Result<Path, GeomError> {
+    let Some(bbox) = path.bounds() else {
+        return Err(GeomError::InvalidShapeParameter("cannot project empty path"));
+    };
+    let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
+    let cy = 0.5 * (bbox.y0.get() + bbox.y1.get());
+    let t1 = Affine2::translation(-cx, -cy)?;
+    let t2 = Affine2::translation(cx, cy)?;
+    let cos30 = 30.0_f64.to_radians().cos();
+    let sin30 = 0.5_f64;
+    let tan30 = 30.0_f64.to_radians().tan();
+    let iso = match plane {
+        AxonometricPlane::IsometricTop => {
+            let rot = Affine2::rotation_rad(45.0_f64.to_radians())?;
+            let sc = Affine2::scaling(1.0, tan30)?;
+            rot.then(sc)?
+        }
+        AxonometricPlane::IsometricLeft => Affine2::new(cos30, sin30, 0.0, 1.0, 0.0, 0.0)?,
+        AxonometricPlane::IsometricRight => Affine2::new(cos30, -sin30, 0.0, 1.0, 0.0, 0.0)?,
+    };
+    let tf = t1.then(iso)?.then(t2)?;
+    path.transform(tf)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1900,5 +1937,10 @@ mod m26_tests {
 
         let hatched = hatch_path_region(&rect_path, 45.0, 8.0, true).unwrap();
         assert!(hatched.elements.len() >= 10);
+
+        for plane in [AxonometricPlane::IsometricTop, AxonometricPlane::IsometricLeft, AxonometricPlane::IsometricRight] {
+            let proj = project_path_axonometric(&rect_path, plane).unwrap();
+            assert_eq!(proj.elements.len(), rect_path.elements.len());
+        }
     }
 }
