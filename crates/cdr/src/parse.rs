@@ -215,6 +215,14 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
     Ok(ParseOutcome { document: doc, probe_report, parse_warnings })
 }
 
+/// Total decompressed bytes allowed across every `LIST cmpr` stream in one file. Each stream is
+/// also capped by [`MAX_DECOMPRESSED_BYTES`]; this shared budget stops many small compressed lists
+/// from expanding into an unbounded amount of retained memory.
+pub const MAX_FILE_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
+
+/// Largest embedded bitmap accepted, in pixels (64 Mpx, 256 MiB of RGBA).
+pub const MAX_BITMAP_PIXELS: usize = 64 * 1024 * 1024;
+
 fn default_a4_page(page_num: u64) -> Page {
     let template = Document::new_a4_portrait();
     let mut page = template.pages[0].clone();
@@ -231,6 +239,10 @@ struct ParserCtx {
     outlines: BTreeMap<u32, OutlineStyle>,
     next_id: u64,
     chunks_seen: usize,
+    /// Remaining shared decompression budget for this file.
+    decompress_budget: usize,
+    /// True while walking the decompressed contents of a `LIST cmpr` (nested `cmpr` stays opaque).
+    inside_cmpr: bool,
 }
 
 impl ParserCtx {
@@ -251,6 +263,17 @@ struct ParsedChunk {
 }
 
 fn parse_riff_stream(bytes: &[u8], endian: Endian, version: u16, doc: &mut Document, warnings: &mut Vec<String>) {
+    parse_riff_stream_with_budget(bytes, endian, version, doc, warnings, MAX_FILE_DECOMPRESSED_BYTES);
+}
+
+fn parse_riff_stream_with_budget(
+    bytes: &[u8],
+    endian: Endian,
+    version: u16,
+    doc: &mut Document,
+    warnings: &mut Vec<String>,
+    decompress_budget: usize,
+) {
     if bytes.len() < 12 {
         return;
     }
@@ -269,6 +292,8 @@ fn parse_riff_stream(bytes: &[u8], endian: Endian, version: u16, doc: &mut Docum
         outlines: BTreeMap::new(),
         next_id: 100,
         chunks_seen: 0,
+        decompress_budget,
+        inside_cmpr: false,
     };
 
     let top_chunks = walk_chunk_sequence(&bytes[12..end], 12, None, &mut ctx, 0, warnings);
@@ -338,12 +363,46 @@ fn walk_chunk_sequence(
         if &fourcc == b"LIST" && payload_slice.len() >= 4 {
             let list_type = <[u8; 4]>::try_from(&payload_slice[0..4]).unwrap_or(*b"    ");
             let body = &payload_slice[4..];
-            if &list_type == b"cmpr" {
-                match decompress_cmpr_payload(body, ctx.endian, MAX_DECOMPRESSED_BYTES) {
+            if &list_type == b"cmpr" && ctx.inside_cmpr {
+                warnings.push(format!("W-CMPR-NESTED: LIST cmpr at offset {src_offset} inside another LIST cmpr kept opaque"));
+                out.push(ParsedChunk {
+                    fourcc,
+                    list_type: Some(list_type),
+                    payload: body.iter().copied().take(1024).collect(),
+                    children: Vec::new(),
+                    src_offset,
+                });
+            } else if &list_type == b"cmpr" && ctx.decompress_budget == 0 {
+                warnings.push(format!("W-CMPR-BUDGET: LIST cmpr at offset {src_offset} skipped; per-file decompression budget exhausted"));
+                out.push(ParsedChunk {
+                    fourcc,
+                    list_type: Some(list_type),
+                    payload: body.iter().copied().take(1024).collect(),
+                    children: Vec::new(),
+                    src_offset,
+                });
+            } else if &list_type == b"cmpr" {
+                let limit = ctx.decompress_budget.min(MAX_DECOMPRESSED_BYTES);
+                match decompress_cmpr_payload(body, ctx.endian, limit) {
                     Ok((part1, part2_sizes)) => {
+                        let used = part1.len().saturating_add(part2_sizes.len().saturating_mul(4));
+                        ctx.decompress_budget = ctx.decompress_budget.saturating_sub(used);
                         let bs_ref = if part2_sizes.is_empty() { None } else { Some(part2_sizes.as_slice()) };
+                        ctx.inside_cmpr = true;
                         let children = walk_chunk_sequence(&part1, src_offset + 12, bs_ref, ctx, depth + 1, warnings);
+                        ctx.inside_cmpr = false;
                         out.push(ParsedChunk { fourcc, list_type: Some(list_type), payload: Vec::new(), children, src_offset });
+                    }
+                    Err(ProbeError::LimitExceeded { .. }) if limit < MAX_DECOMPRESSED_BYTES => {
+                        ctx.decompress_budget = 0;
+                        warnings.push(format!("W-CMPR-BUDGET: LIST cmpr at offset {src_offset} exceeds the remaining per-file decompression budget ({limit} bytes); kept opaque"));
+                        out.push(ParsedChunk {
+                            fourcc,
+                            list_type: Some(list_type),
+                            payload: body.iter().copied().take(1024).collect(),
+                            children: Vec::new(),
+                            src_offset,
+                        });
                     }
                     Err(e) => {
                         warnings.push(format!("W-CMPR-DECOMPRESS: LIST cmpr at offset {src_offset} failed ({e}); keeping opaque payload"));
@@ -1073,23 +1132,22 @@ fn decode_loda_bitmap(slice: &[u8], endian: Endian, _version: u16, _page_size: S
         let dpi_y_raw = read_u32(endian, slice, 16)?;
         let dpi_x = F64::new(f64::from(f32::from_bits(dpi_x_raw))).unwrap_or(dpi_fallback);
         let dpi_y = F64::new(f64::from(f32::from_bits(dpi_y_raw))).unwrap_or(dpi_fallback);
-        let byte_len = read_u32(endian, slice, 20)? as usize;
-        let expected = (pixel_width as usize) * (pixel_height as usize) * 4;
-        let pixel_bytes = slice.get(24..24 + byte_len)?;
-        let rgba_pixels = if pixel_bytes.len() == expected {
-            pixel_bytes.to_vec()
-        } else {
-            let mut v = pixel_bytes.to_vec();
-            v.resize(expected, 0xFF);
-            v
-        };
-        Some(ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels })
-    } else if let Some(rect) = bbox_rect {
-        let pixel_width = (rect.width().round() as u32).clamp(1, 4096);
-        let pixel_height = (rect.height().round() as u32).clamp(1, 4096);
-        let total = (pixel_width as usize) * (pixel_height as usize) * 4;
-        Some(ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x: dpi_fallback, dpi_y: dpi_fallback, rgba_pixels: vec![0xCC; total] })
+        let byte_len = usize::try_from(read_u32(endian, slice, 20)?).ok()?;
+        let pixels = usize::try_from(pixel_width).ok()?.checked_mul(usize::try_from(pixel_height).ok()?)?;
+        if pixels == 0 || pixels > MAX_BITMAP_PIXELS {
+            return None;
+        }
+        let expected = pixels.checked_mul(4)?;
+        // The pixel data must be present in full: never pad or invent pixels from header fields.
+        if byte_len != expected {
+            return None;
+        }
+        let pixel_bytes = slice.get(24..24usize.checked_add(byte_len)?)?;
+        Some(ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels: pixel_bytes.to_vec() })
     } else {
+        // Without decodable pixel data the caller falls back to an `Unsupported` object that keeps
+        // the bounding box; placeholder pixels are never invented.
+        let _ = bbox_rect;
         None
     }
 }
@@ -1115,9 +1173,22 @@ fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind
         if w == 0 || h == 0 || w > 16384 || h > 16384 {
             return None;
         }
+        let pixels = (w as usize).checked_mul(h as usize)?;
+        if pixels > MAX_BITMAP_PIXELS {
+            return None;
+        }
 
         let raw_pixels = payload.get(40..)?;
-        let mut rgba = Vec::with_capacity((w as usize) * (h as usize) * 4);
+        // Check that the pixel data is present before allocating the RGBA buffer.
+        let needed = match bpp {
+            32 => pixels.checked_mul(4)?,
+            24 => (w as usize).checked_mul(3)?.div_ceil(4).checked_mul(4)?.checked_mul(h as usize)?,
+            _ => return None,
+        };
+        if raw_pixels.len() < needed {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
         if bpp == 32 {
             for &[b, g, r, a] in raw_pixels.as_chunks::<4>().0.iter().take((w as usize) * (h as usize)) {
                 rgba.push(r);
@@ -1653,4 +1724,124 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     out.extend_from_slice(&form_type);
     out.extend_from_slice(&body);
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod budget_tests {
+    use super::*;
+
+    /// `CPng` header + zlib header + stored deflate blocks (each at most 65,535 bytes).
+    fn cpng_stored(raw: &[u8]) -> Vec<u8> {
+        let mut out = b"CPng\x01\x00\x04\x00".to_vec();
+        out.extend_from_slice(&[0x78, 0x01]);
+        let mut chunks = raw.chunks(65_535).peekable();
+        if chunks.peek().is_none() {
+            out.extend_from_slice(&[0x01, 0x00, 0x00, 0xFF, 0xFF]);
+        }
+        while let Some(c) = chunks.next() {
+            out.push(u8::from(chunks.peek().is_none()));
+            let len = c.len() as u16;
+            out.extend_from_slice(&len.to_le_bytes());
+            out.extend_from_slice(&(!len).to_le_bytes());
+            out.extend_from_slice(c);
+        }
+        out
+    }
+
+    /// Body of a `LIST cmpr` (starting with the `cmpr` list type) for `part1` / `part2` streams.
+    fn cmpr_body(part1: &[u8], part2: &[u8]) -> Vec<u8> {
+        let c1 = cpng_stored(part1);
+        let c2 = cpng_stored(part2);
+        let mut body = b"cmpr".to_vec();
+        for v in [c1.len(), part1.len(), c2.len(), part2.len()] {
+            body.extend_from_slice(&(v as u32).to_le_bytes());
+        }
+        body.extend_from_slice(&c1);
+        body.extend_from_slice(&c2);
+        body
+    }
+
+    fn riff_with_top_level(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let mut inner = Vec::new();
+        for body in chunks {
+            inner.extend_from_slice(b"LIST");
+            inner.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            inner.extend_from_slice(body);
+            if body.len() % 2 == 1 {
+                inner.push(0);
+            }
+        }
+        let mut riff = b"RIFF".to_vec();
+        riff.extend_from_slice(&((inner.len() + 4) as u32).to_le_bytes());
+        riff.extend_from_slice(b"CDRD");
+        riff.extend_from_slice(&inner);
+        riff
+    }
+
+    /// Part1 holding one opaque `junk` chunk whose size is block-size index 0, plus its Part2 table.
+    fn junk_cmpr(payload_len: usize) -> Vec<u8> {
+        let mut part1 = b"junk".to_vec();
+        part1.extend_from_slice(&0u32.to_le_bytes());
+        part1.extend(std::iter::repeat_n(0xAB_u8, payload_len));
+        cmpr_body(&part1, &(payload_len as u32).to_le_bytes())
+    }
+
+    #[test]
+    fn cmpr_decompression_budget_is_shared_across_all_lists_in_a_file() {
+        let riff = riff_with_top_level(&[junk_cmpr(40_000), junk_cmpr(40_000), junk_cmpr(40_000)]);
+        let mut doc = Document::new_a4_portrait();
+        let mut warnings = Vec::new();
+        parse_riff_stream_with_budget(&riff, Endian::Little, 1300, &mut doc, &mut warnings, 100_000);
+        let budget_hits = warnings.iter().filter(|w| w.starts_with("W-CMPR-BUDGET")).count();
+        assert_eq!(budget_hits, 1, "the third 40 KB list must exceed a shared 100 KB budget: {warnings:?}");
+    }
+
+    #[test]
+    fn nested_cmpr_inside_cmpr_is_kept_opaque() {
+        let inner = junk_cmpr(16);
+        let mut part1 = b"LIST".to_vec();
+        part1.extend_from_slice(&0u32.to_le_bytes());
+        part1.extend_from_slice(&inner);
+        let outer = cmpr_body(&part1, &(inner.len() as u32).to_le_bytes());
+        let outcome = parse_document(&riff_with_top_level(&[outer])).unwrap();
+        assert!(
+            outcome.parse_warnings.iter().any(|w| w.starts_with("W-CMPR-NESTED")),
+            "nested cmpr must not be decompressed: {:?}",
+            outcome.parse_warnings
+        );
+    }
+
+    #[test]
+    fn hostile_bitmap_headers_are_rejected_without_huge_allocations() {
+        // `BMP ` header claiming u32::MAX x u32::MAX pixels with a 16-byte body.
+        let mut bmp = b"BMP ".to_vec();
+        for v in [u32::MAX, u32::MAX, 0, 0, 16] {
+            bmp.extend_from_slice(&v.to_le_bytes());
+        }
+        bmp.extend_from_slice(&[0u8; 16]);
+        assert!(decode_loda_bitmap(&bmp, Endian::Little, 1400, Size::default(), None).is_none());
+
+        // 2x2 bitmap whose pixel data is short: must be rejected, not padded.
+        let mut short = b"BMP ".to_vec();
+        for v in [2u32, 2, 0, 0, 8] {
+            short.extend_from_slice(&v.to_le_bytes());
+        }
+        short.extend_from_slice(&[0u8; 8]);
+        assert!(decode_loda_bitmap(&short, Endian::Little, 1400, Size::default(), None).is_none());
+
+        // No `BMP ` magic: no invented placeholder pixels, even with a bounding box.
+        let bbox = Rect::new(0.0, 0.0, 4000.0, 4000.0).ok();
+        assert!(decode_loda_bitmap(&[0u8; 32], Endian::Little, 1400, Size::default(), bbox).is_none());
+
+        // BITMAPINFOHEADER 16384 x 16384 x 24 bpp with no pixel data: rejected before allocating.
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40u32.to_le_bytes());
+        dib.extend_from_slice(&16_384i32.to_le_bytes());
+        dib.extend_from_slice(&16_384i32.to_le_bytes());
+        dib.extend_from_slice(&1u16.to_le_bytes());
+        dib.extend_from_slice(&24u16.to_le_bytes());
+        dib.resize(40, 0);
+        assert!(decode_bmp_or_cdib_chunk(&dib, Endian::Little).is_none());
+    }
 }

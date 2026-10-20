@@ -18,7 +18,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 
 **Phase 1: security and crash safety**
 - [x] R1.1 Close the GUI preview server attack surface: require a per-launch token, check Host and Origin, add timeouts and size caps. It will be removed once R2 lands.
-- [ ] R1.2 CDR parser budgets:
+- [x] R1.2 CDR parser budgets:
   - a per-file decompression budget, with nested `cmpr` treated as opaque;
   - bitmap pixel and byte budgets with `checked_mul`, and no invented placeholder pixels;
   - checked arithmetic for 32-bit targets.
