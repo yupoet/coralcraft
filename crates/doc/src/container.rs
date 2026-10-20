@@ -88,11 +88,12 @@ pub fn load_bytes(bytes: &[u8]) -> Result<Document, DocError> {
     if trimmed.starts_with(b"{") {
         let raw_tree: Value = serde_json::from_slice(trimmed).map_err(|e| DocError::Json(e.to_string()))?;
         check_tree_no_unexpected_payload_keys(&raw_tree)?;
-        let doc: Document = serde_json::from_value(raw_tree).map_err(|e| DocError::Json(e.to_string()))?;
+        let mut doc: Document = serde_json::from_value(raw_tree).map_err(|e| DocError::Json(e.to_string()))?;
         if doc.schema.major != CURRENT_SCHEMA.major {
             return Err(DocError::UnsupportedVersion { found: doc.schema.major, expected: CURRENT_SCHEMA.major });
         }
         validate_no_reserved_extra_keys(&doc)?;
+        doc.validate()?;
         return Ok(doc);
     }
     Err(DocError::BadMagic)
@@ -306,11 +307,12 @@ fn load_zip_bytes(bytes: &[u8]) -> Result<Document, DocError> {
     check_tree_no_unexpected_payload_keys(&tree)?;
     internalize_payloads(&mut tree, &entries)?;
 
-    let doc: Document = serde_json::from_value(tree).map_err(|e| DocError::Json(e.to_string()))?;
+    let mut doc: Document = serde_json::from_value(tree).map_err(|e| DocError::Json(e.to_string()))?;
     if doc.schema.major != CURRENT_SCHEMA.major {
         return Err(DocError::UnsupportedVersion { found: doc.schema.major, expected: CURRENT_SCHEMA.major });
     }
     validate_no_reserved_extra_keys(&doc)?;
+    doc.validate()?;
     Ok(doc)
 }
 

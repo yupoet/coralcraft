@@ -83,3 +83,58 @@ fn coralcraft_loader_survives_deterministic_mutations_of_json_and_zip() {
         let _ = load_bytes(&mutate(&mut rng, &zip));
     }
 }
+
+fn doc_json_with(edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    let mut doc = Document::new_a4_portrait();
+    let a = doc.allocate_object_id();
+    let b = doc.allocate_object_id();
+    let rect = |id| {
+        coralcraft_doc::ObjectNode::new(
+            id,
+            None,
+            coralcraft_doc::ObjectKind::Rect(coralcraft_geom::RectSpec::sharp(coralcraft_geom::Rect::new(0.0, 0.0, 10.0, 10.0).unwrap())),
+            None,
+            None,
+        )
+    };
+    doc.pages[0].layers[0].objects.push(rect(a));
+    doc.pages[0].layers[0].objects.push(rect(b));
+    let mut v: serde_json::Value = serde_json::from_slice(&save_json(&doc).unwrap()).unwrap();
+    edit(&mut v);
+    serde_json::to_vec(&v).unwrap()
+}
+
+#[test]
+fn loader_rejects_documents_without_pages() {
+    let bytes = doc_json_with(|v| v["pages"] = serde_json::json!([]));
+    assert!(matches!(load_bytes(&bytes), Err(coralcraft_doc::DocError::InvalidDocument(_))));
+}
+
+#[test]
+fn loader_rejects_duplicate_object_ids() {
+    let bytes = doc_json_with(|v| {
+        let id = v["pages"][0]["layers"][0]["objects"][0]["id"].clone();
+        v["pages"][0]["layers"][0]["objects"][1]["id"] = id;
+    });
+    assert!(matches!(load_bytes(&bytes), Err(coralcraft_doc::DocError::InvalidDocument(_))));
+}
+
+#[test]
+fn loader_recomputes_a_stale_next_id_so_new_ids_never_collide() {
+    let bytes = doc_json_with(|v| v["next_id"] = serde_json::json!(1));
+    let mut doc = load_bytes(&bytes).unwrap();
+    let fresh = doc.allocate_object_id();
+    let mut ids = Vec::new();
+    for layer in &doc.pages[0].layers {
+        ids.push(layer.id.0);
+        ids.extend(layer.objects.iter().map(|o| o.id.0));
+    }
+    ids.push(doc.pages[0].id.0);
+    assert!(ids.iter().all(|&id| id < fresh.0), "fresh id {} collides with existing ids {ids:?}", fresh.0);
+}
+
+#[test]
+fn loader_rejects_ids_at_the_top_of_the_id_space() {
+    let bytes = doc_json_with(|v| v["pages"][0]["layers"][0]["objects"][0]["id"] = serde_json::json!(u64::MAX));
+    assert!(matches!(load_bytes(&bytes), Err(coralcraft_doc::DocError::InvalidDocument(_))));
+}

@@ -22,7 +22,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
   - a per-file decompression budget, with nested `cmpr` treated as opaque;
   - bitmap pixel and byte budgets with `checked_mul`, and no invented placeholder pixels;
   - checked arithmetic for 32-bit targets.
-- [ ] R1.3 Add `Document::validate()` (at least one page, unique IDs, recomputed `next_id`). Use it on every load and in `EditorEngine::new`. Remove `unreachable!` and unchecked page indexing, and add `catch_unwind` around MCP requests.
+- [x] R1.3 Add `Document::validate()` (at least one page, unique IDs, recomputed `next_id`). Use it on every load and in `EditorEngine::new`. Remove `unreachable!` and unchecked page indexing, and add `catch_unwind` around MCP requests.
 - [x] R1.4 Fix the SVG import panic on multibyte `#hex` colours. Use checked arithmetic for ZIP local-header offsets and text lengths on 32-bit targets. Add deterministic mutation tests for `import_svg`, `import_dxf` and `load_bytes`. Add an i686 CI test job.
 - [ ] R1.5 Roll out `clippy::indexing_slicing` and `clippy::arithmetic_side_effects` crate by crate, as `[lints]` in each crate's `Cargo.toml`. Hit counts on 2026-10-20:
 

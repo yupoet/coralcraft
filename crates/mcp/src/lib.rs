@@ -94,7 +94,20 @@ impl McpServer {
     #[must_use]
     pub fn handle_json_str(&mut self, line: &str) -> String {
         let resp = match serde_json::from_str::<JsonRpcRequest>(line) {
-            Ok(req) => self.handle_request(req),
+            Ok(req) => {
+                let id = req.id.clone();
+                // Defense in depth: shipped code must not panic, but if an undiscovered bug does,
+                // report an internal error instead of taking the whole stdio server down.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_request(req))) {
+                    Ok(resp) => resp,
+                    Err(_) => JsonRpcResponse {
+                        jsonrpc: "2.0".to_owned(),
+                        id,
+                        result: None,
+                        error: Some(JsonRpcError { code: -32603, message: "Internal error: request handler panicked".to_owned() }),
+                    },
+                }
+            }
             Err(err) => JsonRpcResponse {
                 jsonrpc: "2.0".to_owned(),
                 id: Value::Null,
@@ -2094,14 +2107,14 @@ impl McpServer {
             "import_svg" => {
                 let svg = args.get("svg").and_then(Value::as_str).ok_or_else(|| "Missing svg string".to_owned())?;
                 let doc = import_svg(svg).map_err(|e| e.to_string())?;
-                let count = doc.pages[0].layers[0].objects.len();
+                let count: usize = doc.pages.iter().flat_map(|p| p.layers.iter()).map(|l| l.objects.len()).sum();
                 self.engine = EditorEngine::new(doc);
                 Ok(json!({ "status": "ok", "imported_objects": count }))
             }
             "import_dxf" => {
                 let dxf = args.get("dxf").and_then(Value::as_str).ok_or_else(|| "Missing dxf string".to_owned())?;
                 let doc = import_dxf(dxf).map_err(|e| e.to_string())?;
-                let count = doc.pages[0].layers[0].objects.len();
+                let count: usize = doc.pages.iter().flat_map(|p| p.layers.iter()).map(|l| l.objects.len()).sum();
                 self.engine = EditorEngine::new(doc);
                 Ok(json!({ "status": "ok", "imported_objects": count }))
             }

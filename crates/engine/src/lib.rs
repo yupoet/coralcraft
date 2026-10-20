@@ -421,7 +421,8 @@ impl EditorEngine {
     /// Creates an engine initialized with `document`, `Page 1` active, and standard CorelDRAW
     /// creation defaults (No Fill, Black Hairline Outline).
     #[must_use]
-    pub fn new(document: Document) -> Self {
+    pub fn new(mut document: Document) -> Self {
+        Self::ensure_minimum_structure(&mut document);
         Self {
             document,
             active_target: ActivePageTarget::Page(0),
@@ -436,6 +437,25 @@ impl EditorEngine {
             snap_to_page: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+        }
+    }
+
+    /// Repairs the invariants the engine relies on: at least one page, a `next_id` above every
+    /// existing ID. Documents from files are already checked by `Document::validate`; this keeps
+    /// programmatically built documents from crashing the engine.
+    fn ensure_minimum_structure(document: &mut Document) {
+        // Ignore the error: an empty document is repaired below, and duplicate IDs cannot be
+        // repaired here (loaders reject them first).
+        let _ = document.validate();
+        if document.pages.is_empty()
+            && let Some(mut page) = Document::new_a4_portrait().pages.into_iter().next()
+        {
+            page.id = PageId(document.allocate_object_id().0);
+            for layer in &mut page.layers {
+                layer.id = LayerId(document.allocate_object_id().0);
+                layer.objects.clear();
+            }
+            document.pages.push(page);
         }
     }
 
@@ -5008,32 +5028,45 @@ impl EditorEngine {
     fn target_layer_mut(&mut self) -> &mut Layer {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
-                let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
-                if !self.document.pages[page_idx].layers.iter().any(|l| l.role == LayerRole::Normal) {
-                    let layer_id = LayerId(self.document.allocate_object_id().0);
-                    self.document.pages[page_idx].layers.push(Layer::new_normal(layer_id, "Layer 1"));
+                if self.document.pages.is_empty() {
+                    Self::ensure_minimum_structure(&mut self.document);
                 }
-                self.document.pages[page_idx].layers.iter_mut().rev().find(|l| l.role == LayerRole::Normal).unwrap_or_else(|| unreachable!())
+                let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
+                let normal_pos = self.document.pages.get(page_idx).and_then(|p| p.layers.iter().rposition(|l| l.role == LayerRole::Normal));
+                let pos = match normal_pos {
+                    Some(pos) => pos,
+                    None => {
+                        let layer_id = LayerId(self.document.allocate_object_id().0);
+                        let page = &mut self.document.pages[page_idx];
+                        page.layers.push(Layer::new_normal(layer_id, "Layer 1"));
+                        page.layers.len() - 1
+                    }
+                };
+                &mut self.document.pages[page_idx].layers[pos]
             }
             ActivePageTarget::MasterPage => {
-                if let Some(pos) = self.document.master_layers.iter().position(|l| l.role == LayerRole::MasterAllPages) {
-                    &mut self.document.master_layers[pos]
-                } else {
-                    let id = LayerId(self.document.allocate_object_id().0);
-                    let mut master = Layer::new_normal(id, "Master Page");
-                    master.role = LayerRole::MasterAllPages;
-                    self.document.master_layers.push(master);
-                    self.document.master_layers.last_mut().unwrap_or_else(|| unreachable!())
-                }
+                let pos = match self.document.master_layers.iter().position(|l| l.role == LayerRole::MasterAllPages) {
+                    Some(pos) => pos,
+                    None => {
+                        let id = LayerId(self.document.allocate_object_id().0);
+                        let mut master = Layer::new_normal(id, "Master Page");
+                        master.role = LayerRole::MasterAllPages;
+                        self.document.master_layers.push(master);
+                        self.document.master_layers.len() - 1
+                    }
+                };
+                &mut self.document.master_layers[pos]
             }
             ActivePageTarget::Desktop => {
-                if let Some(pos) = self.document.master_layers.iter().position(|l| l.role == LayerRole::Desktop) {
-                    &mut self.document.master_layers[pos]
-                } else {
-                    let id = LayerId(self.document.allocate_object_id().0);
-                    self.document.master_layers.push(Layer::new_desktop(id));
-                    self.document.master_layers.last_mut().unwrap_or_else(|| unreachable!())
-                }
+                let pos = match self.document.master_layers.iter().position(|l| l.role == LayerRole::Desktop) {
+                    Some(pos) => pos,
+                    None => {
+                        let id = LayerId(self.document.allocate_object_id().0);
+                        self.document.master_layers.push(Layer::new_desktop(id));
+                        self.document.master_layers.len() - 1
+                    }
+                };
+                &mut self.document.master_layers[pos]
             }
         }
     }
@@ -5114,6 +5147,29 @@ fn reallocate_object_ids_recursive(node: &mut ObjectNode, doc: &mut Document) {
 mod tests {
     use super::*;
     use coralcraft_tools::PropertyContext;
+
+    #[test]
+    fn engine_repairs_a_document_without_pages_instead_of_panicking() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages.clear();
+        let mut engine = EditorEngine::new(doc);
+        assert_eq!(engine.document.pages.len(), 1, "engine must guarantee at least one page");
+        let _ = engine.current_page();
+        assert!(engine.current_target_objects().is_empty());
+        // Every target kind must yield a layer without panicking, even with no master layers.
+        engine.document.master_layers.clear();
+        for target in [ActivePageTarget::MasterPage, ActivePageTarget::Desktop, ActivePageTarget::Page(0)] {
+            engine.set_active_target(target);
+            engine.select_all();
+            let _ = engine.target_layer_mut();
+        }
+        let mut ids: Vec<u64> = engine.document.pages.iter().flat_map(|p| p.layers.iter().map(|l| l.id.0)).collect();
+        ids.extend(engine.document.master_layers.iter().map(|l| l.id.0));
+        let before = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), before, "repaired layers must get unique ids");
+    }
 
     #[test]
     fn palette_left_right_click_and_no_color_swatch_update_selection_and_defaults_with_undo() {

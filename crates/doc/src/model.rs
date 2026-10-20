@@ -53,6 +53,9 @@ pub enum DocError {
         /// Total page count.
         count: usize,
     },
+    /// Structurally invalid document (no pages, duplicate object IDs, exhausted ID space).
+    #[error("invalid document: {0}")]
+    InvalidDocument(String),
     /// Invalid or unsupported SVG document structure.
     #[error("invalid SVG document: {0}")]
     InvalidSvg(String),
@@ -636,6 +639,50 @@ impl Document {
     }
 
     /// Allocates the next deterministic monotonic ID in this document.
+    /// Checks the structural invariants every consumer relies on and repairs the ID allocator.
+    ///
+    /// Use this on every document that comes from outside the process (files, MCP tools, imports).
+    /// - at least one page;
+    /// - object IDs (including group, PowerClip and unsupported-object children) are unique;
+    /// - no page, layer or object ID uses `u64::MAX` (the allocator could not move past it);
+    /// - `next_id` is raised above every page, layer and object ID, so new IDs never collide.
+    ///
+    /// # Errors
+    /// Returns [`DocError::InvalidDocument`] when an invariant cannot be repaired.
+    pub fn validate(&mut self) -> Result<(), DocError> {
+        if self.pages.is_empty() {
+            return Err(DocError::InvalidDocument("document has no pages".to_owned()));
+        }
+        let mut object_ids = std::collections::BTreeSet::new();
+        let mut max_id = self.id;
+        let mut stack: Vec<&ObjectNode> = Vec::new();
+        let layers = self.pages.iter().flat_map(|p| p.layers.iter()).chain(self.master_layers.iter());
+        for page in &self.pages {
+            max_id = max_id.max(page.id.0);
+        }
+        for layer in layers {
+            max_id = max_id.max(layer.id.0);
+            stack.extend(layer.objects.iter());
+            while let Some(node) = stack.pop() {
+                if !object_ids.insert(node.id.0) {
+                    return Err(DocError::InvalidDocument(format!("duplicate object id {}", node.id.0)));
+                }
+                max_id = max_id.max(node.id.0);
+                stack.extend(node.powerclip_children.iter());
+                match &node.kind {
+                    ObjectKind::Group { children } => stack.extend(children.iter()),
+                    ObjectKind::Unsupported(u) => stack.extend(u.children.iter()),
+                    _ => {}
+                }
+            }
+        }
+        if max_id == u64::MAX || self.next_id == u64::MAX {
+            return Err(DocError::InvalidDocument("object id space exhausted (id u64::MAX in use)".to_owned()));
+        }
+        self.next_id = self.next_id.max(max_id + 1);
+        Ok(())
+    }
+
     pub fn allocate_object_id(&mut self) -> ObjectId {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
