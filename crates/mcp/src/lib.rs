@@ -6,13 +6,13 @@ use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
-    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg,
+    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, save_json,
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
-    build_angular_dimension_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path,
-    build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
+    build_angular_dimension_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_gear_wheel_path,
+    build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -838,6 +838,26 @@ impl McpServer {
                         {
                             "name": "set_outline_cap_join",
                             "description": "Updates line cap (butt, round, square), line join (miter, round, bevel), and/or miter_limit on selected objects' OutlineStyle (F12 Outline Pen).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_gear_wheel",
+                            "description": "Adds a parametric mechanical gear / cogwheel Path with teeth trapezoidal cogs and a concentric bore hole.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "align_curve_nodes",
+                            "description": "Aligns the endpoints of element_indices on an object horizontally (same Y) and/or vertically (same X) to the first index (Shape Tool F10 -> Align Nodes).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "shift_selection_colors",
+                            "description": "Shifts HSB hue (hue_delta_deg), saturation (saturation_delta), and brightness (brightness_delta) across all fills, fountain stops, patterns, and outlines of the selection.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_coralcraft_json",
+                            "description": "Serializes the entire multi-page Document to lossless native .coralcraft JSON.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2416,6 +2436,42 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit });
                 Ok(json!({ "outline_cap_join_updated": ok }))
             }
+            "add_gear_wheel" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let outer_radius = args.get("outer_radius").and_then(Value::as_f64).unwrap_or(60.0);
+                let inner_radius = args.get("inner_radius").and_then(Value::as_f64).unwrap_or(45.0);
+                let teeth = args.get("teeth").and_then(Value::as_u64).unwrap_or(12) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_gear_wheel_path(center, outer_radius, inner_radius, teeth).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Gear Wheel".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "gear_wheel", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "align_curve_nodes" => {
+                let target = self.resolve_target_id(args)?;
+                let element_indices: Vec<usize> = args
+                    .get("element_indices")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                    .unwrap_or_else(|| vec![0, 1]);
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let vertical = args.get("vertical").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::AlignCurveNodes { object_id: target, element_indices, horizontal, vertical });
+                Ok(json!({ "nodes_aligned": ok, "object_id": target.0 }))
+            }
+            "shift_selection_colors" => {
+                self.apply_optional_selection(args);
+                let hue_delta_deg = F64::new(args.get("hue_delta_deg").and_then(Value::as_f64).unwrap_or(30.0)).map_err(|e| e.to_string())?;
+                let saturation_delta = F64::new(args.get("saturation_delta").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let brightness_delta = F64::new(args.get("brightness_delta").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta });
+                Ok(json!({ "colors_shifted": ok }))
+            }
+            "export_coralcraft_json" => {
+                let bytes = save_json(&self.engine.document).map_err(|e| e.to_string())?;
+                let json_str = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+                Ok(json!({ "coralcraft_json_bytes": json_str.len(), "coralcraft_json": json_str }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2445,7 +2501,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 148);
+        assert_eq!(tools, 152);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -696,6 +696,47 @@ pub fn build_polyline_path(points: &[Point], closed: bool) -> Result<Path, GeomE
     Ok(path)
 }
 
+/// Builds a parametric mechanical gear / cogwheel [`Path`] with `teeth` trapezoidal cogs and a
+/// concentric axle bore hole (`Basic Shapes -> Gear Wheel`).
+pub fn build_gear_wheel_path(center: Point, outer_radius: f64, inner_radius: f64, teeth: u32) -> Result<Path, GeomError> {
+    let r_out = F64::new(outer_radius)?.get();
+    let r_in = F64::new(inner_radius)?.get();
+    if r_in <= 0.0 || r_out <= r_in {
+        return Err(GeomError::InvalidShapeParameter("outer_radius must exceed inner_radius and 0"));
+    }
+    let n = teeth.clamp(3, 128);
+    let pitch = std::f64::consts::TAU / f64::from(n);
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let mut path = Path { elements: Vec::new(), fill_rule: crate::path::FillRule::EvenOdd };
+
+    for i in 0..n {
+        let base = -std::f64::consts::FRAC_PI_2 + f64::from(i) * pitch;
+        let samples = [(0.0, r_in), (0.15, r_out), (0.45, r_out), (0.60, r_in)];
+        for (k, &(frac, r)) in samples.iter().enumerate() {
+            let a = base + frac * pitch;
+            let pt = Point::new(cx + r * a.cos(), cy + r * a.sin())?;
+            if i == 0 && k == 0 {
+                path.move_to(pt)?;
+            } else {
+                path.line_to(pt)?;
+            }
+        }
+    }
+    path.close()?;
+
+    // Add concentric circular bore hole subpath at 0.4 * inner_radius
+    let bore_r = 0.4 * r_in;
+    let k = bore_r * KAPPA;
+    path.move_to(Point::new(cx + bore_r, cy)?)?;
+    path.cubic_to(Point::new(cx + bore_r, cy + k)?, Point::new(cx + k, cy + bore_r)?, Point::new(cx, cy + bore_r)?)?;
+    path.cubic_to(Point::new(cx - k, cy + bore_r)?, Point::new(cx - bore_r, cy + k)?, Point::new(cx - bore_r, cy)?)?;
+    path.cubic_to(Point::new(cx - bore_r, cy - k)?, Point::new(cx - k, cy - bore_r)?, Point::new(cx, cy - bore_r)?)?;
+    path.cubic_to(Point::new(cx + k, cy - bore_r)?, Point::new(cx + bore_r, cy - k)?, Point::new(cx + bore_r, cy)?)?;
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -719,5 +760,9 @@ mod m27_tests {
         let poly =
             build_polyline_path(&[Point::new(0.0, 0.0).unwrap(), Point::new(40.0, 0.0).unwrap(), Point::new(20.0, 30.0).unwrap()], true).unwrap();
         assert_eq!(poly.elements.len(), 4);
+
+        let gear = build_gear_wheel_path(Point::new(50.0, 50.0).unwrap(), 40.0, 30.0, 8).unwrap();
+        let gear_closes = gear.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(gear_closes, 2);
     }
 }

@@ -273,6 +273,10 @@ pub enum EngineCommand {
     FitPageToSelection { margin_pt: F64 },
     /// Updates `cap`, `join`, and/or `miter_limit` on selected objects' `OutlineStyle` or creation defaults (`F12` Outline Pen).
     SetOutlineCapAndJoin { cap: Option<LineCap>, join: Option<LineJoin>, miter_limit: Option<F64> },
+    /// Aligns the endpoints of `element_indices` on `object_id` horizontally (same Y) and/or vertically (same X) to the first index (`Shape Tool F10 -> Align Nodes`).
+    AlignCurveNodes { object_id: ObjectId, element_indices: Vec<usize>, horizontal: bool, vertical: bool },
+    /// Shifts HSB hue (`hue_delta_deg`), saturation (`saturation_delta`), and brightness (`brightness_delta`) across all fills, fountain stops, patterns, and outlines of the selection (`Effects -> Adjust -> Hue/Saturation/Lightness`).
+    ShiftSelectionColors { hue_delta_deg: F64, saturation_delta: F64, brightness_delta: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1158,6 +1162,29 @@ impl EditorEngine {
             }
             EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
                 if cap.is_none() && join.is_none() && miter_limit.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
+                if element_indices.len() < 2 || (!horizontal && !vertical) {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| {
+                            element_indices.iter().all(|&idx| idx < p.elements.len() && !matches!(p.elements[idx], PathElement::Close))
+                        })
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
+                if hue_delta_deg.get().abs() <= 1e-6 && saturation_delta.get().abs() <= 1e-6 && brightness_delta.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
                     return false;
                 }
             }
@@ -3234,6 +3261,97 @@ impl EditorEngine {
                     });
                 }
             }
+            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    let Some(mut path) = object_to_path(obj) else {
+                        return;
+                    };
+                    let elem_end = |el: &PathElement| -> Option<Point> {
+                        match *el {
+                            PathElement::MoveTo(p)
+                            | PathElement::LineTo(p)
+                            | PathElement::QuadTo { end: p, .. }
+                            | PathElement::CubicTo { end: p, .. } => Some(p),
+                            PathElement::Close => None,
+                        }
+                    };
+                    let Some(ref_pt) = element_indices.first().and_then(|&i| path.elements.get(i)).and_then(elem_end) else {
+                        return;
+                    };
+                    for &idx in element_indices.iter().skip(1) {
+                        let Some(cur_pt) = path.elements.get(idx).and_then(elem_end) else {
+                            continue;
+                        };
+                        let nx = if vertical { ref_pt.x.get() } else { cur_pt.x.get() };
+                        let ny = if horizontal { ref_pt.y.get() } else { cur_pt.y.get() };
+                        let dx = nx - cur_pt.x.get();
+                        let dy = ny - cur_pt.y.get();
+                        let Ok(new_end) = Point::new(nx, ny) else {
+                            continue;
+                        };
+                        match &mut path.elements[idx] {
+                            PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
+                            PathElement::QuadTo { ctrl, end } => {
+                                if let Ok(nc) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
+                                    *ctrl = nc;
+                                }
+                                *end = new_end;
+                            }
+                            PathElement::CubicTo { c2, end, .. } => {
+                                if let Ok(nc2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
+                                    *c2 = nc2;
+                                }
+                                *end = new_end;
+                            }
+                            PathElement::Close => {}
+                        }
+                        if idx + 1 < path.elements.len()
+                            && let PathElement::CubicTo { c1, .. } = &mut path.elements[idx + 1]
+                            && let Ok(nc1) = Point::new(c1.x.get() + dx, c1.y.get() + dy)
+                        {
+                            *c1 = nc1;
+                        }
+                    }
+                    obj.kind = ObjectKind::Path(path);
+                });
+            }
+            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
+                let dh = hue_delta_deg.get();
+                let ds = saturation_delta.get();
+                let db = brightness_delta.get();
+                let shift_color = |c: &Color| -> Color {
+                    let [r, g, b] = c.to_srgb8();
+                    let [h, s, v] = coralcraft_color::srgb8_to_hsb(r, g, b);
+                    let [nr, ng, nb] = coralcraft_color::hsb_to_srgb8((h + dh).rem_euclid(360.0), (s + ds).clamp(0.0, 1.0), (v + db).clamp(0.0, 1.0));
+                    Color::rgb8(nr, ng, nb)
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => *color = shift_color(color),
+                            FillStyle::Fountain { stops, .. } => {
+                                for stop in stops {
+                                    stop.color = shift_color(&stop.color);
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                *fg_color = shift_color(fg_color);
+                                *bg_color = shift_color(bg_color);
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(outline) = &mut obj.outline {
+                        outline.color = shift_color(&outline.color);
+                    }
+                });
+            }
         }
         true
     }
@@ -4062,5 +4180,11 @@ mod tests {
             miter_limit: Some(F64::new(8.0).unwrap()),
         }));
         assert!(engine.execute(EngineCommand::FitPageToSelection { margin_pt: F64::new(10.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::AlignCurveNodes { object_id: sf_id, element_indices: vec![0, 1], horizontal: true, vertical: false }));
+        assert!(engine.execute(EngineCommand::ShiftSelectionColors {
+            hue_delta_deg: F64::new(45.0).unwrap(),
+            saturation_delta: F64::new(0.1).unwrap(),
+            brightness_delta: F64::new(-0.05).unwrap(),
+        }));
     }
 }
