@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M34 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M35 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -32,9 +32,10 @@
   24. **M31: Attract and Repel Tool Localized Path Deformer (`radial_push_path_around_point`), Page Duplication/Rename/Delete (`duplicate_page`, `rename_page`, `delete_page`), and 108 MCP Tools (`commit 757e7ac`)**.
   25. **M32: Smear Tool Localized Path Deformer (`smear_path_from_point`), Paragraph Text Frame Layout (`SetParagraphTextLayout`), Page Target Switch (`set_active_page_target`), Object Inspection (`inspect_object`), and 112 MCP Tools (`commit 6b873eb`)**.
   26. **M33: Roughen Brush Localized Path Deformer (`roughen_path_segments`), Artistic Text Typography Properties (`SetArtisticTextProperties`), Page Objects & Layer Listing (`list_page_objects` & `list_layers`), and 116 MCP Tools (`commit 9437435`)**.
-  27. **M34: Smooth Tool Localized Laplacian Path Deformer (`smooth_path_around_point`), Parametric Rectangle & Ellipse MCP Tools (`update_rect_corners`, `update_ellipse_parameters`), Document Pages Listing (`list_pages`), and 120 MCP Tools**:
-      - `coralcraft-geom`: Added `smooth_path_around_point`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `SmoothObjectPath`, `smooth_path`, `update_rect_corners`, `update_ellipse_parameters`, `list_pages`, and expanded MCP server to **120 tools**.
+  27. **M34: Smooth Tool Localized Laplacian Path Deformer (`smooth_path_around_point`), Parametric Rectangle & Ellipse MCP Tools (`update_rect_corners`, `update_ellipse_parameters`), Document Pages Listing (`list_pages`), and 120 MCP Tools (`commit 20f68c9`)**.
+  28. **M35: Knife Tool (`knife_cut_path_by_line`), Crop Tool (`CropToRect`), Polygon/Star Live Updates (`update_polygon_parameters`), Cross-Layer Object Transfer (`MoveObjectToLayer`), and 124 MCP Tools**:
+      - `coralcraft-geom`: Added `knife_cut_path_by_line`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `KnifeCutObject`, `CropToRect`, `MoveObjectToLayer`, `knife_cut_object`, `crop_to_rect`, `update_polygon_parameters`, `move_object_to_layer`, and expanded MCP server to **124 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

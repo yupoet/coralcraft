@@ -15,7 +15,7 @@ use coralcraft_geom::{
     build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
-use coralcraft_tools::{AlignMode, ZOrderOp, combined_selection_bounds};
+use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -698,6 +698,26 @@ impl McpServer {
                         {
                             "name": "list_pages",
                             "description": "Lists all pages in the document with index, id, name, width_pt, height_pt, bleed_pt, and layer_count (Pages Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "knife_cut_object",
+                            "description": "Slices an object along the cut line (start_x, start_y) -> (end_x, end_y) with kerf gap_pt (Knife Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "crop_to_rect",
+                            "description": "Crops unlocked selected objects (or all unlocked objects on the active layer) to the rectangle (x, y, width, height) (Crop Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "update_polygon_parameters",
+                            "description": "Updates polygon/star mode (polygon, star), points, and inner_radius_pt on selected polygons without converting them to curves (Property Bar).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "move_object_to_layer",
+                            "description": "Moves object_id to target_layer_id on the active page (Objects Docker).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1998,6 +2018,47 @@ impl McpServer {
                     .collect();
                 Ok(json!({ "page_count": pages.len(), "active_page_index": self.engine.current_page_index(), "pages": pages }))
             }
+            "knife_cut_object" => {
+                let target = self.resolve_target_id(args)?;
+                let sx = args.get("start_x").and_then(Value::as_f64).unwrap_or(0.0);
+                let sy = args.get("start_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let ex = args.get("end_x").and_then(Value::as_f64).unwrap_or(100.0);
+                let ey = args.get("end_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let line_start = Point::new(sx, sy).map_err(|e| e.to_string())?;
+                let line_end = Point::new(ex, ey).map_err(|e| e.to_string())?;
+                let gap_pt = F64::new(args.get("gap_pt").and_then(Value::as_f64).unwrap_or(1.5)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::KnifeCutObject { object_id: target, line_start, line_end, gap_pt });
+                Ok(json!({ "knife_cut": ok, "object_id": target.0 }))
+            }
+            "crop_to_rect" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(100.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(100.0);
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::CropToRect { rect });
+                Ok(json!({ "cropped": ok, "remaining_objects": self.engine.current_target_objects().len() }))
+            }
+            "update_polygon_parameters" => {
+                if let Some(id_raw) = args.get("object_id").and_then(Value::as_u64) {
+                    self.engine.set_selection(vec![ObjectId(id_raw)]);
+                }
+                let mode = match args.get("mode").and_then(Value::as_str).unwrap_or("polygon") {
+                    "star" => PolygonSubMode::Star,
+                    _ => PolygonSubMode::Polygon,
+                };
+                let points = args.get("points").and_then(Value::as_u64).unwrap_or(5) as u32;
+                let inner_radius_pt = args.get("inner_radius_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::UpdatePolygonParameters { mode, points, inner_radius_pt });
+                Ok(json!({ "polygon_parameters_updated": ok, "selection": self.engine.selection.iter().map(|i| i.0).collect::<Vec<_>>() }))
+            }
+            "move_object_to_layer" => {
+                let target = self.resolve_target_id(args)?;
+                let target_layer_id =
+                    LayerId(args.get("target_layer_id").and_then(Value::as_u64).ok_or_else(|| "Missing target_layer_id".to_owned())?);
+                let ok = self.engine.execute(EngineCommand::MoveObjectToLayer { object_id: target, target_layer_id });
+                Ok(json!({ "moved_to_layer": ok, "object_id": target.0, "target_layer_id": target_layer_id.0 }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2027,7 +2088,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 120);
+        assert_eq!(tools, 124);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

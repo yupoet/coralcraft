@@ -7,10 +7,10 @@ use coralcraft_doc::{
     TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
 };
 use coralcraft_geom::{
-    Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
-    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
-    smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
+    Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
+    artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
+    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, radial_push_path_around_point, reference_point, reverse_path_direction,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -235,6 +235,12 @@ pub enum EngineCommand {
     SetArtisticTextProperties { object_id: ObjectId, text: Option<String>, font_family: Option<String>, size_pt: Option<F64> },
     /// Applies localized Jacobi Laplacian vertex smoothing within `radius_pt` around `center` on `object_id` (`Smooth Tool`).
     SmoothObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64, iterations: u32 },
+    /// Slices `object_id` along the cut line `(line_start, line_end)` with kerf `gap_pt` (`Knife Tool`).
+    KnifeCutObject { object_id: ObjectId, line_start: Point, line_end: Point, gap_pt: F64 },
+    /// Crops unlocked selected objects (or all unlocked objects on the active layer when selection is empty) to `rect` (`Crop Tool`).
+    CropToRect { rect: Rect },
+    /// Moves `object_id` to `target_layer_id` on the active page (`Objects` Docker).
+    MoveObjectToLayer { object_id: ObjectId, target_layer_id: LayerId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -970,6 +976,32 @@ impl EditorEngine {
                             .is_some_and(|p| smooth_path_around_point(&p, *center, radius_pt.get(), strength.get(), *iterations).is_ok())
                 });
                 if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| knife_cut_path_by_line(&p, *line_start, *line_end, gap_pt.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CropToRect { rect } => {
+                if rect.width() <= 0.0 || rect.height() <= 0.0 {
+                    return false;
+                }
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && o.visible);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
+                let page = self.current_page();
+                let dst_ok = page.layers.iter().any(|l| l.id == *target_layer_id && !l.locked);
+                let src_ok =
+                    page.layers.iter().any(|l| l.id != *target_layer_id && !l.locked && l.objects.iter().any(|o| o.id == *object_id && !o.locked));
+                if !dst_ok || !src_ok {
                     return false;
                 }
             }
@@ -2661,6 +2693,64 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
+                let g = gap_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = knife_cut_path_by_line(&base_path, line_start, line_end, g)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::CropToRect { rect } => {
+                let Ok(clip_path) = RectSpec::sharp(rect).to_path() else {
+                    return false;
+                };
+                let sel = self.selection.clone();
+                let filter_sel = !sel.is_empty();
+                let layer = self.target_layer_mut();
+                let mut cropped_objs = Vec::with_capacity(layer.objects.len());
+                for mut obj in layer.objects.drain(..) {
+                    if obj.locked || !obj.visible || (filter_sel && !sel.contains(&obj.id)) {
+                        cropped_objs.push(obj);
+                        continue;
+                    }
+                    if let Some(world_path) = object_to_path(&obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(inter) = boolean_paths(&world_path, &clip_path, BooleanOp::Intersect)
+                    {
+                        if !inter.elements.is_empty() {
+                            obj.kind = ObjectKind::Path(inter);
+                            obj.transform = Affine2::IDENTITY;
+                            cropped_objs.push(obj);
+                        }
+                    } else {
+                        cropped_objs.push(obj);
+                    }
+                }
+                layer.objects = cropped_objs;
+                let remaining_ids: Vec<ObjectId> = layer.objects.iter().map(|o| o.id).collect();
+                self.selection.retain(|id| remaining_ids.contains(id));
+            }
+            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
+                let page_idx = self.current_page_index();
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    let mut extracted: Option<ObjectNode> = None;
+                    for layer in &mut page.layers {
+                        if let Some(pos) = layer.objects.iter().position(|o| o.id == object_id && !o.locked) {
+                            extracted = Some(layer.objects.remove(pos));
+                            break;
+                        }
+                    }
+                    if let Some(node) = extracted
+                        && let Some(dst) = page.layers.iter_mut().find(|l| l.id == target_layer_id)
+                    {
+                        dst.objects.push(node);
+                    }
+                }
+            }
         }
         true
     }
@@ -3430,5 +3520,13 @@ mod tests {
             strength: F64::new(0.5).unwrap(),
             iterations: 3,
         }));
+        assert!(engine.execute(EngineCommand::KnifeCutObject {
+            object_id: boundary_id,
+            line_start: Point::new(0.0, 80.0).unwrap(),
+            line_end: Point::new(200.0, 80.0).unwrap(),
+            gap_pt: F64::new(2.0).unwrap(),
+        }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::CropToRect { rect: Rect::new(0.0, 0.0, 300.0, 300.0).unwrap() }));
     }
 }

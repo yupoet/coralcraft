@@ -595,6 +595,72 @@ fn glyph_outline(ch: char) -> (f64, &'static [GlyphOp]) {
     }
 }
 
+fn clip_polygon_half_plane(pts: &[Point], origin: Point, nx: f64, ny: f64, offset: f64) -> Result<Vec<Point>, GeomError> {
+    if pts.len() < 3 {
+        return Ok(Vec::new());
+    }
+    let signed_dist = |p: Point| -> f64 { (p.x.get() - origin.x.get()) * nx + (p.y.get() - origin.y.get()) * ny - offset };
+    let mut out = Vec::with_capacity(pts.len() + 2);
+    let mut prev = pts[pts.len() - 1];
+    let mut d_prev = signed_dist(prev);
+    for &curr in pts {
+        let d_curr = signed_dist(curr);
+        let prev_in = d_prev >= -1e-9;
+        let curr_in = d_curr >= -1e-9;
+        if prev_in != curr_in {
+            let denom = d_prev - d_curr;
+            if denom.abs() > 1e-12 {
+                let t = (d_prev / denom).clamp(0.0, 1.0);
+                let ix = prev.x.get() + t * (curr.x.get() - prev.x.get());
+                let iy = prev.y.get() + t * (curr.y.get() - prev.y.get());
+                out.push(Point::new(ix, iy)?);
+            }
+        }
+        if curr_in {
+            out.push(curr);
+        }
+        prev = curr;
+        d_prev = d_curr;
+    }
+    Ok(out)
+}
+
+/// Slices a closed [`Path`] along the cut line through `line_start` and `line_end` with blade
+/// kerf width `gap_pt >= 0.0` (`CorelDRAW Knife Tool`), emitting both clipped half-space loops.
+pub fn knife_cut_path_by_line(path: &Path, line_start: Point, line_end: Point, gap_pt: f64) -> Result<Path, GeomError> {
+    let gap = crate::F64::new(gap_pt)?.get();
+    if gap < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("knife gap_pt must be non-negative"));
+    }
+    let dx = line_end.x.get() - line_start.x.get();
+    let dy = line_end.y.get() - line_start.y.get();
+    let len = dx.hypot(dy);
+    if len <= crate::EPS {
+        return Err(GeomError::InvalidShapeParameter("knife cut line endpoints must be distinct"));
+    }
+    let nx = -dy / len;
+    let ny = dx / len;
+    let h = 0.5 * gap.max(1e-4);
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+    for poly in polylines {
+        if poly.points.len() < 3 {
+            continue;
+        }
+        for (sx, sy) in [(nx, ny), (-nx, -ny)] {
+            let clipped = clip_polygon_half_plane(&poly.points, line_start, sx, sy, h)?;
+            if clipped.len() >= 3 {
+                out.move_to(clipped[0])?;
+                for pt in clipped.iter().skip(1) {
+                    out.line_to(*pt)?;
+                }
+                out.close()?;
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,6 +685,11 @@ mod tests {
         let inter = boolean_paths(&r1, &r2, BooleanOp::Intersect).expect("intersect");
         let inter_bounds = inter.bounds().expect("intersect bounds");
         assert!(inter_bounds.width() <= 50.0);
+
+        // 4. Knife cut splits rectangle into 2 closed subpaths
+        let cut = knife_cut_path_by_line(&r1, Point::new(-10.0, 25.0).unwrap(), Point::new(60.0, 25.0).unwrap(), 2.0).expect("knife cut");
+        let move_count = cut.elements.iter().filter(|e| matches!(e, crate::path::PathElement::MoveTo(_))).count();
+        assert_eq!(move_count, 2);
     }
 
     #[test]
