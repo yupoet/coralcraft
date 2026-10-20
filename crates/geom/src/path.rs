@@ -1484,6 +1484,54 @@ pub fn measure_path_length_and_area(path: &Path) -> Result<(f64, f64), GeomError
     Ok((total_len, 0.5 * signed_area2.abs()))
 }
 
+/// Converts the node at the end of `element_index` into a smooth symmetrical cubic Bézier node
+/// (`Shape Tool F10 -> Smooth / Symmetrical Node`), aligning incoming `c2` and outgoing `c1`
+/// along the chord tangent between neighboring anchors.
+pub fn smooth_curve_node_at(path: &Path, element_index: usize, tension: f64) -> Result<Path, GeomError> {
+    if !tension.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if element_index == 0 || element_index >= path.elements.len() {
+        return Err(GeomError::InvalidShapeParameter("element_index out of range"));
+    }
+    let elem_end = |el: &PathElement| -> Option<Point> {
+        match *el {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => Some(p),
+            PathElement::Close => None,
+        }
+    };
+    let Some(p_prev) = elem_end(&path.elements[element_index - 1]) else {
+        return Err(GeomError::InvalidShapeParameter("previous element has no endpoint"));
+    };
+    let Some(p_cur) = elem_end(&path.elements[element_index]) else {
+        return Err(GeomError::InvalidShapeParameter("target element has no endpoint"));
+    };
+    let next_idx =
+        if element_index + 1 < path.elements.len() && elem_end(&path.elements[element_index + 1]).is_some() { Some(element_index + 1) } else { None };
+    let p_next = next_idx.and_then(|idx| elem_end(&path.elements[idx])).unwrap_or(p_cur);
+    let tau = tension.clamp(0.05, 0.5);
+    let tx = (p_next.x.get() - p_prev.x.get()) * 0.5 * tau;
+    let ty = (p_next.y.get() - p_prev.y.get()) * 0.5 * tau;
+    let in_c2 = Point::new(p_cur.x.get() - tx, p_cur.y.get() - ty)?;
+    let out_c1 = Point::new(p_cur.x.get() + tx, p_cur.y.get() + ty)?;
+
+    let mut elements = path.elements.clone();
+    let in_c1 = match elements[element_index] {
+        PathElement::CubicTo { c1, .. } => c1,
+        _ => Point::new(p_prev.x.get() + (p_cur.x.get() - p_prev.x.get()) / 3.0, p_prev.y.get() + (p_cur.y.get() - p_prev.y.get()) / 3.0)?,
+    };
+    elements[element_index] = PathElement::CubicTo { c1: in_c1, c2: in_c2, end: p_cur };
+
+    if let Some(ni) = next_idx {
+        let out_c2 = match elements[ni] {
+            PathElement::CubicTo { c2, .. } => c2,
+            _ => Point::new(p_next.x.get() - (p_next.x.get() - p_cur.x.get()) / 3.0, p_next.y.get() - (p_next.y.get() - p_cur.y.get()) / 3.0)?,
+        };
+        elements[ni] = PathElement::CubicTo { c1: out_c1, c2: out_c2, end: p_next };
+    }
+    Path::from_elements(elements, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1525,5 +1573,18 @@ mod m26_tests {
         let (perim, area) = measure_path_length_and_area(&rect_path).unwrap();
         assert!((perim - 180.0).abs() < 1e-6);
         assert!((area - 2000.0).abs() < 1e-6);
+
+        let poly = Path::from_elements(
+            vec![
+                PathElement::MoveTo(Point::new(0.0, 0.0).unwrap()),
+                PathElement::LineTo(Point::new(50.0, 40.0).unwrap()),
+                PathElement::LineTo(Point::new(100.0, 0.0).unwrap()),
+            ],
+            FillRule::NonZero,
+        )
+        .unwrap();
+        let smoothed_node = smooth_curve_node_at(&poly, 1, 0.35).unwrap();
+        assert!(matches!(smoothed_node.elements[1], PathElement::CubicTo { .. }));
+        assert!(matches!(smoothed_node.elements[2], PathElement::CubicTo { .. }));
     }
 }

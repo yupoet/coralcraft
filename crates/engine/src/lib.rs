@@ -11,7 +11,8 @@ use coralcraft_geom::{
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
     delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, trace_bitmap_to_path,
+    twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -258,6 +259,14 @@ pub enum EngineCommand {
     SwapObjectPositions { first_id: ObjectId, second_id: ObjectId },
     /// Centers the current selection horizontally and/or vertically on the active page (`Object -> Align and Distribute -> Center to Page`).
     CenterSelectionToPage { horizontal: bool, vertical: bool },
+    /// Converts the node at the end of `element_index` on `object_id` into a smooth symmetrical cubic Bézier node (`Shape Tool F10 -> Smooth / Symmetrical Node`).
+    SmoothCurveNode { object_id: ObjectId, element_index: usize, tension: F64 },
+    /// Duplicates the current selection in a `rows × cols` 2D grid with `(spacing_x_pt, spacing_y_pt)` step offsets (`Object -> Transformations -> Array`).
+    ArrayDuplicateSelection { rows: u32, cols: u32, spacing_x_pt: F64, spacing_y_pt: F64 },
+    /// Adds a horizontal or vertical ruler guideline at `position_pt` on the active page's `Guides` layer (`View -> Guidelines`).
+    AddGuideline { horizontal: bool, position_pt: F64 },
+    /// Removes all guidelines from the active page's `Guides` layer (`View -> Guidelines -> Clear Guidelines`).
+    ClearGuidelines,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1088,6 +1097,34 @@ impl EditorEngine {
                 }
                 let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
                 if sel_nodes.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| smooth_curve_node_at(&p, *element_index, tension.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
+                if *rows == 0 || *cols == 0 || (*rows == 1 && *cols == 1) {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::AddGuideline { position_pt, .. } => {
+                if !position_pt.get().is_finite() {
+                    return false;
+                }
+            }
+            EngineCommand::ClearGuidelines => {
+                let has_guides = self.current_page().layers.iter().any(|l| l.role == LayerRole::Guides && !l.objects.is_empty());
+                if !has_guides {
                     return false;
                 }
             }
@@ -2970,6 +3007,101 @@ impl EditorEngine {
                     }
                 }
             }
+            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
+                let t = tension.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smooth_curve_node_at(&base_path, element_index, t)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, spacing_x_pt, spacing_y_pt } => {
+                let r_count = rows.clamp(1, 20);
+                let c_count = cols.clamp(1, 20);
+                let sx = spacing_x_pt.get();
+                let sy = spacing_y_pt.get();
+                let sel = self.selection.clone();
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for r in 0..r_count {
+                    for c in 0..c_count {
+                        if r == 0 && c == 0 {
+                            continue;
+                        }
+                        let dx = f64::from(c) * sx;
+                        let dy = f64::from(r) * sy;
+                        let Ok(tf) = Affine2::translation(dx, dy) else {
+                            continue;
+                        };
+                        for mut dup in templates.clone() {
+                            reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                            if let Ok(composed) = dup.transform.then(tf) {
+                                dup.transform = composed;
+                            }
+                            new_selection.push(dup.id);
+                            self.target_layer_mut().objects.push(dup);
+                        }
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
+            EngineCommand::AddGuideline { horizontal, position_pt } => {
+                let page_idx = self.current_page_index();
+                let page_size = self.document.pages[page_idx].size;
+                let pos = position_pt.get();
+                let (p0, p1, label) = if horizontal {
+                    (Point::new(0.0, pos), Point::new(page_size.width.get(), pos), format!("Horizontal Guide ({pos:.1} pt)"))
+                } else {
+                    (Point::new(pos, 0.0), Point::new(pos, page_size.height.get()), format!("Vertical Guide ({pos:.1} pt)"))
+                };
+                if let (Ok(a), Ok(b)) = (p0, p1)
+                    && let Ok(path) = Path::from_elements(vec![PathElement::MoveTo(a), PathElement::LineTo(b)], FillRule::NonZero)
+                {
+                    let obj_id = self.document.allocate_object_id();
+                    let mut outline = OutlineStyle::hairline(Color::rgb8(0, 85, 229));
+                    if let (Ok(d1), Ok(d2)) = (F64::new(4.0), F64::new(3.0)) {
+                        outline.dash_pattern = vec![d1, d2];
+                    }
+                    let node = ObjectNode::new(obj_id, Some(label), ObjectKind::Path(path), None, Some(outline));
+                    if let Some(guide_layer) = self.document.pages[page_idx].layers.iter_mut().find(|l| l.role == LayerRole::Guides) {
+                        guide_layer.objects.push(node);
+                    } else {
+                        let layer_id = LayerId(self.document.allocate_object_id().0);
+                        let page = &mut self.document.pages[page_idx];
+                        page.layers.push(Layer {
+                            id: layer_id,
+                            name: "Guides".to_owned(),
+                            role: LayerRole::Guides,
+                            visible: true,
+                            printable: false,
+                            locked: false,
+                            master_in_front: true,
+                            opacity: F64::ONE,
+                            objects: vec![node],
+                            residual: Residual::default(),
+                            extra: BTreeMap::new(),
+                        });
+                    }
+                }
+            }
+            EngineCommand::ClearGuidelines => {
+                let page_idx = self.current_page_index();
+                let mut removed_ids = Vec::new();
+                for layer in &mut self.document.pages[page_idx].layers {
+                    if layer.role == LayerRole::Guides {
+                        for obj in layer.objects.drain(..) {
+                            removed_ids.push(obj.id);
+                        }
+                    }
+                }
+                self.selection.retain(|id| !removed_ids.contains(id));
+            }
         }
         true
     }
@@ -3775,5 +3907,16 @@ mod tests {
         assert!(engine.execute(EngineCommand::SwapObjectPositions { first_id: sf_id, second_id: off_id }));
         engine.set_selection(vec![sf_id]);
         assert!(engine.execute(EngineCommand::CenterSelectionToPage { horizontal: true, vertical: true }));
+        assert!(engine.measure_object_geometry(sf_id).is_some());
+        assert!(engine.execute(EngineCommand::SmoothCurveNode { object_id: sf_id, element_index: 1, tension: F64::new(0.35).unwrap() }));
+        assert!(engine.execute(EngineCommand::ArrayDuplicateSelection {
+            rows: 2,
+            cols: 2,
+            spacing_x_pt: F64::new(20.0).unwrap(),
+            spacing_y_pt: F64::new(20.0).unwrap(),
+        }));
+        assert_eq!(engine.selection.len(), 3);
+        assert!(engine.execute(EngineCommand::AddGuideline { horizontal: true, position_pt: F64::new(120.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::ClearGuidelines));
     }
 }

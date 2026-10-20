@@ -799,6 +799,26 @@ impl McpServer {
                             "name": "set_style_spot",
                             "description": "Sets fill or outline to a named Spot color (or Registration when name is 'Registration') with tint (0.0..=1.0) and CMYK fallback.",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "smooth_curve_node",
+                            "description": "Converts the node at element_index on an object into a smooth symmetrical C1 cubic Bezier node (Shape Tool F10 -> Smooth / Symmetrical Node).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "array_duplicate_selection",
+                            "description": "Duplicates the current selection in a rows x cols 2D grid with (spacing_x_pt, spacing_y_pt) step offsets.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_guideline",
+                            "description": "Adds a horizontal or vertical ruler guideline at position_pt on the active page's non-printing Guides layer.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "clear_guidelines",
+                            "description": "Removes all guidelines from the active page's Guides layer.",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -2294,6 +2314,33 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color: Some(color) });
                 Ok(json!({ "spot_style_applied": ok, "name": name }))
             }
+            "smooth_curve_node" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let tension = F64::new(args.get("tension").and_then(Value::as_f64).unwrap_or(0.35)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SmoothCurveNode { object_id: target, element_index, tension });
+                Ok(json!({ "node_smoothed": ok, "object_id": target.0, "element_index": element_index }))
+            }
+            "array_duplicate_selection" => {
+                self.apply_optional_selection(args);
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let spacing_x_pt = F64::new(args.get("spacing_x_pt").and_then(Value::as_f64).unwrap_or(50.0)).map_err(|e| e.to_string())?;
+                let spacing_y_pt = F64::new(args.get("spacing_y_pt").and_then(Value::as_f64).unwrap_or(50.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ArrayDuplicateSelection { rows, cols, spacing_x_pt, spacing_y_pt });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|i| i.0).collect();
+                Ok(json!({ "array_duplicated": ok, "created_ids": ids }))
+            }
+            "add_guideline" => {
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let position_pt = F64::new(args.get("position_pt").and_then(Value::as_f64).unwrap_or(100.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::AddGuideline { horizontal, position_pt });
+                Ok(json!({ "guideline_added": ok, "horizontal": horizontal, "position_pt": position_pt.get() }))
+            }
+            "clear_guidelines" => {
+                let ok = self.engine.execute(EngineCommand::ClearGuidelines);
+                Ok(json!({ "guidelines_cleared": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2323,7 +2370,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 140);
+        assert_eq!(tools, 144);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
