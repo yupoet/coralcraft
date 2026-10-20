@@ -457,12 +457,22 @@ fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> 
         }
 
         // Read local file header & data
-        if local_offset + 30 > cd_offset || &bytes[local_offset..local_offset + 4] != b"PK\x03\x04" {
+        // Checked arithmetic: offsets come from the file and `usize` is 32 bits on wasm32.
+        let local_header = local_offset.checked_add(30).filter(|end| *end <= cd_offset).and_then(|end| bytes.get(local_offset..end));
+        let Some(local_header) = local_header else {
             return Err(DocError::InvalidZipContainer("invalid local file header".to_owned()));
-        }
-        let l_name_len = u16::from_le_bytes([bytes[local_offset + 26], bytes[local_offset + 27]]) as usize;
-        let l_extra_len = u16::from_le_bytes([bytes[local_offset + 28], bytes[local_offset + 29]]) as usize;
-        let data_start = local_offset + 30 + l_name_len + l_extra_len;
+        };
+        let Some((l_name_len, l_extra_len)) = local_header.starts_with(b"PK\x03\x04").then(|| {
+            (
+                usize::from(u16::from_le_bytes([local_header[26], local_header[27]])),
+                usize::from(u16::from_le_bytes([local_header[28], local_header[29]])),
+            )
+        }) else {
+            return Err(DocError::InvalidZipContainer("invalid local file header".to_owned()));
+        };
+        let Some(data_start) = local_offset.checked_add(30).and_then(|v| v.checked_add(l_name_len)).and_then(|v| v.checked_add(l_extra_len)) else {
+            return Err(DocError::InvalidZipContainer("local header range overflow".to_owned()));
+        };
         let Some(data_end) = data_start.checked_add(uncomp_size) else {
             return Err(DocError::InvalidZipContainer("local data range overflow".to_owned()));
         };
@@ -470,7 +480,9 @@ fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> 
             return Err(DocError::InvalidZipContainer("local data exceeds central directory".to_owned()));
         }
 
-        let slice = &bytes[data_start..data_end];
+        let Some(slice) = bytes.get(data_start..data_end) else {
+            return Err(DocError::InvalidZipContainer("local data out of range".to_owned()));
+        };
         if crc32(slice) != expected_crc {
             if let Some(id) = name.strip_prefix("blobs/").and_then(|s| s.strip_suffix(".bin")) {
                 return Err(DocError::CorruptBlob { id: id.to_owned(), reason: "ZIP CRC-32 mismatch".to_owned() });

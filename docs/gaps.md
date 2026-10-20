@@ -23,7 +23,18 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
   - bitmap pixel and byte budgets with `checked_mul`, and no invented placeholder pixels;
   - checked arithmetic for 32-bit targets.
 - [ ] R1.3 Add `Document::validate()` (at least one page, unique IDs, recomputed `next_id`). Use it on every load and in `EditorEngine::new`. Remove `unreachable!` and unchecked page indexing, and add `catch_unwind` around MCP requests.
-- [ ] R1.4 Fix the SVG import panic on multibyte `#hex` colours. Enable `clippy::indexing_slicing` and `arithmetic_side_effects` for the parser crates. Add `overflow-checks` to the release profile.
+- [x] R1.4 Fix the SVG import panic on multibyte `#hex` colours. Use checked arithmetic for ZIP local-header offsets and text lengths on 32-bit targets. Add deterministic mutation tests for `import_svg`, `import_dxf` and `load_bytes`. Add an i686 CI test job.
+- [ ] R1.5 Roll out `clippy::indexing_slicing` and `clippy::arithmetic_side_effects` crate by crate, as `[lints]` in each crate's `Cargo.toml`. Hit counts on 2026-10-20:
+
+  | Crate | `indexing_slicing` | `arithmetic_side_effects` |
+  |---|---:|---:|
+  | color | 46 | 25 |
+  | geom | 418 | 143 |
+  | doc | 728 | 283 |
+  | cdr | 828 | 444 |
+  | render | 982 | 419 |
+
+  Order: color → cdr → doc → render → geom. Untrusted-input crates come first after the small one. `overflow-checks` is not enabled in release: a wrap-to-panic switch would turn silent misbehaviour into a crash instead of an error. The real fix is checked arithmetic.
 
 **Phase 2: native egui desktop shell (D1)**
 - [ ] R2.1 Build an `eframe`/`egui` 0.36 app shell in `coralcraft-ui-egui`, following VectorCraft's `ui-egui`: canvas, toolbox, property bar, palette, objects docker, and page tabs, driven by `EditorEngine`. Use `rfd` for file dialogs and `arboard` for the clipboard. Remove `gui_server`.

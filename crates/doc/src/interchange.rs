@@ -206,11 +206,11 @@ fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineS
 
 fn parse_hex_color(s: &str) -> Option<Color> {
     let hex = s.strip_prefix('#')?;
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some(Color::rgb8(r, g, b))
+    // Byte-wise parsing: `len()` counts bytes, so slicing a non-ASCII string could split a char.
+    if let [r1, r2, g1, g2, b1, b2] = hex.as_bytes() {
+        let digit = |c: &u8| char::from(*c).to_digit(16).and_then(|d| u8::try_from(d).ok());
+        let byte = |hi: &u8, lo: &u8| Some(digit(hi)? * 16 + digit(lo)?);
+        Some(Color::rgb8(byte(r1, r2)?, byte(g1, g2)?, byte(b1, b2)?))
     } else {
         None
     }

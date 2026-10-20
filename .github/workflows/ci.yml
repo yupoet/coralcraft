@@ -58,3 +58,22 @@ jobs:
             coralcraft --version
             printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""
           '
+
+  test-32bit:
+    # usize is 32 bits on wasm32/i686: offset arithmetic that cannot overflow on 64-bit hosts can
+    # overflow here (docs/gaps.md R1.4). Run the whole test suite on i686 Linux.
+    name: tests (i686, 32-bit usize)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: i686-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: i686
+      - name: Install 32-bit C toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: cargo test (i686)
+        run: cargo test --workspace --target i686-unknown-linux-gnu

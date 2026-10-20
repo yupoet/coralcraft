@@ -1023,7 +1023,7 @@ fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_si
         let fam_end = cursor + 2 + fam_len;
         let font_family = std::str::from_utf8(slice.get(cursor + 2..fam_end)?).ok()?.to_owned();
         let txt_len = read_u32(endian, slice, fam_end)? as usize;
-        let txt_end = fam_end + 4 + txt_len;
+        let txt_end = fam_end.checked_add(4)?.checked_add(txt_len)?;
         let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
         let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
         let size_pt = F64::new(size_pt_raw.abs().clamp(1.0, 1440.0)).ok()?;
@@ -1051,7 +1051,7 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
         let fam_end = cursor + 8 + fam_len;
         let font_family = std::str::from_utf8(slice.get(cursor + 8..fam_end)?).ok()?.to_owned();
         let txt_len = read_u32(endian, slice, fam_end)? as usize;
-        let txt_end = fam_end + 4 + txt_len;
+        let txt_end = fam_end.checked_add(4)?.checked_add(txt_len)?;
         let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
         let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
         let alignment = match align_code {
