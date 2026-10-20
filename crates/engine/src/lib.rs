@@ -9,8 +9,9 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
-    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
+    erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, radial_push_path_around_point, reference_point,
+    reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path,
+    twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -241,6 +242,10 @@ pub enum EngineCommand {
     CropToRect { rect: Rect },
     /// Moves `object_id` to `target_layer_id` on the active page (`Objects` Docker).
     MoveObjectToLayer { object_id: ObjectId, target_layer_id: LayerId },
+    /// Subtracts a circular eraser nib of `radius_pt` centered at `center` from `object_id` (`Eraser Tool X`).
+    EraseObjectCircle { object_id: ObjectId, center: Point, radius_pt: F64 },
+    /// Updates `snap_to_objects` and/or `snap_to_page` preferences (`View -> Snap To`).
+    SetSnapSettings { snap_to_objects: Option<bool>, snap_to_page: Option<bool> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1002,6 +1007,19 @@ impl EditorEngine {
                 let src_ok =
                     page.layers.iter().any(|l| l.id != *target_layer_id && !l.locked && l.objects.iter().any(|o| o.id == *object_id && !o.locked));
                 if !dst_ok || !src_ok {
+                    return false;
+                }
+            }
+            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| erase_path_within_circle(&p, *center, radius_pt.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
+                if snap_to_objects.is_none() && snap_to_page.is_none() {
                     return false;
                 }
             }
@@ -2751,6 +2769,26 @@ impl EditorEngine {
                     }
                 }
             }
+            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
+                let r = radius_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = erase_path_within_circle(&base_path, center, r)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
+                if let Some(so) = snap_to_objects {
+                    self.snap_to_objects = so;
+                }
+                if let Some(sp) = snap_to_page {
+                    self.snap_to_page = sp;
+                }
+            }
         }
         true
     }
@@ -3528,5 +3566,12 @@ mod tests {
         }));
         engine.set_selection(vec![boundary_id]);
         assert!(engine.execute(EngineCommand::CropToRect { rect: Rect::new(0.0, 0.0, 300.0, 300.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::EraseObjectCircle {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SetSnapSettings { snap_to_objects: Some(false), snap_to_page: Some(true) }));
+        assert!(!engine.snap_to_objects && engine.snap_to_page);
     }
 }

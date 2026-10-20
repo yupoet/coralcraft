@@ -719,6 +719,26 @@ impl McpServer {
                             "name": "move_object_to_layer",
                             "description": "Moves object_id to target_layer_id on the active page (Objects Docker).",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "erase_object_circle",
+                            "description": "Subtracts a circular eraser nib of radius_pt centered at (center_x, center_y) from an object (Eraser Tool X).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_snap_settings",
+                            "description": "Updates snap_to_objects and/or snap_to_page preferences (View -> Snap To).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_viewport",
+                            "description": "Updates canvas zoom factor (0.05..=64.0) and pan offset (pan_x, pan_y) (Zoom / Pan Tool Z / H).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_active_tool",
+                            "description": "Switches the active CorelDRAW toolbox tool (pick, shape, crop, zoom, freehand, rectangle, ellipse, polygon, artistic_text, interactive_fill).",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -2059,6 +2079,55 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::MoveObjectToLayer { object_id: target, target_layer_id });
                 Ok(json!({ "moved_to_layer": ok, "object_id": target.0, "target_layer_id": target_layer_id.0 }))
             }
+            "erase_object_circle" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(0.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(10.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::EraseObjectCircle { object_id: target, center, radius_pt });
+                Ok(json!({ "erased": ok, "object_id": target.0 }))
+            }
+            "set_snap_settings" => {
+                let snap_to_objects = args.get("snap_to_objects").and_then(Value::as_bool);
+                let snap_to_page = args.get("snap_to_page").and_then(Value::as_bool);
+                let ok = self.engine.execute(EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page });
+                Ok(json!({
+                    "snap_updated": ok,
+                    "snap_to_objects": self.engine.snap_to_objects,
+                    "snap_to_page": self.engine.snap_to_page
+                }))
+            }
+            "set_viewport" => {
+                if let Some(z) = args.get("zoom").and_then(Value::as_f64) {
+                    self.engine.zoom = F64::new(z.clamp(0.05, 64.0)).map_err(|e| e.to_string())?;
+                }
+                let px = args.get("pan_x").and_then(Value::as_f64).unwrap_or_else(|| self.engine.pan_pt.x.get());
+                let py = args.get("pan_y").and_then(Value::as_f64).unwrap_or_else(|| self.engine.pan_pt.y.get());
+                self.engine.pan_pt = Point::new(px, py).map_err(|e| e.to_string())?;
+                Ok(json!({
+                    "zoom": self.engine.zoom.get(),
+                    "pan_x": self.engine.pan_pt.x.get(),
+                    "pan_y": self.engine.pan_pt.y.get()
+                }))
+            }
+            "set_active_tool" => {
+                let tool_str = args.get("tool").and_then(Value::as_str).unwrap_or("pick");
+                let tool = match tool_str {
+                    "shape" => coralcraft_tools::ToolKind::Shape,
+                    "crop" => coralcraft_tools::ToolKind::Crop,
+                    "zoom" => coralcraft_tools::ToolKind::Zoom,
+                    "freehand" | "bezier" => coralcraft_tools::ToolKind::FreehandBezier,
+                    "rectangle" | "rect" => coralcraft_tools::ToolKind::Rectangle,
+                    "ellipse" => coralcraft_tools::ToolKind::Ellipse,
+                    "polygon" | "star" => coralcraft_tools::ToolKind::PolygonStar,
+                    "artistic_text" | "text" => coralcraft_tools::ToolKind::ArtisticText,
+                    "interactive_fill" | "fill" => coralcraft_tools::ToolKind::InteractiveFill,
+                    _ => coralcraft_tools::ToolKind::Pick,
+                };
+                self.engine.tool_state.active_tool = tool;
+                Ok(json!({ "active_tool": format!("{tool:?}") }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2088,7 +2157,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 124);
+        assert_eq!(tools, 128);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

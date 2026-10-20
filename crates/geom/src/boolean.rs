@@ -661,6 +661,165 @@ pub fn knife_cut_path_by_line(path: &Path, line_start: Point, line_end: Point, g
     Ok(out)
 }
 
+/// Erases (subtracts) a circular nib of `radius_pt` centered at `center` from `path`
+/// (`CorelDRAW Eraser Tool X`).
+///
+/// - When the circle is completely disjoint from `path.bounds()`, returns `path` unchanged.
+/// - When the circle lies strictly inside a closed polygon subpath, punches a 24-gon circular
+///   counter-wound hole with `FillRule::EvenOdd`.
+/// - When the circle intersects open or closed segments, clips out portions inside `radius_pt`
+///   at exact segment-circle intersection parameters $t \in [0, 1]$.
+pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> Result<Path, GeomError> {
+    let r = crate::F64::new(radius_pt)?.get();
+    if r <= crate::EPS {
+        return Err(GeomError::InvalidShapeParameter("eraser radius must be positive"));
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    if let Some(b) = path.bounds()
+        && (cx + r < b.x0.get() || cx - r > b.x1.get() || cy + r < b.y0.get() || cy - r > b.y1.get())
+    {
+        return Ok(path.clone());
+    }
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: crate::FillRule::EvenOdd };
+
+    let seg_circle_ts = |a: Point, b: Point| -> Vec<f64> {
+        let dx = b.x.get() - a.x.get();
+        let dy = b.y.get() - a.y.get();
+        let fx = a.x.get() - cx;
+        let fy = a.y.get() - cy;
+        let qa = dx * dx + dy * dy;
+        if qa <= 1e-12 {
+            return Vec::new();
+        }
+        let qb = 2.0 * (fx * dx + fy * dy);
+        let qc = fx * fx + fy * fy - r * r;
+        let disc = qb * qb - 4.0 * qa * qc;
+        if disc < 0.0 {
+            return Vec::new();
+        }
+        let s = disc.sqrt();
+        let mut ts = Vec::new();
+        for t in [(-qb - s) / (2.0 * qa), (-qb + s) / (2.0 * qa)] {
+            if (0.0..=1.0).contains(&t) {
+                ts.push(t);
+            }
+        }
+        ts.sort_by(|x, y| x.total_cmp(y));
+        ts
+    };
+
+    for poly in polylines {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        if !poly.closed {
+            let mut current_run: Vec<Point> = Vec::new();
+            for seg in poly.points.windows(2) {
+                let a = seg[0];
+                let b = seg[1];
+                let mut cuts = vec![0.0];
+                cuts.extend(seg_circle_ts(a, b));
+                cuts.push(1.0);
+                for pair in cuts.windows(2) {
+                    let t0 = pair[0];
+                    let t1 = pair[1];
+                    if t1 - t0 <= 1e-7 {
+                        continue;
+                    }
+                    let tm = 0.5 * (t0 + t1);
+                    let mx = a.x.get() + tm * (b.x.get() - a.x.get());
+                    let my = a.y.get() + tm * (b.y.get() - a.y.get());
+                    let inside = (mx - cx).hypot(my - cy) < r - 1e-7;
+                    if inside {
+                        if current_run.len() >= 2 {
+                            out.move_to(current_run[0])?;
+                            for pt in current_run.iter().skip(1) {
+                                out.line_to(*pt)?;
+                            }
+                        }
+                        current_run.clear();
+                    } else {
+                        let p0 = Point::new(a.x.get() + t0 * (b.x.get() - a.x.get()), a.y.get() + t0 * (b.y.get() - a.y.get()))?;
+                        let p1 = Point::new(a.x.get() + t1 * (b.x.get() - a.x.get()), a.y.get() + t1 * (b.y.get() - a.y.get()))?;
+                        if current_run.is_empty() {
+                            current_run.push(p0);
+                        }
+                        current_run.push(p1);
+                    }
+                }
+            }
+            if current_run.len() >= 2 {
+                out.move_to(current_run[0])?;
+                for pt in current_run.iter().skip(1) {
+                    out.line_to(*pt)?;
+                }
+            }
+            continue;
+        }
+
+        // Closed polygon subpath
+        let all_outside = poly.points.iter().all(|p| (p.x.get() - cx).hypot(p.y.get() - cy) >= r);
+        let any_seg_hit = (0..poly.points.len()).any(|i| !seg_circle_ts(poly.points[i], poly.points[(i + 1) % poly.points.len()]).is_empty());
+        if all_outside && !any_seg_hit && point_in_polygon(center, &poly.points) {
+            out.move_to(poly.points[0])?;
+            for pt in poly.points.iter().skip(1) {
+                out.line_to(*pt)?;
+            }
+            out.close()?;
+            let hole_steps = 24u32;
+            for i in 0..hole_steps {
+                let ang = -std::f64::consts::TAU * f64::from(i) / f64::from(hole_steps);
+                let hp = Point::new(cx + r * ang.cos(), cy + r * ang.sin())?;
+                if i == 0 {
+                    out.move_to(hp)?;
+                } else {
+                    out.line_to(hp)?;
+                }
+            }
+            out.close()?;
+            continue;
+        }
+
+        let mut ring: Vec<Point> = Vec::new();
+        let n = poly.points.len();
+        for i in 0..n {
+            let a = poly.points[i];
+            let b = poly.points[(i + 1) % n];
+            let mut cuts = vec![0.0];
+            cuts.extend(seg_circle_ts(a, b));
+            cuts.push(1.0);
+            for pair in cuts.windows(2) {
+                let t0 = pair[0];
+                let t1 = pair[1];
+                if t1 - t0 <= 1e-7 {
+                    continue;
+                }
+                let tm = 0.5 * (t0 + t1);
+                let mx = a.x.get() + tm * (b.x.get() - a.x.get());
+                let my = a.y.get() + tm * (b.y.get() - a.y.get());
+                if (mx - cx).hypot(my - cy) >= r - 1e-7 {
+                    let p0 = Point::new(a.x.get() + t0 * (b.x.get() - a.x.get()), a.y.get() + t0 * (b.y.get() - a.y.get()))?;
+                    let p1 = Point::new(a.x.get() + t1 * (b.x.get() - a.x.get()), a.y.get() + t1 * (b.y.get() - a.y.get()))?;
+                    if ring.last().is_none_or(|last| (last.x.get() - p0.x.get()).hypot(last.y.get() - p0.y.get()) > 1e-6) {
+                        ring.push(p0);
+                    }
+                    ring.push(p1);
+                }
+            }
+        }
+        if ring.len() >= 3 {
+            out.move_to(ring[0])?;
+            for pt in ring.iter().skip(1) {
+                out.line_to(*pt)?;
+            }
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +849,18 @@ mod tests {
         let cut = knife_cut_path_by_line(&r1, Point::new(-10.0, 25.0).unwrap(), Point::new(60.0, 25.0).unwrap(), 2.0).expect("knife cut");
         let move_count = cut.elements.iter().filter(|e| matches!(e, crate::path::PathElement::MoveTo(_))).count();
         assert_eq!(move_count, 2);
+
+        // 5. Eraser nib subtraction: interior hole punches 2 subpaths, open line splits into 2 open subpaths
+        let hole_erased = erase_path_within_circle(&r1, Point::new(25.0, 25.0).unwrap(), 8.0).expect("eraser interior hole");
+        let hole_moves = hole_erased.elements.iter().filter(|e| matches!(e, crate::path::PathElement::MoveTo(_))).count();
+        assert_eq!(hole_moves, 2);
+
+        let mut open_line = Path::new();
+        open_line.move_to(Point::new(0.0, 25.0).unwrap()).unwrap();
+        open_line.line_to(Point::new(100.0, 25.0).unwrap()).unwrap();
+        let split_open = erase_path_within_circle(&open_line, Point::new(50.0, 25.0).unwrap(), 10.0).expect("eraser open split");
+        let open_moves = split_open.elements.iter().filter(|e| matches!(e, crate::path::PathElement::MoveTo(_))).count();
+        assert_eq!(open_moves, 2);
     }
 
     #[test]
