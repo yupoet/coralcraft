@@ -11,11 +11,11 @@ use coralcraft_geom::{
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, fit_circle_to_path_points,
-    hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
-    medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
-    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
-    smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path,
-    transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path,
+    measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric,
+    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
+    smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length,
+    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -354,6 +354,10 @@ pub enum EngineCommand {
     FitCircleToObjectPath { object_id: ObjectId },
     /// Translates each selected unlocked object radially from `center` so its center lies on the circle of `radius_pt` (`Object -> Align and Distribute -> Snap Selection to Circle Radius`).
     SnapSelectionToCircleRadius { center: Point, radius_pt: F64 },
+    /// Converts each subpath of `object_id` into a $C^1$-continuous Catmull-Rom cubic Bézier curve with `tension` (`Shape Tool F10 -> Convert Polyline to Smooth Cubic Curves`).
+    SmoothPolylineToCubicBeziers { object_id: ObjectId, tension: F64 },
+    /// Rotates each selected unlocked object around its own center to face radially away from (or toward) `center` plus `angle_offset_deg` (`Object -> Transformations -> Orient Selection to Center`).
+    OrientSelectionToCenter { center: Point, angle_offset_deg: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4588,6 +4592,55 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::SmoothPolylineToCubicBeziers { object_id, tension } => {
+                let tau = tension.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(smooth) = interpolate_smooth_cubic_path(&base_path, tau)
+                    {
+                        obj.kind = ObjectKind::Path(smooth);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::OrientSelectionToCenter { center, angle_offset_deg } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let off_rad = angle_offset_deg.get().to_radians();
+                let mut rotations = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = oc.x.get() - cx;
+                    let dy = oc.y.get() - cy;
+                    let target_rad = dy.atan2(dx) + off_rad;
+                    rotations.insert(obj.id, (oc, target_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, rot_rad)) = rotations.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5556,5 +5609,10 @@ mod tests {
                 radius_pt: F64::new(65.0).unwrap(),
             })
         );
+        assert!(engine.execute(EngineCommand::SmoothPolylineToCubicBeziers { object_id: hull_id, tension: F64::new(1.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::OrientSelectionToCenter {
+            center: Point::new(120.0, 120.0).unwrap(),
+            angle_offset_deg: F64::new(90.0).unwrap(),
+        }));
     }
 }

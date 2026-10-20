@@ -1,10 +1,10 @@
 //! Model Context Protocol (MCP) JSON-RPC 2.0 server (`coralcraft-mcp`, L6)
 //! for agent-driven multi-page CorelDRAW illustration and vector export.
-#![recursion_limit = "512"]
+#![recursion_limit = "2048"]
 
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{
-    Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, parse_xml_palette, serialize_binary_cpl, serialize_xml_palette,
+    Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, parse_binary_cpl, parse_xml_palette, serialize_binary_cpl, serialize_xml_palette,
 };
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
@@ -19,11 +19,11 @@ use coralcraft_geom::{
     build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path,
     build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path,
     build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
-    build_voronoi_mosaic_path,
+    build_truchet_tiles_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{
-    ImpositionSpec, PrepressOptions, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_pdf_with_prepress,
-    export_svg, export_svg_with_prepress, render_page,
+    ImpositionSpec, PrepressOptions, RenderOpts, base64_decode, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed,
+    export_pdf_with_prepress, export_svg, export_svg_with_prepress, render_page,
 };
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
@@ -1426,6 +1426,57 @@ impl McpServer {
                                     "registration_marks": { "type": "boolean" },
                                     "bleed_pt": { "type": "number" }
                                 }
+                            }
+                        },
+                        {
+                            "name": "add_truchet_tiles",
+                            "description": "Inserts a deterministic Smith quarter-circle Truchet tile maze path on the active layer.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "x": { "type": "number" },
+                                    "y": { "type": "number" },
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" },
+                                    "cols": { "type": "integer" },
+                                    "rows": { "type": "integer" },
+                                    "seed": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "smooth_polyline_to_cubic_beziers",
+                            "description": "Converts each subpath of a path object into a C1-continuous Catmull-Rom cubic Bezier curve with configurable tension.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "tension": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "orient_selection_to_center",
+                            "description": "Rotates each selected unlocked object around its own center to face radially away from (center_x, center_y) plus angle_offset_deg.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "center_x": { "type": "number" },
+                                    "center_y": { "type": "number" },
+                                    "angle_offset_deg": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "import_cpl_palette_base64",
+                            "description": "Parses a base64-encoded CorelDRAW binary .cpl color palette and returns its palette name and swatches.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "cpl_base64": { "type": "string" }
+                                },
+                                "required": ["cpl_base64"]
                             }
                         }
                     ]
@@ -3938,6 +3989,58 @@ impl McpServer {
                     "svg": svg
                 }))
             }
+            "add_truchet_tiles" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(4) as u32;
+                let seed = args.get("seed").and_then(Value::as_u64).unwrap_or(42);
+                let bounds = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_truchet_tiles_path(bounds, cols, rows, seed).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Truchet Tiles".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "truchet_tiles", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "smooth_polyline_to_cubic_beziers" => {
+                let target = self.resolve_target_id(args)?;
+                let tension = F64::new(args.get("tension").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SmoothPolylineToCubicBeziers { object_id: target, tension });
+                Ok(json!({ "smoothed_to_cubic": ok, "object_id": target.0, "tension": tension.get() }))
+            }
+            "orient_selection_to_center" => {
+                self.apply_optional_selection(args);
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let angle_offset_deg = F64::new(args.get("angle_offset_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::OrientSelectionToCenter { center, angle_offset_deg });
+                Ok(json!({ "oriented_to_center": ok, "angle_offset_deg": angle_offset_deg.get() }))
+            }
+            "import_cpl_palette_base64" => {
+                let b64 = args.get("cpl_base64").and_then(Value::as_str).ok_or_else(|| "Missing cpl_base64 string".to_owned())?;
+                let bytes = base64_decode(b64)?;
+                let pal = parse_binary_cpl(&bytes).map_err(|e| e.to_string())?;
+                let swatches: Vec<Value> = pal
+                    .swatches
+                    .iter()
+                    .map(|sw| {
+                        let [r, g, b] = sw.color.to_srgb8();
+                        json!({
+                            "name": sw.name,
+                            "hex": format!("#{r:02X}{g:02X}{b:02X}"),
+                            "r": r,
+                            "g": g,
+                            "b": b
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "palette_name": pal.name,
+                    "swatch_count": swatches.len(),
+                    "swatches": swatches
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3967,7 +4070,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 224);
+        assert_eq!(tools, 228);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4333,5 +4436,45 @@ mod tests {
         )
         .unwrap();
         assert!(prep_svg_resp.result.unwrap()["structuredContent"]["svg"].as_str().unwrap().contains("<svg"));
+
+        let truch_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":56,"method":"tools/call","params":{"name":"add_truchet_tiles","arguments":{"x":40.0,"y":40.0,"width":160.0,"height":120.0,"cols":4,"rows":3,"seed":42}}}"#,
+            ),
+        )
+        .unwrap();
+        let truch_id = truch_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let smc_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":57,"method":"tools/call","params":{{"name":"smooth_polyline_to_cubic_beziers","arguments":{{"object_id":{knot_id},"tension":1.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(smc_resp.result.unwrap()["structuredContent"]["smoothed_to_cubic"].as_bool().unwrap());
+
+        let oric_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":58,"method":"tools/call","params":{{"name":"orient_selection_to_center","arguments":{{"selection":[{truch_id},{knot_id}],"center_x":150.0,"center_y":150.0,"angle_offset_deg":45.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(oric_resp.result.unwrap()["structuredContent"]["oriented_to_center"].as_bool().unwrap());
+
+        let exp_cpl_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(
+            r#"{"jsonrpc":"2.0","id":59,"method":"tools/call","params":{"name":"export_cpl_palette_base64","arguments":{"palette_name":"M61 CPL"}}}"#,
+        ))
+        .unwrap();
+        let cpl_b64 = exp_cpl_resp.result.unwrap()["structuredContent"]["cpl_base64"].as_str().unwrap().to_owned();
+
+        let imp_cpl_req = json!({
+            "jsonrpc": "2.0",
+            "id": 60,
+            "method": "tools/call",
+            "params": {
+                "name": "import_cpl_palette_base64",
+                "arguments": {
+                    "cpl_base64": cpl_b64
+                }
+            }
+        });
+        let imp_cpl_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_cpl_req.to_string())).unwrap();
+        assert!(imp_cpl_resp.result.unwrap()["structuredContent"]["swatch_count"].as_u64().unwrap() >= 1);
     }
 }

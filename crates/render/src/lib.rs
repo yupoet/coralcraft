@@ -14,7 +14,7 @@ use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpe
 
 pub use eps::{export_dxf, export_eps};
 pub use pdf::{ImpositionSpec, PrepressOptions, export_pdf, export_pdf_imposed, export_pdf_with_prepress};
-pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
+pub use png::{adler32, base64_decode, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, build_arrowhead_polylines, dash_polylines, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
     MAX_CLIP_DEPTH, MAX_SURFACE_PIXELS, MAX_SURFACE_SIDE, RenderError, RenderWarning, Surface, premul_to_straight, src_over_premul,

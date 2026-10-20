@@ -214,9 +214,13 @@
 60. **M60 Braided Celtic Knot Ring (`build_celtic_knot_ring_path`), Least-Squares Kåsa Circle Fit (`fit_circle_to_path_points` & `FitCircleToObjectPath`), Snap Selection to Circle Radius (`SnapSelectionToCircleRadius`), Prepress SVG Export (`export_svg_with_prepress`), and 224 MCP Tools**:
     - `coralcraft-geom`: `build_celtic_knot_ring_path` (two-strand counter-phase braided Celtic knot ring) and `fit_circle_to_path_points` (centroid-centered Kåsa algebraic least-squares circle fit).
     - `coralcraft-engine` & `coralcraft-mcp`: `FitCircleToObjectPath`, `SnapSelectionToCircleRadius`, `add_celtic_knot_ring`, `fit_circle_to_object_path`, `snap_selection_to_circle_radius`, `export_svg_with_prepress`, and **224 MCP tools**.
+61. **M61 Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools**:
+    - `coralcraft-geom`: `build_truchet_tiles_path` (deterministic $G^1$-continuous Smith quarter-circle Truchet tile maze) and `interpolate_smooth_cubic_path` ($C^1$ Catmull-Rom cubic Bézier curve interpolation).
+    - `coralcraft-engine`, `coralcraft-render` & `coralcraft-mcp`: `base64_decode`, `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `add_truchet_tiles`, `smooth_polyline_to_cubic_beziers`, `orient_selection_to_center`, `import_cpl_palette_base64`, and **228 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M61 delivered (`build_truchet_tiles_path` & `add_truchet_tiles`, `interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `base64_decode` & `import_cpl_palette_base64`, 228 MCP tools).
 - 2026-10-20: M60 delivered (`build_celtic_knot_ring_path` & `add_celtic_knot_ring`, `fit_circle_to_path_points` & `FitCircleToObjectPath`, `SnapSelectionToCircleRadius`, `export_svg_with_prepress`, 224 MCP tools).
 - 2026-10-20: M59 delivered (`build_halftone_wave_lines_path` & `add_halftone_wave_lines`, `laplacian_relax_closed_path` & `RelaxObjectPath`, `ApplyPaletteSwatchesToSelection`, `export_pdf_with_prepress_base64`, 220 MCP tools).
 - 2026-10-20: M58 delivered (`build_phyllotaxis_path` & `add_phyllotaxis_pattern`, `spherical_fisheye_warp_path` & `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `import_xml_palette`, 216 MCP tools).

@@ -118,6 +118,45 @@ pub fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+/// Standard RFC 4648 Base64 decoder (ignores ASCII whitespace).
+pub fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let clean: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if clean.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !clean.len().is_multiple_of(4) {
+        return Err("invalid base64 length (must be a multiple of 4)".to_owned());
+    }
+    let decode_val = |b: u8| -> Result<u8, String> {
+        match b {
+            b'A'..=b'Z' => Ok(b - b'A'),
+            b'a'..=b'z' => Ok(b - b'a' + 26),
+            b'0'..=b'9' => Ok(b - b'0' + 52),
+            b'+' | b'-' => Ok(62),
+            b'/' | b'_' => Ok(63),
+            _ => Err(format!("invalid base64 character: 0x{b:02X}")),
+        }
+    };
+    let mut out = Vec::with_capacity((clean.len() / 4) * 3);
+    for chunk in clean.chunks_exact(4) {
+        let v0 = decode_val(chunk[0])?;
+        let v1 = decode_val(chunk[1])?;
+        let pad2 = chunk[2] == b'=';
+        let pad3 = chunk[3] == b'=';
+        let v2 = if pad2 { 0 } else { decode_val(chunk[2])? };
+        let v3 = if pad3 { 0 } else { decode_val(chunk[3])? };
+        let triple = (u32::from(v0) << 18) | (u32::from(v1) << 12) | (u32::from(v2) << 6) | u32::from(v3);
+        out.push(((triple >> 16) & 0xFF) as u8);
+        if !pad2 {
+            out.push(((triple >> 8) & 0xFF) as u8);
+        }
+        if !pad2 && !pad3 {
+            out.push((triple & 0xFF) as u8);
+        }
+    }
+    Ok(out)
+}
+
 fn write_png_chunk(out: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) -> Result<(), RenderError> {
     let Ok(len_u32) = u32::try_from(data.len()) else {
         return Err(RenderError::PngTooLarge);

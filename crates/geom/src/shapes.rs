@@ -1741,6 +1741,56 @@ pub fn build_celtic_knot_ring_path(center: Point, radius_pt: f64, amplitude_pt: 
     Ok(path)
 }
 
+/// Builds a deterministic Smith quarter-circle Truchet tile maze [`Path`] inside `bounds`
+/// (`Object -> Insert -> Truchet Tile Maze`) with `cols` (`1..=32`), `rows` (`1..=32`), and `seed`.
+pub fn build_truchet_tiles_path(bounds: Rect, cols: u32, rows: u32, seed: u64) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 || !(1..=32).contains(&cols) || !(1..=32).contains(&rows) {
+        return Err(GeomError::InvalidShapeParameter("invalid Truchet tile parameters"));
+    }
+    let cw = w / f64::from(cols);
+    let ch = h / f64::from(rows);
+    let rx = 0.5 * cw;
+    let ry = 0.5 * ch;
+    let kx = KAPPA * rx;
+    let ky = KAPPA * ry;
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+
+    let mut state = seed;
+    let mut path = Path::new();
+    for r in 0..rows {
+        let y = y0 + f64::from(r) * ch;
+        for c in 0..cols {
+            let x = x0 + f64::from(c) * cw;
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            let flip = ((z ^ (z >> 31)) & 1) == 1;
+
+            let top = Point::new(x + rx, y)?;
+            let bot = Point::new(x + rx, y + ch)?;
+            let left = Point::new(x, y + ry)?;
+            let right = Point::new(x + cw, y + ry)?;
+
+            if !flip {
+                path.move_to(top)?;
+                path.cubic_to(Point::new(x + rx, y + ky)?, Point::new(x + kx, y + ry)?, left)?;
+                path.move_to(bot)?;
+                path.cubic_to(Point::new(x + rx, y + ch - ky)?, Point::new(x + cw - kx, y + ry)?, right)?;
+            } else {
+                path.move_to(top)?;
+                path.cubic_to(Point::new(x + rx, y + ky)?, Point::new(x + cw - kx, y + ry)?, right)?;
+                path.move_to(bot)?;
+                path.cubic_to(Point::new(x + rx, y + ch - ky)?, Point::new(x + kx, y + ry)?, left)?;
+            }
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1857,5 +1907,9 @@ mod m27_tests {
         let knot = build_celtic_knot_ring_path(Point::new(100.0, 100.0).unwrap(), 50.0, 8.0, 6, 72).unwrap();
         let knot_closes = knot.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(knot_closes, 2);
+
+        let truchet = build_truchet_tiles_path(Rect::new(0.0, 0.0, 120.0, 90.0).unwrap(), 4, 3, 42).unwrap();
+        let truchet_moves = truchet.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
+        assert_eq!(truchet_moves, 24);
     }
 }

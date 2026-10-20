@@ -2509,6 +2509,57 @@ pub fn fit_circle_to_path_points(path: &Path) -> Result<Path, GeomError> {
     crate::shapes::EllipseSpec::full(rect).to_path()
 }
 
+/// Converts each subpath of `path` into a $C^1$-continuous Catmull-Rom cubic Bézier curve
+/// with `tension` (`0.1..=2.0`, default `1.0`) (`Shape Tool F10 -> Convert Polyline to Smooth Cubic Curves`).
+pub fn interpolate_smooth_cubic_path(path: &Path, tension: f64) -> Result<Path, GeomError> {
+    let tau = crate::f64_canon::F64::new(tension)?.get();
+    if path.elements.is_empty() || !(0.1..=2.0).contains(&tau) {
+        return Err(GeomError::InvalidShapeParameter("invalid Catmull-Rom cubic interpolation parameters"));
+    }
+    let s = tau / 6.0;
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for poly in polys {
+        let mut pts = poly.points;
+        if poly.closed && pts.len() >= 2 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a == b) {
+            pts.pop();
+        }
+        let n = pts.len();
+        if n < 2 {
+            continue;
+        }
+        out.move_to(pts[0])?;
+        if poly.closed && n >= 3 {
+            for i in 0..n {
+                let p0 = pts[(i + n - 1) % n];
+                let p1 = pts[i];
+                let p2 = pts[(i + 1) % n];
+                let p3 = pts[(i + 2) % n];
+                let c1 = Point::new(p1.x.get() + (p2.x.get() - p0.x.get()) * s, p1.y.get() + (p2.y.get() - p0.y.get()) * s)?;
+                let c2 = Point::new(p2.x.get() - (p3.x.get() - p1.x.get()) * s, p2.y.get() - (p3.y.get() - p1.y.get()) * s)?;
+                out.cubic_to(c1, c2, p2)?;
+            }
+            out.close()?;
+        } else {
+            for i in 0..(n - 1) {
+                let p0 = if i == 0 { pts[0] } else { pts[i - 1] };
+                let p1 = pts[i];
+                let p2 = pts[i + 1];
+                let p3 = if i + 2 < n { pts[i + 2] } else { pts[n - 1] };
+                let c1 = Point::new(p1.x.get() + (p2.x.get() - p0.x.get()) * s, p1.y.get() + (p2.y.get() - p0.y.get()) * s)?;
+                let c2 = Point::new(p2.x.get() - (p3.x.get() - p1.x.get()) * s, p2.y.get() - (p3.y.get() - p1.y.get()) * s)?;
+                out.cubic_to(c1, c2, p2)?;
+            }
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("Catmull-Rom interpolation produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2621,5 +2672,9 @@ mod m26_tests {
         let fb = fitted_circle.bounds().unwrap();
         assert!((fb.center().unwrap().x.get() - 25.0).abs() < 1e-3);
         assert!((fb.center().unwrap().y.get() - 20.0).abs() < 1e-3);
+
+        let smooth_cubic = interpolate_smooth_cubic_path(&rect_path, 1.0).unwrap();
+        let cubic_count = smooth_cubic.elements.iter().filter(|e| matches!(e, PathElement::CubicTo { .. })).count();
+        assert_eq!(cubic_count, 4);
     }
 }
