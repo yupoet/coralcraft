@@ -16,7 +16,7 @@ pub use spaces::{
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -137,5 +137,23 @@ mod tests {
         assert_eq!(detect_cpl(&bin_cpl), CplDetection::Cpl { version: 0xCDDC, color_count: default_pal.swatches.len() as u16 });
         let decoded_cpl = load_palette_bytes(&bin_cpl).unwrap();
         assert_eq!(decoded_cpl, default_pal);
+    }
+
+    #[test]
+    fn xml_palette_1_percent_and_fractional_percent_roundtrip_exactly() {
+        let pal = Palette {
+            name: "Low Tint Test".to_owned(),
+            guid: None,
+            swatches: vec![
+                PaletteSwatch { name: "1% Cyan".to_owned(), color: Color::cmyk(0.01, 0.0, 0.0, 0.0).unwrap() },
+                PaletteSwatch { name: "0.5% Magenta".to_owned(), color: Color::cmyk(0.0, 0.005, 0.0, 0.0).unwrap() },
+                PaletteSwatch { name: "1% HSB".to_owned(), color: Color::hsb(180.0, 0.01, 0.01).unwrap() },
+                PaletteSwatch { name: "1% Spot".to_owned(), color: Color::spot("Spot 1%", 0.01, [0.01, 0.0, 0.0, 0.0]).unwrap() },
+                PaletteSwatch { name: "1% Gray".to_owned(), color: Color::gray(0.01).unwrap() },
+            ],
+        };
+        let xml = serialize_xml_palette(&pal);
+        let roundtripped = parse_xml_palette(&xml).unwrap();
+        assert_eq!(roundtripped, pal);
     }
 }

@@ -131,9 +131,9 @@ fn assets(root: &Path) -> Result<(), String> {
     let mut missing = Vec::new();
     collect_files(&dir, &mut |p| {
         let rel = p.strip_prefix(root).unwrap_or(p.as_path());
-        let rel = rel.to_string_lossy();
-        if !manifest.contains(rel.as_ref()) {
-            missing.push(rel.into_owned());
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if !manifest.contains(&rel) {
+            missing.push(rel);
         }
     });
     if missing.is_empty() {

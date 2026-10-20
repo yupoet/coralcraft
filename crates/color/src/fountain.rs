@@ -46,6 +46,9 @@ impl FountainStop {
 
 /// Evaluates a list of sorted [`FountainStop`]s at position `t in 0.0..=1.0` using `mode`.
 pub fn interpolate_stops(stops: &[FountainStop], mode: FountainBlendMode, t: f64) -> Result<[u8; 3], ColorError> {
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+        return Err(ColorError::InvalidFountainStops("at least 2 stops are required"));
+    };
     if stops.len() < 2 {
         return Err(ColorError::InvalidFountainStops("at least 2 stops are required"));
     }
@@ -55,26 +58,28 @@ pub fn interpolate_stops(stops: &[FountainStop], mode: FountainBlendMode, t: f64
     let p = t.clamp(0.0, 1.0);
 
     // Clamp to first/last stop when outside range
-    if p <= stops[0].offset.get() {
-        return Ok(stops[0].color.to_srgb8());
+    if p <= first.offset.get() {
+        return Ok(first.color.to_srgb8());
     }
-    if let Some(last) = stops.last()
-        && p >= last.offset.get()
-    {
+    if p >= last.offset.get() {
         return Ok(last.color.to_srgb8());
     }
 
     // Locate the active adjacent pair `(s0, s1)`
-    let mut pair_idx = 0;
-    for i in 0..(stops.len() - 1) {
-        if p >= stops[i].offset.get() && p <= stops[i + 1].offset.get() {
-            pair_idx = i;
+    let mut active_pair = None;
+    for pair in stops.windows(2) {
+        if let [s0, s1] = pair
+            && p >= s0.offset.get()
+            && p <= s1.offset.get()
+        {
+            active_pair = Some((s0, s1));
             break;
         }
     }
-
-    let s0 = &stops[pair_idx];
-    let s1 = &stops[pair_idx + 1];
+    let (s0, s1) = match active_pair.or_else(|| stops.windows(2).next().and_then(|w| if let [a, b] = w { Some((a, b)) } else { None })) {
+        Some(pair) => pair,
+        None => return Ok(first.color.to_srgb8()),
+    };
     let span = s1.offset.get() - s0.offset.get();
     if span <= 1e-12 {
         return Ok(s1.color.to_srgb8());

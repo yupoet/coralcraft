@@ -290,13 +290,16 @@ impl Color {
 
     /// Parses a `#RRGGBB` or `RRGGBB` hex string into [`Color::Rgb`].
     pub fn from_hex(hex: &str) -> Result<Self, ColorError> {
-        let s = hex.trim().strip_prefix('#').unwrap_or(hex.trim());
+        let s = hex.trim().strip_prefix('#').unwrap_or_else(|| hex.trim());
+        let (Some(r_str), Some(g_str), Some(b_str)) = (s.get(0..2), s.get(2..4), s.get(4..6)) else {
+            return Err(ColorError::InvalidHexColor(hex.to_owned()));
+        };
         if s.len() != 6 || !s.is_ascii() {
             return Err(ColorError::InvalidHexColor(hex.to_owned()));
         }
-        let r = u8::from_str_radix(&s[0..2], 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
-        let g = u8::from_str_radix(&s[2..4], 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
-        let b = u8::from_str_radix(&s[4..6], 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
+        let r = u8::from_str_radix(r_str, 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
+        let g = u8::from_str_radix(g_str, 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
+        let b = u8::from_str_radix(b_str, 16).map_err(|_| ColorError::InvalidHexColor(hex.to_owned()))?;
         Ok(Self::Rgb { r, g, b })
     }
 

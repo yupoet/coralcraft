@@ -92,19 +92,19 @@ pub enum CplDetection {
 /// Never triggers false positives on XML (`<`) or JSON (`{`) text files.
 #[must_use]
 pub fn detect_cpl(bytes: &[u8]) -> CplDetection {
-    if bytes.len() < 8 {
+    let [b0, b1, b2, b3, _, _, _, _, ..] = *bytes else {
         return CplDetection::NotCpl;
-    }
+    };
     // Reject XML / JSON / UTF-8 BOM text files immediately
     let trimmed = strip_bom_and_ascii_ws(bytes);
     if trimmed.starts_with(b"<") || trimmed.starts_with(b"{") {
         return CplDetection::NotCpl;
     }
 
-    let magic = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let magic = u16::from_le_bytes([b0, b1]);
     let known_magics: &[u16] = &[0xCDCD, 0xDCDC, 0xCDDC, 0xCCDC, 0xCC80, 0xCC90, 0xCDD0, 0xCD01];
     if known_magics.contains(&magic) {
-        let count = u16::from_le_bytes([bytes[2], bytes[3]]);
+        let count = u16::from_le_bytes([b2, b3]);
         if count <= 4096 {
             return CplDetection::Cpl { version: magic, color_count: count };
         }
@@ -137,38 +137,30 @@ pub fn parse_binary_cpl(bytes: &[u8]) -> Result<Palette, ColorError> {
     if count > MAX_PALETTE_SWATCHES || bytes.len() < 9 {
         return Err(ColorError::UnsupportedBinaryCpl);
     }
-    let mut pos = 4usize;
-    let pal_name_len = usize::from(bytes[pos]);
-    pos += 1;
-    if pos + pal_name_len > bytes.len() {
-        return Err(ColorError::UnsupportedBinaryCpl);
-    }
-    let pal_name_raw = std::str::from_utf8(&bytes[pos..pos + pal_name_len]).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
+    let after_magic = bytes.get(4..).ok_or(ColorError::UnsupportedBinaryCpl)?;
+    let (&pal_name_len_u8, after_len) = after_magic.split_first().ok_or(ColorError::UnsupportedBinaryCpl)?;
+    let pal_name_len = usize::from(pal_name_len_u8);
+    let pal_name_bytes = after_len.get(..pal_name_len).ok_or(ColorError::UnsupportedBinaryCpl)?;
+    let mut rest = after_len.get(pal_name_len..).ok_or(ColorError::UnsupportedBinaryCpl)?;
+    let pal_name_raw = std::str::from_utf8(pal_name_bytes).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
     let palette_name = if pal_name_raw.is_empty() { "Binary CPL Palette".to_owned() } else { pal_name_raw.to_owned() };
-    pos += pal_name_len;
 
-    if count > 0 && pos >= bytes.len() {
+    if count > 0 && rest.is_empty() {
         return Err(ColorError::UnsupportedBinaryCpl);
     }
 
     let mut swatches = Vec::with_capacity(count);
     for idx in 0..count {
-        if pos + 9 > bytes.len() {
+        let [m0, m1, _, _, c0, c1, c2, c3, name_len_u8, ..] = *rest else {
             return Err(ColorError::UnsupportedBinaryCpl);
-        }
-        let model = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
-        let c0 = bytes[pos + 4];
-        let c1 = bytes[pos + 5];
-        let c2 = bytes[pos + 6];
-        let c3 = bytes[pos + 7];
-        let name_len = usize::from(bytes[pos + 8]);
-        pos += 9;
-        if pos + name_len > bytes.len() {
-            return Err(ColorError::UnsupportedBinaryCpl);
-        }
-        let name_str = std::str::from_utf8(&bytes[pos..pos + name_len]).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
-        pos += name_len;
-        let name = if name_str.is_empty() { format!("Swatch {}", idx + 1) } else { name_str.to_owned() };
+        };
+        let model = u16::from_le_bytes([m0, m1]);
+        let name_len = usize::from(name_len_u8);
+        let after_hdr = rest.get(9..).ok_or(ColorError::UnsupportedBinaryCpl)?;
+        let name_bytes = after_hdr.get(..name_len).ok_or(ColorError::UnsupportedBinaryCpl)?;
+        rest = after_hdr.get(name_len..).ok_or(ColorError::UnsupportedBinaryCpl)?;
+        let name_str = std::str::from_utf8(name_bytes).map_err(|_| ColorError::UnsupportedBinaryCpl)?;
+        let name = if name_str.is_empty() { format!("Swatch {}", idx.saturating_add(1)) } else { name_str.to_owned() };
 
         let color = match model {
             1 | 5 => Color::rgb8(c0, c1, c2),
@@ -195,9 +187,9 @@ pub fn serialize_binary_cpl(palette: &Palette) -> Vec<u8> {
     let count = u16::try_from(palette.swatches.len()).unwrap_or(u16::MAX);
     out.extend_from_slice(&count.to_le_bytes());
     let pal_name_bytes = palette.name.as_bytes();
-    let pal_name_len = pal_name_bytes.len().min(255);
-    out.push(pal_name_len as u8);
-    out.extend_from_slice(&pal_name_bytes[..pal_name_len]);
+    let pal_name_slice = pal_name_bytes.get(..255).unwrap_or(pal_name_bytes);
+    out.push(u8::try_from(pal_name_slice.len()).unwrap_or(255));
+    out.extend_from_slice(pal_name_slice);
 
     for sw in palette.swatches.iter().take(usize::from(count)) {
         match &sw.color {
@@ -229,17 +221,16 @@ pub fn serialize_binary_cpl(palette: &Palette) -> Vec<u8> {
             }
         }
         let sw_name = sw.name.as_bytes();
-        let sw_len = sw_name.len().min(255);
-        out.push(sw_len as u8);
-        out.extend_from_slice(&sw_name[..sw_len]);
+        let sw_slice = sw_name.get(..255).unwrap_or(sw_name);
+        out.push(u8::try_from(sw_slice.len()).unwrap_or(255));
+        out.extend_from_slice(sw_slice);
     }
     out
 }
 
 fn strip_bom_and_ascii_ws(bytes: &[u8]) -> &[u8] {
     let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    let start = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
-    &b[start..]
+    b.trim_ascii_start()
 }
 
 /// Parses a clean-room XML palette (`<palette name="..."><colors><cs .../></colors></palette>`).
@@ -256,28 +247,28 @@ pub fn parse_xml_palette(xml: &str) -> Result<Palette, ColorError> {
     let mut swatches = Vec::new();
 
     let mut rest = xml;
-    while let Some(lt) = rest.find('<') {
-        rest = &rest[lt + 1..];
-        if rest.starts_with("!--") {
-            let Some(end_comment) = rest.find("-->") else {
+    while let Some((_, after_lt)) = rest.split_once('<') {
+        rest = after_lt;
+        if let Some(comment_body) = rest.strip_prefix("!--") {
+            let Some((_, after_comment)) = comment_body.split_once("-->") else {
                 return Err(ColorError::XmlParseError("unclosed XML comment".to_owned()));
             };
-            rest = &rest[end_comment + 3..];
+            rest = after_comment;
             continue;
         }
-        if rest.starts_with('?') {
-            let Some(end_pi) = rest.find("?>") else {
+        if let Some(pi_body) = rest.strip_prefix('?') {
+            let Some((_, after_pi)) = pi_body.split_once("?>") else {
                 return Err(ColorError::XmlParseError("unclosed XML processing instruction".to_owned()));
             };
-            rest = &rest[end_pi + 2..];
+            rest = after_pi;
             continue;
         }
 
-        let Some(gt) = rest.find('>') else {
+        let Some((tag_raw, after_gt)) = rest.split_once('>') else {
             return Err(ColorError::XmlParseError("unclosed XML tag".to_owned()));
         };
-        let tag_body = rest[..gt].trim();
-        rest = &rest[gt + 1..];
+        let tag_body = tag_raw.trim();
+        rest = after_gt;
 
         if tag_body.starts_with('/') {
             continue;
@@ -364,9 +355,13 @@ pub fn serialize_xml_palette(palette: &Palette) -> String {
                 push_xml_escaped(&mut out, &sw.name);
                 out.push_str(&format!("\" l=\"{}\" a=\"{}\" b=\"{}\"/>", l.get(), a.get(), b.get()));
             }
-            Color::Spot { name: _, tint, fallback_cmyk } => {
+            Color::Spot { name: spot_name, tint, fallback_cmyk } => {
                 out.push_str("type=\"5\" name=\"");
                 push_xml_escaped(&mut out, &sw.name);
+                if spot_name != &sw.name {
+                    out.push_str("\" ink=\"");
+                    push_xml_escaped(&mut out, spot_name);
+                }
                 out.push_str(&format!(
                     "\" c=\"{}\" m=\"{}\" y=\"{}\" k=\"{}\" tint=\"{}\"/>",
                     fallback_cmyk[0].get() * 100.0,
@@ -394,7 +389,7 @@ pub fn serialize_xml_palette(palette: &Palette) -> String {
 }
 
 fn split_tag_name(s: &str) -> (&str, &str) {
-    if let Some(idx) = s.find(char::is_whitespace) { (&s[..idx], s[idx..].trim()) } else { (s, "") }
+    if let Some((name, rest)) = s.split_once(char::is_whitespace) { (name, rest.trim()) } else { (s, "") }
 }
 
 fn parse_attributes(mut s: &str) -> Result<Vec<(String, String)>, ColorError> {
@@ -404,21 +399,24 @@ fn parse_attributes(mut s: &str) -> Result<Vec<(String, String)>, ColorError> {
         if s.is_empty() {
             break;
         }
-        let Some(eq_idx) = s.find('=') else {
+        let Some((key_raw, after_eq)) = s.split_once('=') else {
             return Err(ColorError::XmlParseError(format!("malformed attribute in `{s}`")));
         };
-        let key = s[..eq_idx].trim().to_owned();
-        s = s[eq_idx + 1..].trim_start();
-        let Some(quote) = s.chars().next().filter(|&c| c == '"' || c == '\'') else {
+        let key = key_raw.trim().to_owned();
+        s = after_eq.trim_start();
+        let (quote, after_open_q) = if let Some(rest_q) = s.strip_prefix('"') {
+            ('"', rest_q)
+        } else if let Some(rest_q) = s.strip_prefix('\'') {
+            ('\'', rest_q)
+        } else {
             return Err(ColorError::XmlParseError(format!("missing quote for attribute `{key}`")));
         };
-        s = &s[1..];
-        let Some(end_q) = s.find(quote) else {
+        let Some((val_raw, after_close_q)) = after_open_q.split_once(quote) else {
             return Err(ColorError::XmlParseError(format!("unclosed quote for attribute `{key}`")));
         };
-        let val = unescape_xml(&s[..end_q]);
+        let val = unescape_xml(val_raw);
         attrs.push((key, val));
-        s = &s[end_q + 1..];
+        s = after_close_q;
     }
     Ok(attrs)
 }
@@ -439,7 +437,10 @@ fn swatch_from_attrs(attrs: &[(String, String)]) -> Result<PaletteSwatch, ColorE
     let name = get("name").unwrap_or("Unnamed").to_owned();
     let cs_type = get("type").unwrap_or("");
 
-    let norm_pct = |v: f64| -> f64 { if v > 1.0 { (v / 100.0).clamp(0.0, 1.0) } else { v.clamp(0.0, 1.0) } };
+    let norm_pct = |v: f64| -> f64 {
+        let scale = if v > 100.0 { 255.0 } else { 100.0 };
+        (v / scale).clamp(0.0, 1.0)
+    };
 
     let color = match cs_type {
         "1" => {
@@ -454,13 +455,7 @@ fn swatch_from_attrs(attrs: &[(String, String)]) -> Result<PaletteSwatch, ColorE
             let raw_y = get_f64("y")?.unwrap_or(0.0);
             let raw_k = get_f64("k")?.unwrap_or(0.0);
             let max_v = raw_c.max(raw_m).max(raw_y).max(raw_k);
-            let scale = if max_v > 100.0 {
-                255.0
-            } else if max_v > 1.0 {
-                100.0
-            } else {
-                1.0
-            };
+            let scale = if max_v > 100.0 { 255.0 } else { 100.0 };
             Color::cmyk(
                 (raw_c / scale).clamp(0.0, 1.0),
                 (raw_m / scale).clamp(0.0, 1.0),
@@ -486,7 +481,8 @@ fn swatch_from_attrs(attrs: &[(String, String)]) -> Result<PaletteSwatch, ColorE
             let y = norm_pct(get_f64("y")?.unwrap_or(0.0));
             let k = norm_pct(get_f64("k")?.unwrap_or(0.0));
             let tint = norm_pct(get_f64("tint")?.unwrap_or(100.0));
-            Color::spot(name.clone(), tint, [c, m, y, k])?
+            let ink_name = get("ink").unwrap_or(&name).to_owned();
+            Color::spot(ink_name, tint, [c, m, y, k])?
         }
         "6" => Color::Registration,
         "7" => {

@@ -28,7 +28,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 
   | Crate | `indexing_slicing` | `arithmetic_side_effects` |
   |---|---:|---:|
-  | color | 46 | 25 |
+  | color | 0 (enforced) | 0 (enforced) |
   | geom | 418 | 143 |
   | doc | 728 | 283 |
   | cdr | 828 | 444 |
@@ -51,7 +51,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [ ] R5.1 Rewrite the boolean engine. Evaluate VectorCraft's `linesweeper` against a clean-room Martinez–Rueda implementation. Add area and point-membership property tests.
 - [ ] R5.2 EPS/DXF: compose group transforms, support even-odd fill, escape names (injection). PDF: image XObject, `/Pattern`, real shadings, opacity.
 - [ ] R5.3 Give raster, SVG and PDF the same gradient semantics and one shared effect-expansion stage. Rasterizer: active-edge table and bbox-limited buffers.
-- [ ] R5.4 Fix the XML palette unit round-trip (1% currently reads back as 100%).
+- [x] R5.4 Fix the XML palette unit round-trip (1% currently reads back as 100%).
 
 **Phase 6: packaging that installs**
 - [ ] R6.1 macOS universal `.app.zip`: `lipo`, ad-hoc `codesign`, `ditto`, plus a CLI zip. Build it in CI and verify on a real Mac. Add DMG and notarization later.
