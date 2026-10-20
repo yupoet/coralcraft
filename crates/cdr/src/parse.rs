@@ -496,6 +496,8 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
                     | b"rott"
                     | b"rdot"
                     | b"rotl"
+                    | b"ixpg"
+                    | b"ixmr"
                     | b"ccmm"
                     | b"cont"
                     | b"indx"
@@ -955,6 +957,7 @@ fn apply_cmx_efpc_bytes(efpc: &[u8], ctx: &mut ParserCtx, page_size: Size, node:
         let pclp_start = cur.saturating_add(2);
         let pclp_end = pclp_start.saturating_add(pclp_len).min(efpc.len());
         let pclp_slice = efpc.get(pclp_start..pclp_end).unwrap_or_default();
+        cur = pclp_end;
         if !pclp_slice.is_empty() {
             let old_v = ctx.version;
             ctx.version = 700;
@@ -962,6 +965,70 @@ fn apply_cmx_efpc_bytes(efpc: &[u8], ctx: &mut ParserCtx, page_size: Size, node:
             collect_loose_objects_recursive(&sub_chunks, ctx, page_size, &mut node.powerclip_children, &mut warnings);
             ctx.version = old_v;
         }
+    }
+    if efpc.get(cur..cur.saturating_add(4)) == Some(b"EX83") {
+        cur = cur.saturating_add(4);
+        let has_unk_fill = efpc.get(cur).copied().unwrap_or(0);
+        cur = cur.saturating_add(1);
+        if has_unk_fill == 1 && cur.saturating_add(6) <= efpc.len() {
+            let tag = efpc.get(cur..cur.saturating_add(4)).and_then(|s| <[u8; 4]>::try_from(s).ok()).unwrap_or(*b"unkn");
+            let plen = usize::from(read_u16(ctx.endian, efpc, cur.saturating_add(4)).unwrap_or(0));
+            let pstart = cur.saturating_add(6);
+            let pend = pstart.saturating_add(plen).min(efpc.len());
+            let pay = efpc.get(pstart..pend).unwrap_or_default().to_vec();
+            cur = pend;
+            node.fill = Some(FillStyle::Unknown { tag: ChunkTag(tag), payload: RawPayload(pay) });
+        }
+        decode_cmx_residual_list(efpc, &mut cur, ctx.endian, &mut node.residual);
+        if let ObjectKind::Unsupported(u) = &mut node.kind
+            && cur.saturating_add(2) <= efpc.len()
+        {
+            let uchl_len = usize::from(read_u16(ctx.endian, efpc, cur).unwrap_or(0));
+            let ustart = cur.saturating_add(2);
+            let uend = ustart.saturating_add(uchl_len).min(efpc.len());
+            let uchl_slice = efpc.get(ustart..uend).unwrap_or_default();
+            cur = uend;
+            if !uchl_slice.is_empty() {
+                let old_v = ctx.version;
+                ctx.version = 700;
+                let sub_chunks = walk_chunk_sequence(uchl_slice, 0, None, ctx, 1, &mut warnings);
+                collect_loose_objects_recursive(&sub_chunks, ctx, page_size, &mut u.children, &mut warnings);
+                ctx.version = old_v;
+            }
+            decode_cmx_residual_list(efpc, &mut cur, ctx.endian, &mut u.residual);
+        }
+    }
+}
+
+fn encode_cmx_residual_list(res: &Residual, out: &mut Vec<u8>) {
+    let chunks: Vec<&RawChunk> = res.chunks.iter().filter(|rc| !rc.payload.0.is_empty() && rc.payload.0.len() <= 512).take(64).collect();
+    out.extend_from_slice(&(chunks.len() as u16).to_le_bytes());
+    for rc in chunks {
+        out.extend_from_slice(&rc.tag.0);
+        out.extend_from_slice(&(rc.payload.0.len() as u16).to_le_bytes());
+        out.extend_from_slice(&rc.payload.0);
+    }
+}
+
+fn decode_cmx_residual_list(buf: &[u8], cur: &mut usize, endian: Endian, res: &mut Residual) {
+    if cur.saturating_add(2) > buf.len() {
+        return;
+    }
+    let count = usize::from(read_u16(endian, buf, *cur).unwrap_or(0)).min(64);
+    *cur = cur.saturating_add(2);
+    for slot_idx in 0..count {
+        if cur.saturating_add(6) > buf.len() {
+            break;
+        }
+        let Some(tag) = buf.get(*cur..cur.saturating_add(4)).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
+            break;
+        };
+        let plen = usize::from(read_u16(endian, buf, cur.saturating_add(4)).unwrap_or(0));
+        let pstart = cur.saturating_add(6);
+        let pend = pstart.saturating_add(plen).min(buf.len());
+        let pay = buf.get(pstart..pend).unwrap_or_default().to_vec();
+        *cur = pend;
+        res.chunks.push(RawChunk { tag: ChunkTag(tag), flags: 0, slot: slot_idx as u32, payload: RawPayload(pay), src_offset: 0 });
     }
 }
 
@@ -985,29 +1052,51 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
         let code = read_i16(ctx.endian, payload, code_off).unwrap_or(0).unsigned_abs();
         if code == 9 {
             // CMX_Command_BeginPage
-            let tag_start = pos.saturating_add(header_len);
-            if tag_start.saturating_add(25) <= pos.saturating_add(inst_size) && payload.get(tag_start) == Some(&1) {
-                let x0 = read_i32(ctx.endian, payload, tag_start.saturating_add(9)).unwrap_or(0);
-                let y0 = read_i32(ctx.endian, payload, tag_start.saturating_add(13)).unwrap_or(0);
-                let x1 = read_i32(ctx.endian, payload, tag_start.saturating_add(17)).unwrap_or(0);
-                let y1 = read_i32(ctx.endian, payload, tag_start.saturating_add(21)).unwrap_or(0);
-                let w_pt = ((CdrUnit(i64::from(x1).saturating_sub(i64::from(x0))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
-                let h_pt = ((CdrUnit(i64::from(y0).saturating_sub(i64::from(y1))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
-                if w_pt > 1.0
-                    && h_pt > 1.0
-                    && let Ok(sz) = Size::new(w_pt, h_pt)
-                {
-                    page.size = sz;
+            let mut tag_pos = pos.saturating_add(header_len);
+            let inst_end = pos.saturating_add(inst_size);
+            while tag_pos < inst_end {
+                let Some(&tag_id) = payload.get(tag_pos) else { break };
+                if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
+                    break;
                 }
+                let tag_len = (read_u16(ctx.endian, payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                if tag_id == 1 && tag_pos.saturating_add(25) <= inst_end {
+                    let x0 = read_i32(ctx.endian, payload, tag_pos.saturating_add(9)).unwrap_or(0);
+                    let y0 = read_i32(ctx.endian, payload, tag_pos.saturating_add(13)).unwrap_or(0);
+                    let x1 = read_i32(ctx.endian, payload, tag_pos.saturating_add(17)).unwrap_or(0);
+                    let y1 = read_i32(ctx.endian, payload, tag_pos.saturating_add(21)).unwrap_or(0);
+                    let w_pt = ((CdrUnit(i64::from(x1).saturating_sub(i64::from(x0))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
+                    let h_pt = ((CdrUnit(i64::from(y0).saturating_sub(i64::from(y1))).to_pt().get().abs()) * 1000.0).round() / 1000.0;
+                    if w_pt > 1.0
+                        && h_pt > 1.0
+                        && let Ok(sz) = Size::new(w_pt, h_pt)
+                    {
+                        page.size = sz;
+                    }
+                } else if tag_id == 99 && tag_pos.saturating_add(tag_len) <= inst_end {
+                    let s = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                    if s.get(0..4) == Some(b"CPGM") && s.len() >= 6 {
+                        let pmta_len = usize::from(read_u16(ctx.endian, s, 4).unwrap_or(0));
+                        let pmta_end = 6usize.saturating_add(pmta_len).min(s.len());
+                        if let Some(pmta_slice) = s.get(6..pmta_end) {
+                            decode_pmta(pmta_slice, ctx.endian, 700, page, &mut Vec::new());
+                        }
+                        let mut cur = pmta_end;
+                        decode_cmx_residual_list(s, &mut cur, ctx.endian, &mut page.residual);
+                    }
+                }
+                tag_pos = tag_pos.saturating_add(tag_len);
             }
         } else if code == 11 {
             // CMX_Command_BeginLayer
             let tag_start = pos.saturating_add(header_len);
-            if tag_start.saturating_add(17) <= pos.saturating_add(inst_size) && payload.get(tag_start) == Some(&1) {
+            let inst_end = pos.saturating_add(inst_size);
+            if tag_start.saturating_add(17) <= inst_end && payload.get(tag_start) == Some(&1) {
+                let tag1_len = (read_u16(ctx.endian, payload, tag_start.saturating_add(1)).unwrap_or(17) as usize).max(17);
                 let flags = read_u32(ctx.endian, payload, tag_start.saturating_add(7)).unwrap_or(0x03);
                 let name_len = usize::from(read_u16(ctx.endian, payload, tag_start.saturating_add(15)).unwrap_or(0));
                 let name_start = tag_start.saturating_add(17);
-                let name_end = name_start.saturating_add(name_len).min(pos.saturating_add(inst_size));
+                let name_end = name_start.saturating_add(name_len).min(inst_end);
                 let layer_name = payload
                     .get(name_start..name_end)
                     .and_then(|s| std::str::from_utf8(s).ok())
@@ -1021,6 +1110,27 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
                 lyr.visible = (flags & 0x01) != 0;
                 lyr.printable = (flags & 0x02) != 0;
                 lyr.locked = (flags & 0x04) != 0;
+                let mut tag_pos = tag_start.saturating_add(tag1_len).max(name_end);
+                while tag_pos < inst_end {
+                    let Some(&tag_id) = payload.get(tag_pos) else { break };
+                    if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
+                        break;
+                    }
+                    let tag_len = (read_u16(ctx.endian, payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                    if tag_id == 99 && tag_pos.saturating_add(tag_len) <= inst_end {
+                        let s = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                        if s.get(0..4) == Some(b"CLYM") && s.len() >= 6 {
+                            let lmta_len = usize::from(read_u16(ctx.endian, s, 4).unwrap_or(0));
+                            let lmta_end = 6usize.saturating_add(lmta_len).min(s.len());
+                            if let Some(lmta_slice) = s.get(6..lmta_end) {
+                                decode_lmta(lmta_slice, ctx.endian, &mut lyr);
+                            }
+                            let mut cur = lmta_end;
+                            decode_cmx_residual_list(s, &mut cur, ctx.endian, &mut lyr.residual);
+                        }
+                    }
+                    tag_pos = tag_pos.saturating_add(tag_len);
+                }
                 page.layers.push(lyr);
             }
         } else if (code == 13 || code == 14) && inst_size >= 10 {
@@ -4100,7 +4210,10 @@ fn encode_cmx_meta_tag(node: &ObjectNode, cx: f64, cy: f64, bbox_payload: &[u8])
     let has_trfd = node.transform != Affine2::IDENTITY;
     let has_trns = node.transparency.is_some();
     let has_shape = !matches!(node.kind, ObjectKind::Path(_) | ObjectKind::Group { .. });
-    let has_efpc = !node.effects.is_empty() || !node.powerclip_children.is_empty();
+    let has_unk_fill = matches!(node.fill, Some(FillStyle::Unknown { .. }));
+    let has_unsup_ext = matches!(&node.kind, ObjectKind::Unsupported(u) if !u.children.is_empty() || !u.residual.chunks.is_empty());
+    let has_efpc =
+        !node.effects.is_empty() || !node.powerclip_children.is_empty() || !node.residual.chunks.is_empty() || has_unk_fill || has_unsup_ext;
     if !has_omta && !has_trfd && !has_trns && !has_shape && !has_efpc {
         return None;
     }
@@ -4183,6 +4296,37 @@ fn encode_cmx_meta_tag(node: &ObjectNode, cx: f64, cy: f64, bbox_payload: &[u8])
             meta.extend_from_slice(&pclp_bytes);
         } else {
             meta.extend_from_slice(&0u16.to_le_bytes());
+        }
+        if has_unk_fill || !node.residual.chunks.is_empty() || has_unsup_ext {
+            meta.extend_from_slice(b"EX83");
+            if let Some(FillStyle::Unknown { tag, payload }) = &node.fill {
+                meta.push(1u8);
+                meta.extend_from_slice(&tag.0);
+                let plen = payload.0.len().min(4096);
+                meta.extend_from_slice(&(plen as u16).to_le_bytes());
+                meta.extend_from_slice(payload.0.get(..plen).unwrap_or_default());
+            } else {
+                meta.push(0u8);
+            }
+            encode_cmx_residual_list(&node.residual, &mut meta);
+            if let ObjectKind::Unsupported(u) = &node.kind {
+                let mut uchl_bytes = Vec::new();
+                if !u.children.is_empty()
+                    && let Ok(page_sz) = Size::new((cx * 2.0).max(1.0), (cy * 2.0).max(1.0))
+                {
+                    let mut next_style_id = 1u32;
+                    for uch in &u.children {
+                        let _ = encode_object_into_layer(uch, page_sz, &mut next_style_id, &mut uchl_bytes);
+                    }
+                }
+                if uchl_bytes.len() <= 40_000 {
+                    meta.extend_from_slice(&(uchl_bytes.len() as u16).to_le_bytes());
+                    meta.extend_from_slice(&uchl_bytes);
+                } else {
+                    meta.extend_from_slice(&0u16.to_le_bytes());
+                }
+                encode_cmx_residual_list(&u.residual, &mut meta);
+            }
         }
     }
     if meta.len().saturating_add(3) <= usize::from(u16::MAX) { Some(meta) } else { None }
@@ -4526,8 +4670,8 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         let mut page_cmds = Vec::new();
         // 1. CMX_Command_BeginPage (code = 9)
         {
-            let mut cmd = Vec::with_capacity(30);
-            cmd.extend_from_slice(&30i16.to_le_bytes()); // instructionSize
+            let mut cmd = Vec::with_capacity(64);
+            cmd.extend_from_slice(&0i16.to_le_bytes()); // instructionSize placeholder
             cmd.extend_from_slice(&9i16.to_le_bytes()); // CMX_Command_BeginPage
             cmd.push(1u8); // CMX_Tag_BeginPage_PageSpecification
             cmd.extend_from_slice(&25u16.to_le_bytes()); // tagLength = 25
@@ -4537,7 +4681,31 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
             cmd.extend_from_slice(&half_h.to_le_bytes());
             cmd.extend_from_slice(&half_w.to_le_bytes());
             cmd.extend_from_slice(&neg_half_h.to_le_bytes());
+
+            let has_page_meta = page.name != format!("Page {page_num}")
+                || page.bleed.get() > 1e-6
+                || page.background != Some(FillStyle::uniform(Color::WHITE))
+                || !page.residual.chunks.is_empty();
+            if has_page_meta {
+                let mut cpgm = Vec::new();
+                cpgm.extend_from_slice(b"CPGM");
+                let pmta = encode_pmta_payload(page);
+                cpgm.extend_from_slice(&(pmta.len() as u16).to_le_bytes());
+                cpgm.extend_from_slice(&pmta);
+                encode_cmx_residual_list(&page.residual, &mut cpgm);
+                if cpgm.len().saturating_add(3) <= 16_000 {
+                    let cpgm_tag_len = (3usize.saturating_add(cpgm.len())) as u16;
+                    cmd.push(99u8);
+                    cmd.extend_from_slice(&cpgm_tag_len.to_le_bytes());
+                    cmd.extend_from_slice(&cpgm);
+                }
+            }
+
             cmd.push(255u8); // CMX_Tag_EndTag
+            let inst_len = (cmd.len() as i16).to_le_bytes();
+            if let Some(dst) = cmd.get_mut(0..2) {
+                dst.copy_from_slice(&inst_len);
+            }
             page_cmds.extend_from_slice(&cmd);
         }
 
@@ -4556,18 +4724,43 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
             let name_bytes = layer.name.as_bytes();
             let name_len = name_bytes.len().min(256);
             let tag_len = (17usize.saturating_add(name_len)) as u16;
-            let inst_len = (22usize.saturating_add(name_len)) as i16;
-            page_cmds.extend_from_slice(&inst_len.to_le_bytes());
-            page_cmds.extend_from_slice(&11i16.to_le_bytes()); // CMX_Command_BeginLayer
-            page_cmds.push(1u8); // CMX_Tag_BeginLayer_LayerSpecification
-            page_cmds.extend_from_slice(&tag_len.to_le_bytes());
-            page_cmds.extend_from_slice(&page_num.to_le_bytes());
-            page_cmds.extend_from_slice(&layer_num.to_le_bytes());
-            page_cmds.extend_from_slice(&l_flags.to_le_bytes());
-            page_cmds.extend_from_slice(&(layer.objects.len() as u32).to_le_bytes()); // tally
-            page_cmds.extend_from_slice(&(name_len as u16).to_le_bytes());
-            page_cmds.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
-            page_cmds.push(255u8); // CMX_Tag_EndTag
+            let mut l_cmd = Vec::with_capacity(64);
+            l_cmd.extend_from_slice(&0i16.to_le_bytes()); // instructionSize placeholder
+            l_cmd.extend_from_slice(&11i16.to_le_bytes()); // CMX_Command_BeginLayer
+            l_cmd.push(1u8); // CMX_Tag_BeginLayer_LayerSpecification
+            l_cmd.extend_from_slice(&tag_len.to_le_bytes());
+            l_cmd.extend_from_slice(&page_num.to_le_bytes());
+            l_cmd.extend_from_slice(&layer_num.to_le_bytes());
+            l_cmd.extend_from_slice(&l_flags.to_le_bytes());
+            l_cmd.extend_from_slice(&(layer.objects.len() as u32).to_le_bytes()); // tally
+            l_cmd.extend_from_slice(&(name_len as u16).to_le_bytes());
+            l_cmd.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
+
+            let has_layer_meta = layer.role != coralcraft_doc::LayerRole::Normal
+                || layer.master_in_front
+                || (layer.opacity.get() - 1.0).abs() > 1e-6
+                || !layer.residual.chunks.is_empty();
+            if has_layer_meta {
+                let mut clym = Vec::new();
+                clym.extend_from_slice(b"CLYM");
+                let lmta = encode_lmta_payload(layer);
+                clym.extend_from_slice(&(lmta.len() as u16).to_le_bytes());
+                clym.extend_from_slice(&lmta);
+                encode_cmx_residual_list(&layer.residual, &mut clym);
+                if clym.len().saturating_add(3) <= 16_000 {
+                    let clym_tag_len = (3usize.saturating_add(clym.len())) as u16;
+                    l_cmd.push(99u8);
+                    l_cmd.extend_from_slice(&clym_tag_len.to_le_bytes());
+                    l_cmd.extend_from_slice(&clym);
+                }
+            }
+
+            l_cmd.push(255u8); // CMX_Tag_EndTag
+            let inst_len = (l_cmd.len() as i16).to_le_bytes();
+            if let Some(dst) = l_cmd.get_mut(0..2) {
+                dst.copy_from_slice(&inst_len);
+            }
+            page_cmds.extend_from_slice(&l_cmd);
 
             for node in &layer.objects {
                 encode_cmx_node(node, cx, cy, &mut tables, &mut page_cmds)?;
@@ -4824,22 +5017,67 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     append_riff_chunk(&mut body, *b"ixpg", &ixpg);
     append_riff_chunk(&mut body, *b"ixmr", &ixmr);
 
-    // Also include `LIST page` chunks so `parse_document` round-trips all parametric primitives and effects losslessly
-    let mut next_style_id = 1u32;
-    for page in &doc.pages {
-        let mut page_children = Vec::new();
-        let mut mcfg = Vec::with_capacity(8);
-        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
-        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
-        append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
-        for layer in &page.layers {
-            let mut layer_children = Vec::new();
-            for obj in &layer.objects {
-                encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children)?;
-            }
-            append_riff_list(&mut page_children, *b"layr", &layer_children);
+    // Optional document-level metadata (`dmta`, `plte`, `LIST mstr`, and `doc.residual`)
+    let dmta = encode_dmta_payload(doc);
+    append_riff_chunk(&mut body, *b"dmta", &dmta);
+    if doc.palette != coralcraft_color::Palette::default_workspace_palette() {
+        let xml_pal = coralcraft_color::serialize_xml_palette(&doc.palette);
+        append_riff_chunk(&mut body, *b"plte", xml_pal.as_bytes());
+    }
+    for rc in &doc.residual.chunks {
+        if !matches!(
+            &rc.tag.0,
+            b"vrsn"
+                | b"dmta"
+                | b"plte"
+                | b"mcfg"
+                | b"fild"
+                | b"outl"
+                | b"page"
+                | b"rclr"
+                | b"rpen"
+                | b"rott"
+                | b"rdot"
+                | b"rotl"
+                | b"ixpg"
+                | b"ixmr"
+                | b"cont"
+                | b"LIST"
+        ) && !rc.payload.0.is_empty()
+        {
+            append_riff_chunk(&mut body, rc.tag.0, &rc.payload.0);
         }
-        append_riff_list(&mut body, *b"page", &page_children);
+    }
+    let has_custom_master = doc.master_layers.len() > 1
+        || doc.master_layers.first().is_some_and(|ml| {
+            !ml.objects.is_empty()
+                || !ml.residual.chunks.is_empty()
+                || ml.name != "Master Page"
+                || !ml.visible
+                || !ml.printable
+                || ml.locked
+                || ml.master_in_front
+                || (ml.opacity.get() - 1.0).abs() > 1e-6
+        });
+    if has_custom_master {
+        let mut next_style_id = 1u32;
+        let master_page_size = first_page.size;
+        let mut mstr_children = Vec::new();
+        for mlayer in &doc.master_layers {
+            let mut layer_children = Vec::new();
+            let lmta = encode_lmta_payload(mlayer);
+            append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for rc in &mlayer.residual.chunks {
+                if !matches!(&rc.tag.0, b"lmta" | b"LIST") && !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut layer_children, rc.tag.0, &rc.payload.0);
+                }
+            }
+            for obj in &mlayer.objects {
+                encode_object_into_layer(obj, master_page_size, &mut next_style_id, &mut layer_children)?;
+            }
+            append_riff_list(&mut mstr_children, *b"layr", &layer_children);
+        }
+        append_riff_list(&mut body, *b"mstr", &mstr_children);
     }
 
     let riff_size = 4u32.saturating_add(body.len() as u32);

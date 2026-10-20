@@ -884,7 +884,7 @@ mod tests {
         }
 
         // Also test standalone CMX1 `page` + `rclr`/`rpen`/`rotl` chunks (without trailing `LIST page`)
-        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").unwrap_or(cmx_bytes.len());
         let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
         let pure_riff_sz = (pure_cmx.len() - 8) as u32;
         pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
@@ -962,7 +962,7 @@ mod tests {
         ));
 
         let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
-        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").unwrap_or(cmx_bytes.len());
         let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
         let pure_riff_sz = (pure_cmx.len() - 8) as u32;
         pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
@@ -1022,7 +1022,7 @@ mod tests {
         ));
 
         let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
-        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").unwrap_or(cmx_bytes.len());
         let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
         let pure_riff_sz = (pure_cmx.len() - 8) as u32;
         pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
@@ -1095,7 +1095,7 @@ mod tests {
         }
 
         let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
-        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").unwrap_or(cmx_bytes.len());
         let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
         let pure_riff_sz = (pure_cmx.len() - 8) as u32;
         pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
@@ -1974,5 +1974,147 @@ mod tests {
         assert_eq!(pc.name.as_deref(), Some("ClippedEllipse"));
         assert_eq!(pc.fill, Some(FillStyle::uniform(Color::rgb8(30, 140, 220))));
         assert!(matches!(pc.kind, ObjectKind::Ellipse(_)));
+    }
+
+    #[test]
+    fn write_cmx1_pure_document_page_layer_residuals_and_unsupported_object_roundtrip_m83() {
+        use coralcraft_color::{Color, PaletteSwatch};
+        use coralcraft_doc::{
+            ChunkTag, Document, FillStyle, LayerRole, ObjectId, ObjectKind, ObjectNode, RawChunk, RawPayload, Residual, UnsupportedObject,
+        };
+        use coralcraft_geom::{F64, Rect, RectSpec, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "CMX Pure Engineering Spec".to_owned();
+        doc.units = Unit::Mm;
+        doc.palette.name = "CMX Custom Palette".to_owned();
+        doc.palette.swatches = vec![
+            PaletteSwatch { name: "Spot Gold".to_owned(), color: Color::spot("PANTONE 871 C", 0.9, [0.2, 0.3, 0.7, 0.1]).unwrap() },
+            PaletteSwatch { name: "Process Cyan".to_owned(), color: Color::cmyk(1.0, 0.0, 0.0, 0.0).unwrap() },
+        ];
+        doc.residual.chunks.push(RawChunk { tag: ChunkTag(*b"dcst"), flags: 0, slot: 0, payload: RawPayload(vec![0xAA, 0xBB, 0xCC]), src_offset: 0 });
+
+        let m_layer = &mut doc.master_layers[0];
+        m_layer.name = "Master Header".to_owned();
+        m_layer.role = LayerRole::MasterAllPages;
+        m_layer.master_in_front = true;
+        m_layer.opacity = F64::new(0.85).unwrap();
+        m_layer.residual.chunks.push(RawChunk { tag: ChunkTag(*b"mres"), flags: 0, slot: 0, payload: RawPayload(vec![0x10, 0x20]), src_offset: 0 });
+        m_layer.objects.push(ObjectNode::new(
+            ObjectId(10),
+            Some("MasterRule".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 500.0, 24.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(40, 40, 40))),
+            None,
+        ));
+
+        let page = &mut doc.pages[0];
+        page.name = "Cover Sheet".to_owned();
+        page.bleed = F64::new(9.0).unwrap();
+        page.background = Some(FillStyle::uniform(Color::rgb8(250, 248, 240)));
+        page.residual.chunks.push(RawChunk { tag: ChunkTag(*b"pgex"), flags: 0, slot: 0, payload: RawPayload(vec![1, 3, 5, 7]), src_offset: 0 });
+
+        let layer = &mut page.layers[0];
+        layer.name = "Guides & CAD".to_owned();
+        layer.role = LayerRole::Guides;
+        layer.master_in_front = true;
+        layer.opacity = F64::new(0.75).unwrap();
+        layer.residual.chunks.push(RawChunk { tag: ChunkTag(*b"lyex"), flags: 0, slot: 0, payload: RawPayload(vec![2, 4, 6, 8]), src_offset: 0 });
+
+        let unk_fill = FillStyle::Unknown { tag: ChunkTag(*b"ufll"), payload: RawPayload(vec![0xDE, 0xAD, 0xBE, 0xEF]) };
+        let mut obj0 = ObjectNode::new(
+            ObjectId(101),
+            Some("UnkFillBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 40.0, 130.0, 100.0).unwrap())),
+            Some(unk_fill.clone()),
+            None,
+        );
+        obj0.residual.chunks.push(RawChunk { tag: ChunkTag(*b"obex"), flags: 0, slot: 0, payload: RawPayload(vec![9, 9, 9]), src_offset: 0 });
+        layer.objects.push(obj0);
+
+        let unsup_child = ObjectNode::new(
+            ObjectId(102),
+            Some("UnsupInner".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(45.0, 55.0, 85.0, 85.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(80, 160, 240))),
+            None,
+        );
+        let mut unsup_res = Residual::default();
+        unsup_res.chunks.push(RawChunk { tag: ChunkTag(*b"ures"), flags: 0, slot: 0, payload: RawPayload(vec![7, 6, 5]), src_offset: 0 });
+        let obj1 = ObjectNode::new(
+            ObjectId(103),
+            Some("CmxUnsupportedPlugin".to_owned()),
+            ObjectKind::Unsupported(UnsupportedObject {
+                tag: ChunkTag(*b"plug"),
+                class_hint: Some("CustomCadTable".to_owned()),
+                payload: RawPayload(vec![0x42, 0x43, 0x44, 0x45]),
+                fallback_bounds: Some(Rect::new(40.0, 120.0, 180.0, 220.0).unwrap()),
+                absolute_geometry: true,
+                children: vec![unsup_child],
+                residual: unsup_res,
+            }),
+            None,
+            None,
+        );
+        layer.objects.push(obj1);
+
+        let bytes = write_cmx1(&doc).expect("write_cmx1 M83");
+        assert!(
+            !bytes.windows(8).any(|w| &w[0..4] == b"LIST" && &w[4..8] == b"page"),
+            "write_cmx1 must emit a pure CMX1 stream without fallback LIST page chunks"
+        );
+
+        let parsed = parse_document(&bytes).expect("parse_document M83");
+        let pdoc = &parsed.document;
+        assert_eq!(pdoc.title, "CMX Pure Engineering Spec");
+        assert_eq!(pdoc.units, Unit::Mm);
+        assert_eq!(pdoc.palette.swatches.len(), 2);
+        assert_eq!(pdoc.palette.swatches[0].name, "Spot Gold");
+        assert_eq!(pdoc.residual.chunks.len(), 1);
+        assert_eq!(&pdoc.residual.chunks[0].tag.0, b"dcst");
+        assert_eq!(pdoc.residual.chunks[0].payload.0, vec![0xAA, 0xBB, 0xCC]);
+
+        assert_eq!(pdoc.master_layers.len(), 1);
+        let pm = &pdoc.master_layers[0];
+        assert_eq!(pm.name, "Master Header");
+        assert_eq!(pm.role, LayerRole::MasterAllPages);
+        assert!(pm.master_in_front);
+        assert!((pm.opacity.get() - 0.85).abs() < 1e-6);
+        assert!(pm.residual.chunks.iter().any(|c| &c.tag.0 == b"mres" && c.payload.0 == vec![0x10, 0x20]));
+        assert_eq!(pm.objects.len(), 1);
+        assert_eq!(pm.objects[0].name.as_deref(), Some("MasterRule"));
+
+        let ppage = &pdoc.pages[0];
+        assert_eq!(ppage.name, "Cover Sheet");
+        assert!((ppage.bleed.get() - 9.0).abs() < 1e-6);
+        assert_eq!(ppage.background, Some(FillStyle::uniform(Color::rgb8(250, 248, 240))));
+        assert!(ppage.residual.chunks.iter().any(|c| &c.tag.0 == b"pgex" && c.payload.0 == vec![1, 3, 5, 7]));
+
+        let plyr = &ppage.layers[0];
+        assert_eq!(plyr.name, "Guides & CAD");
+        assert_eq!(plyr.role, LayerRole::Guides);
+        assert!(plyr.master_in_front);
+        assert!((plyr.opacity.get() - 0.75).abs() < 1e-6);
+        assert!(plyr.residual.chunks.iter().any(|c| &c.tag.0 == b"lyex" && c.payload.0 == vec![2, 4, 6, 8]));
+        assert_eq!(plyr.objects.len(), 2);
+
+        let po0 = &plyr.objects[0];
+        assert_eq!(po0.name.as_deref(), Some("UnkFillBox"));
+        assert_eq!(po0.fill, Some(unk_fill));
+        assert!(po0.residual.chunks.iter().any(|c| &c.tag.0 == b"obex" && c.payload.0 == vec![9, 9, 9]));
+
+        let po1 = &plyr.objects[1];
+        assert_eq!(po1.name.as_deref(), Some("CmxUnsupportedPlugin"));
+        let ObjectKind::Unsupported(u) = &po1.kind else {
+            panic!("expected ObjectKind::Unsupported, got {:?}", po1.kind);
+        };
+        assert_eq!(&u.tag.0, b"plug");
+        assert_eq!(u.class_hint.as_deref(), Some("CustomCadTable"));
+        assert_eq!(u.payload.0, vec![0x42, 0x43, 0x44, 0x45]);
+        assert!(u.absolute_geometry);
+        assert_eq!(u.fallback_bounds, Some(Rect::new(40.0, 120.0, 180.0, 220.0).unwrap()));
+        assert_eq!(u.children.len(), 1);
+        assert_eq!(u.children[0].name.as_deref(), Some("UnsupInner"));
+        assert!(u.residual.chunks.iter().any(|c| &c.tag.0 == b"ures" && c.payload.0 == vec![7, 6, 5]));
     }
 }

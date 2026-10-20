@@ -7,7 +7,7 @@ use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle};
-use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
+use crate::style::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
 fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
@@ -17,10 +17,10 @@ fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
     }
 }
 
-type SvgGroupFrame = (Option<String>, bool, F64, Affine2, Option<String>, Option<TransparencyStyle>, Vec<ObjectNode>);
+type SvgGroupFrame = (Option<String>, bool, bool, F64, Affine2, Option<String>, Option<TransparencyStyle>, Vec<ObjectNode>);
 
 fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: ObjectNode) {
-    if let Some((_, _, _, _, _, _, children)) = group_stack.last_mut() {
+    if let Some((_, _, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.push(node);
     } else {
         push_to_active_layer(doc, node);
@@ -28,7 +28,7 @@ fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: Ob
 }
 
 fn last_svg_sibling_mut<'a>(doc: &'a mut Document, group_stack: &'a mut [SvgGroupFrame]) -> Option<&'a mut ObjectNode> {
-    if let Some((_, _, _, _, _, _, children)) = group_stack.last_mut() {
+    if let Some((_, _, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.last_mut()
     } else {
         doc.pages.first_mut()?.layers.last_mut()?.objects.last_mut()
@@ -222,20 +222,21 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 passthrough_g_stack.push(true);
             } else {
                 passthrough_g_stack.push(false);
+                let is_obj_wrapper = extract_attr_str(tag_slice, "data-object-wrapper") == Some("1");
                 let name = extract_attr_str(tag_slice, "data-name")
                     .map(unescape_svg_xml)
-                    .or_else(|| if id_str.is_empty() { Some("SVG Group".to_owned()) } else { Some(id_str.to_owned()) });
+                    .or_else(|| if id_str.is_empty() || is_obj_wrapper { None } else { Some(id_str.to_owned()) });
                 let locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
                 let opacity = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()).unwrap_or(F64::ONE);
                 let tf = parse_svg_transform(tag_slice);
                 let clip_id = extract_url_ref_id(tag_slice, "clip-path");
                 let tr = parse_svg_transparency(tag_slice, &svg_masks);
-                group_stack.push((name, locked, opacity, tf, clip_id, tr, Vec::new()));
+                group_stack.push((name, is_obj_wrapper, locked, opacity, tf, clip_id, tr, Vec::new()));
             }
             continue;
         } else if tag_slice.starts_with("</g>") {
             if passthrough_g_stack.pop() == Some(false)
-                && let Some((name, locked, opacity, tf, clip_id_opt, tr, children)) = group_stack.pop()
+                && let Some((name, is_obj_wrapper, locked, opacity, tf, clip_id_opt, tr, mut children)) = group_stack.pop()
             {
                 if let Some(clip_id) = clip_id_opt {
                     if let Some(prev) = last_svg_sibling_mut(&mut doc, &mut group_stack)
@@ -250,9 +251,36 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                         container.powerclip_children = children;
                         push_svg_node(&mut doc, &mut group_stack, container);
                     }
+                } else if is_obj_wrapper && !children.is_empty() {
+                    let mut merged = children.remove(0);
+                    for ch in children {
+                        if merged.fill.is_none() && ch.fill.is_some() {
+                            merged.fill = ch.fill;
+                            merged.kind = ch.kind;
+                        }
+                        if merged.outline.is_none() && ch.outline.is_some() {
+                            merged.outline = ch.outline;
+                        }
+                        if merged.powerclip_children.is_empty() && !ch.powerclip_children.is_empty() {
+                            merged.powerclip_children = ch.powerclip_children;
+                        }
+                    }
+                    if name.is_some() {
+                        merged.name = name;
+                    }
+                    if locked {
+                        merged.locked = true;
+                    }
+                    merged.opacity = opacity;
+                    merged.transform = tf;
+                    if tr.is_some() {
+                        merged.transparency = tr;
+                    }
+                    push_svg_node(&mut doc, &mut group_stack, merged);
                 } else {
+                    let grp_name = name.or_else(|| Some("SVG Group".to_owned()));
                     let obj_id = doc.allocate_object_id();
-                    let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+                    let mut grp = ObjectNode::new(obj_id, grp_name, ObjectKind::Group { children }, None, None);
                     grp.locked = locked;
                     grp.opacity = opacity;
                     grp.transform = tf;
@@ -370,9 +398,15 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 if extract_style_or_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
                     path.fill_rule = FillRule::EvenOdd;
                 }
+                let kind = parse_svg_shape_meta_kind(tag_slice).unwrap_or(ObjectKind::Path(path));
                 let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
+                let name = extract_attr_str(tag_slice, "data-name").map(unescape_svg_xml).or_else(|| Some("SVG Path".to_owned()));
                 let obj_id = doc.allocate_object_id();
-                let mut node = ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline);
+                let mut node = ObjectNode::new(obj_id, name, kind, fill, outline);
+                node.locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
+                if let Some(op) = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()) {
+                    node.opacity = op;
+                }
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
                 push_svg_node(&mut doc, &mut group_stack, node);
@@ -431,9 +465,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         }
     }
 
-    while let Some((name, locked, opacity, tf, _, tr, children)) = group_stack.pop() {
+    while let Some((name, _, locked, opacity, tf, _, tr, children)) = group_stack.pop() {
+        let grp_name = name.or_else(|| Some("SVG Group".to_owned()));
         let obj_id = doc.allocate_object_id();
-        let mut grp = ObjectNode::new(obj_id, name, ObjectKind::Group { children }, None, None);
+        let mut grp = ObjectNode::new(obj_id, grp_name, ObjectKind::Group { children }, None, None);
         grp.locked = locked;
         grp.opacity = opacity;
         grp.transform = tf;
@@ -966,11 +1001,27 @@ fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillS
     let mut outline =
         if fill.is_none() && outline.is_none() && !has_explicit_stroke_none { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
     if let Some(st) = &mut outline {
-        if let Some(w) = parse_style_or_attr_f64(tag_slice, "stroke-width")
+        if let Some(w) = parse_attr_f64(tag_slice, "data-stroke-width-pt").or_else(|| parse_style_or_attr_f64(tag_slice, "stroke-width"))
             && w > 0.0
             && let Ok(w_f64) = F64::new(w)
         {
             st.width_pt = w_f64;
+        }
+        if extract_attr_str(tag_slice, "data-behind-fill") == Some("1")
+            || extract_style_or_attr_str(tag_slice, "paint-order").is_some_and(|v| v.contains("stroke") && v.contains("fill"))
+        {
+            st.behind_fill = true;
+        }
+        if extract_attr_str(tag_slice, "data-scale-with-object") == Some("0")
+            || extract_style_or_attr_str(tag_slice, "vector-effect").map(str::trim) == Some("non-scaling-stroke")
+        {
+            st.scale_with_object = false;
+        }
+        if let Some(sa) = extract_attr_str(tag_slice, "data-start-arrow").and_then(parse_svg_arrow_kind) {
+            st.start_arrow = sa;
+        }
+        if let Some(ea) = extract_attr_str(tag_slice, "data-end-arrow").and_then(parse_svg_arrow_kind) {
+            st.end_arrow = ea;
         }
         if let Some(ml) = parse_style_or_attr_f64(tag_slice, "stroke-miterlimit")
             && ml >= 1.0
@@ -1013,6 +1064,62 @@ fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillS
         }
     }
     (fill, outline)
+}
+
+fn parse_svg_arrow_kind(s: &str) -> Option<ArrowheadKind> {
+    match s.trim() {
+        "none" => Some(ArrowheadKind::None),
+        "triangle" => Some(ArrowheadKind::Triangle),
+        "open-arrow" => Some(ArrowheadKind::OpenArrow),
+        "circle" => Some(ArrowheadKind::Circle),
+        "diamond" => Some(ArrowheadKind::Diamond),
+        "unknown" => Some(ArrowheadKind::Unknown),
+        _ => None,
+    }
+}
+
+fn parse_svg_shape_meta_kind(tag_slice: &str) -> Option<ObjectKind> {
+    if let Some(el_str) = extract_attr_str(tag_slice, "data-ellipse") {
+        let nums: Vec<f64> = el_str.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [x0, y0, x1, y1, s_deg, e_deg, m_code] = nums.as_slice()
+            && let Ok(rect) = Rect::new(*x0, *y0, *x1, *y1)
+        {
+            let mode = match *m_code as u8 {
+                1 => coralcraft_geom::EllipseMode::Pie,
+                2 => coralcraft_geom::EllipseMode::Arc,
+                _ => coralcraft_geom::EllipseMode::Full,
+            };
+            return Some(ObjectKind::Ellipse(EllipseSpec {
+                rect,
+                start_deg: F64::new(*s_deg).unwrap_or(F64::ZERO),
+                end_deg: F64::new(*e_deg).unwrap_or(F64::ZERO),
+                mode,
+            }));
+        }
+    }
+    if let Some(rc_str) = extract_attr_str(tag_slice, "data-rect") {
+        let nums: Vec<f64> = rc_str.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [x0, y0, x1, y1, r0, r1, r2, r3, k0, k1, k2, k3] = nums.as_slice()
+            && let Ok(rect) = Rect::new(*x0, *y0, *x1, *y1)
+        {
+            let map_ck = |v: f64| match v as u8 {
+                1 => CornerKind::Scalloped,
+                2 => CornerKind::Chamfered,
+                _ => CornerKind::Round,
+            };
+            return Some(ObjectKind::Rect(RectSpec {
+                rect,
+                radii: [
+                    F64::new(*r0).unwrap_or(F64::ZERO),
+                    F64::new(*r1).unwrap_or(F64::ZERO),
+                    F64::new(*r2).unwrap_or(F64::ZERO),
+                    F64::new(*r3).unwrap_or(F64::ZERO),
+                ],
+                corner_kinds: [map_ck(*k0), map_ck(*k1), map_ck(*k2), map_ck(*k3)],
+            }));
+        }
+    }
+    None
 }
 
 fn extract_url_ref_id(tag_slice: &str, prop: &str) -> Option<String> {

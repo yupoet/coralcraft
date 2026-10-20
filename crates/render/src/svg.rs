@@ -331,8 +331,20 @@ fn format_transform_attr(t: Affine2) -> String {
     }
 }
 
+fn format_arrow_kind(a: coralcraft_doc::ArrowheadKind) -> Option<&'static str> {
+    match a {
+        coralcraft_doc::ArrowheadKind::None => None,
+        coralcraft_doc::ArrowheadKind::Triangle => Some("triangle"),
+        coralcraft_doc::ArrowheadKind::OpenArrow => Some("open-arrow"),
+        coralcraft_doc::ArrowheadKind::Circle => Some("circle"),
+        coralcraft_doc::ArrowheadKind::Diamond => Some("diamond"),
+        coralcraft_doc::ArrowheadKind::Unknown => Some("unknown"),
+    }
+}
+
 fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String {
-    let mut w = if outline.is_hairline() { 0.25 } else { outline.width_pt.get() };
+    let raw_w = if outline.is_hairline() { 0.25 } else { outline.width_pt.get() };
+    let mut w = raw_w;
     if !outline.scale_with_object {
         let scale = obj_transform.determinant().abs().sqrt();
         if scale > 1e-6 {
@@ -355,8 +367,16 @@ fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String
         let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
         format!(" stroke-dasharray=\"{}\"", joined.join(","))
     };
+    let behind_attr = if outline.behind_fill { " paint-order=\"stroke fill\" data-behind-fill=\"1\"" } else { "" };
+    let scale_attr = if !outline.scale_with_object {
+        format!(" vector-effect=\"non-scaling-stroke\" data-scale-with-object=\"0\" data-stroke-width-pt=\"{}\"", fmt_num(raw_w))
+    } else {
+        String::new()
+    };
+    let start_arrow_attr = format_arrow_kind(outline.start_arrow).map(|s| format!(" data-start-arrow=\"{s}\"")).unwrap_or_default();
+    let end_arrow_attr = format_arrow_kind(outline.end_arrow).map(|s| format!(" data-end-arrow=\"{s}\"")).unwrap_or_default();
     format!(
-        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}",
+        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}{behind_attr}{scale_attr}{start_arrow_attr}{end_arrow_attr}",
         svg_hex_color(&outline.color),
         fmt_num(w),
         fmt_num(outline.miter_limit.get())
@@ -517,6 +537,54 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
     emit_path_node(defs, body, node, &local_path, local_bbox, indent_level)
 }
 
+fn format_shape_meta_attr(node: &ObjectNode) -> String {
+    if !node.effects.is_empty() {
+        return String::new();
+    }
+    match &node.kind {
+        ObjectKind::Rect(rs) => {
+            let ck = rs.corner_kinds.map(|k| match k {
+                coralcraft_geom::CornerKind::Round => 0u8,
+                coralcraft_geom::CornerKind::Scalloped => 1u8,
+                coralcraft_geom::CornerKind::Chamfered => 2u8,
+            });
+            format!(
+                " data-rect=\"{},{},{},{},{},{},{},{},{},{},{},{}\"",
+                fmt_num(rs.rect.x0.get()),
+                fmt_num(rs.rect.y0.get()),
+                fmt_num(rs.rect.x1.get()),
+                fmt_num(rs.rect.y1.get()),
+                fmt_num(rs.radii[0].get()),
+                fmt_num(rs.radii[1].get()),
+                fmt_num(rs.radii[2].get()),
+                fmt_num(rs.radii[3].get()),
+                ck[0],
+                ck[1],
+                ck[2],
+                ck[3]
+            )
+        }
+        ObjectKind::Ellipse(es) => {
+            let mode_code = match es.mode {
+                coralcraft_geom::EllipseMode::Full => 0u8,
+                coralcraft_geom::EllipseMode::Pie => 1u8,
+                coralcraft_geom::EllipseMode::Arc => 2u8,
+            };
+            format!(
+                " data-ellipse=\"{},{},{},{},{},{},{}\"",
+                fmt_num(es.rect.x0.get()),
+                fmt_num(es.rect.y0.get()),
+                fmt_num(es.rect.x1.get()),
+                fmt_num(es.rect.y1.get()),
+                fmt_num(es.start_deg.get()),
+                fmt_num(es.end_deg.get()),
+                mode_code
+            )
+        }
+        _ => String::new(),
+    }
+}
+
 fn emit_path_node(
     defs: &mut String,
     body: &mut String,
@@ -531,6 +599,9 @@ fn emit_path_node(
         return Ok(());
     }
 
+    let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+    let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
+    let shape_meta_attr = format_shape_meta_attr(node);
     let fill_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
     let fill_attr = match &node.fill {
         Some(FillStyle::Uniform { color }) => svg_hex_color(color),
@@ -587,13 +658,17 @@ fn emit_path_node(
         .is_some_and(|o| o.start_arrow != coralcraft_doc::ArrowheadKind::None || o.end_arrow != coralcraft_doc::ArrowheadKind::None);
     let needs_wrapper = has_powerclip || behind_fill || has_arrows || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
     if needs_wrapper {
-        let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}{mask_attr}>", node.id.0);
+        let _ = writeln!(
+            body,
+            "{indent}<g id=\"obj-{}\" data-object-wrapper=\"1\"{name_attr}{locked_attr}{transform_attr}{opacity_attr}{mask_attr}>",
+            node.id.0
+        );
         let child_indent = "  ".repeat(indent_level.saturating_add(1));
 
         // 1. Outline behind fill
         if behind_fill && let Some(outline) = &node.outline {
             let stroke_attrs = format_stroke_attrs(outline, node.transform);
-            let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+            let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
             emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
         }
 
@@ -604,10 +679,10 @@ fn emit_path_node(
                 && let Some(outline) = &node.outline
             {
                 let stroke_attrs = format_stroke_attrs(outline, node.transform);
-                let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr} {stroke_attrs}/>");
+                let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr} {stroke_attrs}/>");
                 emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
             } else {
-                let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}/>");
+                let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}/>");
             }
         }
 
@@ -626,14 +701,18 @@ fn emit_path_node(
             && let Some(outline) = &node.outline
         {
             let stroke_attrs = format_stroke_attrs(outline, node.transform);
-            let _ = writeln!(body, "{child_indent}<path d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
+            let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"none\" {stroke_attrs}/>");
             emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
         }
 
         let _ = writeln!(body, "{indent}</g>");
     } else {
         let stroke_part = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
-        let _ = writeln!(body, "{indent}<path id=\"obj-{}\" d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}{stroke_part}/>", node.id.0);
+        let _ = writeln!(
+            body,
+            "{indent}<path id=\"obj-{}\"{name_attr}{locked_attr}{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}{stroke_part}/>",
+            node.id.0
+        );
     }
 
     Ok(())

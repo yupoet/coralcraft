@@ -1436,4 +1436,87 @@ mod tests {
         assert_eq!(r_spec.columns, 2);
         assert!((r_spec.gutter_pt.get() - 12.0).abs() < 1e-4);
     }
+
+    #[test]
+    fn export_svg_and_import_svg_roundtrip_object_wrapper_powerclip_behind_fill_and_arrowheads_m83() {
+        use coralcraft_doc::{ArrowheadKind, LineCap, LineJoin};
+        use coralcraft_geom::EllipseSpec;
+
+        let mut doc = Document::new_a4_portrait();
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+
+        let mut banner_path = Path::new();
+        banner_path.move_to(Point::new(40.0, 50.0).unwrap()).unwrap();
+        banner_path.line_to(Point::new(220.0, 50.0).unwrap()).unwrap();
+        banner_path.line_to(Point::new(220.0, 140.0).unwrap()).unwrap();
+        banner_path.line_to(Point::new(40.0, 140.0).unwrap()).unwrap();
+        banner_path.close().unwrap();
+
+        let mut outline = OutlineStyle::with_width(Color::rgb8(0x14, 0x28, 0x50), F64::new(3.0).unwrap());
+        outline.cap = LineCap::Round;
+        outline.join = LineJoin::Bevel;
+        outline.miter_limit = F64::new(6.0).unwrap();
+        outline.behind_fill = true;
+        outline.scale_with_object = false;
+        outline.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(3.0).unwrap()];
+        outline.start_arrow = ArrowheadKind::Triangle;
+        outline.end_arrow = ArrowheadKind::Diamond;
+
+        let pc_child = ObjectNode::new(
+            ObjectId(1),
+            Some("ClippedBadge".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(70.0, 65.0, 190.0, 125.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(0x30, 0xA0, 0xE0))),
+            None,
+        );
+
+        let mut banner = ObjectNode::new(
+            ObjectId(2),
+            Some("Clipped Banner".to_owned()),
+            ObjectKind::Path(banner_path),
+            Some(FillStyle::uniform(Color::rgb8(0xF0, 0x64, 0x28))),
+            Some(outline),
+        );
+        banner.locked = true;
+        banner.opacity = F64::new(0.8).unwrap();
+        banner.transform = Affine2::new(2.0, 0.0, 0.0, 2.0, 15.0, 25.0).unwrap();
+        banner.powerclip_children.push(pc_child);
+        objs.push(banner);
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg M83");
+        assert!(svg.contains("data-object-wrapper=\"1\""), "export_svg must mark wrapped object group: {svg}");
+        assert!(svg.contains("paint-order=\"stroke fill\""), "export_svg must emit paint-order for behind_fill: {svg}");
+        assert!(svg.contains("vector-effect=\"non-scaling-stroke\""), "export_svg must emit non-scaling-stroke: {svg}");
+        assert!(svg.contains("data-start-arrow=\"triangle\""), "export_svg must emit data-start-arrow: {svg}");
+        assert!(svg.contains("data-end-arrow=\"diamond\""), "export_svg must emit data-end-arrow: {svg}");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg M83");
+        let robjs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 1, "wrapped object must unwrap to a single top-level ObjectNode");
+        let rnode = robjs.first().unwrap();
+        assert_eq!(rnode.name.as_deref(), Some("Clipped Banner"));
+        assert!(rnode.locked);
+        assert!((rnode.opacity.get() - 0.8).abs() < 1e-6);
+        assert_eq!(rnode.transform, Affine2::new(2.0, 0.0, 0.0, 2.0, 15.0, 25.0).unwrap());
+        assert_eq!(rnode.fill, Some(FillStyle::uniform(Color::rgb8(0xF0, 0x64, 0x28))));
+        assert!(matches!(rnode.kind, ObjectKind::Path(_)));
+
+        let rout = rnode.outline.as_ref().expect("outline on reimported banner");
+        assert_eq!(rout.color, Color::rgb8(0x14, 0x28, 0x50));
+        assert!((rout.width_pt.get() - 3.0).abs() < 1e-4, "expected original 3.0pt stroke width, got {}", rout.width_pt.get());
+        assert_eq!(rout.cap, LineCap::Round);
+        assert_eq!(rout.join, LineJoin::Bevel);
+        assert!((rout.miter_limit.get() - 6.0).abs() < 1e-4);
+        assert!(rout.behind_fill);
+        assert!(!rout.scale_with_object);
+        assert_eq!(rout.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(3.0).unwrap()]);
+        assert_eq!(rout.start_arrow, ArrowheadKind::Triangle);
+        assert_eq!(rout.end_arrow, ArrowheadKind::Diamond);
+
+        assert_eq!(rnode.powerclip_children.len(), 1);
+        let rpc = rnode.powerclip_children.first().unwrap();
+        assert_eq!(rpc.name.as_deref(), Some("ClippedBadge"));
+        assert_eq!(rpc.fill, Some(FillStyle::uniform(Color::rgb8(0x30, 0xA0, 0xE0))));
+        assert!(matches!(rpc.kind, ObjectKind::Ellipse(_)));
+    }
 }
