@@ -277,7 +277,7 @@ pub fn reference_point(r: Rect, index: usize) -> Result<Point, GeomError> {
     let c = r.center()?;
     let xs = [r.x0.get(), c.x.get(), r.x1.get()];
     let ys = [r.y0.get(), c.y.get(), r.y1.get()];
-    Point::new(xs[index % 3], ys[(index / 3).min(2)])
+    Point::new(xs.get(index % 3).copied().unwrap_or(0.0), ys.get((index / 3).min(2)).copied().unwrap_or(0.0))
 }
 
 /// Normalizes an angle in degrees into `(-180.0, 180.0]`.

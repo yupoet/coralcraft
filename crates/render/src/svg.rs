@@ -375,7 +375,7 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
         ObjectKind::Group { children } => {
             let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}>", node.id.0);
             for ch in children {
-                emit_svg_node(defs, body, ch, indent_level + 1)?;
+                emit_svg_node(defs, body, ch, indent_level.saturating_add(1))?;
             }
             let _ = writeln!(body, "{indent}</g>");
             return Ok(());
@@ -560,7 +560,7 @@ fn emit_path_node(
     let needs_wrapper = has_powerclip || behind_fill || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
     if needs_wrapper {
         let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{transform_attr}{opacity_attr}{mask_attr}>", node.id.0);
-        let child_indent = "  ".repeat(indent_level + 1);
+        let child_indent = "  ".repeat(indent_level.saturating_add(1));
 
         // 1. Outline behind fill
         if behind_fill && let Some(outline) = &node.outline {
@@ -585,7 +585,7 @@ fn emit_path_node(
         if has_powerclip {
             let _ = writeln!(body, "{child_indent}<g clip-path=\"url(#clip-{})\">", node.id.0);
             for pc in &node.powerclip_children {
-                emit_svg_node(defs, body, pc, indent_level + 2)?;
+                emit_svg_node(defs, body, pc, indent_level.saturating_add(2))?;
             }
             let _ = writeln!(body, "{child_indent}</g>");
         }

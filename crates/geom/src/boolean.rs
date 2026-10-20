@@ -96,8 +96,10 @@ pub fn boolean_paths(subj: &Path, clip: &Path, op: BooleanOp) -> Result<Path, Ge
             }
             let a_minus_b = clip_polylines(&subj_polys, &clip_polys, BooleanOp::Trim, crate::FillRule::EvenOdd)?;
             let b_minus_a = clip_polylines(&subj_polys, &clip_polys, BooleanOp::BackMinusFront, crate::FillRule::EvenOdd)?;
-            let mut out =
-                Path { elements: Vec::with_capacity(a_minus_b.elements.len() + b_minus_a.elements.len()), fill_rule: crate::FillRule::EvenOdd };
+            let mut out = Path {
+                elements: Vec::with_capacity(a_minus_b.elements.len().saturating_add(b_minus_a.elements.len())),
+                fill_rule: crate::FillRule::EvenOdd,
+            };
             out.elements.extend(a_minus_b.elements);
             out.elements.extend(b_minus_a.elements);
             Ok(out)
@@ -124,7 +126,7 @@ pub fn path_contains_point(path: &Path, pt: Point) -> bool {
             let mut winding = 0i32;
             for poly in &polys {
                 if poly.points.len() >= 3 {
-                    winding += polygon_winding_number(pt, &poly.points);
+                    winding = winding.saturating_add(polygon_winding_number(pt, &poly.points));
                 }
             }
             winding != 0
@@ -139,12 +141,15 @@ fn point_in_polygon(pt: Point, poly: &[Point]) -> bool {
     let mut inside = false;
     let px = pt.x.get();
     let py = pt.y.get();
-    let mut j = poly.len() - 1;
+    let mut j = poly.len().saturating_sub(1);
     for i in 0..poly.len() {
-        let xi = poly[i].x.get();
-        let yi = poly[i].y.get();
-        let xj = poly[j].x.get();
-        let yj = poly[j].y.get();
+        let (Some(&pi), Some(&pj)) = (poly.get(i), poly.get(j)) else {
+            continue;
+        };
+        let xi = pi.x.get();
+        let yi = pi.y.get();
+        let xj = pj.x.get();
+        let yj = pj.y.get();
 
         let intersect = ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
         if intersect {
@@ -164,18 +169,20 @@ fn polygon_winding_number(pt: Point, poly: &[Point]) -> i32 {
     let mut winding = 0i32;
     let n = poly.len();
     for i in 0..n {
-        let p0 = poly[i];
-        let p1 = poly[(i + 1) % n];
+        let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+        let (Some(&p0), Some(&p1)) = (poly.get(i), poly.get(next_i)) else {
+            continue;
+        };
         let x0 = p0.x.get();
         let y0 = p0.y.get();
         let x1 = p1.x.get();
         let y1 = p1.y.get();
         if y0 <= py {
             if y1 > py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) > 0.0 {
-                winding += 1;
+                winding = winding.saturating_add(1);
             }
         } else if y1 <= py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0.0 {
-            winding -= 1;
+            winding = winding.saturating_sub(1);
         }
     }
     winding
@@ -188,9 +195,10 @@ fn polygon_signed_area2(poly: &[Point]) -> f64 {
     }
     let mut area2 = 0.0;
     for i in 0..n {
-        let p0 = poly[i];
-        let p1 = poly[(i + 1) % n];
-        area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+        let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+        if let (Some(&p0), Some(&p1)) = (poly.get(i), poly.get(next_i)) {
+            area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+        }
     }
     area2
 }
@@ -215,15 +223,17 @@ fn extract_normalized_rings(polys: &[Polyline]) -> Vec<Vec<Point>> {
     // Orient outer rings with positive signed area (> 0) and hole rings with negative signed area (< 0)
     let count = raw_rings.len();
     let mut normalized = Vec::with_capacity(count);
-    for i in 0..count {
-        let test_pt = raw_rings[i][0];
+    for (i, raw_ring) in raw_rings.iter().enumerate() {
+        let Some(&test_pt) = raw_ring.first() else {
+            continue;
+        };
         let mut depth = 0usize;
         for (j, other) in raw_rings.iter().enumerate() {
             if i != j && point_in_polygon(test_pt, other) {
-                depth += 1;
+                depth = depth.saturating_add(1);
             }
         }
-        let mut ring = raw_rings[i].clone();
+        let mut ring = raw_ring.clone();
         let area2 = polygon_signed_area2(&ring);
         let is_hole = depth % 2 == 1;
         if (!is_hole && area2 < 0.0) || (is_hole && area2 > 0.0) {
@@ -296,8 +306,10 @@ fn split_ring_edges_against_pool(rings: &[Vec<Point>], pool: &VertexPool) -> Vec
     for ring in rings {
         let n = ring.len();
         for i in 0..n {
-            let a = ring[i];
-            let b = ring[(i + 1) % n];
+            let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+            let (Some(&a), Some(&b)) = (ring.get(i), ring.get(next_i)) else {
+                continue;
+            };
             let dx = b.x.get() - a.x.get();
             let dy = b.y.get() - a.y.get();
             let len_sq = dx * dx + dy * dy;
@@ -327,8 +339,10 @@ fn split_ring_edges_against_pool(rings: &[Vec<Point>], pool: &VertexPool) -> Vec
                 }
             }
             for pair in chain.windows(2) {
-                if pair[0] != pair[1] {
-                    directed_edges.push((pair[0], pair[1]));
+                if let [u, v] = *pair
+                    && u != v
+                {
+                    directed_edges.push((u, v));
                 }
             }
         }
@@ -362,13 +376,17 @@ fn clip_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp,
     for ra in &rings_a {
         let na = ra.len();
         for i in 0..na {
-            let a0 = ra[i];
-            let a1 = ra[(i + 1) % na];
+            let next_i = i.saturating_add(1).checked_rem(na).unwrap_or(0);
+            let (Some(&a0), Some(&a1)) = (ra.get(i), ra.get(next_i)) else {
+                continue;
+            };
             for rb in &rings_b {
                 let nb = rb.len();
                 for j in 0..nb {
-                    let b0 = rb[j];
-                    let b1 = rb[(j + 1) % nb];
+                    let next_j = j.saturating_add(1).checked_rem(nb).unwrap_or(0);
+                    let (Some(&b0), Some(&b1)) = (rb.get(j), rb.get(next_j)) else {
+                        continue;
+                    };
                     if let Some(ipt) = segment_proper_or_touch_intersection(a0, a1, b0, b1) {
                         pool.intern(ipt);
                     }
@@ -389,15 +407,19 @@ fn clip_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp,
         // Check if this undirected elementary edge is shared with Clip
         let mut shared_b_idx: Option<usize> = None;
         for (bi, &(ub, vb)) in edges_b.iter().enumerate() {
-            if !used_b[bi] && ((ua == ub && va == vb) || (ua == vb && va == ub)) {
+            if !used_b.get(bi).copied().unwrap_or(true) && ((ua == ub && va == vb) || (ua == vb && va == ub)) {
                 shared_b_idx = Some(bi);
                 break;
             }
         }
 
         if let Some(bi) = shared_b_idx {
-            used_b[bi] = true;
-            let (ub, vb) = edges_b[bi];
+            if let Some(slot) = used_b.get_mut(bi) {
+                *slot = true;
+            }
+            let Some(&(ub, vb)) = edges_b.get(bi) else {
+                continue;
+            };
             let same_dir = ua == ub && va == vb;
             match op {
                 BooleanOp::Weld | BooleanOp::Intersect => {
@@ -418,8 +440,9 @@ fn clip_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp,
                 BooleanOp::Exclude => {}
             }
         } else {
-            let pa = pool.pts[ua];
-            let pb = pool.pts[va];
+            let (Some(&pa), Some(&pb)) = (pool.pts.get(ua), pool.pts.get(va)) else {
+                continue;
+            };
             let mid = Point::new(0.5 * (pa.x.get() + pb.x.get()), 0.5 * (pa.y.get() + pb.y.get()))?;
             let in_b = point_in_rings(mid, &rings_b);
             match op {
@@ -444,11 +467,12 @@ fn clip_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp,
     }
 
     for (bi, &(ub, vb)) in edges_b.iter().enumerate() {
-        if used_b[bi] {
+        if used_b.get(bi).copied().unwrap_or(true) {
             continue;
         }
-        let pa = pool.pts[ub];
-        let pb = pool.pts[vb];
+        let (Some(&pa), Some(&pb)) = (pool.pts.get(ub), pool.pts.get(vb)) else {
+            continue;
+        };
         let mid = Point::new(0.5 * (pa.x.get() + pb.x.get()), 0.5 * (pa.y.get() + pb.y.get()))?;
         let in_a = point_in_rings(mid, &rings_a);
         match op {
@@ -480,12 +504,13 @@ fn stitch_directed_edges(edges: &[(usize, usize)], pts: &[Point]) -> Vec<Vec<Poi
     let mut used = vec![false; edges.len()];
     let mut loops: Vec<Vec<Point>> = Vec::new();
 
-    for start_idx in 0..edges.len() {
-        if used[start_idx] {
+    for (start_idx, &(u0, v0)) in edges.iter().enumerate() {
+        if used.get(start_idx).copied().unwrap_or(true) {
             continue;
         }
-        used[start_idx] = true;
-        let (u0, v0) = edges[start_idx];
+        if let Some(slot) = used.get_mut(start_idx) {
+            *slot = true;
+        }
         let mut chain: Vec<usize> = vec![u0, v0];
 
         loop {
@@ -499,25 +524,31 @@ fn stitch_directed_edges(edges: &[(usize, usize)], pts: &[Point]) -> Vec<Vec<Poi
             }
 
             // If `curr` already appeared earlier in `chain` (at index k > 0), extract the simple sub-cycle
-            if let Some(pos) = chain[..chain.len() - 1].iter().position(|&v| v == curr)
+            let prefix_len = chain.len().saturating_sub(1);
+            if let Some(prefix) = chain.get(..prefix_len)
+                && let Some(pos) = prefix.iter().position(|&v| v == curr)
                 && pos > 0
+                && let Some(sub_slice) = chain.get(pos..prefix_len)
             {
-                let sub_cycle = chain[pos..chain.len() - 1].to_vec();
-                chain.truncate(pos + 1);
+                let sub_cycle = sub_slice.to_vec();
+                chain.truncate(pos.saturating_add(1));
                 if let Some(clean) = simplify_loop_indices(&sub_cycle, pts) {
                     loops.push(clean);
                 }
             }
 
-            let prev = if chain.len() >= 2 { chain[chain.len() - 2] } else { u0 };
-            let p_prev = pts[prev];
-            let p_curr = pts[curr];
+            let prev = chain.get(chain.len().saturating_sub(2)).copied().unwrap_or(u0);
+            let (Some(&p_prev), Some(&p_curr)) = (pts.get(prev), pts.get(curr)) else {
+                break;
+            };
             let in_angle = (p_prev.y.get() - p_curr.y.get()).atan2(p_prev.x.get() - p_curr.x.get());
 
             let mut best_edge: Option<(usize, f64)> = None;
             for (ei, &(u, v)) in edges.iter().enumerate() {
-                if !used[ei] && u == curr {
-                    let p_next = pts[v];
+                if !used.get(ei).copied().unwrap_or(true)
+                    && u == curr
+                    && let Some(&p_next) = pts.get(v)
+                {
                     let out_angle = (p_next.y.get() - p_curr.y.get()).atan2(p_next.x.get() - p_curr.x.get());
                     let mut turn = (out_angle - in_angle).rem_euclid(std::f64::consts::TAU);
                     if turn < 1e-9 {
@@ -529,9 +560,13 @@ fn stitch_directed_edges(edges: &[(usize, usize)], pts: &[Point]) -> Vec<Vec<Poi
                 }
             }
 
-            if let Some((next_ei, _)) = best_edge {
-                used[next_ei] = true;
-                chain.push(edges[next_ei].1);
+            if let Some((next_ei, _)) = best_edge
+                && let Some(&(_, next_v)) = edges.get(next_ei)
+            {
+                if let Some(slot) = used.get_mut(next_ei) {
+                    *slot = true;
+                }
+                chain.push(next_v);
             } else {
                 break;
             }
@@ -545,16 +580,18 @@ fn simplify_loop_indices(indices: &[usize], pts: &[Point]) -> Option<Vec<Point>>
     if indices.len() < 3 {
         return None;
     }
-    let mut ring: Vec<Point> = indices.iter().map(|&idx| pts[idx]).collect();
+    let mut ring: Vec<Point> = indices.iter().filter_map(|&idx| pts.get(idx).copied()).collect();
     // Remove collinear intermediate vertices along straight split segments
     let mut changed = true;
     while changed && ring.len() >= 3 {
         changed = false;
         let n = ring.len();
         for i in 0..n {
-            let p_prev = ring[(i + n - 1) % n];
-            let p_curr = ring[i];
-            let p_next = ring[(i + 1) % n];
+            let prev_i = i.saturating_add(n.saturating_sub(1)).checked_rem(n).unwrap_or(0);
+            let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+            let (Some(&p_prev), Some(&p_curr), Some(&p_next)) = (ring.get(prev_i), ring.get(i), ring.get(next_i)) else {
+                continue;
+            };
             let ax = p_curr.x.get() - p_prev.x.get();
             let ay = p_curr.y.get() - p_prev.y.get();
             let bx = p_next.x.get() - p_curr.x.get();
@@ -589,11 +626,11 @@ fn rings_to_path(rings: &[Vec<Point>], fill_rule: crate::FillRule) -> Result<Pat
 }
 
 fn add_polyline_to_path(points: &[Point], closed: bool, path: &mut Path) -> Result<(), GeomError> {
-    if points.is_empty() {
+    let Some((&first, rest)) = points.split_first() else {
         return Ok(());
-    }
-    path.move_to(points[0])?;
-    for &p in &points[1..] {
+    };
+    path.move_to(first)?;
+    for &p in rest {
         path.line_to(p)?;
     }
     if closed {
@@ -928,9 +965,12 @@ pub fn clip_polygon_half_plane(pts: &[Point], origin: Point, nx: f64, ny: f64, o
     if pts.len() < 3 {
         return Ok(Vec::new());
     }
+    let Some(&last_pt) = pts.last() else {
+        return Ok(Vec::new());
+    };
     let signed_dist = |p: Point| -> f64 { (p.x.get() - origin.x.get()) * nx + (p.y.get() - origin.y.get()) * ny - offset };
-    let mut out = Vec::with_capacity(pts.len() + 2);
-    let mut prev = pts[pts.len() - 1];
+    let mut out = Vec::with_capacity(pts.len().saturating_add(2));
+    let mut prev = last_pt;
     let mut d_prev = signed_dist(prev);
     for &curr in pts {
         let d_curr = signed_dist(curr);
@@ -978,10 +1018,12 @@ pub fn knife_cut_path_by_line(path: &Path, line_start: Point, line_end: Point, g
         }
         for (sx, sy) in [(nx, ny), (-nx, -ny)] {
             let clipped = clip_polygon_half_plane(&poly.points, line_start, sx, sy, h)?;
-            if clipped.len() >= 3 {
-                out.move_to(clipped[0])?;
-                for pt in clipped.iter().skip(1) {
-                    out.line_to(*pt)?;
+            if clipped.len() >= 3
+                && let Some((&first, rest)) = clipped.split_first()
+            {
+                out.move_to(first)?;
+                for &pt in rest {
+                    out.line_to(pt)?;
                 }
                 out.close()?;
             }
@@ -1046,14 +1088,12 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
         if !poly.closed {
             let mut current_run: Vec<Point> = Vec::new();
             for seg in poly.points.windows(2) {
-                let a = seg[0];
-                let b = seg[1];
+                let [a, b] = *seg else { continue };
                 let mut cuts = vec![0.0];
                 cuts.extend(seg_circle_ts(a, b));
                 cuts.push(1.0);
                 for pair in cuts.windows(2) {
-                    let t0 = pair[0];
-                    let t1 = pair[1];
+                    let [t0, t1] = *pair else { continue };
                     if t1 - t0 <= 1e-7 {
                         continue;
                     }
@@ -1062,10 +1102,12 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
                     let my = a.y.get() + tm * (b.y.get() - a.y.get());
                     let inside = (mx - cx).hypot(my - cy) < r - 1e-7;
                     if inside {
-                        if current_run.len() >= 2 {
-                            out.move_to(current_run[0])?;
-                            for pt in current_run.iter().skip(1) {
-                                out.line_to(*pt)?;
+                        if current_run.len() >= 2
+                            && let Some((&first, rest)) = current_run.split_first()
+                        {
+                            out.move_to(first)?;
+                            for &pt in rest {
+                                out.line_to(pt)?;
                             }
                         }
                         current_run.clear();
@@ -1079,10 +1121,12 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
                     }
                 }
             }
-            if current_run.len() >= 2 {
-                out.move_to(current_run[0])?;
-                for pt in current_run.iter().skip(1) {
-                    out.line_to(*pt)?;
+            if current_run.len() >= 2
+                && let Some((&first, rest)) = current_run.split_first()
+            {
+                out.move_to(first)?;
+                for &pt in rest {
+                    out.line_to(pt)?;
                 }
             }
             continue;
@@ -1090,11 +1134,19 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
 
         // Closed polygon subpath
         let all_outside = poly.points.iter().all(|p| (p.x.get() - cx).hypot(p.y.get() - cy) >= r);
-        let any_seg_hit = (0..poly.points.len()).any(|i| !seg_circle_ts(poly.points[i], poly.points[(i + 1) % poly.points.len()]).is_empty());
-        if all_outside && !any_seg_hit && point_in_polygon(center, &poly.points) {
-            out.move_to(poly.points[0])?;
-            for pt in poly.points.iter().skip(1) {
-                out.line_to(*pt)?;
+        let n = poly.points.len();
+        let any_seg_hit = (0..n).any(|i| {
+            let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+            if let (Some(&pa), Some(&pb)) = (poly.points.get(i), poly.points.get(next_i)) { !seg_circle_ts(pa, pb).is_empty() } else { false }
+        });
+        if all_outside
+            && !any_seg_hit
+            && point_in_polygon(center, &poly.points)
+            && let Some((&first, rest)) = poly.points.split_first()
+        {
+            out.move_to(first)?;
+            for &pt in rest {
+                out.line_to(pt)?;
             }
             out.close()?;
             let hole_steps = 24u32;
@@ -1112,16 +1164,16 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
         }
 
         let mut ring: Vec<Point> = Vec::new();
-        let n = poly.points.len();
         for i in 0..n {
-            let a = poly.points[i];
-            let b = poly.points[(i + 1) % n];
+            let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+            let (Some(&a), Some(&b)) = (poly.points.get(i), poly.points.get(next_i)) else {
+                continue;
+            };
             let mut cuts = vec![0.0];
             cuts.extend(seg_circle_ts(a, b));
             cuts.push(1.0);
             for pair in cuts.windows(2) {
-                let t0 = pair[0];
-                let t1 = pair[1];
+                let [t0, t1] = *pair else { continue };
                 if t1 - t0 <= 1e-7 {
                     continue;
                 }
@@ -1138,10 +1190,12 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
                 }
             }
         }
-        if ring.len() >= 3 {
-            out.move_to(ring[0])?;
-            for pt in ring.iter().skip(1) {
-                out.line_to(*pt)?;
+        if ring.len() >= 3
+            && let Some((&first, rest)) = ring.split_first()
+        {
+            out.move_to(first)?;
+            for &pt in rest {
+                out.line_to(pt)?;
             }
             out.close()?;
         }
@@ -1150,6 +1204,7 @@ pub fn erase_path_within_circle(path: &Path, center: Point, radius_pt: f64) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::Rect;

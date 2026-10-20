@@ -57,7 +57,7 @@ pub fn render_page(doc: &Document, page_index: usize, opts: &RenderOpts) -> Resu
     }
 
     let layers = doc.effective_layers_for_page(page_index, opts.export_mode)?;
-    let page = &doc.pages[page_index];
+    let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
 
     let w_px = (page.size.width.get() * opts.scale).round() as u32;
     let h_px = (page.size.height.get() * opts.scale).round() as u32;
@@ -79,7 +79,7 @@ pub fn render_page(doc: &Document, page_index: usize, opts: &RenderOpts) -> Resu
         && let Some(bg_fill @ FillStyle::Fountain { .. }) = &page.background
     {
         let page_rect = Rect::new(0.0, 0.0, page.size.width.get(), page.size.height.get())?;
-        let full_cov = vec![16_u8; (w_px as usize) * (h_px as usize)];
+        let full_cov = vec![16_u8; (w_px as usize).saturating_mul(h_px as usize)];
         shade_coverage(&mut surface, &full_cov, bg_fill, page_rect, page_to_dev, 1.0, &mut warnings, 0)?;
     }
 
@@ -129,7 +129,7 @@ fn render_blend_steps(
 
     let clamped_steps = steps.min(64);
     for k in 1..=clamped_steps {
-        let u = f64::from(k) / f64::from(clamped_steps + 1);
+        let u = f64::from(k) / f64::from(clamped_steps.saturating_add(1));
         let target_center = if let Some(lut) = &spine_lut
             && let Some(sample) = lut.sample_normalized(u)
         {
@@ -219,7 +219,10 @@ fn render_object_node(
 
         for py in 0..h {
             for px in 0..w {
-                let sp = offscreen.pixels[py * w + px];
+                let idx = py.saturating_mul(w).saturating_add(px);
+                let Some(&sp) = offscreen.pixels.get(idx) else {
+                    continue;
+                };
                 if sp[3] == 0 {
                     continue;
                 }
@@ -240,8 +243,9 @@ fn render_object_node(
                     (f64::from(sp[2]) * alpha_mult).round() as u8,
                     (f64::from(sp[3]) * alpha_mult).round() as u8,
                 ];
-                let dst = &mut surface.pixels[py * w + px];
-                *dst = src_over_premul(masked_src, *dst);
+                if let Some(dst) = surface.pixels.get_mut(idx) {
+                    *dst = src_over_premul(masked_src, *dst);
+                }
             }
         }
         return Ok(());
@@ -297,7 +301,7 @@ fn paint_geometry_and_powerclip(
                 let h = surface.height as usize;
                 for py in 0..h {
                     for px in 0..w {
-                        let cov = shadow_cov[py * w + px];
+                        let cov = shadow_cov.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                         if cov > 0 {
                             let a = shadow_a * (f64::from(cov) / 16.0);
                             surface.blend_straight(px as u32, py as u32, shadow_rgb, a);
@@ -323,7 +327,7 @@ fn paint_geometry_and_powerclip(
                 let h = surface.height as usize;
                 for py in 0..h {
                     for px in 0..w {
-                        let cov = ext_cov[py * w + px];
+                        let cov = ext_cov.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                         if cov > 0 {
                             let a = eff_opacity * 0.7 * (f64::from(cov) / 16.0);
                             surface.blend_straight(px as u32, py as u32, ext_rgb, a);
@@ -361,7 +365,7 @@ fn paint_geometry_and_powerclip(
         } else {
             let mut offscreen = Surface::new(surface.width, surface.height, [0, 0, 0, 0])?;
             for pc in &node.powerclip_children {
-                render_object_node(&mut offscreen, pc, local_to_dev, page_scale, eff_opacity, clip_depth + 1, warnings)?;
+                render_object_node(&mut offscreen, pc, local_to_dev, page_scale, eff_opacity, clip_depth.saturating_add(1), warnings)?;
             }
             surface.composite_masked(&offscreen, cov);
         }
@@ -387,7 +391,7 @@ fn paint_geometry_and_powerclip(
                 let rgb = if *inside { [80, 80, 80] } else { [180, 180, 180] };
                 for py in 0..h {
                     for px in 0..w {
-                        let c = cov[py * w + px];
+                        let c = cov.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                         if c > 0 {
                             let a = eff_opacity * 0.4 * (f64::from(c) / 16.0);
                             surface.blend_straight(px as u32, py as u32, rgb, a);
@@ -421,7 +425,7 @@ fn apply_lens_coverage(
 
     for py in 0..h {
         for px in 0..w {
-            let c = cov[py * w + px];
+            let c = cov.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
             if c == 0 {
                 continue;
             }
@@ -429,7 +433,7 @@ fn apply_lens_coverage(
             let rgb = match kind {
                 LensKind::Invert => {
                     let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
-                    [255 - sr, 255 - sg, 255 - sb]
+                    [255_u8.saturating_sub(sr), 255_u8.saturating_sub(sg), 255_u8.saturating_sub(sb)]
                 }
                 LensKind::Brighten { rate } => {
                     let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
@@ -454,8 +458,8 @@ fn apply_lens_coverage(
                 }
                 LensKind::Magnify { factor } => {
                     let f = factor.get().max(1.0);
-                    let sx = (cx + ((px as f64) - cx) / f).round().clamp(0.0, (w - 1) as f64) as u32;
-                    let sy = (cy + ((py as f64) - cy) / f).round().clamp(0.0, (h - 1) as f64) as u32;
+                    let sx = (cx + ((px as f64) - cx) / f).round().clamp(0.0, w.saturating_sub(1) as f64) as u32;
+                    let sy = (cy + ((py as f64) - cy) / f).round().clamp(0.0, h.saturating_sub(1) as f64) as u32;
                     let [sr, sg, sb, _] = snapshot.get_straight_rgba(sx, sy);
                     [sr, sg, sb]
                 }
@@ -505,7 +509,7 @@ fn paint_outline(
     let h = surface.height as usize;
     for py in 0..h {
         for px in 0..w {
-            let cov = stroke_cov[py * w + px];
+            let cov = stroke_cov.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
             if cov > 0 {
                 let a = eff_opacity * (f64::from(cov) / 16.0);
                 surface.blend_straight(px as u32, py as u32, rgb, a);
@@ -530,7 +534,7 @@ fn paint_bitmap(
     if pixel_width == 0 || pixel_height == 0 || surface.width == 0 || surface.height == 0 {
         return;
     }
-    let expected_len = (pixel_width as usize) * (pixel_height as usize) * 4;
+    let expected_len = (pixel_width as usize).saturating_mul(pixel_height as usize).saturating_mul(4);
     if rgba_pixels.len() < expected_len {
         return;
     }
@@ -552,12 +556,12 @@ fn paint_bitmap(
         if ix < 0 || ix >= pixel_width as i32 || iy < 0 || iy >= pixel_height as i32 {
             [0.0, 0.0, 0.0, 0.0]
         } else {
-            let offset = ((iy as usize) * (pixel_width as usize) + (ix as usize)) * 4;
-            if offset + 4 <= rgba_pixels.len() {
-                let a = f64::from(rgba_pixels[offset + 3]) / 255.0;
-                let r = (f64::from(rgba_pixels[offset]) / 255.0) * a;
-                let g = (f64::from(rgba_pixels[offset + 1]) / 255.0) * a;
-                let b = (f64::from(rgba_pixels[offset + 2]) / 255.0) * a;
+            let offset = (iy as usize).saturating_mul(pixel_width as usize).saturating_add(ix as usize).saturating_mul(4);
+            if let Some(&[r_u8, g_u8, b_u8, a_u8, ..]) = rgba_pixels.get(offset..) {
+                let a = f64::from(a_u8) / 255.0;
+                let r = (f64::from(r_u8) / 255.0) * a;
+                let g = (f64::from(g_u8) / 255.0) * a;
+                let b = (f64::from(b_u8) / 255.0) * a;
                 [r, g, b, a]
             } else {
                 [0.0, 0.0, 0.0, 0.0]
@@ -568,7 +572,8 @@ fn paint_bitmap(
     for py in 0..h {
         let y_center = (py as f64) + 0.5;
         for px in 0..w {
-            let cov = container_cov.map_or(16, |c| c[py * w + px]);
+            let idx = py.saturating_mul(w).saturating_add(px);
+            let cov = container_cov.map_or(16, |c| c.get(idx).copied().unwrap_or(0));
             if cov == 0 {
                 continue;
             }
@@ -591,8 +596,8 @@ fn paint_bitmap(
 
             let x0 = tx.floor() as i32;
             let y0 = ty.floor() as i32;
-            let x1 = x0 + 1;
-            let y1 = y0 + 1;
+            let x1 = x0.saturating_add(1);
+            let y1 = y0.saturating_add(1);
 
             let fx = (tx - tx.floor()).clamp(0.0, 1.0);
             let fy = (ty - ty.floor()).clamp(0.0, 1.0);
@@ -602,12 +607,12 @@ fn paint_bitmap(
             let s01 = sample_texel(x0, y1);
             let s11 = sample_texel(x1, y1);
 
-            let mut blended = [0.0; 4];
-            for c in 0..4 {
-                let top = s00[c] + fx * (s10[c] - s00[c]);
-                let bot = s01[c] + fx * (s11[c] - s01[c]);
-                blended[c] = top + fy * (bot - top);
-            }
+            let lerp2 = |k: usize| -> f64 {
+                let top = s00.get(k).copied().unwrap_or(0.0) + fx * (s10.get(k).copied().unwrap_or(0.0) - s00.get(k).copied().unwrap_or(0.0));
+                let bot = s01.get(k).copied().unwrap_or(0.0) + fx * (s11.get(k).copied().unwrap_or(0.0) - s01.get(k).copied().unwrap_or(0.0));
+                top + fy * (bot - top)
+            };
+            let blended = [lerp2(0), lerp2(1), lerp2(2), lerp2(3)];
 
             let a = blended[3];
             if a <= 1e-4 {
@@ -695,9 +700,9 @@ pub fn render_swatch_png(color: &Color, size_px: u32) -> Result<Vec<u8>, RenderE
 
     for y in 0..side {
         for x in 0..side {
-            let in_border = x < border || x >= side - border || y < border || y >= side - border;
+            let in_border = x < border || x >= side.saturating_sub(border) || y < border || y >= side.saturating_sub(border);
             if in_border {
-                let cell = ((x / 8) + (y / 8)) % 2;
+                let cell = (x / 8).saturating_add(y / 8) % 2;
                 let g = if cell == 0 { 220 } else { 180 };
                 surface.blend_straight(x, y, [g, g, g], 1.0);
             } else {
@@ -710,7 +715,7 @@ pub fn render_swatch_png(color: &Color, size_px: u32) -> Result<Vec<u8>, RenderE
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use coralcraft_color::{FountainBlendMode, FountainStop};
     use coralcraft_doc::{ChunkTag, FountainGeometry, ObjectId, RawPayload, Residual, UnsupportedObject};

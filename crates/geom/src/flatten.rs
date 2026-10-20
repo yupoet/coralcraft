@@ -87,8 +87,8 @@ pub fn flatten_cubic(p0: Point, c1: Point, c2: Point, p3: Point, opts: &FlattenO
             return;
         }
 
-        subdivide([x0, y0, x01, y01, x012, y012, x0123, y0123], tol_sq, depth + 1, max_depth, sink);
-        subdivide([x0123, y0123, x123, y123, x23, y23, x3, y3], tol_sq, depth + 1, max_depth, sink);
+        subdivide([x0, y0, x01, y01, x012, y012, x0123, y0123], tol_sq, depth.saturating_add(1), max_depth, sink);
+        subdivide([x0123, y0123, x123, y123, x23, y23, x3, y3], tol_sq, depth.saturating_add(1), max_depth, sink);
     }
 
     subdivide([p0.x.get(), p0.y.get(), c1.x.get(), c1.y.get(), c2.x.get(), c2.y.get(), p3.x.get(), p3.y.get()], tol * tol, 0, max_depth, sink);

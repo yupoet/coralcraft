@@ -24,15 +24,15 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
   - checked arithmetic for 32-bit targets.
 - [x] R1.3 Add `Document::validate()` (at least one page, unique IDs, recomputed `next_id`). Use it on every load and in `EditorEngine::new`. Remove `unreachable!` and unchecked page indexing, and add `catch_unwind` around MCP requests.
 - [x] R1.4 Fix the SVG import panic on multibyte `#hex` colours. Use checked arithmetic for ZIP local-header offsets and text lengths on 32-bit targets. Add deterministic mutation tests for `import_svg`, `import_dxf` and `load_bytes`. Add an i686 CI test job.
-- [ ] R1.5 Roll out `clippy::indexing_slicing` and `clippy::arithmetic_side_effects` crate by crate, as `[lints]` in each crate's `Cargo.toml`. Hit counts on 2026-10-20:
+- [x] R1.5 Roll out `clippy::indexing_slicing` and `clippy::arithmetic_side_effects` crate by crate, as `[lints]` in each crate's `Cargo.toml`. Hit counts on 2026-10-20 (now 0 across all 5 crates):
 
   | Crate | `indexing_slicing` | `arithmetic_side_effects` |
   |---|---:|---:|
   | color | 0 (enforced) | 0 (enforced) |
-  | geom | 418 | 143 |
-  | doc | 728 | 283 |
-  | cdr | 828 | 444 |
-  | render | 982 | 419 |
+  | geom | 0 (enforced) | 0 (enforced) |
+  | doc | 0 (enforced) | 0 (enforced) |
+  | cdr | 0 (enforced) | 0 (enforced) |
+  | render | 0 (enforced) | 0 (enforced) |
 
   Order: color → cdr → doc → render → geom. Untrusted-input crates come first after the small one. `overflow-checks` is not enabled in release: a wrap-to-panic switch would turn silent misbehaviour into a crash instead of an error. The real fix is checked arithmetic.
 

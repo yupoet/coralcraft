@@ -166,14 +166,14 @@ pub fn inspect_riff(bytes: &[u8]) -> Result<RiffInspection, ProbeError> {
 
         let raw_fourcc =
             slice4(bytes, chunk_offset).ok_or(ProbeError::Truncated { offset: chunk_offset as u64, needed: 4, available: remaining as u64 })?;
-        let chunk_size_bytes = slice4(bytes, chunk_offset + 4).ok_or(ProbeError::Truncated {
-            offset: (chunk_offset + 4) as u64,
+        let chunk_size_bytes = slice4(bytes, chunk_offset.saturating_add(4)).ok_or(ProbeError::Truncated {
+            offset: chunk_offset.saturating_add(4) as u64,
             needed: 4,
             available: remaining.saturating_sub(4) as u64,
         })?;
         let chunk_size = read_u32(endian, chunk_size_bytes);
 
-        let payload_start = chunk_offset + 8;
+        let payload_start = chunk_offset.saturating_add(8);
         let payload_end_u64 = (payload_start as u64)
             .checked_add(u64::from(chunk_size))
             .ok_or(ProbeError::Invalid { offset: chunk_offset as u64, reason: "chunk payload offset arithmetic overflow".to_string() })?;
@@ -182,7 +182,7 @@ pub fn inspect_riff(bytes: &[u8]) -> Result<RiffInspection, ProbeError> {
             return Err(ProbeError::Truncated {
                 offset: payload_start as u64,
                 needed: u64::from(chunk_size),
-                available: (frame.end - payload_start) as u64,
+                available: frame.end.saturating_sub(payload_start) as u64,
             });
         }
 
@@ -195,7 +195,7 @@ pub fn inspect_riff(bytes: &[u8]) -> Result<RiffInspection, ProbeError> {
                 {
                     warnings.push(ProbeWarning::NonZeroPadByte { offset: payload_end as u64, byte: pad_byte });
                 }
-                payload_end + 1
+                payload_end.saturating_add(1)
             } else if payload_end == root_end {
                 // Tolerate missing trailing pad byte at the end of the root RIFF container.
                 warnings.push(ProbeWarning::MissingTrailingPad { offset: payload_end as u64 });
@@ -247,11 +247,11 @@ pub fn inspect_riff(bytes: &[u8]) -> Result<RiffInspection, ProbeError> {
             if is_opaque {
                 warnings.push(ProbeWarning::OpaqueListSkipped { list_type: list_type_str, offset: chunk_offset as u64, size: chunk_size });
             } else {
-                let next_depth = current_depth + 1;
+                let next_depth = current_depth.saturating_add(1);
                 if next_depth > MAX_DEPTH {
                     return Err(ProbeError::LimitExceeded { limit: "max_depth".to_string(), max: MAX_DEPTH });
                 }
-                stack.push(Frame { cursor: payload_start + 4, end: payload_end, depth: next_depth });
+                stack.push(Frame { cursor: payload_start.saturating_add(4), end: payload_end, depth: next_depth });
             }
         } else {
             chunks.push(ChunkSummary {
@@ -270,6 +270,7 @@ pub fn inspect_riff(bytes: &[u8]) -> Result<RiffInspection, ProbeError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

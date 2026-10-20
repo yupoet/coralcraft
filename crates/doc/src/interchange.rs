@@ -7,6 +7,14 @@ use coralcraft_geom::{EllipseSpec, F64, Path, Point, Rect, RectSpec, Size};
 use crate::model::{DocError, Document, ObjectKind, ObjectNode};
 use crate::style::{FillStyle, OutlineStyle};
 
+fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
+    if let Some(page) = doc.pages.first_mut()
+        && let Some(layer) = page.layers.first_mut()
+    {
+        layer.objects.push(node);
+    }
+}
+
 /// Imports a clean-room SVG 1.1 document string into a [`Document`].
 pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     if !svg_str.contains("<svg") {
@@ -16,22 +24,29 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     if let Some(svg_open) = extract_tag_slice(svg_str, "<svg") {
         let w = parse_attr_f64(svg_open, "width").unwrap_or(595.276);
         let h = parse_attr_f64(svg_open, "height").unwrap_or(841.89);
-        if let Ok(sz) = Size::new(w.max(1.0), h.max(1.0)) {
-            doc.pages[0].size = sz;
+        if let Ok(sz) = Size::new(w.max(1.0), h.max(1.0))
+            && let Some(page) = doc.pages.first_mut()
+        {
+            page.size = sz;
         }
     }
 
     let mut pos = 0usize;
-    while pos < svg_str.len() {
-        let Some(lt_rel) = svg_str[pos..].find('<') else {
+    while let Some(rem) = svg_str.get(pos..) {
+        let Some(lt_rel) = rem.find('<') else {
             break;
         };
-        let start = pos + lt_rel;
-        let Some(gt_rel) = svg_str[start..].find('>') else {
+        let start = pos.saturating_add(lt_rel);
+        let Some(from_start) = svg_str.get(start..) else {
             break;
         };
-        let end = start + gt_rel + 1;
-        let tag_slice = &svg_str[start..end];
+        let Some(gt_rel) = from_start.find('>') else {
+            break;
+        };
+        let end = start.saturating_add(gt_rel).saturating_add(1);
+        let Some(tag_slice) = svg_str.get(start..end) else {
+            break;
+        };
         pos = end;
 
         if tag_slice.starts_with("<rect ") || tag_slice.starts_with("<rect\t") {
@@ -49,13 +64,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    obj_id,
-                    Some("SVG Rect".to_owned()),
-                    ObjectKind::Rect(RectSpec::sharp(r)),
-                    fill,
-                    outline,
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(RectSpec::sharp(r)), fill, outline),
+                );
             }
         } else if tag_slice.starts_with("<ellipse ") || tag_slice.starts_with("<circle ") {
             let cx = parse_attr_f64(tag_slice, "cx").unwrap_or(0.0);
@@ -68,13 +80,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    obj_id,
-                    Some("SVG Ellipse".to_owned()),
-                    ObjectKind::Ellipse(EllipseSpec::full(r)),
-                    fill,
-                    outline,
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline),
+                );
             }
         } else if tag_slice.starts_with("<path ") {
             let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
@@ -87,13 +96,14 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline));
+                push_to_first_layer(&mut doc, ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline));
             }
         } else if tag_slice.starts_with("<text ")
-            && let Some(close_rel) = svg_str[pos..].find("</text>")
+            && let Some(after_open) = svg_str.get(pos..)
+            && let Some(close_rel) = after_open.find("</text>")
         {
-            let text_content = svg_str[pos..pos + close_rel].trim().to_owned();
-            pos += close_rel + 7;
+            let text_content = after_open.get(..close_rel).unwrap_or_default().trim().to_owned();
+            pos = pos.saturating_add(close_rel).saturating_add(7);
             let x = parse_attr_f64(tag_slice, "x").unwrap_or(0.0);
             let y = parse_attr_f64(tag_slice, "y").unwrap_or(0.0);
             let font_family = extract_attr_str(tag_slice, "font-family").unwrap_or("Arial").to_owned();
@@ -101,18 +111,25 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             if let (Ok(position), Ok(size_pt)) = (Point::new(x, y), F64::new(size_val)) {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    obj_id,
-                    Some("SVG Text".to_owned()),
-                    ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position },
-                    fill,
-                    outline,
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(
+                        obj_id,
+                        Some("SVG Text".to_owned()),
+                        ObjectKind::ArtisticText { text: text_content, font_family, size_pt, position },
+                        fill,
+                        outline,
+                    ),
+                );
             }
         }
     }
 
     Ok(doc)
+}
+
+fn token_f64(tokens: &[String], idx: usize) -> Option<f64> {
+    tokens.get(idx)?.parse::<f64>().ok()
 }
 
 fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
@@ -138,49 +155,51 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     }
 
     let mut i = 0usize;
-    while i < tokens.len() {
-        let cmd = tokens[i].as_str();
-        i += 1;
+    while let Some(cmd) = tokens.get(i).map(String::as_str) {
+        i = i.saturating_add(1);
         match cmd {
-            "M" if i + 1 < tokens.len() => {
-                if let (Ok(x), Ok(y)) = (tokens[i].parse::<f64>(), tokens[i + 1].parse::<f64>()) {
+            "M" if i.saturating_add(1) < tokens.len() => {
+                if let (Some(x), Some(y)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
                     let pt = Point::new(x, y)?;
                     path.move_to(pt)?;
                 }
-                i += 2;
+                i = i.saturating_add(2);
             }
-            "L" if i + 1 < tokens.len() => {
-                if let (Ok(x), Ok(y)) = (tokens[i].parse::<f64>(), tokens[i + 1].parse::<f64>()) {
+            "L" if i.saturating_add(1) < tokens.len() => {
+                if let (Some(x), Some(y)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
                     let pt = Point::new(x, y)?;
                     path.line_to(pt)?;
                 }
-                i += 2;
+                i = i.saturating_add(2);
             }
-            "Q" if i + 3 < tokens.len() => {
-                if let (Ok(cx), Ok(cy), Ok(ex), Ok(ey)) =
-                    (tokens[i].parse::<f64>(), tokens[i + 1].parse::<f64>(), tokens[i + 2].parse::<f64>(), tokens[i + 3].parse::<f64>())
-                {
+            "Q" if i.saturating_add(3) < tokens.len() => {
+                if let (Some(cx), Some(cy), Some(ex), Some(ey)) = (
+                    token_f64(&tokens, i),
+                    token_f64(&tokens, i.saturating_add(1)),
+                    token_f64(&tokens, i.saturating_add(2)),
+                    token_f64(&tokens, i.saturating_add(3)),
+                ) {
                     let ctrl = Point::new(cx, cy)?;
                     let pt = Point::new(ex, ey)?;
                     path.quad_to(ctrl, pt)?;
                 }
-                i += 4;
+                i = i.saturating_add(4);
             }
-            "C" if i + 5 < tokens.len() => {
-                if let (Ok(c1x), Ok(c1y), Ok(c2x), Ok(c2y), Ok(ex), Ok(ey)) = (
-                    tokens[i].parse::<f64>(),
-                    tokens[i + 1].parse::<f64>(),
-                    tokens[i + 2].parse::<f64>(),
-                    tokens[i + 3].parse::<f64>(),
-                    tokens[i + 4].parse::<f64>(),
-                    tokens[i + 5].parse::<f64>(),
+            "C" if i.saturating_add(5) < tokens.len() => {
+                if let (Some(c1x), Some(c1y), Some(c2x), Some(c2y), Some(ex), Some(ey)) = (
+                    token_f64(&tokens, i),
+                    token_f64(&tokens, i.saturating_add(1)),
+                    token_f64(&tokens, i.saturating_add(2)),
+                    token_f64(&tokens, i.saturating_add(3)),
+                    token_f64(&tokens, i.saturating_add(4)),
+                    token_f64(&tokens, i.saturating_add(5)),
                 ) {
                     let c1 = Point::new(c1x, c1y)?;
                     let c2 = Point::new(c2x, c2y)?;
                     let pt = Point::new(ex, ey)?;
                     path.cubic_to(c1, c2, pt)?;
                 }
-                i += 6;
+                i = i.saturating_add(6);
             }
             "Z" | "z" => {
                 path.close()?;
@@ -209,7 +228,7 @@ fn parse_hex_color(s: &str) -> Option<Color> {
     // Byte-wise parsing: `len()` counts bytes, so slicing a non-ASCII string could split a char.
     if let [r1, r2, g1, g2, b1, b2] = hex.as_bytes() {
         let digit = |c: &u8| char::from(*c).to_digit(16).and_then(|d| u8::try_from(d).ok());
-        let byte = |hi: &u8, lo: &u8| Some(digit(hi)? * 16 + digit(lo)?);
+        let byte = |hi: &u8, lo: &u8| Some((digit(hi)? << 4) | digit(lo)?);
         Some(Color::rgb8(byte(r1, r2)?, byte(g1, g2)?, byte(b1, b2)?))
     } else {
         None
@@ -218,15 +237,17 @@ fn parse_hex_color(s: &str) -> Option<Color> {
 
 fn extract_tag_slice<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     let start = s.find(prefix)?;
-    let end = s[start..].find('>')?;
-    Some(&s[start..start + end + 1])
+    let from_start = s.get(start..)?;
+    let end = from_start.find('>')?;
+    from_start.get(..end.saturating_add(1))
 }
 
 fn extract_attr_str<'a>(tag: &'a str, attr: &str) -> Option<&'a str> {
     let needle = format!("{attr}=\"");
-    let start = tag.find(&needle)? + needle.len();
-    let end = tag[start..].find('"')?;
-    Some(&tag[start..start + end])
+    let start = tag.find(&needle)?.saturating_add(needle.len());
+    let from_start = tag.get(start..)?;
+    let end = from_start.find('"')?;
+    from_start.get(..end)
 }
 
 fn parse_attr_f64(tag: &str, attr: &str) -> Option<f64> {
@@ -241,172 +262,195 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         return Err(DocError::InvalidDxf("missing ENTITIES section".to_owned()));
     }
     let mut doc = Document::new_a4_portrait();
-    let page_h = doc.pages[0].size.height.get();
+    let page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
     let lines: Vec<&str> = dxf_str.lines().map(str::trim).collect();
 
     let mut pairs = Vec::with_capacity(lines.len() / 2);
     let mut idx = 0usize;
-    while idx + 1 < lines.len() {
-        if let Ok(code) = lines[idx].parse::<i32>() {
-            pairs.push((code, lines[idx + 1]));
-            idx += 2;
+    while let (Some(&code_line), Some(&val_line)) = (lines.get(idx), lines.get(idx.saturating_add(1))) {
+        if let Ok(code) = code_line.parse::<i32>() {
+            pairs.push((code, val_line));
+            idx = idx.saturating_add(2);
         } else {
-            idx += 1;
+            idx = idx.saturating_add(1);
         }
     }
 
     let mut p = 0usize;
-    while p < pairs.len() {
-        let (code, val) = pairs[p];
+    while let Some(&(code, val)) = pairs.get(p) {
         if code == 0 && val == "LINE" {
-            p += 1;
+            p = p.saturating_add(1);
             let mut x0 = 0.0;
             let mut y0 = 0.0;
             let mut x1 = 0.0;
             let mut y1 = 0.0;
-            while p < pairs.len() && pairs[p].0 != 0 {
-                match pairs[p].0 {
-                    10 => x0 = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                    20 => y0 = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                    11 => x1 = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                    21 => y1 = pairs[p].1.parse::<f64>().unwrap_or(0.0),
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => x0 = v.parse::<f64>().unwrap_or(0.0),
+                    20 => y0 = v.parse::<f64>().unwrap_or(0.0),
+                    11 => x1 = v.parse::<f64>().unwrap_or(0.0),
+                    21 => y1 = v.parse::<f64>().unwrap_or(0.0),
                     _ => {}
                 }
-                p += 1;
+                p = p.saturating_add(1);
             }
             let mut path = Path::new();
             if let (Ok(pt0), Ok(pt1)) = (Point::new(x0, page_h - y0), Point::new(x1, page_h - y1)) {
                 let _ = path.move_to(pt0);
                 let _ = path.line_to(pt1);
                 let id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    id,
-                    Some("DXF Line".to_owned()),
-                    ObjectKind::Path(path),
-                    None,
-                    Some(OutlineStyle::hairline(Color::BLACK)),
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF Line".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                );
             }
         } else if code == 0 && val == "POLYLINE" {
-            p += 1;
+            p = p.saturating_add(1);
             let mut closed = false;
-            while p < pairs.len() && pairs[p].0 != 0 {
-                if pairs[p].0 == 70 && pairs[p].1.parse::<i32>().unwrap_or(0) & 1 != 0 {
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                if c == 70 && v.parse::<i32>().unwrap_or(0) & 1 != 0 {
                     closed = true;
                 }
-                p += 1;
+                p = p.saturating_add(1);
             }
             let mut pts = Vec::new();
-            while p < pairs.len() {
-                if pairs[p].0 == 0 && pairs[p].1 == "VERTEX" {
-                    p += 1;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 && v == "VERTEX" {
+                    p = p.saturating_add(1);
                     let mut vx = 0.0;
                     let mut vy = 0.0;
-                    while p < pairs.len() && pairs[p].0 != 0 {
-                        match pairs[p].0 {
-                            10 => vx = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                            20 => vy = pairs[p].1.parse::<f64>().unwrap_or(0.0),
+                    while let Some(&(vc, vv)) = pairs.get(p) {
+                        if vc == 0 {
+                            break;
+                        }
+                        match vc {
+                            10 => vx = vv.parse::<f64>().unwrap_or(0.0),
+                            20 => vy = vv.parse::<f64>().unwrap_or(0.0),
                             _ => {}
                         }
-                        p += 1;
+                        p = p.saturating_add(1);
                     }
                     if let Ok(pt) = Point::new(vx, page_h - vy) {
                         pts.push(pt);
                     }
-                } else if pairs[p].0 == 0 && pairs[p].1 == "SEQEND" {
-                    p += 1;
-                    while p < pairs.len() && pairs[p].0 != 0 {
-                        p += 1;
+                } else if c == 0 && v == "SEQEND" {
+                    p = p.saturating_add(1);
+                    while let Some(&(sc, _)) = pairs.get(p) {
+                        if sc == 0 {
+                            break;
+                        }
+                        p = p.saturating_add(1);
                     }
                     break;
                 } else {
                     break;
                 }
             }
-            if pts.len() >= 2 {
+            if let (Some(&first), Some(rest)) = (pts.first(), pts.get(1..))
+                && !rest.is_empty()
+            {
                 let mut path = Path::new();
-                let _ = path.move_to(pts[0]);
-                for &pt in &pts[1..] {
+                let _ = path.move_to(first);
+                for &pt in rest {
                     let _ = path.line_to(pt);
                 }
                 if closed {
                     let _ = path.close();
                 }
                 let id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    id,
-                    Some("DXF Polyline".to_owned()),
-                    ObjectKind::Path(path),
-                    None,
-                    Some(OutlineStyle::hairline(Color::BLACK)),
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF Polyline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                );
             }
         } else if code == 0 && val == "CIRCLE" {
-            p += 1;
+            p = p.saturating_add(1);
             let mut cx = 0.0;
             let mut cy = 0.0;
             let mut r = 0.0;
-            while p < pairs.len() && pairs[p].0 != 0 {
-                match pairs[p].0 {
-                    10 => cx = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                    20 => cy = pairs[p].1.parse::<f64>().unwrap_or(0.0),
-                    40 => r = pairs[p].1.parse::<f64>().unwrap_or(0.0),
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => cx = v.parse::<f64>().unwrap_or(0.0),
+                    20 => cy = v.parse::<f64>().unwrap_or(0.0),
+                    40 => r = v.parse::<f64>().unwrap_or(0.0),
                     _ => {}
                 }
-                p += 1;
+                p = p.saturating_add(1);
             }
             let sy = page_h - cy;
             if r > 0.0
                 && let Ok(rect) = Rect::new(cx - r, sy - r, cx + r, sy + r)
             {
                 let id = doc.allocate_object_id();
-                doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                    id,
-                    Some("DXF Circle".to_owned()),
-                    ObjectKind::Ellipse(EllipseSpec::full(rect)),
-                    None,
-                    Some(OutlineStyle::hairline(Color::BLACK)),
-                ));
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Circle".to_owned()),
+                        ObjectKind::Ellipse(EllipseSpec::full(rect)),
+                        None,
+                        Some(OutlineStyle::hairline(Color::BLACK)),
+                    ),
+                );
             }
         } else if code == 0 && val == "LWPOLYLINE" {
-            p += 1;
+            p = p.saturating_add(1);
             let mut closed = false;
             let mut xs = Vec::new();
             let mut ys = Vec::new();
-            while p < pairs.len() && pairs[p].0 != 0 {
-                match pairs[p].0 {
-                    70 if pairs[p].1.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
-                    10 => xs.push(pairs[p].1.parse::<f64>().unwrap_or(0.0)),
-                    20 => ys.push(pairs[p].1.parse::<f64>().unwrap_or(0.0)),
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
+                    10 => xs.push(v.parse::<f64>().unwrap_or(0.0)),
+                    20 => ys.push(v.parse::<f64>().unwrap_or(0.0)),
                     _ => {}
                 }
-                p += 1;
+                p = p.saturating_add(1);
             }
-            let n = xs.len().min(ys.len());
-            if n >= 2 {
+            let mut coords = xs.into_iter().zip(ys);
+            if let Some((fx, fy)) = coords.next()
+                && let Ok(first) = Point::new(fx, page_h - fy)
+            {
                 let mut path = Path::new();
-                if let Ok(first) = Point::new(xs[0], page_h - ys[0]) {
-                    let _ = path.move_to(first);
-                    for k in 1..n {
-                        if let Ok(pt) = Point::new(xs[k], page_h - ys[k]) {
-                            let _ = path.line_to(pt);
-                        }
+                let _ = path.move_to(first);
+                let mut count = 1usize;
+                for (kx, ky) in coords {
+                    if let Ok(pt) = Point::new(kx, page_h - ky) {
+                        let _ = path.line_to(pt);
+                        count = count.saturating_add(1);
                     }
+                }
+                if count >= 2 {
                     if closed {
                         let _ = path.close();
                     }
                     let id = doc.allocate_object_id();
-                    doc.pages[0].layers[0].objects.push(ObjectNode::new(
-                        id,
-                        Some("DXF LwPolyline".to_owned()),
-                        ObjectKind::Path(path),
-                        None,
-                        Some(OutlineStyle::hairline(Color::BLACK)),
-                    ));
+                    push_to_first_layer(
+                        &mut doc,
+                        ObjectNode::new(
+                            id,
+                            Some("DXF LwPolyline".to_owned()),
+                            ObjectKind::Path(path),
+                            None,
+                            Some(OutlineStyle::hairline(Color::BLACK)),
+                        ),
+                    );
                 }
             }
         } else {
-            p += 1;
+            p = p.saturating_add(1);
         }
     }
 

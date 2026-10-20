@@ -61,9 +61,9 @@ impl<'a> BitReader<'a> {
             let Some(&b) = self.data.get(self.byte_pos) else {
                 return Err(ProbeError::Truncated { offset: self.byte_pos as u64, needed: 1, available: 0 });
             };
-            self.byte_pos += 1;
-            self.bit_buf |= u64::from(b) << self.bit_count;
-            self.bit_count += 8;
+            self.byte_pos = self.byte_pos.saturating_add(1);
+            self.bit_buf |= u64::from(b).wrapping_shl(u32::from(self.bit_count));
+            self.bit_count = self.bit_count.saturating_add(8);
         }
         Ok(())
     }
@@ -73,17 +73,17 @@ impl<'a> BitReader<'a> {
             return Ok(0);
         }
         self.ensure_bits(n)?;
-        let mask = (1u64 << n) - 1;
+        let mask = 1u64.wrapping_shl(u32::from(n)).wrapping_sub(1);
         let val = (self.bit_buf & mask) as u32;
-        self.bit_buf >>= n;
-        self.bit_count -= n;
+        self.bit_buf = self.bit_buf.wrapping_shr(u32::from(n));
+        self.bit_count = self.bit_count.saturating_sub(n);
         Ok(val)
     }
 
     fn align_to_byte(&mut self) {
         let drop = self.bit_count & 7;
-        self.bit_buf >>= drop;
-        self.bit_count -= drop;
+        self.bit_buf = self.bit_buf.wrapping_shr(u32::from(drop));
+        self.bit_count = self.bit_count.saturating_sub(drop);
     }
 
     fn read_aligned_u16_le(&mut self) -> Result<u16, ProbeError> {
@@ -119,15 +119,17 @@ impl HuffmanTable {
             if usize::from(len) > MAX_BITS {
                 return Err(ProbeError::Invalid { offset: 0, reason: format!("Huffman code length {len} exceeds 15") });
             }
-            if len > 0 {
-                counts[usize::from(len)] += 1;
+            if len > 0
+                && let Some(slot) = counts.get_mut(usize::from(len))
+            {
+                *slot = slot.saturating_add(1);
             }
         }
 
         // Check that the tree is not over-subscribed
         let mut left = 1i32;
-        for &c in &counts[1..=MAX_BITS] {
-            left = (left << 1) - i32::from(c);
+        for &c in counts.get(1..=MAX_BITS).unwrap_or(&[]) {
+            left = left.wrapping_shl(1).saturating_sub(i32::from(c));
             if left < 0 {
                 return Err(ProbeError::Invalid { offset: 0, reason: "over-subscribed Huffman code length table".to_owned() });
             }
@@ -136,16 +138,22 @@ impl HuffmanTable {
         let mut offsets = [0usize; MAX_BITS + 1];
         let mut total_syms = 0usize;
         for bits in 1..=MAX_BITS {
-            offsets[bits] = total_syms;
-            total_syms += usize::from(counts[bits]);
+            if let Some(off) = offsets.get_mut(bits) {
+                *off = total_syms;
+            }
+            total_syms = total_syms.saturating_add(usize::from(counts.get(bits).copied().unwrap_or(0)));
         }
 
         let mut symbols = vec![0u16; total_syms];
         for (sym, &len) in lengths.iter().enumerate() {
-            if len > 0 {
-                let slot = offsets[usize::from(len)];
-                offsets[usize::from(len)] += 1;
-                symbols[slot] = sym as u16;
+            if len > 0
+                && let Some(off) = offsets.get_mut(usize::from(len))
+            {
+                let slot = *off;
+                *off = off.saturating_add(1);
+                if let Some(sym_slot) = symbols.get_mut(slot) {
+                    *sym_slot = sym as u16;
+                }
             }
         }
 
@@ -156,10 +164,14 @@ impl HuffmanTable {
         static TABLE: OnceLock<HuffmanTable> = OnceLock::new();
         TABLE.get_or_init(|| {
             let mut lengths = [0u8; 288];
-            lengths[0..=143].fill(8);
-            lengths[144..=255].fill(9);
-            lengths[256..=279].fill(7);
-            lengths[280..=287].fill(8);
+            for (idx, slot) in lengths.iter_mut().enumerate() {
+                *slot = match idx {
+                    0..=143 => 8,
+                    144..=255 => 9,
+                    256..=279 => 7,
+                    _ => 8,
+                };
+            }
             Self::from_lengths(&lengths).unwrap_or(Self { counts: [0; MAX_BITS + 1], symbols: Vec::new() })
         })
     }
@@ -173,9 +185,9 @@ impl HuffmanTable {
     }
 
     fn decode(&self, reader: &mut BitReader<'_>) -> Result<u16, ProbeError> {
-        if self.symbols.len() == 1 && self.counts[1] == 1 {
+        if self.symbols.len() == 1 && self.counts.get(1).copied() == Some(1) {
             let _ = reader.read_bits(1)?;
-            return Ok(self.symbols[0]);
+            return Ok(self.symbols.first().copied().unwrap_or(0));
         }
         let mut code = 0i32;
         let mut first = 0i32;
@@ -184,18 +196,18 @@ impl HuffmanTable {
         for bits in 1..=MAX_BITS {
             let bit = reader.read_bits(1)? as i32;
             code |= bit;
-            let count = i32::from(self.counts[bits]);
-            if code - count < first {
-                let sym_idx = index + ((code - first) as usize);
+            let count = i32::from(self.counts.get(bits).copied().unwrap_or(0));
+            if code.saturating_sub(count) < first {
+                let sym_idx = index.saturating_add(code.saturating_sub(first) as usize);
                 return self
                     .symbols
                     .get(sym_idx)
                     .copied()
                     .ok_or_else(|| ProbeError::Invalid { offset: reader.byte_pos as u64, reason: "invalid Huffman symbol index".to_owned() });
             }
-            index += count as usize;
-            first = (first + count) << 1;
-            code <<= 1;
+            index = index.saturating_add(count as usize);
+            first = first.saturating_add(count).wrapping_shl(1);
+            code = code.wrapping_shl(1);
         }
 
         Err(ProbeError::Invalid { offset: reader.byte_pos as u64, reason: "unmatched Huffman code in DEFLATE stream".to_owned() })
@@ -236,9 +248,9 @@ fn inflate_raw_with_consumed(bytes: &[u8], max_output_len: usize) -> Result<(Vec
             }
             2 => {
                 // Dynamic Huffman block
-                let hlit = (reader.read_bits(5)? as usize) + 257;
-                let hdist = (reader.read_bits(5)? as usize) + 1;
-                let hclen = (reader.read_bits(4)? as usize) + 4;
+                let hlit = (reader.read_bits(5)? as usize).saturating_add(257);
+                let hdist = (reader.read_bits(5)? as usize).saturating_add(1);
+                let hclen = (reader.read_bits(4)? as usize).saturating_add(4);
                 if hlit > 286 || hdist > 30 {
                     return Err(ProbeError::Invalid {
                         offset: reader.byte_pos as u64,
@@ -247,12 +259,14 @@ fn inflate_raw_with_consumed(bytes: &[u8], max_output_len: usize) -> Result<(Vec
                 }
 
                 let mut cl_lengths = [0u8; 19];
-                for i in 0..hclen {
-                    cl_lengths[CL_ORDER[i]] = reader.read_bits(3)? as u8;
+                for &cl_idx in CL_ORDER.iter().take(hclen) {
+                    if let Some(slot) = cl_lengths.get_mut(cl_idx) {
+                        *slot = reader.read_bits(3)? as u8;
+                    }
                 }
                 let cl_table = HuffmanTable::from_lengths(&cl_lengths)?;
 
-                let total_codes = hlit + hdist;
+                let total_codes = hlit.saturating_add(hdist);
                 let mut lengths = Vec::with_capacity(total_codes);
                 while lengths.len() < total_codes {
                     let sym = cl_table.decode(&mut reader)?;
@@ -265,34 +279,34 @@ fn inflate_raw_with_consumed(bytes: &[u8], max_output_len: usize) -> Result<(Vec
                                     reason: "DEFLATE code length 16 with no previous length".to_owned(),
                                 });
                             };
-                            let repeat = (reader.read_bits(2)? as usize) + 3;
-                            if lengths.len() + repeat > total_codes {
+                            let repeat = (reader.read_bits(2)? as usize).saturating_add(3);
+                            if lengths.len().saturating_add(repeat) > total_codes {
                                 return Err(ProbeError::Invalid {
                                     offset: reader.byte_pos as u64,
                                     reason: "DEFLATE code length 16 repeat overflow".to_owned(),
                                 });
                             }
-                            lengths.resize(lengths.len() + repeat, prev);
+                            lengths.resize(lengths.len().saturating_add(repeat), prev);
                         }
                         17 => {
-                            let repeat = (reader.read_bits(3)? as usize) + 3;
-                            if lengths.len() + repeat > total_codes {
+                            let repeat = (reader.read_bits(3)? as usize).saturating_add(3);
+                            if lengths.len().saturating_add(repeat) > total_codes {
                                 return Err(ProbeError::Invalid {
                                     offset: reader.byte_pos as u64,
                                     reason: "DEFLATE code length 17 repeat overflow".to_owned(),
                                 });
                             }
-                            lengths.resize(lengths.len() + repeat, 0);
+                            lengths.resize(lengths.len().saturating_add(repeat), 0);
                         }
                         18 => {
-                            let repeat = (reader.read_bits(7)? as usize) + 11;
-                            if lengths.len() + repeat > total_codes {
+                            let repeat = (reader.read_bits(7)? as usize).saturating_add(11);
+                            if lengths.len().saturating_add(repeat) > total_codes {
                                 return Err(ProbeError::Invalid {
                                     offset: reader.byte_pos as u64,
                                     reason: "DEFLATE code length 18 repeat overflow".to_owned(),
                                 });
                             }
-                            lengths.resize(lengths.len() + repeat, 0);
+                            lengths.resize(lengths.len().saturating_add(repeat), 0);
                         }
                         _ => {
                             return Err(ProbeError::Invalid {
@@ -303,8 +317,10 @@ fn inflate_raw_with_consumed(bytes: &[u8], max_output_len: usize) -> Result<(Vec
                     }
                 }
 
-                let lit_len_table = HuffmanTable::from_lengths(&lengths[..hlit])?;
-                let dist_table = HuffmanTable::from_lengths(&lengths[hlit..])?;
+                let lit_len_slice = lengths.get(..hlit).unwrap_or(&[]);
+                let dist_slice = lengths.get(hlit..).unwrap_or(&[]);
+                let lit_len_table = HuffmanTable::from_lengths(lit_len_slice)?;
+                let dist_table = HuffmanTable::from_lengths(dist_slice)?;
                 decode_huffman_block(&mut reader, &lit_len_table, &dist_table, &mut out, max_output_len)?;
             }
             _ => {
@@ -340,18 +356,18 @@ fn decode_huffman_block(
             break;
         } else {
             let len_idx = (sym as usize).saturating_sub(257);
-            if len_idx >= LENGTH_BASE.len() {
+            let Some(&base_len) = LENGTH_BASE.get(len_idx) else {
                 return Err(ProbeError::Invalid { offset: reader.byte_pos as u64, reason: format!("invalid DEFLATE length symbol {sym}") });
-            }
-            let extra_len_bits = LENGTH_EXTRA[len_idx];
-            let length = usize::from(LENGTH_BASE[len_idx]) + (reader.read_bits(extra_len_bits)? as usize);
+            };
+            let extra_len_bits = LENGTH_EXTRA.get(len_idx).copied().unwrap_or(0);
+            let length = usize::from(base_len).saturating_add(reader.read_bits(extra_len_bits)? as usize);
 
             let dist_sym = dist_table.decode(reader)? as usize;
-            if dist_sym >= DIST_BASE.len() {
+            let Some(&base_dist) = DIST_BASE.get(dist_sym) else {
                 return Err(ProbeError::Invalid { offset: reader.byte_pos as u64, reason: format!("invalid DEFLATE distance symbol {dist_sym}") });
-            }
-            let extra_dist_bits = DIST_EXTRA[dist_sym];
-            let distance = usize::from(DIST_BASE[dist_sym]) + (reader.read_bits(extra_dist_bits)? as usize);
+            };
+            let extra_dist_bits = DIST_EXTRA.get(dist_sym).copied().unwrap_or(0);
+            let distance = usize::from(base_dist).saturating_add(reader.read_bits(extra_dist_bits)? as usize);
 
             if distance == 0 || distance > out.len() {
                 return Err(ProbeError::Invalid {
@@ -363,9 +379,9 @@ fn decode_huffman_block(
                 return Err(ProbeError::LimitExceeded { limit: "max_decompressed_bytes".to_owned(), max: max_output_len });
             }
 
-            let start = out.len() - distance;
+            let start = out.len().saturating_sub(distance);
             for i in 0..length {
-                let b = out[start + i];
+                let b = out.get(start.saturating_add(i)).copied().unwrap_or(0);
                 out.push(b);
             }
         }
@@ -377,13 +393,13 @@ fn decode_huffman_block(
 ///
 /// Also accepts the 8-byte CDR `"CPng\x01\x00\x04\x00"` prefix if present at the start of `bytes`.
 pub fn inflate_zlib(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, ProbeError> {
-    let payload = if bytes.len() >= 8 && &bytes[0..4] == b"CPng" { &bytes[8..] } else { bytes };
+    let payload = if bytes.get(0..4) == Some(b"CPng") { bytes.get(8..).unwrap_or(&[]) } else { bytes };
 
     if payload.len() < 2 {
         return Err(ProbeError::TooShort { needed: 2, got: payload.len() });
     }
-    let cmf = payload[0];
-    let flg = payload[1];
+    let cmf = payload.first().copied().unwrap_or(0);
+    let flg = payload.get(1).copied().unwrap_or(0);
     let cm = cmf & 0x0F;
     let cinfo = cmf >> 4;
     let check = (u16::from(cmf) << 8) | u16::from(flg);
@@ -394,12 +410,17 @@ pub fn inflate_zlib(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Prob
         return Err(ProbeError::Invalid { offset: 0, reason: "RFC 1950 FDICT preset dictionary is not supported".to_owned() });
     }
 
-    let (out, consumed) = inflate_raw_with_consumed(&payload[2..], max_output_len)?;
+    let (out, consumed) = inflate_raw_with_consumed(payload.get(2..).unwrap_or(&[]), max_output_len)?;
     let trailer_start = 2usize.saturating_add(consumed);
     let Some(trailer_slice) = payload.get(trailer_start..trailer_start.saturating_add(4)) else {
         return Err(ProbeError::Truncated { offset: trailer_start as u64, needed: 4, available: payload.len().saturating_sub(trailer_start) as u64 });
     };
-    let expected_adler = u32::from_be_bytes([trailer_slice[0], trailer_slice[1], trailer_slice[2], trailer_slice[3]]);
+    let expected_adler = u32::from_be_bytes([
+        trailer_slice.first().copied().unwrap_or(0),
+        trailer_slice.get(1).copied().unwrap_or(0),
+        trailer_slice.get(2).copied().unwrap_or(0),
+        trailer_slice.get(3).copied().unwrap_or(0),
+    ]);
     let actual_adler = adler32(&out);
     if actual_adler != expected_adler {
         return Err(ProbeError::Invalid {
@@ -411,7 +432,7 @@ pub fn inflate_zlib(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Prob
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

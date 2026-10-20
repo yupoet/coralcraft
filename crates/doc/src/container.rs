@@ -68,7 +68,7 @@ pub fn save_zip(doc: &Document) -> Result<Vec<u8>, DocError> {
     };
     let manifest_bytes = serde_json::to_vec(&manifest).map_err(|e| DocError::Json(e.to_string()))?;
 
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(2 + blobs.len());
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(2usize.saturating_add(blobs.len()));
     entries.push(("manifest.json".to_owned(), manifest_bytes));
     entries.push(("document.json".to_owned(), doc_json_bytes));
     for (id, data) in blobs {
@@ -108,7 +108,7 @@ pub fn list_zip_blobs(bytes: &[u8]) -> Result<Vec<String>, DocError> {
 fn strip_bom_and_ws(bytes: &[u8]) -> &[u8] {
     let b = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     let idx = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
-    &b[idx..]
+    b.get(idx..).unwrap_or_default()
 }
 
 fn validate_no_reserved_extra_keys(doc: &Document) -> Result<(), DocError> {
@@ -381,34 +381,44 @@ fn write_deterministic_stored_zip(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+fn zip_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let s = bytes.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_le_bytes(<[u8; 2]>::try_from(s).ok()?))
+}
+
+fn zip_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    let s = bytes.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_le_bytes(<[u8; 4]>::try_from(s).ok()?))
+}
+
 fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> {
     if bytes.len() < 22 {
         return Err(DocError::InvalidZipContainer("ZIP shorter than 22 bytes".to_owned()));
     }
     let min_eocd = bytes.len().saturating_sub(65_557);
     let mut eocd_pos = None;
-    let mut i = bytes.len() - 22;
+    let mut i = bytes.len().saturating_sub(22);
     loop {
-        if &bytes[i..i + 4] == b"PK\x05\x06" {
-            let comment_len = u16::from_le_bytes([bytes[i + 20], bytes[i + 21]]) as usize;
-            if i + 22 + comment_len == bytes.len() {
+        if bytes.get(i..i.saturating_add(4)) == Some(b"PK\x05\x06") {
+            let comment_len = usize::from(zip_u16_le(bytes, i.saturating_add(20)).unwrap_or(0));
+            if i.saturating_add(22).saturating_add(comment_len) == bytes.len() {
                 eocd_pos = Some(i);
                 break;
             }
         }
-        if i == min_eocd {
+        if i <= min_eocd {
             break;
         }
-        i -= 1;
+        i = i.saturating_sub(1);
     }
 
     let Some(eocd) = eocd_pos else {
         return Err(DocError::InvalidZipContainer("missing EOCD record".to_owned()));
     };
 
-    let total_entries = u16::from_le_bytes([bytes[eocd + 10], bytes[eocd + 11]]) as usize;
-    let cd_size = u32::from_le_bytes([bytes[eocd + 12], bytes[eocd + 13], bytes[eocd + 14], bytes[eocd + 15]]) as usize;
-    let cd_offset = u32::from_le_bytes([bytes[eocd + 16], bytes[eocd + 17], bytes[eocd + 18], bytes[eocd + 19]]) as usize;
+    let total_entries = usize::from(zip_u16_le(bytes, eocd.saturating_add(10)).unwrap_or(0));
+    let cd_size = zip_u32_le(bytes, eocd.saturating_add(12)).unwrap_or(0) as usize;
+    let cd_offset = zip_u32_le(bytes, eocd.saturating_add(16)).unwrap_or(0) as usize;
 
     let Some(cd_end) = cd_offset.checked_add(cd_size) else {
         return Err(DocError::InvalidZipContainer("central directory offset overflow".to_owned()));
@@ -422,20 +432,20 @@ fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> 
     let mut pos = cd_offset;
 
     for _ in 0..total_entries {
-        if pos + 46 > cd_end || &bytes[pos..pos + 4] != b"PK\x01\x02" {
+        if pos.saturating_add(46) > cd_end || bytes.get(pos..pos.saturating_add(4)) != Some(b"PK\x01\x02") {
             return Err(DocError::InvalidZipContainer("corrupt central directory entry".to_owned()));
         }
-        let method = u16::from_le_bytes([bytes[pos + 10], bytes[pos + 11]]);
+        let method = zip_u16_le(bytes, pos.saturating_add(10)).unwrap_or(u16::MAX);
         if method != 0 {
             return Err(DocError::InvalidZipContainer(format!("unsupported ZIP method {method}")));
         }
-        let expected_crc = u32::from_le_bytes([bytes[pos + 16], bytes[pos + 17], bytes[pos + 18], bytes[pos + 19]]);
-        let comp_size = u32::from_le_bytes([bytes[pos + 20], bytes[pos + 21], bytes[pos + 22], bytes[pos + 23]]) as usize;
-        let uncomp_size = u32::from_le_bytes([bytes[pos + 24], bytes[pos + 25], bytes[pos + 26], bytes[pos + 27]]) as usize;
-        let name_len = u16::from_le_bytes([bytes[pos + 28], bytes[pos + 29]]) as usize;
-        let extra_len = u16::from_le_bytes([bytes[pos + 30], bytes[pos + 31]]) as usize;
-        let comment_len = u16::from_le_bytes([bytes[pos + 32], bytes[pos + 33]]) as usize;
-        let local_offset = u32::from_le_bytes([bytes[pos + 42], bytes[pos + 43], bytes[pos + 44], bytes[pos + 45]]) as usize;
+        let expected_crc = zip_u32_le(bytes, pos.saturating_add(16)).unwrap_or(0);
+        let comp_size = zip_u32_le(bytes, pos.saturating_add(20)).unwrap_or(0) as usize;
+        let uncomp_size = zip_u32_le(bytes, pos.saturating_add(24)).unwrap_or(0) as usize;
+        let name_len = usize::from(zip_u16_le(bytes, pos.saturating_add(28)).unwrap_or(0));
+        let extra_len = usize::from(zip_u16_le(bytes, pos.saturating_add(30)).unwrap_or(0));
+        let comment_len = usize::from(zip_u16_le(bytes, pos.saturating_add(32)).unwrap_or(0));
+        let local_offset = zip_u32_le(bytes, pos.saturating_add(42)).unwrap_or(0) as usize;
 
         if comp_size != uncomp_size || uncomp_size > MAX_ZIP_ENTRY_BYTES {
             return Err(DocError::InvalidZipContainer("entry size invalid or exceeds limit".to_owned()));
@@ -445,13 +455,15 @@ fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> 
             return Err(DocError::InvalidZipContainer("archive exceeds total size limit".to_owned()));
         }
 
-        let name_end = pos + 46 + name_len;
-        let next_pos = name_end + extra_len + comment_len;
+        let name_start = pos.saturating_add(46);
+        let name_end = name_start.saturating_add(name_len);
+        let next_pos = name_end.saturating_add(extra_len).saturating_add(comment_len);
         if next_pos > cd_end {
             return Err(DocError::InvalidZipContainer("central directory name truncated".to_owned()));
         }
-        let name =
-            std::str::from_utf8(&bytes[pos + 46..name_end]).map_err(|_| DocError::InvalidZipContainer("non-UTF8 entry name".to_owned()))?.to_owned();
+        let name_slice =
+            bytes.get(name_start..name_end).ok_or_else(|| DocError::InvalidZipContainer("central directory name truncated".to_owned()))?;
+        let name = std::str::from_utf8(name_slice).map_err(|_| DocError::InvalidZipContainer("non-UTF8 entry name".to_owned()))?.to_owned();
 
         // Reject path traversal
         if name.starts_with('/') || name.contains("..") || name.contains('\\') {
@@ -464,12 +476,10 @@ fn read_stored_zip(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, DocError> 
         let Some(local_header) = local_header else {
             return Err(DocError::InvalidZipContainer("invalid local file header".to_owned()));
         };
-        let Some((l_name_len, l_extra_len)) = local_header.starts_with(b"PK\x03\x04").then(|| {
-            (
-                usize::from(u16::from_le_bytes([local_header[26], local_header[27]])),
-                usize::from(u16::from_le_bytes([local_header[28], local_header[29]])),
-            )
-        }) else {
+        let Some((l_name_len, l_extra_len)) = local_header
+            .starts_with(b"PK\x03\x04")
+            .then(|| (usize::from(zip_u16_le(local_header, 26).unwrap_or(0)), usize::from(zip_u16_le(local_header, 28).unwrap_or(0))))
+        else {
             return Err(DocError::InvalidZipContainer("invalid local file header".to_owned()));
         };
         let Some(data_start) = local_offset.checked_add(30).and_then(|v| v.checked_add(l_name_len)).and_then(|v| v.checked_add(l_extra_len)) else {
@@ -518,6 +528,7 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 
 /// Clean-room FIPS 180-4 SHA-256 digest formatted as a 64-character lowercase hex string.
 #[must_use]
+#[allow(clippy::indexing_slicing)]
 pub fn sha256_hex(data: &[u8]) -> String {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be,
@@ -531,7 +542,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     let mut h: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
 
     let bit_len = (data.len() as u64).wrapping_mul(8);
-    let mut padded = Vec::with_capacity((data.len() + 72) & !63);
+    let mut padded = Vec::with_capacity((data.len().saturating_add(72)) & !63);
     padded.extend_from_slice(data);
     padded.push(0x80);
     while (padded.len() % 64) != 56 {
@@ -544,14 +555,16 @@ pub fn sha256_hex(data: &[u8]) -> String {
         for (slot, word) in w.iter_mut().zip(chunk.as_chunks::<4>().0) {
             *slot = u32::from_be_bytes(*word);
         }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+        for i in 16..64usize {
+            let w15 = w[i.saturating_sub(15)];
+            let w2 = w[i.saturating_sub(2)];
+            let s0 = w15.rotate_right(7) ^ w15.rotate_right(18) ^ (w15 >> 3);
+            let s1 = w2.rotate_right(17) ^ w2.rotate_right(19) ^ (w2 >> 10);
+            w[i] = w[i.saturating_sub(16)].wrapping_add(s0).wrapping_add(w[i.saturating_sub(7)]).wrapping_add(s1);
         }
 
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..64 {
+        for i in 0..64usize {
             let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
             let ch = (e & f) ^ ((!e) & g);
             let temp1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);

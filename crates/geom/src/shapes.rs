@@ -238,7 +238,7 @@ impl EllipseSpec {
 
         for i in 0..pieces {
             let a0 = start + step_deg * f64::from(i);
-            let a1 = start + step_deg * f64::from(i + 1);
+            let a1 = start + step_deg * f64::from(i.saturating_add(1));
             let (p0, d0) = eval_pt(a0)?;
             let (p1, d1) = eval_pt(a1)?;
             let c1 = Point::new(p0.x.get() + k * d0.0, p0.y.get() + k * d0.1)?;
@@ -353,7 +353,7 @@ pub fn build_spiral_path(center: Point, outer_radius: f64, revolutions: u32, exp
     let cx = center.x.get();
     let cy = center.y.get();
     let total_theta = TAU * f64::from(revolutions);
-    let segments = revolutions * 4;
+    let segments = revolutions.saturating_mul(4);
     let d_theta = total_theta / f64::from(segments);
 
     let is_logarithmic = (expansion - 1.0).abs() > 1e-6;
@@ -388,7 +388,7 @@ pub fn build_spiral_path(center: Point, outer_radius: f64, revolutions: u32, exp
 
     for i in 0..segments {
         let t0 = f64::from(i) * d_theta;
-        let t1 = f64::from(i + 1) * d_theta;
+        let t1 = f64::from(i.saturating_add(1)) * d_theta;
         let (p0, d0) = eval_pt_and_deriv(t0)?;
         let (p1, d1) = eval_pt_and_deriv(t1)?;
         let k = d_theta / 3.0;
@@ -527,15 +527,15 @@ pub fn build_callout_path(box_rect: Rect, target_pt: Point, tail_width: f64) -> 
 /// Builds a smooth Catmull-Rom / B-Spline cubic Bézier [`Path`] passing through `control_points`
 /// (`B-Spline Tool`).
 pub fn build_bspline_path(control_points: &[Point], closed: bool) -> Result<Path, GeomError> {
-    if control_points.len() < 2 {
+    let (Some(&pt0), Some(&pt1)) = (control_points.first(), control_points.get(1)) else {
         return Err(GeomError::InvalidShapeParameter("build_bspline_path requires at least 2 control points"));
-    }
+    };
     let n = control_points.len();
     let mut path = Path::new();
-    path.move_to(control_points[0])?;
+    path.move_to(pt0)?;
 
     if n == 2 {
-        path.line_to(control_points[1])?;
+        path.line_to(pt1)?;
         if closed {
             path.close()?;
         }
@@ -545,19 +545,19 @@ pub fn build_bspline_path(control_points: &[Point], closed: bool) -> Result<Path
     let get_pt = |idx: isize| -> Point {
         if closed {
             let rem = idx.rem_euclid(n as isize) as usize;
-            control_points[rem]
+            control_points.get(rem).copied().unwrap_or(pt0)
         } else {
-            let clamped = idx.clamp(0, (n - 1) as isize) as usize;
-            control_points[clamped]
+            let clamped = idx.clamp(0, n.saturating_sub(1) as isize) as usize;
+            control_points.get(clamped).copied().unwrap_or(pt0)
         }
     };
 
-    let seg_count = if closed { n } else { n - 1 };
+    let seg_count = if closed { n } else { n.saturating_sub(1) };
     for i in 0..seg_count {
-        let p_prev = get_pt((i as isize) - 1);
+        let p_prev = get_pt((i as isize).saturating_sub(1));
         let p0 = get_pt(i as isize);
-        let p1 = get_pt((i + 1) as isize);
-        let p_next = get_pt((i + 2) as isize);
+        let p1 = get_pt(i.saturating_add(1) as isize);
+        let p_next = get_pt(i.saturating_add(2) as isize);
 
         let c1 = Point::new(p0.x.get() + (p1.x.get() - p_prev.x.get()) / 6.0, p0.y.get() + (p1.y.get() - p_prev.y.get()) / 6.0)?;
         let c2 = Point::new(p1.x.get() - (p_next.x.get() - p0.x.get()) / 6.0, p1.y.get() - (p_next.y.get() - p0.y.get()) / 6.0)?;
@@ -642,7 +642,7 @@ pub fn build_impact_rays_path(center: Point, inner_radius: f64, outer_radius: f6
 
 fn gcd_u32(mut a: u32, mut b: u32) -> u32 {
     while b != 0 {
-        let r = a % b;
+        let r = a.checked_rem(b).unwrap_or(0);
         a = b;
         b = r;
     }
@@ -656,17 +656,17 @@ pub fn build_complex_star_path(center: Point, radius: f64, points: u32, sharpnes
         return Err(GeomError::InvalidShapeParameter("radius must be positive"));
     }
     let n = points.clamp(5, 256);
-    let max_k = (n - 1) / 2;
+    let max_k = n.saturating_sub(1) / 2;
     let k = sharpness.clamp(2, max_k.max(2));
     let cycles = gcd_u32(n, k);
-    let steps_per_cycle = n / cycles;
+    let steps_per_cycle = n.checked_div(cycles).unwrap_or(1);
     let cx = center.x.get();
     let cy = center.y.get();
     let mut path = Path { elements: Vec::new(), fill_rule: crate::path::FillRule::EvenOdd };
 
     for c in 0..cycles {
         for s in 0..steps_per_cycle {
-            let v_idx = (c + s * k) % n;
+            let v_idx = c.saturating_add(s.saturating_mul(k)).checked_rem(n).unwrap_or(0);
             let angle = -std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * (f64::from(v_idx) / f64::from(n));
             let pt = Point::new(cx + r * angle.cos(), cy + r * angle.sin())?;
             if s == 0 {
@@ -682,12 +682,15 @@ pub fn build_complex_star_path(center: Point, radius: f64, points: u32, sharpnes
 
 /// Builds an open or closed polyline [`Path`] from `points` (`Freehand / Polyline Tool F5`).
 pub fn build_polyline_path(points: &[Point], closed: bool) -> Result<Path, GeomError> {
-    if points.len() < 2 {
+    let Some((&first, rest)) = points.split_first() else {
+        return Err(GeomError::InvalidShapeParameter("polyline requires at least 2 points"));
+    };
+    if rest.is_empty() {
         return Err(GeomError::InvalidShapeParameter("polyline requires at least 2 points"));
     }
     let mut path = Path::new();
-    path.move_to(points[0])?;
-    for &pt in &points[1..] {
+    path.move_to(first)?;
+    for &pt in rest {
         path.line_to(pt)?;
     }
     if closed {
@@ -896,9 +899,9 @@ pub fn build_rose_guilloche_path(center: Point, radius: f64, petals_k: u32, poin
         return Err(GeomError::InvalidShapeParameter("invalid rose guilloche parameters"));
     }
     let k = petals_k.clamp(1, 36);
-    let lobes = if k.is_multiple_of(2) { 2 * k } else { k };
+    let lobes = if k.is_multiple_of(2) { k.saturating_mul(2) } else { k };
     let max_theta = if k.is_multiple_of(2) { std::f64::consts::TAU } else { std::f64::consts::PI };
-    let total_steps = (lobes * points_per_lobe.clamp(4, 64)).min(1024);
+    let total_steps = lobes.saturating_mul(points_per_lobe.clamp(4, 64)).min(1024);
     let cx = center.x.get();
     let cy = center.y.get();
 
@@ -939,14 +942,14 @@ pub fn build_barcode_path(bounds: Rect, digits: &str) -> Result<Path, GeomError>
         0b011_0111, // 8
         0b000_1011, // 9
     ];
-    let mut modules = Vec::with_capacity(clean.len() * 7 + 11);
+    let mut modules = Vec::with_capacity(clean.len().saturating_mul(7).saturating_add(11));
     modules.extend_from_slice(&[true, false, true]); // start guard
     let half = clean.len() / 2;
     for (idx, &d) in clean.iter().take(24).enumerate() {
         if idx == half && half > 0 {
             modules.extend_from_slice(&[false, true, false, true, false]); // center guard
         }
-        let pat = L_PATTERNS[(d - b'0') as usize];
+        let pat = L_PATTERNS.get(d.saturating_sub(b'0') as usize).copied().unwrap_or(L_PATTERNS[0]);
         for bit in (0..7).rev() {
             modules.push(((pat >> bit) & 1) != 0);
         }
@@ -954,7 +957,7 @@ pub fn build_barcode_path(bounds: Rect, digits: &str) -> Result<Path, GeomError>
     modules.extend_from_slice(&[true, false, true]); // end guard
 
     let quiet = 4usize;
-    let total_mods = modules.len() + 2 * quiet;
+    let total_mods = modules.len().saturating_add(quiet.saturating_mul(2));
     let mod_w = w / (total_mods as f64);
     let x0 = bounds.x0.get();
     let y0 = bounds.y0.get();
@@ -963,16 +966,16 @@ pub fn build_barcode_path(bounds: Rect, digits: &str) -> Result<Path, GeomError>
     let mut path = Path::new();
     let mut i = 0usize;
     while i < modules.len() {
-        if !modules[i] {
-            i += 1;
+        if !modules.get(i).copied().unwrap_or(false) {
+            i = i.saturating_add(1);
             continue;
         }
         let run_start = i;
-        while i < modules.len() && modules[i] {
-            i += 1;
+        while modules.get(i).copied().unwrap_or(false) {
+            i = i.saturating_add(1);
         }
-        let bx0 = x0 + ((quiet + run_start) as f64) * mod_w;
-        let bx1 = x0 + ((quiet + i) as f64) * mod_w;
+        let bx0 = x0 + (quiet.saturating_add(run_start) as f64) * mod_w;
+        let bx1 = x0 + (quiet.saturating_add(i) as f64) * mod_w;
         path.move_to(Point::new(bx0, y0)?)?;
         path.line_to(Point::new(bx1, y0)?)?;
         path.line_to(Point::new(bx1, y1)?)?;
@@ -1224,12 +1227,12 @@ pub fn build_lsystem_path(
                 }
             }
             if let Some(rep) = matched {
-                if next_str.len() + rep.len() > max_symbols {
+                if next_str.len().saturating_add(rep.len()) > max_symbols {
                     break;
                 }
                 next_str.push_str(rep);
             } else {
-                if next_str.len() + ch.len_utf8() > max_symbols {
+                if next_str.len().saturating_add(ch.len_utf8()) > max_symbols {
                     break;
                 }
                 next_str.push(ch);
@@ -1331,9 +1334,11 @@ pub fn build_voronoi_mosaic_path(bounds: Rect, seeds: &[Point], cell_gap_pt: f64
                 break;
             }
         }
-        if cell.len() >= 3 {
-            path.move_to(cell[0])?;
-            for &pt in &cell[1..] {
+        if cell.len() >= 3
+            && let Some((&first, rest)) = cell.split_first()
+        {
+            path.move_to(first)?;
+            for &pt in rest {
                 path.line_to(pt)?;
             }
             path.close()?;
@@ -1469,7 +1474,7 @@ pub fn build_concentric_rings_path(center: Point, inner_radius_pt: f64, outer_ra
     path.fill_rule = crate::path::FillRule::EvenOdd;
 
     for i in 0..ring_count {
-        let t = if ring_count == 1 { 1.0 } else { f64::from(i) / f64::from(ring_count - 1) };
+        let t = if ring_count == 1 { 1.0 } else { f64::from(i) / f64::from(ring_count.saturating_sub(1)) };
         let r = r_in + (r_out - r_in) * t;
         let rect = Rect::new(cx - r, cy - r, cx + r, cy + r)?;
         let circle = EllipseSpec::full(rect).to_path()?;
@@ -1545,8 +1550,8 @@ pub fn build_hilbert_curve_path(bounds: Rect, order: u32) -> Result<Path, GeomEr
     if w <= 0.0 || h <= 0.0 || !(1..=5).contains(&order) {
         return Err(GeomError::InvalidShapeParameter("invalid Hilbert curve parameters"));
     }
-    let n = 1_u32 << order;
-    let total = n * n;
+    let n = 1_u32.checked_shl(order).unwrap_or(1);
+    let total = n.saturating_mul(n);
     let x0 = bounds.x0.get();
     let y0 = bounds.y0.get();
     let mut path = Path::new();
@@ -1560,15 +1565,15 @@ pub fn build_hilbert_curve_path(bounds: Rect, order: u32) -> Result<Path, GeomEr
             let ry = 1 & (t ^ rx);
             if ry == 0 {
                 if rx == 1 {
-                    x = s - 1 - x;
-                    y = s - 1 - y;
+                    x = s.saturating_sub(1).saturating_sub(x);
+                    y = s.saturating_sub(1).saturating_sub(y);
                 }
                 std::mem::swap(&mut x, &mut y);
             }
-            x += s * rx;
-            y += s * ry;
+            x = x.saturating_add(s.saturating_mul(rx));
+            y = y.saturating_add(s.saturating_mul(ry));
             t /= 4;
-            s *= 2;
+            s = s.saturating_mul(2);
         }
         let px = x0 + (f64::from(x) + 0.5) / f64::from(n) * w;
         let py = y0 + (f64::from(y) + 0.5) / f64::from(n) * h;
@@ -1633,7 +1638,7 @@ pub fn build_phyllotaxis_path(center: Point, max_radius_pt: f64, seed_count: u32
     let golden_angle_rad = 137.507_764_050_037_85_f64.to_radians();
     let cx = center.x.get();
     let cy = center.y.get();
-    let scale_c = (r_max - r_dot) / f64::from(seed_count - 1).sqrt();
+    let scale_c = (r_max - r_dot) / f64::from(seed_count.saturating_sub(1)).sqrt();
     let mut path = Path::new();
     for i in 0..seed_count {
         let r = scale_c * f64::from(i).sqrt();
@@ -1779,7 +1784,7 @@ pub fn build_sierpinski_triangle_path(bounds: Rect, depth: u32) -> Result<Path, 
 
     let mut tris = vec![(p_top, p_br, p_bl)];
     for _ in 0..depth {
-        let mut next = Vec::with_capacity(tris.len() * 3);
+        let mut next = Vec::with_capacity(tris.len().saturating_mul(3));
         for (a, b, c) in tris {
             let mab = Point::new(0.5 * (a.x.get() + b.x.get()), 0.5 * (a.y.get() + b.y.get()))?;
             let mbc = Point::new(0.5 * (b.x.get() + c.x.get()), 0.5 * (b.y.get() + c.y.get()))?;
@@ -1812,7 +1817,7 @@ pub fn build_koch_snowflake_path(center: Point, radius_pt: f64, iterations: u32)
     let cx = center.x.get();
     let cy = center.y.get();
     // Initial clockwise equilateral triangle vertices in Y-down screen coordinates
-    let mut pts = Vec::with_capacity(3 * (1_usize << (2 * iterations)));
+    let mut pts = Vec::with_capacity(3_usize.saturating_mul(1_usize.checked_shl(iterations.saturating_mul(2)).unwrap_or(1)));
     for k in 0..3 {
         let angle = -std::f64::consts::FRAC_PI_2 + f64::from(k) * (std::f64::consts::TAU / 3.0);
         pts.push((cx + r * angle.cos(), cy + r * angle.sin()));
@@ -1820,10 +1825,12 @@ pub fn build_koch_snowflake_path(center: Point, radius_pt: f64, iterations: u32)
     let sqrt3_half = 3.0_f64.sqrt() * 0.5;
     for _ in 0..iterations {
         let n = pts.len();
-        let mut next = Vec::with_capacity(n * 4);
+        let mut next = Vec::with_capacity(n.saturating_mul(4));
         for i in 0..n {
-            let (ax, ay) = pts[i];
-            let (bx, by) = pts[(i + 1) % n];
+            let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+            let (Some(&(ax, ay)), Some(&(bx, by))) = (pts.get(i), pts.get(next_i)) else {
+                continue;
+            };
             let dx = bx - ax;
             let dy = by - ay;
             let p1 = (ax + dx / 3.0, ay + dy / 3.0);
@@ -1859,15 +1866,14 @@ pub fn build_dragon_curve_path(start: Point, end: Point, iterations: u32) -> Res
     if dist <= 1e-3 || iterations > 11 {
         return Err(GeomError::InvalidShapeParameter("invalid Heighway dragon curve parameters"));
     }
-    let mut pts = Vec::with_capacity((1_usize << iterations) + 1);
+    let mut pts = Vec::with_capacity(1_usize.checked_shl(iterations).unwrap_or(1).saturating_add(1));
     pts.push((start.x.get(), start.y.get()));
     pts.push((end.x.get(), end.y.get()));
 
     for _ in 0..iterations {
-        let mut next = Vec::with_capacity(pts.len() * 2 - 1);
+        let mut next = Vec::with_capacity(pts.len().saturating_mul(2).saturating_sub(1));
         for (i, seg) in pts.windows(2).enumerate() {
-            let (x1, y1) = seg[0];
-            let (x2, y2) = seg[1];
+            let [(x1, y1), (x2, y2)] = *seg else { continue };
             let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
             let mx = 0.5 * (x1 + x2 + sign * (y1 - y2));
             let my = 0.5 * (y1 + y2 + sign * (x2 - x1));

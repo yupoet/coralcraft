@@ -26,7 +26,7 @@ struct Edge {
 pub fn rasterize_coverage(polys: &[Polyline], fill_rule: FillRule, width: u32, height: u32) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
-    let mut cov = vec![0_u8; w * h];
+    let mut cov = vec![0_u8; w.saturating_mul(h)];
     if w == 0 || h == 0 || polys.is_empty() {
         return cov;
     }
@@ -37,7 +37,9 @@ pub fn rasterize_coverage(polys: &[Polyline], fill_rule: FillRule, width: u32, h
             continue;
         }
         for seg in poly.points.windows(2) {
-            push_edge(&mut edges, seg[0], seg[1]);
+            if let [p0, p1] = *seg {
+                push_edge(&mut edges, p0, p1);
+            }
         }
         // Implicitly close the contour for fill coverage
         if let (Some(&last), Some(&first)) = (poly.points.last(), poly.points.first())
@@ -92,7 +94,7 @@ pub fn rasterize_coverage(polys: &[Polyline], fill_rule: FillRule, width: u32, h
                     FillRule::NonZero => winding != 0,
                     FillRule::EvenOdd => (winding & 1) != 0,
                 };
-                winding += w_delta;
+                winding = winding.saturating_add(w_delta);
                 let is_inside = match fill_rule {
                     FillRule::NonZero => winding != 0,
                     FillRule::EvenOdd => (winding & 1) != 0,
@@ -104,7 +106,11 @@ pub fn rasterize_coverage(polys: &[Polyline], fill_rule: FillRule, width: u32, h
                     && !is_inside
                     && let Some(x0) = span_start.take()
                 {
-                    accumulate_subpixel_span(&mut cov[py * w..(py + 1) * w], w, x0, x);
+                    let row_start = py.saturating_mul(w);
+                    let row_end = py.saturating_add(1).saturating_mul(w);
+                    if let Some(row_cov) = cov.get_mut(row_start..row_end) {
+                        accumulate_subpixel_span(row_cov, w, x0, x);
+                    }
                 }
             }
         }
@@ -130,7 +136,7 @@ fn push_edge(edges: &mut Vec<Edge>, p0: Point, p1: Point) {
 /// Accumulates subpixel coverage across `w` pixels on one subpixel scanline for interval `[x0, x1)`.
 /// Subpixel `k` (`0 .. 4*w`) has center at `(k + 0.5) / 4.0`.
 fn accumulate_subpixel_span(row_cov: &mut [u8], w: usize, x0: f64, x1: f64) {
-    let max_sub = (w * SS) as isize;
+    let max_sub = w.saturating_mul(SS) as isize;
     // Subpixel center `(k + 0.5) / 4 >= x0` <=> `k >= ceil(4 * x0 - 0.5)`
     let k_start = ((x0 * (SS as f64) - 0.5).ceil() as isize).clamp(0, max_sub);
     let k_end = ((x1 * (SS as f64) - 0.5).ceil() as isize).clamp(0, max_sub);
@@ -139,7 +145,9 @@ fn accumulate_subpixel_span(row_cov: &mut [u8], w: usize, x0: f64, x1: f64) {
     }
     for k in (k_start as usize)..(k_end as usize) {
         let px = k / SS;
-        row_cov[px] = row_cov[px].saturating_add(1);
+        if let Some(slot) = row_cov.get_mut(px) {
+            *slot = slot.saturating_add(1);
+        }
     }
 }
 
@@ -168,13 +176,12 @@ pub fn dash_polylines(polys: &[Polyline], dash_pattern: &[f64]) -> Result<Vec<Po
         }
 
         let mut pat_idx = 0usize;
-        let mut rem = pat[0];
+        let mut rem = pat.first().copied().unwrap_or(1.0);
         let mut pen_down = true;
-        let mut current_dash: Vec<Point> = vec![pts[0]];
+        let mut current_dash: Vec<Point> = pts.first().copied().into_iter().collect();
 
         for seg in pts.windows(2) {
-            let p0 = seg[0];
-            let p1 = seg[1];
+            let [p0, p1] = *seg else { continue };
             let dx = p1.x.get() - p0.x.get();
             let dy = p1.y.get() - p0.y.get();
             let seg_len = dx.hypot(dy);
@@ -196,8 +203,8 @@ pub fn dash_polylines(polys: &[Polyline], dash_pattern: &[f64]) -> Result<Vec<Po
                         current_dash.clear();
                     }
                 }
-                pat_idx = (pat_idx + 1) % pat.len();
-                rem = pat[pat_idx];
+                pat_idx = pat_idx.saturating_add(1).checked_rem(pat.len()).unwrap_or(0);
+                rem = pat.get(pat_idx).copied().unwrap_or(1.0);
                 pen_down = pat_idx.is_multiple_of(2);
                 if pen_down {
                     current_dash.push(cut);
@@ -249,42 +256,53 @@ pub fn expand_stroke_polylines(polys: &[Polyline], half_w: f64, cap: LineCap, jo
 
         if poly.closed && pts.len() >= 3 {
             let n = pts.len();
-            let mut left_side = Vec::with_capacity(n * 2);
-            let mut right_side = Vec::with_capacity(n * 2);
+            let mut left_side = Vec::with_capacity(n.saturating_mul(2));
+            let mut right_side = Vec::with_capacity(n.saturating_mul(2));
             for i in 0..n {
-                let p_prev = pts[(i + n - 1) % n];
-                let p_curr = pts[i];
-                let p_next = pts[(i + 1) % n];
-                emit_join(&mut left_side, p_prev, p_curr, p_next, half_w, join, miter_lim);
-                emit_join(&mut right_side, p_next, p_curr, p_prev, half_w, join, miter_lim);
+                let prev_idx = i.saturating_add(n.saturating_sub(1)).checked_rem(n).unwrap_or(0);
+                let next_idx = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                if let (Some(&p_prev), Some(&p_curr), Some(&p_next)) = (pts.get(prev_idx), pts.get(i), pts.get(next_idx)) {
+                    emit_join(&mut left_side, p_prev, p_curr, p_next, half_w, join, miter_lim);
+                    emit_join(&mut right_side, p_next, p_curr, p_prev, half_w, join, miter_lim);
+                }
             }
             right_side.reverse();
             out.push(to_closed_polyline(&left_side)?);
             out.push(to_closed_polyline(&right_side)?);
         } else {
             let n = pts.len();
-            let mut contour = Vec::with_capacity(n * 4 + 8);
+            let mut contour = Vec::with_capacity(n.saturating_mul(4).saturating_add(8));
+            let (Some(&pt0), Some(&pt1)) = (pts.first(), pts.get(1)) else {
+                continue;
+            };
+            let (Some(&pt_penult), Some(&pt_last)) = (pts.get(n.saturating_sub(2)), pts.last()) else {
+                continue;
+            };
             // Forward pass along left side
-            let (nx0, ny0) = left_normal(pts[0], pts[1]);
-            contour.push((pts[0].0 + nx0 * half_w, pts[0].1 + ny0 * half_w));
-            for i in 1..(n - 1) {
-                emit_join(&mut contour, pts[i - 1], pts[i], pts[i + 1], half_w, join, miter_lim);
+            let (nx0, ny0) = left_normal(pt0, pt1);
+            contour.push((pt0.0 + nx0 * half_w, pt0.1 + ny0 * half_w));
+            for win in pts.windows(3) {
+                if let [p_prev, p_curr, p_next] = *win {
+                    emit_join(&mut contour, p_prev, p_curr, p_next, half_w, join, miter_lim);
+                }
             }
-            let (nx_last, ny_last) = left_normal(pts[n - 2], pts[n - 1]);
-            contour.push((pts[n - 1].0 + nx_last * half_w, pts[n - 1].1 + ny_last * half_w));
+            let (nx_last, ny_last) = left_normal(pt_penult, pt_last);
+            contour.push((pt_last.0 + nx_last * half_w, pt_last.1 + ny_last * half_w));
 
             // End cap at `pts[n - 1]`
-            emit_cap(&mut contour, pts[n - 2], pts[n - 1], half_w, cap);
+            emit_cap(&mut contour, pt_penult, pt_last, half_w, cap);
 
             // Backward pass along right side
-            contour.push((pts[n - 1].0 - nx_last * half_w, pts[n - 1].1 - ny_last * half_w));
-            for i in (1..(n - 1)).rev() {
-                emit_join(&mut contour, pts[i + 1], pts[i], pts[i - 1], half_w, join, miter_lim);
+            contour.push((pt_last.0 - nx_last * half_w, pt_last.1 - ny_last * half_w));
+            for win in pts.windows(3).rev() {
+                if let [p_prev, p_curr, p_next] = *win {
+                    emit_join(&mut contour, p_next, p_curr, p_prev, half_w, join, miter_lim);
+                }
             }
-            contour.push((pts[0].0 - nx0 * half_w, pts[0].1 - ny0 * half_w));
+            contour.push((pt0.0 - nx0 * half_w, pt0.1 - ny0 * half_w));
 
             // Start cap at `pts[0]`
-            emit_cap(&mut contour, pts[1], pts[0], half_w, cap);
+            emit_cap(&mut contour, pt1, pt0, half_w, cap);
 
             out.push(to_closed_polyline(&contour)?);
         }
@@ -402,18 +420,17 @@ pub fn build_arrowhead_polylines(
         if poly.closed || poly.points.len() < 2 {
             continue;
         }
-        if start_arrow != ArrowheadKind::None {
-            let p_tip = poly.points[0];
-            let p_from = poly.points[1];
-            if let Some(marker) = single_arrowhead(p_from, p_tip, scale, start_arrow)? {
-                out.push(marker);
-            }
+        if start_arrow != ArrowheadKind::None
+            && let (Some(&p_tip), Some(&p_from)) = (poly.points.first(), poly.points.get(1))
+            && let Some(marker) = single_arrowhead(p_from, p_tip, scale, start_arrow)?
+        {
+            out.push(marker);
         }
         if end_arrow != ArrowheadKind::None {
             let n = poly.points.len();
-            let p_tip = poly.points[n - 1];
-            let p_from = poly.points[n - 2];
-            if let Some(marker) = single_arrowhead(p_from, p_tip, scale, end_arrow)? {
+            if let (Some(&p_tip), Some(&p_from)) = (poly.points.last(), poly.points.get(n.saturating_sub(2)))
+                && let Some(marker) = single_arrowhead(p_from, p_tip, scale, end_arrow)?
+            {
                 out.push(marker);
             }
         }
@@ -489,7 +506,7 @@ pub fn shade_coverage(
             let rgb = color.to_srgb8();
             for py in 0..h {
                 for px in 0..w {
-                    let cov = coverage_16[py * w + px];
+                    let cov = coverage_16.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                     if cov > 0 {
                         let a = opacity * (f64::from(cov) / 16.0);
                         surface.blend_straight(px as u32, py as u32, rgb, a);
@@ -506,7 +523,7 @@ pub fn shade_coverage(
 
             for py in 0..h {
                 for px in 0..w {
-                    let cov = coverage_16[py * w + px];
+                    let cov = coverage_16.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                     if cov == 0 {
                         continue;
                     }
@@ -529,7 +546,7 @@ pub fn shade_coverage(
             let bg_rgb = bg_color.to_srgb8();
             for py in 0..h {
                 for px in 0..w {
-                    let cov = coverage_16[py * w + px];
+                    let cov = coverage_16.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                     if cov == 0 {
                         continue;
                     }
@@ -555,7 +572,7 @@ pub fn shade_coverage(
             let fallback_rgb = Color::rgb8(160, 160, 160).to_srgb8();
             for py in 0..h {
                 for px in 0..w {
-                    let cov = coverage_16[py * w + px];
+                    let cov = coverage_16.get(py.saturating_mul(w).saturating_add(px)).copied().unwrap_or(0);
                     if cov > 0 {
                         let a = opacity * (f64::from(cov) / 16.0);
                         surface.blend_straight(px as u32, py as u32, fallback_rgb, a);

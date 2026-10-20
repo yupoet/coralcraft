@@ -56,46 +56,46 @@ pub fn decompress_cmpr_payload(body_after_cmpr: &[u8], endian: Endian, max_outpu
     // Locate the first "CPng" header (typically at offset 16, or 32 in newer CDR versions with extra header fields)
     let mut cpng_positions = Vec::new();
     let mut pos = 16usize;
-    while pos + 8 <= body_after_cmpr.len() {
-        if &body_after_cmpr[pos..pos + 4] == b"CPng" {
+    while pos.saturating_add(8) <= body_after_cmpr.len() {
+        if body_after_cmpr.get(pos..pos.saturating_add(4)) == Some(b"CPng") {
             cpng_positions.push(pos);
-            pos += 8;
+            pos = pos.saturating_add(8);
         } else {
-            pos += 1;
+            pos = pos.saturating_add(1);
         }
     }
 
-    if cpng_positions.is_empty() {
+    let Some(&p1_start) = cpng_positions.first() else {
         return Err(ProbeError::Invalid { offset: 0, reason: "no CPng stream header found inside LIST cmpr".to_owned() });
-    }
-
-    let p1_start = cpng_positions[0];
+    };
     let p1_end = if c1 >= 8 && p1_start.saturating_add(c1) <= body_after_cmpr.len() {
-        p1_start + c1
-    } else if cpng_positions.len() >= 2 {
-        cpng_positions[1]
+        p1_start.saturating_add(c1)
+    } else if let Some(&second) = cpng_positions.get(1) {
+        second
     } else {
         body_after_cmpr.len()
     };
 
-    let part1 = inflate_zlib(&body_after_cmpr[p1_start..p1_end], max_output_len)?;
+    let part1 = inflate_zlib(body_after_cmpr.get(p1_start..p1_end).unwrap_or_default(), max_output_len)?;
 
     let mut block_sizes = Vec::new();
-    let p2_start_opt = if p1_end + 8 <= body_after_cmpr.len() && &body_after_cmpr[p1_end..p1_end + 4] == b"CPng" {
+    let p2_start_opt = if p1_end.saturating_add(8) <= body_after_cmpr.len() && body_after_cmpr.get(p1_end..p1_end.saturating_add(4)) == Some(b"CPng")
+    {
         Some(p1_end)
     } else {
         cpng_positions.iter().copied().find(|&p| p > p1_start)
     };
 
     if let Some(p2_start) = p2_start_opt {
-        let p2_end = if c2 >= 8 && p2_start.saturating_add(c2) <= body_after_cmpr.len() { p2_start + c2 } else { body_after_cmpr.len() };
-        if let Ok(part2_bytes) = inflate_zlib(&body_after_cmpr[p2_start..p2_end], max_output_len) {
-            let mut off = 0;
-            while off + 4 <= part2_bytes.len() {
+        let p2_end =
+            if c2 >= 8 && p2_start.saturating_add(c2) <= body_after_cmpr.len() { p2_start.saturating_add(c2) } else { body_after_cmpr.len() };
+        if let Ok(part2_bytes) = inflate_zlib(body_after_cmpr.get(p2_start..p2_end).unwrap_or_default(), max_output_len) {
+            let mut off = 0usize;
+            while off.saturating_add(4) <= part2_bytes.len() {
                 if let Some(sz) = read_u32(endian, &part2_bytes, off) {
                     block_sizes.push(sz);
                 }
-                off += 4;
+                off = off.saturating_add(4);
             }
         }
     }
@@ -182,7 +182,9 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
                 children: Vec::new(),
                 residual: Residual::default(),
             };
-            page.layers[0].objects.push(ObjectNode::new(ObjectId(10), Some("Legacy WL Document".to_owned()), ObjectKind::Unsupported(u), None, None));
+            if let Some(layer) = page.layers.first_mut() {
+                layer.objects.push(ObjectNode::new(ObjectId(10), Some("Legacy WL Document".to_owned()), ObjectKind::Unsupported(u), None, None));
+            }
             doc.pages.push(page);
             doc.next_id = 100;
             return Ok(ParseOutcome { document: doc, probe_report, parse_warnings });
@@ -224,11 +226,17 @@ pub const MAX_FILE_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_BITMAP_PIXELS: usize = 64 * 1024 * 1024;
 
 fn default_a4_page(page_num: u64) -> Page {
-    let template = Document::new_a4_portrait();
-    let mut page = template.pages[0].clone();
-    page.id = PageId(page_num);
-    page.name = format!("Page {page_num}");
-    page
+    let size = Size::new(595.275_590_551_181_2, 841.889_763_779_527_6).unwrap_or_default();
+    Page {
+        id: PageId(page_num),
+        name: format!("Page {page_num}"),
+        size,
+        bleed: F64::ZERO,
+        background: Some(FillStyle::uniform(Color::WHITE)),
+        layers: vec![Layer::new_normal(LayerId(2), "Layer 1")],
+        residual: Residual::default(),
+        extra: BTreeMap::new(),
+    }
 }
 
 struct ParserCtx {
@@ -248,7 +256,7 @@ struct ParserCtx {
 impl ParserCtx {
     fn alloc_id(&mut self) -> u64 {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self.next_id.saturating_add(1);
         id
     }
 }
@@ -296,7 +304,7 @@ fn parse_riff_stream_with_budget(
         inside_cmpr: false,
     };
 
-    let top_chunks = walk_chunk_sequence(&bytes[12..end], 12, None, &mut ctx, 0, warnings);
+    let top_chunks = walk_chunk_sequence(bytes.get(12..end).unwrap_or_default(), 12, None, &mut ctx, 0, warnings);
     process_chunk_tree(&top_chunks, &mut ctx, doc, warnings);
     doc.next_id = ctx.next_id;
 }
@@ -316,17 +324,17 @@ fn walk_chunk_sequence(
     }
 
     let mut cursor = 0usize;
-    while cursor + 8 <= slice.len() {
+    while cursor.saturating_add(8) <= slice.len() {
         if ctx.chunks_seen >= MAX_CHUNKS {
             warnings.push(format!("W-MAX-CHUNKS: chunk count exceeded {MAX_CHUNKS}"));
             break;
         }
-        ctx.chunks_seen += 1;
+        ctx.chunks_seen = ctx.chunks_seen.saturating_add(1);
 
-        let Some(fourcc) = slice.get(cursor..cursor + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
+        let Some(fourcc) = slice.get(cursor..cursor.saturating_add(4)).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
             break;
         };
-        let raw_size_field = read_u32(ctx.endian, slice, cursor + 4).unwrap_or(0);
+        let raw_size_field = read_u32(ctx.endian, slice, cursor.saturating_add(4)).unwrap_or(0);
         let chunk_size = if let Some(bs) = block_sizes {
             let Some(&mapped) = bs.get(raw_size_field as usize) else {
                 warnings.push(format!(
@@ -342,7 +350,7 @@ fn walk_chunk_sequence(
             raw_size_field as usize
         };
 
-        let payload_start = cursor + 8;
+        let payload_start = cursor.saturating_add(8);
         let Some(payload_end) = payload_start.checked_add(chunk_size) else {
             break;
         };
@@ -350,19 +358,19 @@ fn walk_chunk_sequence(
             warnings.push(format!(
                 "W-TRUNCATED-CHUNK: chunk {} at offset {} declared {} bytes (available {})",
                 format_fourcc(fourcc),
-                base_offset + (cursor as u64),
+                base_offset.saturating_add(cursor as u64),
                 chunk_size,
                 slice.len().saturating_sub(payload_start)
             ));
             break;
         }
 
-        let payload_slice = &slice[payload_start..payload_end];
-        let src_offset = base_offset + (cursor as u64);
+        let payload_slice = slice.get(payload_start..payload_end).unwrap_or_default();
+        let src_offset = base_offset.saturating_add(cursor as u64);
 
         if &fourcc == b"LIST" && payload_slice.len() >= 4 {
-            let list_type = <[u8; 4]>::try_from(&payload_slice[0..4]).unwrap_or(*b"    ");
-            let body = &payload_slice[4..];
+            let list_type = payload_slice.get(0..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).unwrap_or(*b"    ");
+            let body = payload_slice.get(4..).unwrap_or_default();
             if &list_type == b"cmpr" && ctx.inside_cmpr {
                 warnings.push(format!("W-CMPR-NESTED: LIST cmpr at offset {src_offset} inside another LIST cmpr kept opaque"));
                 out.push(ParsedChunk {
@@ -389,7 +397,7 @@ fn walk_chunk_sequence(
                         ctx.decompress_budget = ctx.decompress_budget.saturating_sub(used);
                         let bs_ref = if part2_sizes.is_empty() { None } else { Some(part2_sizes.as_slice()) };
                         ctx.inside_cmpr = true;
-                        let children = walk_chunk_sequence(&part1, src_offset + 12, bs_ref, ctx, depth + 1, warnings);
+                        let children = walk_chunk_sequence(&part1, src_offset.saturating_add(12), bs_ref, ctx, depth.saturating_add(1), warnings);
                         ctx.inside_cmpr = false;
                         out.push(ParsedChunk { fourcc, list_type: Some(list_type), payload: Vec::new(), children, src_offset });
                     }
@@ -418,7 +426,7 @@ fn walk_chunk_sequence(
             } else if &list_type == b"stlt" {
                 out.push(ParsedChunk { fourcc, list_type: Some(list_type), payload: body.to_vec(), children: Vec::new(), src_offset });
             } else {
-                let children = walk_chunk_sequence(body, src_offset + 12, block_sizes, ctx, depth + 1, warnings);
+                let children = walk_chunk_sequence(body, src_offset.saturating_add(12), block_sizes, ctx, depth.saturating_add(1), warnings);
                 out.push(ParsedChunk { fourcc, list_type: Some(list_type), payload: Vec::new(), children, src_offset });
             }
         } else {
@@ -443,7 +451,7 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
     for (idx, page_chunk) in raw_pages.iter().enumerate() {
         // When a CDR file has >= 2 `LIST page` blocks, the first `LIST page` (index 0) is CorelDRAW's Master Page
         // if it has no drawable objects or only Master/Grid/Guides layers; we still include all numbered pages.
-        let page_num = (doc.pages.len() + 1) as u64;
+        let page_num = (doc.pages.len().saturating_add(1)) as u64;
         let mut page = default_a4_page(page_num);
         page.size = ctx.default_page_size;
         page.layers.clear();
@@ -458,7 +466,7 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         if idx == 0 && raw_pages.len() > 1 && page.layers.iter().all(|l| l.objects.is_empty()) {
             continue;
         }
-        let final_num = (doc.pages.len() + 1) as u64;
+        let final_num = (doc.pages.len().saturating_add(1)) as u64;
         page.id = PageId(final_num);
         page.name = format!("Page {final_num}");
         doc.pages.push(page);
@@ -471,7 +479,9 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         let mut loose_objs = Vec::new();
         collect_loose_objects_recursive(chunks, ctx, page.size, &mut loose_objs, warnings);
         if !loose_objs.is_empty() {
-            page.layers[0].objects.extend(loose_objs);
+            if let Some(layer) = page.layers.first_mut() {
+                layer.objects.extend(loose_objs);
+            }
         } else {
             // Also check for standalone CMX `page` instruction streams when no `LIST page` is present
             parse_cmx_commands_into_page(chunks, ctx, &mut page);
@@ -484,53 +494,57 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
     for ch in chunks {
         if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
             let mut pos = 0usize;
-            while pos + 4 <= ch.payload.len() {
+            while pos.saturating_add(4) <= ch.payload.len() {
                 let sz_i16 = read_i16(ctx.endian, &ch.payload, pos).unwrap_or(0);
                 let (inst_size, header_len) = if sz_i16 < 0 {
-                    let sz_i32 = read_i32(ctx.endian, &ch.payload, pos + 2).unwrap_or(0);
+                    let sz_i32 = read_i32(ctx.endian, &ch.payload, pos.saturating_add(2)).unwrap_or(0);
                     (sz_i32.unsigned_abs() as usize, 8usize)
                 } else {
                     (sz_i16 as usize, 4usize)
                 };
-                if inst_size < header_len || pos + inst_size > ch.payload.len() {
+                if inst_size < header_len || pos.saturating_add(inst_size) > ch.payload.len() {
                     break;
                 }
-                let code_off = if sz_i16 < 0 { pos + 6 } else { pos + 2 };
+                let code_off = if sz_i16 < 0 { pos.saturating_add(6) } else { pos.saturating_add(2) };
                 let code = read_i16(ctx.endian, &ch.payload, code_off).unwrap_or(0).unsigned_abs();
                 if code == 67 {
                     // CMX_Command_PolyCurve
-                    let mut tag_pos = pos + header_len;
-                    let inst_end = pos + inst_size;
+                    let mut tag_pos = pos.saturating_add(header_len);
+                    let inst_end = pos.saturating_add(inst_size);
                     while tag_pos < inst_end {
-                        let tag_id = ch.payload[tag_pos];
-                        if tag_id == 255 || tag_pos + 3 > inst_end {
+                        let Some(&tag_id) = ch.payload.get(tag_pos) else {
+                            break;
+                        };
+                        if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
                             break;
                         }
-                        let tag_len = (read_u16(ctx.endian, &ch.payload, tag_pos + 1).unwrap_or(3) as usize).max(3);
-                        if tag_id == 2 && tag_pos + tag_len <= inst_end {
-                            let pt_slice = &ch.payload[tag_pos + 3..tag_pos + tag_len];
+                        let tag_len = (read_u16(ctx.endian, &ch.payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
+                            let pt_slice = ch.payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
                             if pt_slice.len() >= 2 {
                                 let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
-                                let mut with_pad = Vec::with_capacity(4 + pt_slice.len());
+                                let mut with_pad = Vec::with_capacity(4usize.saturating_add(pt_slice.len()));
                                 with_pad.extend_from_slice(&(count as u16).to_le_bytes());
                                 with_pad.extend_from_slice(&0u16.to_le_bytes());
-                                with_pad.extend_from_slice(&pt_slice[2..]);
+                                with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
                                 if let Some(path) = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size) {
                                     let obj_id = ObjectId(ctx.alloc_id());
-                                    page.layers[0].objects.push(ObjectNode::new(
-                                        obj_id,
-                                        None,
-                                        ObjectKind::Path(path),
-                                        None,
-                                        Some(OutlineStyle::hairline(Color::BLACK)),
-                                    ));
+                                    if let Some(layer) = page.layers.first_mut() {
+                                        layer.objects.push(ObjectNode::new(
+                                            obj_id,
+                                            None,
+                                            ObjectKind::Path(path),
+                                            None,
+                                            Some(OutlineStyle::hairline(Color::BLACK)),
+                                        ));
+                                    }
                                 }
                             }
                         }
                         tag_pos = tag_pos.saturating_add(tag_len);
                     }
                 }
-                pos += inst_size;
+                pos = pos.saturating_add(inst_size);
             }
         }
     }
@@ -608,7 +622,7 @@ fn parse_page_chunk(page_chunk: &ParsedChunk, ctx: &mut ParserCtx, page: &mut Pa
         page.layers.push(layer);
     } else {
         for (l_idx, l_chunk) in layer_chunks.iter().enumerate() {
-            let layer_name = format!("Layer {}", l_idx + 1);
+            let layer_name = format!("Layer {}", l_idx.saturating_add(1));
             let mut layer = Layer::new_normal(LayerId(ctx.alloc_id()), layer_name);
             collect_loose_objects_recursive(&l_chunk.children, ctx, page.size, &mut layer.objects, warnings);
             page.layers.push(layer);
@@ -792,18 +806,18 @@ fn flatten_obj_subchunks<'a>(chunks: &'a [ParsedChunk], out: &mut Vec<&'a Parsed
 /// Offset: `V >= 1300 -> 12`, `900 <= V < 1300 -> 4`, `700 <= V < 900 -> 0`, `600 <= V < 700 -> 28`, `V < 600 -> 2`.
 fn decode_mcfg(payload: &[u8], endian: Endian, version: u16) -> Option<Size> {
     let offset = if version >= 1300 {
-        12
+        12usize
     } else if version >= 900 {
-        4
+        4usize
     } else if (700..900).contains(&version) {
-        if payload.len() >= 12 && read_u32(endian, payload, 0) == Some(0) { 4 } else { 0 }
+        if payload.len() >= 12 && read_u32(endian, payload, 0) == Some(0) { 4usize } else { 0usize }
     } else if (600..700).contains(&version) {
-        28
+        28usize
     } else {
-        2
+        2usize
     };
     let (w_pt, step) = cdr_coord_to_pt(endian, payload, offset, version)?;
-    let (h_pt, _) = cdr_coord_to_pt(endian, payload, offset + step, version)?;
+    let (h_pt, _) = cdr_coord_to_pt(endian, payload, offset.saturating_add(step), version)?;
     let w = w_pt.abs().clamp(18.0, 14_400.0);
     let h = h_pt.abs().clamp(18.0, 14_400.0);
     if w > 18.0 && h > 18.0 { Size::new(w, h).ok() } else { None }
@@ -813,8 +827,8 @@ fn decode_mcfg(payload: &[u8], endian: Endian, version: u16) -> Option<Size> {
 fn decode_bbox(payload: &[u8], endian: Endian, version: u16, page_size: Size) -> Option<Rect> {
     let (x0_cdr, step) = cdr_coord_to_pt(endian, payload, 0, version)?;
     let (y0_cdr, _) = cdr_coord_to_pt(endian, payload, step, version)?;
-    let (x1_cdr, _) = cdr_coord_to_pt(endian, payload, step * 2, version)?;
-    let (y1_cdr, _) = cdr_coord_to_pt(endian, payload, step * 3, version)?;
+    let (x1_cdr, _) = cdr_coord_to_pt(endian, payload, step.saturating_mul(2), version)?;
+    let (y1_cdr, _) = cdr_coord_to_pt(endian, payload, step.saturating_mul(3), version)?;
 
     let cx = page_size.width.get() * 0.5;
     let cy = page_size.height.get() * 0.5;
@@ -842,9 +856,9 @@ fn decode_enve(payload: &[u8], endian: Endian, version: u16, page_size: Size) ->
     let cy = page_size.height.get() * 0.5;
     let mut pts = [Point::ZERO; 4];
     for (i, slot) in pts.iter_mut().enumerate() {
-        let base = i * 8;
+        let base = i.saturating_mul(8);
         let (x_cdr, step) = cdr_coord_to_pt(endian, payload, base, version)?;
-        let (y_cdr, _) = cdr_coord_to_pt(endian, payload, base + step, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, payload, base.saturating_add(step), version)?;
         *slot = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
     }
     Some(pts)
@@ -852,13 +866,13 @@ fn decode_enve(payload: &[u8], endian: Endian, version: u16, page_size: Size) ->
 
 fn decode_trfd(payload: &[u8], endian: Endian) -> Option<Affine2> {
     if payload.len() >= 48 {
-        let off = payload.len() - 48;
+        let off = payload.len().saturating_sub(48);
         let a = read_f64(endian, payload, off)?;
-        let c = read_f64(endian, payload, off + 8)?;
-        let tx_raw = read_f64(endian, payload, off + 16)?;
-        let b = read_f64(endian, payload, off + 24)?;
-        let d = read_f64(endian, payload, off + 32)?;
-        let ty_raw = read_f64(endian, payload, off + 40)?;
+        let c = read_f64(endian, payload, off.saturating_add(8))?;
+        let tx_raw = read_f64(endian, payload, off.saturating_add(16))?;
+        let b = read_f64(endian, payload, off.saturating_add(24))?;
+        let d = read_f64(endian, payload, off.saturating_add(32))?;
+        let ty_raw = read_f64(endian, payload, off.saturating_add(40))?;
         if (a.abs() <= 100.0 && d.abs() <= 100.0) && (a * d - b * c).abs() > 1e-6 && tx_raw.abs() < 1e9 && ty_raw.abs() < 1e9 {
             let (tx, ty) = if payload.len() == 72 && payload.get(18..22) == Some(b"CCPT") {
                 (tx_raw * 72.0 / 254_000.0, -ty_raw * 72.0 / 254_000.0)
@@ -886,28 +900,29 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
         0 => None,
         1 => {
             // Uniform fill: standard V>=500 has 2B pad + 12B CDRColor (20B total); legacy compact test has 8B at offset 6
-            let color = if payload.len() >= 20 {
-                decode_cdr_color_v500(&payload[8..20], endian, warnings)
+            let color = if let Some(s) = payload.get(8..20) {
+                decode_cdr_color_v500(s, endian, warnings)
             } else {
-                decode_cdr_color(&payload[6..], endian, warnings)
+                decode_cdr_color(payload.get(6..).unwrap_or_default(), endian, warnings)
             }
             .unwrap_or_else(|| Color::rgb8(128, 128, 128));
             Some((fill_id, FillStyle::uniform(color)))
         }
         2 => {
             if payload.len() >= 56 {
-                let f_type = u16::from(payload[8]);
+                let f_type = u16::from(*payload.get(8).unwrap_or(&0));
                 let angle_raw = read_i32(endian, payload, 32).unwrap_or(0);
                 let angle_deg = (f64::from(angle_raw) / 1_000_000.0).clamp(-360.0, 360.0);
                 let num_stops = (read_u32(endian, payload, 52).unwrap_or(0) as usize).min(64);
                 let mut stops = Vec::with_capacity(num_stops.max(2));
                 for i in 0..num_stops {
-                    let base = 56 + i * 16;
-                    if base + 16 > payload.len() {
+                    let base = 56usize.saturating_add(i.saturating_mul(16));
+                    if base.saturating_add(16) > payload.len() {
                         break;
                     }
-                    let c = decode_cdr_color_v500(&payload[base..base + 12], endian, warnings).unwrap_or(Color::BLACK);
-                    let off_pct = read_u32(endian, payload, base + 12).unwrap_or(0);
+                    let c = decode_cdr_color_v500(payload.get(base..base.saturating_add(12)).unwrap_or_default(), endian, warnings)
+                        .unwrap_or(Color::BLACK);
+                    let off_pct = read_u32(endian, payload, base.saturating_add(12)).unwrap_or(0);
                     let off = (f64::from(off_pct) / 100.0).clamp(0.0, 1.0);
                     if let Ok(st) = FountainStop::new(off, c) {
                         stops.push(st);
@@ -979,8 +994,8 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
             if payload.len() >= 52 {
                 let w_cdr = read_i32(endian, payload, 12).unwrap_or(254_000);
                 let tile_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
-                let fg_color = decode_cdr_color_v500(&payload[28..40], endian, warnings).unwrap_or(Color::BLACK);
-                let bg_color = decode_cdr_color_v500(&payload[40..52], endian, warnings).unwrap_or(Color::WHITE);
+                let fg_color = decode_cdr_color_v500(payload.get(28..40).unwrap_or_default(), endian, warnings).unwrap_or(Color::BLACK);
+                let bg_color = decode_cdr_color_v500(payload.get(40..52).unwrap_or_default(), endian, warnings).unwrap_or(Color::WHITE);
                 let tile_size_pt = F64::new(tile_pt).unwrap_or(F64::ONE);
                 return Some((
                     fill_id,
@@ -1002,10 +1017,10 @@ fn decode_cdr_color_v500(slice: &[u8], endian: Endian, warnings: &mut Vec<String
         return decode_cdr_color(slice, endian, warnings);
     }
     let model = read_u16(endian, slice, 0).unwrap_or(5);
-    let col0 = slice[8];
-    let col1 = slice[9];
-    let col2 = slice[10];
-    let col3 = slice[11];
+    let col0 = *slice.get(8).unwrap_or(&0);
+    let col1 = *slice.get(9).unwrap_or(&0);
+    let col2 = *slice.get(10).unwrap_or(&0);
+    let col3 = *slice.get(11).unwrap_or(&0);
     match model {
         // Standard V>=500 RGB (`0x05`: col2 = R, col1 = G, col0 = B)
         5 => Some(Color::rgb8(col2, col1, col0)),
@@ -1069,7 +1084,7 @@ pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut 
         let join = read_u16(endian, payload, 8).unwrap_or(0);
         let (width_pt_raw, _) = cdr_coord_to_pt(endian, payload, 12, version)?;
         let width_pt = F64::new(width_pt_raw.abs().clamp(0.0, 288.0)).unwrap_or(F64::ZERO);
-        let color = decode_cdr_color_v500(&payload[76..88], endian, warnings).unwrap_or(Color::BLACK);
+        let color = decode_cdr_color_v500(payload.get(76..88).unwrap_or_default(), endian, warnings).unwrap_or(Color::BLACK);
         let mut style = OutlineStyle::with_width(color, width_pt);
         style.behind_fill = (line_type & 0x08) != 0;
         style.scale_with_object = (line_type & 0x20) != 0;
@@ -1106,7 +1121,7 @@ pub fn decode_outl(payload: &[u8], endian: Endian, version: u16, warnings: &mut 
         _ => LineJoin::Miter,
     };
 
-    let color = decode_cdr_color(payload.get(8 + next_off..).unwrap_or(&[]), endian, warnings).unwrap_or(Color::BLACK);
+    let color = decode_cdr_color(payload.get(8usize.saturating_add(next_off)..).unwrap_or(&[]), endian, warnings).unwrap_or(Color::BLACK);
     let mut style = OutlineStyle::with_width(color, width_pt);
     style.behind_fill = behind_fill;
     style.scale_with_object = scale_with_object;
@@ -1122,10 +1137,10 @@ fn extract_loda_style_ids(payload: &[u8], endian: Endian) -> (Option<u32>, Optio
     let num_args = (read_u32(endian, payload, 4).unwrap_or(0) as usize).min(64);
     let start_of_args = read_u32(endian, payload, 8).unwrap_or(0) as usize;
     let start_of_arg_types = read_u32(endian, payload, 12).unwrap_or(0) as usize;
-    let Some(args_end) = start_of_args.checked_add(num_args * 4) else {
+    let Some(args_end) = start_of_args.checked_add(num_args.saturating_mul(4)) else {
         return (None, None);
     };
-    let Some(types_end) = start_of_arg_types.checked_add(num_args * 4) else {
+    let Some(types_end) = start_of_arg_types.checked_add(num_args.saturating_mul(4)) else {
         return (None, None);
     };
     if start_of_args < 16 || args_end > payload.len() || types_end > payload.len() {
@@ -1134,9 +1149,9 @@ fn extract_loda_style_ids(payload: &[u8], endian: Endian) -> (Option<u32>, Optio
     let mut fill_id = None;
     let mut outl_id = None;
     for i in 0..num_args {
-        let arg_off = read_u32(endian, payload, start_of_args + i * 4).unwrap_or(0) as usize;
-        let rev_idx = num_args - 1 - i;
-        let arg_type = read_u32(endian, payload, start_of_arg_types + rev_idx * 4).unwrap_or(0);
+        let arg_off = read_u32(endian, payload, start_of_args.saturating_add(i.saturating_mul(4))).unwrap_or(0) as usize;
+        let rev_idx = num_args.saturating_sub(1).saturating_sub(i);
+        let arg_type = read_u32(endian, payload, start_of_arg_types.saturating_add(rev_idx.saturating_mul(4))).unwrap_or(0);
         if arg_type == 0x14 {
             fill_id = read_u32(endian, payload, arg_off).filter(|&v| v != 0);
         } else if arg_type == 0x0a {
@@ -1164,22 +1179,24 @@ fn decode_loda_geometry(
         let chunk_type = read_u32(endian, payload, 16).unwrap_or(0);
         if (1..=64).contains(&num_args)
             && start_of_args >= 20
-            && start_of_args.saturating_add(num_args * 4) <= payload.len()
-            && start_of_arg_types.saturating_add(num_args * 4) <= payload.len()
+            && start_of_args.saturating_add(num_args.saturating_mul(4)) <= payload.len()
+            && start_of_arg_types.saturating_add(num_args.saturating_mul(4)) <= payload.len()
         {
             for i in 0..num_args {
-                let arg_off = read_u32(endian, payload, start_of_args + i * 4).unwrap_or(0) as usize;
-                let rev_idx = num_args - 1 - i;
-                let arg_type = read_u32(endian, payload, start_of_arg_types + rev_idx * 4).unwrap_or(0);
+                let arg_off = read_u32(endian, payload, start_of_args.saturating_add(i.saturating_mul(4))).unwrap_or(0) as usize;
+                let rev_idx = num_args.saturating_sub(1).saturating_sub(i);
+                let arg_type = read_u32(endian, payload, start_of_arg_types.saturating_add(rev_idx.saturating_mul(4))).unwrap_or(0);
                 if arg_type == 0x1e && arg_off < payload.len() {
-                    let next_off = if i + 1 < num_args {
-                        (read_u32(endian, payload, start_of_args + (i + 1) * 4).unwrap_or(payload.len() as u32) as usize).min(payload.len())
+                    let next_off = if i.saturating_add(1) < num_args {
+                        (read_u32(endian, payload, start_of_args.saturating_add(i.saturating_add(1).saturating_mul(4)))
+                            .unwrap_or(payload.len() as u32) as usize)
+                            .min(payload.len())
                     } else {
                         payload.len()
                     };
-                    let slice = &payload[arg_off..next_off.max(arg_off)];
+                    let slice = payload.get(arg_off..next_off.max(arg_off)).unwrap_or_default();
                     if let Some(meta_pos) = slice.windows(6).position(|w| w == b"CCMETA") {
-                        let meta_slice = &slice[meta_pos + 6..];
+                        let meta_slice = slice.get(meta_pos.saturating_add(6)..).unwrap_or_default();
                         return decode_explicit_shape_payload(meta_slice, tag, endian, version, page_size, bbox_rect, warnings);
                     }
                     match chunk_type {
@@ -1287,9 +1304,9 @@ fn decode_loda_polygon(slice: &[u8], endian: Endian, version: u16, page_size: Si
     if slice.len() >= 20 && slice.get(0..4) == Some(b"POLY") {
         let points = read_u32(endian, slice, 4)?;
         let (cx_cdr, s) = cdr_coord_to_pt(endian, slice, 8, version)?;
-        let (cy_cdr, _) = cdr_coord_to_pt(endian, slice, 8 + s, version)?;
-        let (r_pt, _) = cdr_coord_to_pt(endian, slice, 8 + s * 2, version)?;
-        let (inner_pt, _) = cdr_coord_to_pt(endian, slice, 8 + s * 3, version).unwrap_or((0.0, 4));
+        let (cy_cdr, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s), version)?;
+        let (r_pt, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s.saturating_mul(2)), version)?;
+        let (inner_pt, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s.saturating_mul(3)), version).unwrap_or((0.0, 4));
         let cx = page_size.width.get() * 0.5 + cx_cdr;
         let cy = page_size.height.get() * 0.5 - cy_cdr;
         let center = Point::new(cx, cy).ok()?;
@@ -1307,15 +1324,15 @@ fn decode_loda_polygon(slice: &[u8], endian: Endian, version: u16, page_size: Si
 fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
     if slice.len() >= 20 && slice.get(0..4) == Some(b"ATXT") {
         let (x_cdr, s) = cdr_coord_to_pt(endian, slice, 4, version)?;
-        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4 + s, version)?;
-        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4 + s * 2, version)?;
-        let cursor = 4 + s * 3;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s), version)?;
+        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s.saturating_mul(2)), version)?;
+        let cursor = 4usize.saturating_add(s.saturating_mul(3));
         let fam_len = read_u16(endian, slice, cursor)? as usize;
-        let fam_end = cursor + 2 + fam_len;
-        let font_family = std::str::from_utf8(slice.get(cursor + 2..fam_end)?).ok()?.to_owned();
+        let fam_end = cursor.checked_add(2)?.checked_add(fam_len)?;
+        let font_family = std::str::from_utf8(slice.get(cursor.saturating_add(2)..fam_end)?).ok()?.to_owned();
         let txt_len = read_u32(endian, slice, fam_end)? as usize;
         let txt_end = fam_end.checked_add(4)?.checked_add(txt_len)?;
-        let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
+        let text = std::str::from_utf8(slice.get(fam_end.saturating_add(4)..txt_end)?).ok()?.to_owned();
         let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
         let size_pt = F64::new(size_pt_raw.abs().clamp(1.0, 1440.0)).ok()?;
         return Some(ObjectKind::ArtisticText { text, font_family, size_pt, position });
@@ -1329,21 +1346,21 @@ fn decode_loda_artistic_text(slice: &[u8], endian: Endian, version: u16, page_si
 fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
     if slice.len() >= 28 && slice.get(0..4) == Some(b"PTXT") {
         let (x_cdr, s) = cdr_coord_to_pt(endian, slice, 4, version)?;
-        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4 + s, version)?;
-        let (w_pt, _) = cdr_coord_to_pt(endian, slice, 4 + s * 2, version)?;
-        let (h_pt, _) = cdr_coord_to_pt(endian, slice, 4 + s * 3, version)?;
-        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4 + s * 4, version)?;
-        let cursor = 4 + s * 5;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s), version)?;
+        let (w_pt, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s.saturating_mul(2)), version)?;
+        let (h_pt, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s.saturating_mul(3)), version)?;
+        let (size_pt_raw, _) = cdr_coord_to_pt(endian, slice, 4usize.saturating_add(s.saturating_mul(4)), version)?;
+        let cursor = 4usize.saturating_add(s.saturating_mul(5));
         let align_code = *slice.get(cursor)?;
-        let columns = u32::from(*slice.get(cursor + 1)?).max(1);
-        let gutter_tenths = read_u16(endian, slice, cursor + 2)? as f64 / 10.0;
-        let spacing_pct = read_u16(endian, slice, cursor + 4)? as f64 / 100.0;
-        let fam_len = read_u16(endian, slice, cursor + 6)? as usize;
-        let fam_end = cursor + 8 + fam_len;
-        let font_family = std::str::from_utf8(slice.get(cursor + 8..fam_end)?).ok()?.to_owned();
+        let columns = u32::from(*slice.get(cursor.saturating_add(1))?).max(1);
+        let gutter_tenths = f64::from(read_u16(endian, slice, cursor.saturating_add(2))?) / 10.0;
+        let spacing_pct = f64::from(read_u16(endian, slice, cursor.saturating_add(4))?) / 100.0;
+        let fam_len = read_u16(endian, slice, cursor.saturating_add(6))? as usize;
+        let fam_end = cursor.checked_add(8)?.checked_add(fam_len)?;
+        let font_family = std::str::from_utf8(slice.get(cursor.saturating_add(8)..fam_end)?).ok()?.to_owned();
         let txt_len = read_u32(endian, slice, fam_end)? as usize;
         let txt_end = fam_end.checked_add(4)?.checked_add(txt_len)?;
-        let text = std::str::from_utf8(slice.get(fam_end + 4..txt_end)?).ok()?.to_owned();
+        let text = std::str::from_utf8(slice.get(fam_end.saturating_add(4)..txt_end)?).ok()?.to_owned();
         let position = Point::new(page_size.width.get() * 0.5 + x_cdr, page_size.height.get() * 0.5 - y_cdr).ok()?;
         let alignment = match align_code {
             1 => TextAlignment::Center,
@@ -1386,10 +1403,11 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
 fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
     // Byte 0 is text encoding tag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Text)
     let text = if payload.first() == Some(&0x02) && payload.len() >= 3 {
-        let u16s: Vec<u16> = payload[1..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&ch| ch != 0).collect();
+        let u16s: Vec<u16> =
+            payload.get(1..).unwrap_or_default().as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&ch| ch != 0).collect();
         String::from_utf16_lossy(&u16s)
     } else if payload.first().is_some_and(|&b| b <= 0x01) && payload.len() >= 2 {
-        String::from_utf8_lossy(&payload[1..]).trim_end_matches('\0').to_owned()
+        String::from_utf8_lossy(payload.get(1..).unwrap_or_default()).trim_end_matches('\0').to_owned()
     } else {
         String::from_utf8_lossy(payload).trim_end_matches('\0').to_owned()
     };
@@ -1458,8 +1476,8 @@ fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind
         let bpp = read_u16(Endian::Little, payload, 14)?;
         let xpels = read_i32(Endian::Little, payload, 24).unwrap_or(0);
         let ypels = read_i32(Endian::Little, payload, 28).unwrap_or(0);
-        let dpi_x = if xpels > 0 { (xpels as f64 * 0.0254).max(1.0) } else { 72.0 };
-        let dpi_y = if ypels > 0 { (ypels as f64 * 0.0254).max(1.0) } else { 72.0 };
+        let dpi_x = if xpels > 0 { (f64::from(xpels) * 0.0254).max(1.0) } else { 72.0 };
+        let dpi_y = if ypels > 0 { (f64::from(ypels) * 0.0254).max(1.0) } else { 72.0 };
 
         if w == 0 || h == 0 || w > 16384 || h > 16384 {
             return None;
@@ -1479,30 +1497,31 @@ fn decode_bmp_or_cdib_chunk(payload: &[u8], endian: Endian) -> Option<ObjectKind
         if raw_pixels.len() < needed {
             return None;
         }
-        let mut rgba = Vec::with_capacity(pixels.checked_mul(4)?);
+        let expected_rgba_len = pixels.checked_mul(4)?;
+        let mut rgba = Vec::with_capacity(expected_rgba_len);
         if bpp == 32 {
-            for &[b, g, r, a] in raw_pixels.as_chunks::<4>().0.iter().take((w as usize) * (h as usize)) {
+            for &[b, g, r, a] in raw_pixels.as_chunks::<4>().0.iter().take(pixels) {
                 rgba.push(r);
                 rgba.push(g);
                 rgba.push(b);
                 rgba.push(a);
             }
         } else if bpp == 24 {
-            let row_stride = (w as usize * 3).div_ceil(4) * 4;
+            let row_stride = (w as usize).saturating_mul(3).div_ceil(4).saturating_mul(4);
             for row in 0..h as usize {
-                let row_start = row * row_stride;
-                if row_start + (w as usize) * 3 <= raw_pixels.len() {
+                let row_start = row.saturating_mul(row_stride);
+                if row_start.saturating_add((w as usize).saturating_mul(3)) <= raw_pixels.len() {
                     for x in 0..w as usize {
-                        let px = row_start + x * 3;
-                        rgba.push(raw_pixels[px + 2]);
-                        rgba.push(raw_pixels[px + 1]);
-                        rgba.push(raw_pixels[px]);
+                        let px = row_start.saturating_add(x.saturating_mul(3));
+                        rgba.push(*raw_pixels.get(px.saturating_add(2)).unwrap_or(&0));
+                        rgba.push(*raw_pixels.get(px.saturating_add(1)).unwrap_or(&0));
+                        rgba.push(*raw_pixels.get(px).unwrap_or(&0));
                         rgba.push(255);
                     }
                 }
             }
         }
-        if rgba.len() == (w as usize) * (h as usize) * 4 {
+        if rgba.len() == expected_rgba_len {
             let dpi_fallback = F64::new(72.0).unwrap_or(F64::ONE);
             return Some(ObjectKind::Bitmap {
                 pixel_width: w,
@@ -1539,12 +1558,12 @@ fn decode_cdr_point_types_array(slice: &[u8], endian: Endian, version: u16, page
     let cy = page_size.height.get() * 0.5;
     let mut pts = Vec::with_capacity(point_num);
     for i in 0..point_num {
-        let base = 4 + i * coord_step;
+        let base = 4usize.saturating_add(i.saturating_mul(coord_step));
         let (x_cdr, s) = cdr_coord_to_pt(endian, slice, base, version)?;
-        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, base + s, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, base.saturating_add(s), version)?;
         pts.push(Point::new(cx + x_cdr, cy - y_cdr).ok()?);
     }
-    let types = &slice[types_start..types_end];
+    let types = slice.get(types_start..types_end)?;
     let mut path = Path::new();
     let mut ctrl_pts: Vec<Point> = Vec::new();
     for (pt, &t) in pts.into_iter().zip(types.iter()) {
@@ -1565,8 +1584,8 @@ fn decode_cdr_point_types_array(slice: &[u8], endian: Endian, version: u16, page
                 }
             }
             0x80 => {
-                if ctrl_pts.len() >= 2 {
-                    path.cubic_to(ctrl_pts[0], ctrl_pts[1], pt).ok()?;
+                if let (Some(&c1), Some(&c2)) = (ctrl_pts.first(), ctrl_pts.get(1)) {
+                    path.cubic_to(c1, c2, pt).ok()?;
                 } else {
                     path.line_to(pt).ok()?;
                 }
@@ -1598,7 +1617,7 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
         let mut path = Path::new();
         for _ in 0..count {
             let flags = *slice.get(cursor)?;
-            cursor += 1;
+            cursor = cursor.saturating_add(1);
             let op = flags & 0xC0;
             if flags == 0x08 {
                 let _ = path.close();
@@ -1607,15 +1626,15 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
             match op {
                 0x00 => {
                     let (x_cdr, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
-                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
-                    cursor += s * 2;
+                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s), version)?;
+                    cursor = cursor.saturating_add(s.saturating_mul(2));
                     let pt = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
                     path.move_to(pt).ok()?;
                 }
                 0x40 => {
                     let (x_cdr, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
-                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
-                    cursor += s * 2;
+                    let (y_cdr, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s), version)?;
+                    cursor = cursor.saturating_add(s.saturating_mul(2));
                     let pt = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
                     path.line_to(pt).ok()?;
                     if (flags & 0x08) != 0 {
@@ -1624,12 +1643,12 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
                 }
                 0x80 => {
                     let (c1x, s) = cdr_coord_to_pt(endian, slice, cursor, version)?;
-                    let (c1y, _) = cdr_coord_to_pt(endian, slice, cursor + s, version)?;
-                    let (c2x, _) = cdr_coord_to_pt(endian, slice, cursor + s * 2, version)?;
-                    let (c2y, _) = cdr_coord_to_pt(endian, slice, cursor + s * 3, version)?;
-                    let (px, _) = cdr_coord_to_pt(endian, slice, cursor + s * 4, version)?;
-                    let (py, _) = cdr_coord_to_pt(endian, slice, cursor + s * 5, version)?;
-                    cursor += s * 6;
+                    let (c1y, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s), version)?;
+                    let (c2x, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s.saturating_mul(2)), version)?;
+                    let (c2y, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s.saturating_mul(3)), version)?;
+                    let (px, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s.saturating_mul(4)), version)?;
+                    let (py, _) = cdr_coord_to_pt(endian, slice, cursor.saturating_add(s.saturating_mul(5)), version)?;
+                    cursor = cursor.saturating_add(s.saturating_mul(6));
                     let c1 = Point::new(cx + c1x, cy - c1y).ok()?;
                     let c2 = Point::new(cx + c2x, cy - c2y).ok()?;
                     let to = Point::new(cx + px, cy - py).ok()?;
@@ -1652,17 +1671,17 @@ fn decode_cdr_curve(slice: &[u8], endian: Endian, version: u16, page_size: Size)
     if !(2..=10_000).contains(&count) {
         return None;
     }
-    let step = if version < 600 { 4 } else { 8 };
+    let step = if version < 600 { 4usize } else { 8usize };
     let coords_bytes = count.checked_mul(step)?;
-    if slice.len() < 4 + coords_bytes {
+    if slice.len() < 4usize.checked_add(coords_bytes)? {
         return None;
     }
 
     let mut path = Path::new();
     for i in 0..count {
-        let off = 4 + i * step;
+        let off = 4usize.saturating_add(i.saturating_mul(step));
         let (x_cdr, s) = cdr_coord_to_pt(endian, slice, off, version)?;
-        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, off + s, version)?;
+        let (y_cdr, _) = cdr_coord_to_pt(endian, slice, off.saturating_add(s), version)?;
         let pt = Point::new(cx + x_cdr, cy - y_cdr).ok()?;
         if i == 0 {
             path.move_to(pt).ok()?;
@@ -1725,7 +1744,7 @@ fn append_riff_chunk(out: &mut Vec<u8>, fourcc: [u8; 4], payload: &[u8]) {
 }
 
 fn append_riff_list(out: &mut Vec<u8>, list_type: [u8; 4], children_bytes: &[u8]) {
-    let total_len = 4 + children_bytes.len();
+    let total_len = 4usize.saturating_add(children_bytes.len());
     out.extend_from_slice(b"LIST");
     out.extend_from_slice(&(total_len as u32).to_le_bytes());
     out.extend_from_slice(&list_type);
@@ -2054,14 +2073,14 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     let mut fill_id = 0u32;
     if let Some(fill) = &node.fill {
         fill_id = *next_style_id;
-        *next_style_id += 1;
+        *next_style_id = next_style_id.saturating_add(1);
         let fp = encode_fild_payload(fill_id, fill);
         append_riff_chunk(&mut obj_children, *b"fild", &fp);
     }
     let mut outl_id = 0u32;
     if let Some(outl) = &node.outline {
         outl_id = *next_style_id;
-        *next_style_id += 1;
+        *next_style_id = next_style_id.saturating_add(1);
         let op = encode_outl_payload(outl_id, outl);
         append_riff_chunk(&mut obj_children, *b"outl", &op);
     }
@@ -2078,7 +2097,7 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     }
 
     if let ObjectKind::ParagraphText(pt) = &node.kind {
-        let mut txtd = Vec::with_capacity(1 + pt.text.len());
+        let mut txtd = Vec::with_capacity(1usize.saturating_add(pt.text.len()));
         txtd.push(0x01); // UTF-8 encoding tag per Photopea CDR spec §Text
         txtd.extend_from_slice(pt.text.as_bytes());
         append_riff_chunk(&mut obj_children, *b"txtd", &txtd);
@@ -2113,12 +2132,12 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     }
     let num_args = args.len() as u32;
     let start_of_args = 20u32;
-    let start_of_arg_types = 20 + 4 * num_args;
-    let mut running_off = start_of_arg_types + 4 * num_args;
+    let start_of_arg_types = 20u32.saturating_add(4u32.saturating_mul(num_args));
+    let mut running_off = start_of_arg_types.saturating_add(4u32.saturating_mul(num_args));
     let mut arg_offsets = Vec::with_capacity(args.len());
     for (_, data) in &args {
         arg_offsets.push(running_off);
-        running_off += data.len() as u32;
+        running_off = running_off.saturating_add(data.len() as u32);
     }
     let chunk_length = running_off;
 
@@ -2217,8 +2236,8 @@ fn node_bbox_for_export(node: &ObjectNode) -> Rect {
             Rect::new(x0, y0, x0 + w, y0 + h).unwrap_or(default_rect)
         }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
-            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
-            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            let w = (f64::from(*pixel_width) * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (f64::from(*pixel_height) * 72.0 / dpi_y.get().max(1.0)).max(1.0);
             Rect::new(0.0, 0.0, w, h).unwrap_or(default_rect)
         }
         ObjectKind::Group { .. } => default_rect,
@@ -2240,9 +2259,9 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     let mut next_style_id = 1u32;
     for page in &doc.pages {
         let mut page_children = Vec::new();
-        let mut mcfg = vec![0u8; mcfg_off + 8];
-        mcfg[mcfg_off..mcfg_off + 4].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
-        mcfg[mcfg_off + 4..mcfg_off + 8].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        let mut mcfg = vec![0u8; mcfg_off];
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
         append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
 
         for layer in &page.layers {
@@ -2255,8 +2274,8 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
         append_riff_list(&mut body, *b"page", &page_children);
     }
 
-    let riff_size = (4 + body.len()) as u32;
-    let mut out = Vec::with_capacity(8 + riff_size as usize);
+    let riff_size = 4u32.saturating_add(body.len() as u32);
+    let mut out = Vec::with_capacity(8usize.saturating_add(riff_size as usize));
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&riff_size.to_le_bytes());
     out.extend_from_slice(&form_type);
@@ -2282,6 +2301,8 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let cy = page_size.height.get() * 0.5;
     let half_w = pt_to_cdr_i32(cx);
     let half_h = pt_to_cdr_i32(cy);
+    let neg_half_w = half_w.saturating_neg();
+    let neg_half_h = half_h.saturating_neg();
 
     let mut colors: Vec<Color> = vec![Color::BLACK, Color::WHITE];
     let mut pens: Vec<i32> = vec![pt_to_cdr_i32(1.0)];
@@ -2297,10 +2318,10 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         cmd.extend_from_slice(&25u16.to_le_bytes()); // tagLength = 25
         cmd.extend_from_slice(&1u16.to_le_bytes()); // page_number = 1
         cmd.extend_from_slice(&0u32.to_le_bytes()); // flags = 0
-        cmd.extend_from_slice(&(-half_w).to_le_bytes());
+        cmd.extend_from_slice(&neg_half_w.to_le_bytes());
         cmd.extend_from_slice(&half_h.to_le_bytes());
         cmd.extend_from_slice(&half_w.to_le_bytes());
-        cmd.extend_from_slice(&(-half_h).to_le_bytes());
+        cmd.extend_from_slice(&neg_half_h.to_le_bytes());
         cmd.push(255u8); // CMX_Tag_EndTag
         page_cmds.extend_from_slice(&cmd);
     }
@@ -2361,7 +2382,7 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
             render_attr.extend_from_slice(&outl_idx.to_le_bytes());
             render_attr.push(255u8); // EndTag (OutlineSpec)
         }
-        let render_tag_len = (3 + render_attr.len()) as u16;
+        let render_tag_len = (3usize.saturating_add(render_attr.len())) as u16;
 
         let bbox = node_bbox_for_export(node);
         let mut body = Vec::new();
@@ -2388,12 +2409,12 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         // EndTag
         body.push(255u8);
 
-        if let Ok(inst_sz) = i16::try_from(4 + body.len()) {
+        if let Ok(inst_sz) = i16::try_from(4usize.saturating_add(body.len())) {
             page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
             page_cmds.extend_from_slice(&67i16.to_le_bytes()); // CMX_Command_PolyCurve
             page_cmds.extend_from_slice(&body);
         } else {
-            let inst_sz = (8 + body.len()) as i32;
+            let inst_sz = (8usize.saturating_add(body.len())) as i32;
             page_cmds.extend_from_slice(&(-1i16).to_le_bytes());
             page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
             page_cmds.extend_from_slice(&67i16.to_le_bytes());
@@ -2478,16 +2499,16 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     // 0..12: `RIFF` + size + `CMX1`
     // 12..148: `cont` chunk (8B header + 128B payload = 136B -> ends at 148)
     let page_offset = 148u32;
-    let page_chunk_total = 8 + page_cmds.len() + (page_cmds.len() & 1);
-    let rclr_offset = page_offset + page_chunk_total as u32;
-    let rclr_chunk_total = 8 + rclr.len() + (rclr.len() & 1);
-    let rott_offset = rclr_offset + rclr_chunk_total as u32;
-    let rott_chunk_total = 8 + rott.len() + (rott.len() & 1);
-    let rpen_offset = rott_offset + rott_chunk_total as u32;
-    let rpen_chunk_total = 8 + rpen.len() + (rpen.len() & 1);
-    let rotl_offset = rpen_offset + rpen_chunk_total as u32;
-    let rotl_chunk_total = 8 + rotl.len() + (rotl.len() & 1);
-    let ixpg_offset = rotl_offset + rotl_chunk_total as u32;
+    let page_chunk_total = 8usize.saturating_add(page_cmds.len()).saturating_add(page_cmds.len() & 1);
+    let rclr_offset = page_offset.saturating_add(page_chunk_total as u32);
+    let rclr_chunk_total = 8usize.saturating_add(rclr.len()).saturating_add(rclr.len() & 1);
+    let rott_offset = rclr_offset.saturating_add(rclr_chunk_total as u32);
+    let rott_chunk_total = 8usize.saturating_add(rott.len()).saturating_add(rott.len() & 1);
+    let rpen_offset = rott_offset.saturating_add(rott_chunk_total as u32);
+    let rpen_chunk_total = 8usize.saturating_add(rpen.len()).saturating_add(rpen.len() & 1);
+    let rotl_offset = rpen_offset.saturating_add(rpen_chunk_total as u32);
+    let rotl_chunk_total = 8usize.saturating_add(rotl.len()).saturating_add(rotl.len() & 1);
+    let ixpg_offset = rotl_offset.saturating_add(rotl_chunk_total as u32);
 
     // Build `ixpg` payload (CMX_PAGE_INDEX_TABLE = 2, 20 bytes)
     let mut ixpg = Vec::with_capacity(20);
@@ -2497,8 +2518,8 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // layerTableOffset
     ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
     ixpg.extend_from_slice(&u32::MAX.to_le_bytes()); // refListOffset
-    let ixpg_chunk_total = 8 + ixpg.len();
-    let ixmr_offset = ixpg_offset + ixpg_chunk_total as u32;
+    let ixpg_chunk_total = 8usize.saturating_add(ixpg.len());
+    let ixmr_offset = ixpg_offset.saturating_add(ixpg_chunk_total as u32);
 
     // Build `ixmr` payload (master index table)
     let mut ixmr = Vec::with_capacity(36);
@@ -2511,22 +2532,26 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     }
 
     // Build `cont` 128-byte CMX header payload
-    let mut cont = vec![0u8; 128];
-    cont[0..23].copy_from_slice(b"Corel Binary Meta File\0");
-    cont[32..39].copy_from_slice(b"Windows");
-    cont[48..52].copy_from_slice(b"2   "); // Little-endian byte order
-    cont[52..54].copy_from_slice(b"4 "); // 32-bit coordinates (`PRECISION_32BIT`)
-    cont[54..58].copy_from_slice(b"2   "); // Major version 2
-    cont[58..62].copy_from_slice(b"0   "); // Minor version 0
-    cont[62..64].copy_from_slice(&2u16.to_le_bytes()); // Base units: inch
-    cont[64..72].copy_from_slice(&0.000_001f64.to_le_bytes()); // Scale
-    cont[84..88].copy_from_slice(&ixmr_offset.to_le_bytes()); // indexSectionOffset
-    cont[88..92].copy_from_slice(&u32::MAX.to_le_bytes()); // infoSectionOffset
-    cont[92..96].copy_from_slice(&u32::MAX.to_le_bytes()); // thumbnailOffset
-    cont[96..100].copy_from_slice(&(-half_w).to_le_bytes());
-    cont[100..104].copy_from_slice(&half_h.to_le_bytes());
-    cont[104..108].copy_from_slice(&half_w.to_le_bytes());
-    cont[108..112].copy_from_slice(&(-half_h).to_le_bytes());
+    let mut cont = Vec::with_capacity(128);
+    cont.extend_from_slice(b"Corel Binary Meta File\0"); // 0..23
+    cont.resize(32, 0);
+    cont.extend_from_slice(b"Windows"); // 32..39
+    cont.resize(48, 0);
+    cont.extend_from_slice(b"2   "); // 48..52: Little-endian byte order
+    cont.extend_from_slice(b"4 "); // 52..54: 32-bit coordinates (`PRECISION_32BIT`)
+    cont.extend_from_slice(b"2   "); // 54..58: Major version 2
+    cont.extend_from_slice(b"0   "); // 58..62: Minor version 0
+    cont.extend_from_slice(&2u16.to_le_bytes()); // 62..64: Base units: inch
+    cont.extend_from_slice(&0.000_001f64.to_le_bytes()); // 64..72: Scale
+    cont.resize(84, 0);
+    cont.extend_from_slice(&ixmr_offset.to_le_bytes()); // 84..88: indexSectionOffset
+    cont.extend_from_slice(&u32::MAX.to_le_bytes()); // 88..92: infoSectionOffset
+    cont.extend_from_slice(&u32::MAX.to_le_bytes()); // 92..96: thumbnailOffset
+    cont.extend_from_slice(&neg_half_w.to_le_bytes()); // 96..100
+    cont.extend_from_slice(&half_h.to_le_bytes()); // 100..104
+    cont.extend_from_slice(&half_w.to_le_bytes()); // 104..108
+    cont.extend_from_slice(&neg_half_h.to_le_bytes()); // 108..112
+    cont.resize(128, 0);
 
     let mut body = Vec::new();
     append_riff_chunk(&mut body, *b"cont", &cont);
@@ -2542,9 +2567,9 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     let mut next_style_id = 1u32;
     for page in &doc.pages {
         let mut page_children = Vec::new();
-        let mut mcfg = vec![0u8; 8];
-        mcfg[0..4].copy_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
-        mcfg[4..8].copy_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        let mut mcfg = Vec::with_capacity(8);
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
         append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
         for layer in &page.layers {
             let mut layer_children = Vec::new();
@@ -2556,8 +2581,8 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         append_riff_list(&mut body, *b"page", &page_children);
     }
 
-    let riff_size = (4 + body.len()) as u32;
-    let mut out = Vec::with_capacity(8 + riff_size as usize);
+    let riff_size = 4u32.saturating_add(body.len() as u32);
+    let mut out = Vec::with_capacity(8usize.saturating_add(riff_size as usize));
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&riff_size.to_le_bytes());
     out.extend_from_slice(b"CMX1");
@@ -2566,7 +2591,7 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod budget_tests {
     use super::*;
 

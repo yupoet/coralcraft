@@ -91,9 +91,9 @@ pub struct ProbeReport {
 pub fn decode_cdr_version_char(byte: u8) -> Option<u16> {
     match byte {
         b' ' | b'3' => Some(300),
-        b'4'..=b'9' => Some(u16::from(byte - b'0') * 100),
-        b'A'..=b'Z' => Some((u16::from(byte - b'A') + 10) * 100),
-        b'a'..=b'z' => Some((u16::from(byte - b'a') + 10) * 100),
+        b'4'..=b'9' => Some(u16::from(byte.saturating_sub(b'0')).saturating_mul(100)),
+        b'A'..=b'Z' => Some(u16::from(byte.saturating_sub(b'A')).saturating_add(10).saturating_mul(100)),
+        b'a'..=b'z' => Some(u16::from(byte.saturating_sub(b'a')).saturating_add(10).saturating_mul(100)),
         _ => None,
     }
 }
@@ -123,7 +123,7 @@ fn classify_riff_form(form: [u8; 4], vrsn_chunk: Option<u16>, warnings: &mut Vec
             warnings.push(ProbeWarning::NonCanonicalForm { form: form_str });
         }
         let form_version = match version_byte {
-            b'1'..=b'9' => Some(u16::from(version_byte - b'0') * 100),
+            b'1'..=b'9' => Some(u16::from(version_byte.saturating_sub(b'0')).saturating_mul(100)),
             _ => {
                 warnings.push(ProbeWarning::UnknownVersionChar { byte: version_byte });
                 None
@@ -185,7 +185,7 @@ pub fn probe(bytes: &[u8]) -> Result<ProbeReport, ProbeError> {
     }
 
     // 3. Pre-1992 Legacy WL container (WL + 1B sub-version + 0x00, minimum 12-byte header)
-    if bytes.get(0..2) == Some(b"WL") && bytes[3] == 0x00 {
+    if bytes.get(0..2) == Some(b"WL") && bytes.get(3).copied() == Some(0x00) {
         if bytes.len() < 12 {
             return Err(ProbeError::TooShort { needed: 12, got: bytes.len() });
         }
@@ -198,11 +198,17 @@ pub fn probe(bytes: &[u8]) -> Result<ProbeReport, ProbeError> {
         });
     }
 
-    let head = [bytes[0], bytes[1], bytes[2], bytes[3]];
+    let head = [
+        bytes.first().copied().unwrap_or(0),
+        bytes.get(1).copied().unwrap_or(0),
+        bytes.get(2).copied().unwrap_or(0),
+        bytes.get(3).copied().unwrap_or(0),
+    ];
     Err(ProbeError::NotCdr { reason: format!("unknown file header magic {}", crate::riff::format_fourcc(head)) })
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::zip::tests::synth_zip;

@@ -1,23 +1,26 @@
 # 03 — Current Milestone Status, Active Tasks & Next Steps
 
-> Last updated: 2026-10-20
+> Last updated: 2026-10-21
 
 ## 1. Current Stage Status
 
-- **Stage**: `pre-release`. A whole-project review on 2026-10-20 (HEAD `5a7cc75`) found that the M0–M64 "delivered" claims were not backed by behavioural tests. Work now follows the **reopened queue at the top of [`docs/gaps.md`](../gaps.md)** in phase order (R0 → R8).
+- **Stage**: `pre-release`. Following the whole-project review on 2026-10-20 (HEAD `5a7cc75`), **all 21 reopened review items (`R0.1`–`R8.1` in [`docs/gaps.md`](../gaps.md)) are now 100% completed and verified**.
 - **Operator decisions (2026-10-20)**:
   - D1: native egui UI; follow `refs/vectorcraft` overall.
   - D2: macOS `.app.zip` first.
   - D3: GitHub Actions CI.
   - D4: the `v0.0.1` release and tag were deleted.
   - D5: spec-conformant CDR/CMX writers.
-- **Phase 0 status**: README rewritten so it only describes existing features. `coralcraft-cli mcp` added. `docs/mcp.md` is generated from `tools/list` (sync test). Fake packaging removed. CI and macOS `.app.zip` release workflows added.
-- **Phase 1, 2, 3, 4, 5 status**:
-  - **Phase 1 (`R1.1`–`R1.4` + `color` lints)**: Localhost GUI server token/Origin/Host/body guards, CDR decompression & bitmap allocation budgets, `Document::validate()` invariant checks, 32-bit CI job, and XML palette 1% unit fix (`R5.4`).
+- **Phase 0 status (`R0.1`, `R0.2`)**: README rewritten so it only describes existing features. `coralcraft-cli mcp` added. `docs/mcp.md` is generated from `tools/list` (sync test). Fake packaging removed. CI and macOS `.app.zip` release workflows added.
+- **Phase 1–8 status (`R1.1`–`R8.1`)**:
+  - **Phase 1 (`R1.1`–`R1.5`)**: Localhost GUI server token/Origin/Host/body guards (subsequently replaced by native `eframe` in R2.1), CDR decompression & bitmap allocation budgets, `Document::validate()` invariant checks, 32-bit CI job, XML palette 1% unit fix (`R5.4`), and `clippy::indexing_slicing = "deny"` + `clippy::arithmetic_side_effects = "deny"` enforced across all 5 core/untrusted-input crates (`coralcraft-color`, `coralcraft-cdr`, `coralcraft-doc`, `coralcraft-render`, and `coralcraft-geom`).
   - **Phase 2 (`R2.1`)**: Native `eframe`/`egui` 0.36 desktop application shell (`CoralCraftApp` in `crates/ui-egui/src/egui_app.rs` and `EframeHost` in `apps/coralcraft/src/main.rs`) with all 11 classic CorelDRAW top menus, Standard Toolbar, context-sensitive Property Bar, 10-tool Left Toolbox, cached page texture + 60 fps `egui::Painter` vector canvas overlays, Right Color Palette strip, Right collapsible `Objects` & `Properties` Docker, Bottom Page Navigator tabs + Status Bar, `rfd` file dialogs, `arboard` OS clipboard, `egui_kittest::Harness` tests, and removal of `apps/coralcraft/src/gui_server.rs`.
   - **Phase 3 (`R3.1`, `R3.2`)**: Transactional `EditorEngine::execute` / `try_execute`, `MAX_UNDO_HISTORY = 128`, monotonic `next_id`, `MAX_DOCUMENT_OBJECTS = 8_192`, selection validation, and unified recursive node traversal.
   - **Phase 4 (`R4.1`, `R4.2`)**: JSON-RPC 2.0 compliant `McpServer::handle_message` (notifications silent, `ping`, protocol version negotiation, `-32600`/`-32602`, byte-safe 64 MiB stdio loop), generated `inputSchema.properties` for all 244 tools (`crates/mcp/src/schema.rs`), `isError` on engine command failure, and table-driven smoke tests across all 244 tools.
   - **Phase 5 (`R5.1`–`R5.4`)**: Clean-room planar subdivision polygon boolean clipper (`crates/geom/src/boolean.rs`) with canonical `VertexPool` splitting, midpoint + shared-edge classification, Eulerian cycle stitching (supporting holes and multi-component splits), `path_contains_point`, area-identity and grid-oracle tests; EPS/DXF parent `Group` transform composition, EPS `eofill`, DSC/DXF name sanitization, unified `apply_deforming_effects` and linear fountain span across Raster/SVG/PDF/EPS/DXF, and vertical bounding-box scanline culling in `rasterize_coverage`.
+  - **Phase 6 (`R6.1`, `R6.2`)**: Native GitHub Actions release & CI packaging across macOS universal `.app.zip`, Linux `nfpm` `.deb`/`.rpm` + AppImage + Flatpak manifest, Windows GUI subsystem + Inno Setup `.iss`, FreeBSD `vmactions/freebsd-vm`, and real `wasm32-unknown-unknown` `trunk` web bundle (`apps/coralcraft/index.html` + `WebRunner`).
+  - **Phase 7 (`R7.1`–`R7.3`)**: Kaitai-aligned CDR7 `loda` offset-table and CMX1 tag-1/tag-2 writers with strict payload size bounds checking, `libcdr` `cdr2raw` differential oracle tests, public-spec format citations + `REV-0001`..`REV-0010` reverse log entries (`docs/reverse/log-format.md`), `OnceLock` fixed Huffman tables, Adler-32 + ZIP CRC-32 validation, and `fuzz/` crate with 4 `libfuzzer_sys` targets and nightly CI workflow (`.github/workflows/fuzz.yml`).
+  - **Phase 8 (`R8.1`)**: Modularized `crates/engine` (`commands.rs`, `helpers.rs`, `lib.rs`) and `crates/mcp` (`registry.rs`, `schema.rs`, `lib.rs`), and deduplicated Sutherland–Hodgman clipping, quadratic-to-cubic degree elevation, IEEE 802.3 CRC-32, PDF `write_pdf_xref_and_trailer`, and prepress `emit_crop_and_registration_marks`.
 - **Below this line**: the pre-review milestone changelog. Treat it as history, not verification.
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.

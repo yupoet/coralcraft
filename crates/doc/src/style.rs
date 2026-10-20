@@ -89,11 +89,10 @@ impl<'de> Deserialize<'de> for RawPayload {
 /// Encodes `bytes` as lowercase hexadecimal.
 #[must_use]
 pub fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for &b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0F) as usize] as char);
+        out.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
+        out.push(char::from_digit(u32::from(b & 0x0F), 16).unwrap_or('0'));
     }
     out
 }
@@ -104,22 +103,21 @@ pub fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
         return Err(format!("odd hex string length {}", s.len()));
     }
     let mut out = Vec::with_capacity(s.len() / 2);
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let hi = hex_nibble(bytes[i]).ok_or_else(|| format!("invalid hex byte at {i}"))?;
-        let lo = hex_nibble(bytes[i + 1]).ok_or_else(|| format!("invalid hex byte at {}", i + 1))?;
+    let (pairs, _) = s.as_bytes().as_chunks::<2>();
+    for (idx, &[b0, b1]) in pairs.iter().enumerate() {
+        let i = idx.saturating_mul(2);
+        let hi = hex_nibble(b0).ok_or_else(|| format!("invalid hex byte at {i}"))?;
+        let lo = hex_nibble(b1).ok_or_else(|| format!("invalid hex byte at {}", i.saturating_add(1)))?;
         out.push((hi << 4) | lo);
-        i += 2;
     }
     Ok(out)
 }
 
 const fn hex_nibble(b: u8) -> Option<u8> {
     match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'0'..=b'9' => Some(b.saturating_sub(b'0')),
+        b'a'..=b'f' => Some(b.saturating_sub(b'a').saturating_add(10)),
+        b'A'..=b'F' => Some(b.saturating_sub(b'A').saturating_add(10)),
         _ => None,
     }
 }

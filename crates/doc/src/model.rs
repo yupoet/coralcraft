@@ -679,7 +679,7 @@ impl Document {
         if max_id == u64::MAX || self.next_id == u64::MAX {
             return Err(DocError::InvalidDocument("object id space exhausted (id u64::MAX in use)".to_owned()));
         }
-        self.next_id = self.next_id.max(max_id + 1);
+        self.next_id = self.next_id.max(max_id.saturating_add(1));
         Ok(())
     }
 
@@ -700,8 +700,8 @@ impl Document {
             return Err(DocError::PageOutOfRange { index: page_index, count: self.pages.len() });
         };
 
-        let page_num_1based = page_index + 1;
-        let is_odd = page_num_1based % 2 == 1;
+        let page_num_1based = page_index.saturating_add(1);
+        let is_odd = page_num_1based & 1 == 1;
 
         let should_draw = |layer: &Layer| -> bool {
             if !layer.visible {

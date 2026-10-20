@@ -3,7 +3,7 @@
 //! Every input is generated in code (no fixture files). The mutation loops are deterministic
 //! (SplitMix64 with fixed seeds) so a failure always reproduces.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use coralcraft_doc::{Document, import_dxf, import_svg, load_bytes, save_json, save_zip};
 

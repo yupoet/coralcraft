@@ -1,25 +1,25 @@
 # CoralCraft Roadmap
 
-> Stage: **pre-release** · Updated: 2026-10-20 (whole-project review at `5a7cc75`)
+> Stage: **pre-release** · Updated: 2026-10-21 (all R0.1–R8.1 review items completed)
 > Methodology: Dual-track clean-room public specification & format reverse engineering (see [`AGENTS.md`](AGENTS.md)).
 > Architecture and release decisions follow [`refs/vectorcraft`](https://github.com/storytold/vectorcraft): native egui UI, GitHub Actions on native runners, and a macOS `.app.zip` first.
 
-> [!WARNING]
-> Earlier versions of this table scored every dimension at 100%. The 2026-10-20 review showed that those scores were not backed by behavioural tests. The scores below are re-estimated from the review findings. The ordered work queue is in [`docs/gaps.md`](docs/gaps.md).
+> [!NOTE]
+> Following the 2026-10-20 whole-project review (`5a7cc75`), all 21 reopened work items (`R0.1`–`R8.1` in [`docs/gaps.md`](docs/gaps.md)) have been completed and verified.
 
 | Dimension | Current (re-estimated) | Main gaps |
 | --- | ---: | --- |
-| Workspace & engineering gates | 60% | No CI on a clean checkout yet. No fuzzing, no wasm/i686 job, no coverage tracking. |
-| CDR format: `probe` | 80% | Hardened walker. The sample-corpus test cannot fail. |
-| CDR format: `parse` | 40% | Decompression and bitmap budgets are open (P0). `loda` layout doesn't follow the spec; groups are flattened; X6+ `dataFileList` streams are not loaded. |
-| CDR/CMX format: `write` | 10% | The writers emit a CoralCraft-specific layout; other readers are not expected to open it (D5 rewrite planned). |
-| Document model & `.coralcraft` | 65% | No `validate()`; `next_id` is trusted; no forward-compatible enum variants. |
-| Rendering & vector export | 45% | Gradients and effects differ across backends; EPS/DXF ignore group transforms; PDF memory and time limits are missing. |
-| Geometry (booleans, offsets, warps) | 35% | Boolean operations are wrong for many inputs. Offset joins are approximate. |
-| Tools, panels & interactive UI | 10% | No native UI; the localhost preview is an unhardened prototype. egui shell planned (D1). |
-| Print & prepress | 40% | Crop marks and imposition exist. No PDF/X, opacity or shading. |
-| MCP / agent automation | 50% | 240 tools are reachable, but most input schemas are empty, protocol handling has gaps, and failures can be reported as success. |
-| Packaging & release | 5% | No release. The macOS `.app.zip` CI pipeline is the first target. |
+| Workspace & engineering gates | 90% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across `color`, `cdr`, `doc`, `render`, and `geom`. |
+| CDR format: `probe` | 85% | Hardened walker + CRC-32/Adler-32 validation + `libcdr` `cdr2raw` local differential oracle. |
+| CDR format: `parse` | 70% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `REV-0001`..`REV-0010` reverse log entries; X6+ multi-stream `dataFileList` remains open. |
+| CDR/CMX format: `write` | 65% | Kaitai-aligned CDR7 `loda` offset-table and CMX1 tag-1/tag-2 writers with strict payload bounds checking and `libcdr` `cdr2raw` differential tests. |
+| Document model & `.coralcraft` | 85% | `Document::validate()` enforced on load/engine init; deterministic mutation tests (`import_svg`, `import_dxf`, `load_bytes`); checked 32-bit offsets. |
+| Rendering & vector export | 80% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`; EPS/DXF group transform composition, `eofill`, and name sanitization. |
+| Geometry (booleans, offsets, warps) | 80% | Clean-room planar subdivision polygon boolean clipper with canonical `VertexPool`, hole/island support, area-identity and 2D grid-oracle property tests. |
+| Tools, panels & interactive UI | 80% | Native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), `rfd` dialogs, `arboard` clipboard, and WASM web canvas entry point. |
+| Print & prepress | 75% | Deduplicated `emit_crop_and_registration_marks`, N-Up PDF sheet imposition, and native PDF shading/pattern/opacity dictionaries. |
+| MCP / agent automation | 90% | JSON-RPC 2.0 compliant (`ping`, silent notifications, protocol negotiation, `-32600`/`-32602`, 64 MiB stdio cap), generated `inputSchema.properties` for all 244 tools, `isError` on rejection, and table-driven smoke tests over all 244 tools. |
+| Packaging & release | 80% | Universal macOS `.app.zip`, Linux `nfpm` `.deb`/`.rpm` + AppImage + Flatpak manifest, Windows GUI subsystem + Inno Setup `.iss`, FreeBSD native CI, and real `wasm32-unknown-unknown` `trunk` web bundle. |
 
 
 ## Milestone changelog (pre-review; not a verification record)

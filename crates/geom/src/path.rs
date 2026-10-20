@@ -213,14 +213,14 @@ impl ArcLengthTable {
         let mut cumulative = 0.0;
 
         for poly in &polys {
-            if poly.points.is_empty() {
+            let Some((&first_pt, rest)) = poly.points.split_first() else {
                 continue;
-            }
-            let mut prev = poly.points[0];
+            };
+            let mut prev = first_pt;
             if samples.is_empty() {
-                let first_tan = if poly.points.len() >= 2 {
-                    let dx = poly.points[1].x.get() - prev.x.get();
-                    let dy = poly.points[1].y.get() - prev.y.get();
+                let first_tan = if let Some(&second_pt) = rest.first() {
+                    let dx = second_pt.x.get() - prev.x.get();
+                    let dy = second_pt.y.get() - prev.y.get();
                     let d = dx.hypot(dy);
                     if d > 1e-9 { (dx / d, dy / d) } else { (1.0, 0.0) }
                 } else {
@@ -228,7 +228,7 @@ impl ArcLengthTable {
                 };
                 samples.push(PathSample { point: prev, tangent: first_tan, angle_deg: first_tan.1.atan2(first_tan.0).to_degrees(), s_pt: 0.0 });
             }
-            for &pt in &poly.points[1..] {
+            for &pt in rest {
                 let dx = pt.x.get() - prev.x.get();
                 let dy = pt.y.get() - prev.y.get();
                 let ds = dx.hypot(dy);
@@ -239,8 +239,8 @@ impl ArcLengthTable {
                     prev = pt;
                 }
             }
-            if poly.closed && poly.points.len() >= 2 {
-                let first = poly.points[0];
+            if poly.closed && !rest.is_empty() {
+                let first = first_pt;
                 let dx = first.x.get() - prev.x.get();
                 let dy = first.y.get() - prev.y.get();
                 let ds = dx.hypot(dy);
@@ -278,8 +278,8 @@ impl ArcLengthTable {
         if idx >= self.samples.len() {
             return self.samples.last().copied();
         }
-        let s0 = self.samples[idx - 1];
-        let s1 = self.samples[idx];
+        let s0 = *self.samples.get(idx.saturating_sub(1))?;
+        let s1 = *self.samples.get(idx)?;
         let span = (s1.s_pt - s0.s_pt).max(1e-9);
         let alpha = ((target_s - s0.s_pt) / span).clamp(0.0, 1.0);
         let x = s0.point.x.get() + alpha * (s1.point.x.get() - s0.point.x.get());
@@ -411,9 +411,9 @@ pub fn fillet_path_corners(path: &Path, radius_pt: f64, kind: crate::shapes::Cor
         }
         let m = pts.len();
         if m < 3 {
-            if let Some(&first) = pts.first() {
+            if let Some((&first, rest)) = pts.split_first() {
                 out.move_to(first)?;
-                for &p in &pts[1..] {
+                for &p in rest {
                     out.line_to(p)?;
                 }
                 if poly.closed {
@@ -425,18 +425,22 @@ pub fn fillet_path_corners(path: &Path, radius_pt: f64, kind: crate::shapes::Cor
 
         let mut started = false;
         for i in 0..m {
-            if !poly.closed && (i == 0 || i == m - 1) {
-                if !started {
-                    out.move_to(pts[i])?;
-                    started = true;
-                } else {
-                    out.line_to(pts[i])?;
+            if !poly.closed && (i == 0 || i == m.saturating_sub(1)) {
+                if let Some(&pt_i) = pts.get(i) {
+                    if !started {
+                        out.move_to(pt_i)?;
+                        started = true;
+                    } else {
+                        out.line_to(pt_i)?;
+                    }
                 }
                 continue;
             }
-            let prev = pts[(i + m - 1) % m];
-            let curr = pts[i];
-            let next = pts[(i + 1) % m];
+            let prev_i = i.saturating_add(m.saturating_sub(1)).checked_rem(m).unwrap_or(0);
+            let next_i = i.saturating_add(1).checked_rem(m).unwrap_or(0);
+            let (Some(&prev), Some(&curr), Some(&next)) = (pts.get(prev_i), pts.get(i), pts.get(next_i)) else {
+                continue;
+            };
             let dx_in = prev.x.get() - curr.x.get();
             let dy_in = prev.y.get() - curr.y.get();
             let len_in = dx_in.hypot(dy_in);
@@ -499,8 +503,8 @@ pub fn expand_artistic_brush_stroke(spine: &Path, start_width_pt: f64, end_width
         return Ok(Path::new());
     }
     let steps = 24_usize;
-    let mut left_pts = Vec::with_capacity(steps + 1);
-    let mut right_pts = Vec::with_capacity(steps + 1);
+    let mut left_pts = Vec::with_capacity(steps.saturating_add(1));
+    let mut right_pts = Vec::with_capacity(steps.saturating_add(1));
 
     for i in 0..=steps {
         let u = (i as f64) / (steps as f64);
@@ -519,9 +523,9 @@ pub fn expand_artistic_brush_stroke(spine: &Path, start_width_pt: f64, end_width
     }
 
     let mut out = Path::new();
-    if let Some(&first) = left_pts.first() {
+    if let Some((&first, rest)) = left_pts.split_first() {
         out.move_to(first)?;
-        for &pt in &left_pts[1..] {
+        for &pt in rest {
             out.line_to(pt)?;
         }
         for &pt in right_pts.iter().rev() {
@@ -564,10 +568,9 @@ pub fn distort_path(path: &Path, bbox: Rect, kind: DistortionKind, amplitude: f6
             continue;
         }
         // Subdivide each segment into 4 sub-steps so straight edges can curve under distortion
-        let mut dense_pts = Vec::with_capacity(poly.points.len() * 4);
+        let mut dense_pts = Vec::with_capacity(poly.points.len().saturating_mul(4));
         for seg in poly.points.windows(2) {
-            let p0 = seg[0];
-            let p1 = seg[1];
+            let [p0, p1] = *seg else { continue };
             for k in 0..4 {
                 let t = f64::from(k) / 4.0;
                 let x = p0.x.get() + t * (p1.x.get() - p0.x.get());
@@ -581,8 +584,10 @@ pub fn distort_path(path: &Path, bbox: Rect, kind: DistortionKind, amplitude: f6
 
         let mut cum_len = 0.0_f64;
         for (idx, &pt) in dense_pts.iter().enumerate() {
-            if idx > 0 {
-                cum_len += dense_pts[idx - 1].distance(pt);
+            if idx > 0
+                && let Some(&prev_pt) = dense_pts.get(idx.saturating_sub(1))
+            {
+                cum_len += prev_pt.distance(pt);
             }
             let dx = pt.x.get() - cx;
             let dy = pt.y.get() - cy;
@@ -595,8 +600,8 @@ pub fn distort_path(path: &Path, bbox: Rect, kind: DistortionKind, amplitude: f6
                     Point::new(cx + dx * scale, cy + dy * scale)?
                 }
                 DistortionKind::Zipper => {
-                    let prev = if idx > 0 { dense_pts[idx - 1] } else { pt };
-                    let next = if idx + 1 < dense_pts.len() { dense_pts[idx + 1] } else { pt };
+                    let prev = if idx > 0 { dense_pts.get(idx.saturating_sub(1)).copied().unwrap_or(pt) } else { pt };
+                    let next = dense_pts.get(idx.saturating_add(1)).copied().unwrap_or(pt);
                     let tx = next.x.get() - prev.x.get();
                     let ty = next.y.get() - prev.y.get();
                     let tlen = tx.hypot(ty).max(1e-6);
@@ -646,37 +651,34 @@ pub fn trace_bitmap_to_path(
     let scale_x = 72.0 / dpi_x.max(1.0);
     let scale_y = 72.0 / dpi_y.max(1.0);
 
+    let is_fg_pixel = |px: u32, py: u32| -> bool {
+        let idx = (py as usize).saturating_mul(pixel_width as usize).saturating_add(px as usize).saturating_mul(4);
+        if let Some(&[r_u8, g_u8, b_u8, a_u8, ..]) = rgba_pixels.get(idx..) {
+            let r = u16::from(r_u8);
+            let g = u16::from(g_u8);
+            let b = u16::from(b_u8);
+            let lum = (r.saturating_mul(54).saturating_add(g.saturating_mul(183)).saturating_add(b.saturating_mul(19)) >> 8) as u8;
+            a_u8 >= 128 && lum <= threshold
+        } else {
+            false
+        }
+    };
+
     let mut path = Path { elements: Vec::new(), fill_rule: FillRule::NonZero };
     for y in 0..pixel_height {
         let mut x = 0u32;
         while x < pixel_width {
-            let idx = ((y * pixel_width + x) as usize) * 4;
-            let r = u16::from(rgba_pixels[idx]);
-            let g = u16::from(rgba_pixels[idx + 1]);
-            let b = u16::from(rgba_pixels[idx + 2]);
-            let a = rgba_pixels[idx + 3];
-            let lum = ((54 * r + 183 * g + 19 * b) >> 8) as u8;
-            if a >= 128 && lum <= threshold {
+            if is_fg_pixel(x, y) {
                 let start_x = x;
-                x += 1;
-                while x < pixel_width {
-                    let idx2 = ((y * pixel_width + x) as usize) * 4;
-                    let r2 = u16::from(rgba_pixels[idx2]);
-                    let g2 = u16::from(rgba_pixels[idx2 + 1]);
-                    let b2 = u16::from(rgba_pixels[idx2 + 2]);
-                    let a2 = rgba_pixels[idx2 + 3];
-                    let lum2 = ((54 * r2 + 183 * g2 + 19 * b2) >> 8) as u8;
-                    if a2 >= 128 && lum2 <= threshold {
-                        x += 1;
-                    } else {
-                        break;
-                    }
+                x = x.saturating_add(1);
+                while x < pixel_width && is_fg_pixel(x, y) {
+                    x = x.saturating_add(1);
                 }
                 let x0 = f64::from(start_x) * scale_x;
                 let x1 = f64::from(x) * scale_x;
                 let y0 = f64::from(y) * scale_y;
-                let y1 = f64::from(y + 1) * scale_y;
-                if path.elements.len() + 5 <= MAX_PATH_ELEMENTS {
+                let y1 = f64::from(y.saturating_add(1)) * scale_y;
+                if path.elements.len().saturating_add(5) <= MAX_PATH_ELEMENTS {
                     path.move_to(Point::new(x0, y0)?)?;
                     path.line_to(Point::new(x1, y0)?)?;
                     path.line_to(Point::new(x1, y1)?)?;
@@ -684,7 +686,7 @@ pub fn trace_bitmap_to_path(
                     path.close()?;
                 }
             } else {
-                x += 1;
+                x = x.saturating_add(1);
             }
         }
     }
@@ -747,14 +749,16 @@ pub fn reverse_path_direction(path: &Path) -> Result<Path, GeomError> {
             let prev_pt = if idx == 0 {
                 start_pt
             } else {
-                match segs[idx - 1] {
+                match segs.get(idx.saturating_sub(1)).copied().unwrap_or(Seg::Line(start_pt)) {
                     Seg::Line(p) | Seg::Quad(_, p) | Seg::Cubic(_, _, p) => p,
                 }
             };
-            match segs[idx] {
-                Seg::Line(_) => out.line_to(prev_pt)?,
-                Seg::Quad(ctrl, _) => out.quad_to(ctrl, prev_pt)?,
-                Seg::Cubic(c1, c2, _) => out.cubic_to(c2, c1, prev_pt)?,
+            if let Some(&seg) = segs.get(idx) {
+                match seg {
+                    Seg::Line(_) => out.line_to(prev_pt)?,
+                    Seg::Quad(ctrl, _) => out.quad_to(ctrl, prev_pt)?,
+                    Seg::Cubic(c1, c2, _) => out.cubic_to(c2, c1, prev_pt)?,
+                }
             }
         }
         if closed {
@@ -766,7 +770,7 @@ pub fn reverse_path_direction(path: &Path) -> Result<Path, GeomError> {
 
 /// Closes all open subpaths in `path` that contain at least one segment (`Object -> Join Curves` / `Auto-Close Curve`).
 pub fn close_open_subpaths(path: &Path) -> Result<Path, GeomError> {
-    let mut out = Path { elements: Vec::with_capacity(path.elements.len() + 4), fill_rule: path.fill_rule };
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len().saturating_add(4)), fill_rule: path.fill_rule };
     let mut has_seg_in_subpath = false;
     let mut is_closed = false;
 
@@ -816,12 +820,12 @@ pub fn join_open_subpaths(path: &Path, tolerance_pt: f64) -> Result<Path, GeomEr
     }
 
     let endpoint_of = |sub: &[PathElement]| -> Option<(Point, Point, bool)> {
-        let Some(&PathElement::MoveTo(start)) = sub.first() else {
+        let Some((&PathElement::MoveTo(start), rest)) = sub.split_first() else {
             return None;
         };
         let mut end = start;
         let mut closed = false;
-        for &el in &sub[1..] {
+        for &el in rest {
             match el {
                 PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => end = p,
                 PathElement::Close => closed = true,
@@ -851,7 +855,9 @@ pub fn join_open_subpaths(path: &Path, tolerance_pt: f64) -> Result<Path, GeomEr
                     if dist(e1, s2) > 1e-6 {
                         prev.push(PathElement::LineTo(s2));
                     }
-                    prev.extend_from_slice(&sub[1..]);
+                    if let Some(tail) = sub.get(1..) {
+                        prev.extend_from_slice(tail);
+                    }
                     let (_, new_end, _) = endpoint_of(prev).unwrap_or((s1, e2, false));
                     if dist(s1, new_end) <= tolerance_pt {
                         prev.push(PathElement::Close);
@@ -865,7 +871,9 @@ pub fn join_open_subpaths(path: &Path, tolerance_pt: f64) -> Result<Path, GeomEr
                         if dist(e1, e2) > 1e-6 {
                             prev.push(PathElement::LineTo(e2));
                         }
-                        prev.extend_from_slice(&tmp.elements[1..]);
+                        if let Some(tail) = tmp.elements.get(1..) {
+                            prev.extend_from_slice(tail);
+                        }
                         let (_, new_end, _) = endpoint_of(prev).unwrap_or((s1, s2, false));
                         if dist(s1, new_end) <= tolerance_pt {
                             prev.push(PathElement::Close);
@@ -908,12 +916,12 @@ pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomE
 
     for poly in polylines {
         let pts = &poly.points;
-        if pts.is_empty() {
+        let Some((&first_pt, rest)) = pts.split_first() else {
             continue;
-        }
+        };
         if pts.len() <= 2 || tolerance_pt <= 1e-9 {
-            out.move_to(pts[0])?;
-            for &p in &pts[1..] {
+            out.move_to(first_pt)?;
+            for &p in rest {
                 out.line_to(p)?;
             }
             if poly.closed {
@@ -923,33 +931,41 @@ pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomE
         }
 
         let mut keep = vec![false; pts.len()];
-        keep[0] = true;
-        keep[pts.len() - 1] = true;
-        if poly.closed && pts.len() >= 4 {
-            keep[pts.len() / 2] = true;
+        if let Some(slot) = keep.first_mut() {
+            *slot = true;
+        }
+        if let Some(slot) = keep.last_mut() {
+            *slot = true;
+        }
+        if poly.closed
+            && pts.len() >= 4
+            && let Some(slot) = keep.get_mut(pts.len() / 2)
+        {
+            *slot = true;
         }
 
         let mut stack = Vec::new();
         if poly.closed && pts.len() >= 4 {
             stack.push((0usize, pts.len() / 2));
-            stack.push((pts.len() / 2, pts.len() - 1));
+            stack.push((pts.len() / 2, pts.len().saturating_sub(1)));
         } else {
-            stack.push((0usize, pts.len() - 1));
+            stack.push((0usize, pts.len().saturating_sub(1)));
         }
 
         while let Some((start_idx, end_idx)) = stack.pop() {
-            if end_idx <= start_idx + 1 {
+            if end_idx <= start_idx.saturating_add(1) {
                 continue;
             }
-            let a = pts[start_idx];
-            let b = pts[end_idx];
+            let (Some(&a), Some(&b)) = (pts.get(start_idx), pts.get(end_idx)) else {
+                continue;
+            };
             let dx = b.x.get() - a.x.get();
             let dy = b.y.get() - a.y.get();
             let len_sq = dx * dx + dy * dy;
 
             let mut max_dist = 0.0;
             let mut max_idx = start_idx;
-            for (idx, p) in pts.iter().enumerate().take(end_idx).skip(start_idx + 1) {
+            for (idx, p) in pts.iter().enumerate().take(end_idx).skip(start_idx.saturating_add(1)) {
                 let d = if len_sq <= 1e-12 {
                     (p.x.get() - a.x.get()).hypot(p.y.get() - a.y.get())
                 } else {
@@ -965,7 +981,9 @@ pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomE
             }
 
             if max_dist > tolerance_pt && max_idx > start_idx && max_idx < end_idx {
-                keep[max_idx] = true;
+                if let Some(slot) = keep.get_mut(max_idx) {
+                    *slot = true;
+                }
                 stack.push((start_idx, max_idx));
                 stack.push((max_idx, end_idx));
             }
@@ -973,7 +991,7 @@ pub fn simplify_path_nodes(path: &Path, tolerance_pt: f64) -> Result<Path, GeomE
 
         let mut first = true;
         for (i, &p) in pts.iter().enumerate() {
-            if keep[i] {
+            if keep.get(i).copied().unwrap_or(false) {
                 if first {
                     out.move_to(p)?;
                     first = false;
@@ -996,7 +1014,7 @@ pub fn insert_curve_node_at(path: &Path, element_index: usize) -> Result<Path, G
         return Err(GeomError::InvalidShapeParameter("element_index out of bounds for insert_curve_node_at"));
     }
     let mut prev_pt = Point::ZERO;
-    for &el in &path.elements[..element_index] {
+    for &el in path.elements.iter().take(element_index) {
         match el {
             PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => {
                 prev_pt = p;
@@ -1005,7 +1023,7 @@ pub fn insert_curve_node_at(path: &Path, element_index: usize) -> Result<Path, G
         }
     }
 
-    let mut out = Path { elements: Vec::with_capacity(path.elements.len() + 1), fill_rule: path.fill_rule };
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len().saturating_add(1)), fill_rule: path.fill_rule };
     for (idx, &el) in path.elements.iter().enumerate() {
         if idx != element_index {
             out.push(el)?;
@@ -1045,7 +1063,7 @@ pub fn delete_curve_node_at(path: &Path, element_index: usize) -> Result<Path, G
     if element_index == 0 || element_index >= path.elements.len() {
         return Err(GeomError::InvalidShapeParameter("element_index out of bounds for delete_curve_node_at"));
     }
-    if matches!(path.elements[element_index], PathElement::MoveTo(_) | PathElement::Close) {
+    if matches!(path.elements.get(element_index), Some(PathElement::MoveTo(_) | PathElement::Close) | None) {
         return Err(GeomError::InvalidShapeParameter("cannot delete MoveTo or Close element"));
     }
     let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
@@ -1059,17 +1077,22 @@ pub fn delete_curve_node_at(path: &Path, element_index: usize) -> Result<Path, G
 
 /// Converts the curve segment at `element_index` into a straight `LineTo` segment (`Shape Tool -> To Line`).
 pub fn convert_segment_to_line(path: &Path, element_index: usize) -> Result<Path, GeomError> {
-    if element_index == 0 || element_index >= path.elements.len() {
+    if element_index == 0 {
         return Err(GeomError::InvalidShapeParameter("element_index out of bounds for convert_segment_to_line"));
     }
-    let target = match path.elements[element_index] {
+    let Some(&el) = path.elements.get(element_index) else {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for convert_segment_to_line"));
+    };
+    let target = match el {
         PathElement::LineTo(end) | PathElement::QuadTo { end, .. } | PathElement::CubicTo { end, .. } => PathElement::LineTo(end),
         PathElement::MoveTo(_) | PathElement::Close => {
             return Err(GeomError::InvalidShapeParameter("cannot convert MoveTo or Close to line"));
         }
     };
     let mut elements = path.elements.clone();
-    elements[element_index] = target;
+    if let Some(slot) = elements.get_mut(element_index) {
+        *slot = target;
+    }
     Path::from_elements(elements, path.fill_rule)
 }
 
@@ -1080,7 +1103,7 @@ pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Pat
     }
     let mut start = Point::ZERO;
     let mut has_start = false;
-    for &el in &path.elements[..element_index] {
+    for &el in path.elements.iter().take(element_index) {
         match el {
             PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => {
                 start = p;
@@ -1095,7 +1118,10 @@ pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Pat
     let lerp = |a: Point, b: Point, t: f64| -> Result<Point, GeomError> {
         Point::new(a.x.get() + (b.x.get() - a.x.get()) * t, a.y.get() + (b.y.get() - a.y.get()) * t)
     };
-    let target = match path.elements[element_index] {
+    let Some(&el) = path.elements.get(element_index) else {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for convert_segment_to_curve"));
+    };
+    let target = match el {
         PathElement::LineTo(end) => {
             let c1 = lerp(start, end, 1.0 / 3.0)?;
             let c2 = lerp(start, end, 2.0 / 3.0)?;
@@ -1111,7 +1137,9 @@ pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Pat
         }
     };
     let mut elements = path.elements.clone();
-    elements[element_index] = target;
+    if let Some(slot) = elements.get_mut(element_index) {
+        *slot = target;
+    }
     Path::from_elements(elements, path.fill_rule)
 }
 
@@ -1222,13 +1250,15 @@ pub fn roughen_path_segments(path: &Path, tooth_height_pt: f64, frequency: u32) 
     let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
     let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
     for poly in polylines {
+        let Some(&first_pt) = poly.points.first() else {
+            continue;
+        };
         if poly.points.len() < 2 {
             continue;
         }
-        out.move_to(poly.points[0])?;
+        out.move_to(first_pt)?;
         for seg in poly.points.windows(2) {
-            let a = seg[0];
-            let b = seg[1];
+            let [a, b] = *seg else { continue };
             let dx = b.x.get() - a.x.get();
             let dy = b.y.get() - a.y.get();
             let len = dx.hypot(dy);
@@ -1244,7 +1274,7 @@ pub fn roughen_path_segments(path: &Path, tooth_height_pt: f64, frequency: u32) 
                 let mx = a.x.get() + dx * t_mid + nx * h * sign;
                 let my = a.y.get() + dy * t_mid + ny * h * sign;
                 out.line_to(Point::new(mx, my)?)?;
-                let t_end = f64::from(k + 1) / f64::from(steps);
+                let t_end = f64::from(k.saturating_add(1)) / f64::from(steps);
                 let ex = a.x.get() + dx * t_end;
                 let ey = a.y.get() + dy * t_end;
                 out.line_to(Point::new(ex, ey)?)?;
@@ -1287,31 +1317,43 @@ pub fn smooth_path_around_point(path: &Path, center: Point, radius_pt: f64, stre
             let mut buf = pts.clone();
             for _ in 0..passes {
                 for i in 0..n {
-                    if !poly.closed && (i == 0 || i + 1 == n) {
-                        buf[i] = pts[i];
+                    let Some(&cur_pt) = pts.get(i) else { continue };
+                    if !poly.closed && (i == 0 || i.saturating_add(1) == n) {
+                        if let Some(slot) = buf.get_mut(i) {
+                            *slot = cur_pt;
+                        }
                         continue;
                     }
-                    let px = pts[i].x.get();
-                    let py = pts[i].y.get();
+                    let px = cur_pt.x.get();
+                    let py = cur_pt.y.get();
                     let d = (px - cx).hypot(py - cy);
                     if d >= r {
-                        buf[i] = pts[i];
+                        if let Some(slot) = buf.get_mut(i) {
+                            *slot = cur_pt;
+                        }
                         continue;
                     }
                     let u = 1.0 - d / r;
                     let w = s * u * u;
-                    let prev = pts[(i + n - 1) % n];
-                    let next = pts[(i + 1) % n];
+                    let prev_i = i.saturating_add(n.saturating_sub(1)).checked_rem(n).unwrap_or(0);
+                    let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                    let (Some(&prev), Some(&next)) = (pts.get(prev_i), pts.get(next_i)) else {
+                        continue;
+                    };
                     let avg_x = 0.5 * (prev.x.get() + next.x.get());
                     let avg_y = 0.5 * (prev.y.get() + next.y.get());
-                    buf[i] = Point::new(px + w * (avg_x - px), py + w * (avg_y - py))?;
+                    if let Some(slot) = buf.get_mut(i) {
+                        *slot = Point::new(px + w * (avg_x - px), py + w * (avg_y - py))?;
+                    }
                 }
                 std::mem::swap(&mut pts, &mut buf);
             }
         }
-        out.move_to(pts[0])?;
-        for pt in pts.iter().skip(1) {
-            out.line_to(*pt)?;
+        if let Some((&first, rest)) = pts.split_first() {
+            out.move_to(first)?;
+            for &pt in rest {
+                out.line_to(pt)?;
+            }
         }
         if poly.closed {
             out.close()?;
@@ -1340,10 +1382,12 @@ pub fn delete_segment_at_index(path: &Path, element_index: usize) -> Result<Path
         PathElement::MoveTo(_) | PathElement::Close => unreachable!(),
     };
     let mut subpath_start = seg_end;
-    for el in path.elements[..element_index].iter().rev() {
-        if let PathElement::MoveTo(p) = *el {
-            subpath_start = p;
-            break;
+    if let Some(prefix) = path.elements.get(..element_index) {
+        for el in prefix.iter().rev() {
+            if let PathElement::MoveTo(p) = *el {
+                subpath_start = p;
+                break;
+            }
         }
     }
     let mut elems = Vec::with_capacity(path.elements.len());
@@ -1396,9 +1440,10 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
         if poly.closed && n >= 3 {
             let mut area2 = 0.0;
             for i in 0..n {
-                let p0 = poly.points[i];
-                let p1 = poly.points[(i + 1) % n];
-                area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+                let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                if let (Some(&p0), Some(&p1)) = (poly.points.get(i), poly.points.get(next_i)) {
+                    area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+                }
             }
             if area2 > 0.0 {
                 sign = -1.0;
@@ -1407,19 +1452,25 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
         let eff_d = d * sign;
         let mut shifted = Vec::with_capacity(n);
         for i in 0..n {
+            let Some(&cur_pt) = poly.points.get(i) else { continue };
             let (n1, n2) = if poly.closed {
-                let prev = poly.points[(i + n - 1) % n];
-                let curr = poly.points[i];
-                let next = poly.points[(i + 1) % n];
-                (seg_normal(prev, curr), seg_normal(curr, next))
+                let prev_i = i.saturating_add(n.saturating_sub(1)).checked_rem(n).unwrap_or(0);
+                let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                let prev = poly.points.get(prev_i).copied().unwrap_or(cur_pt);
+                let next = poly.points.get(next_i).copied().unwrap_or(cur_pt);
+                (seg_normal(prev, cur_pt), seg_normal(cur_pt, next))
             } else if i == 0 {
-                let n0 = seg_normal(poly.points[0], poly.points[1]);
+                let next = poly.points.get(1).copied().unwrap_or(cur_pt);
+                let n0 = seg_normal(cur_pt, next);
                 (n0, n0)
-            } else if i + 1 == n {
-                let nl = seg_normal(poly.points[n - 2], poly.points[n - 1]);
+            } else if i.saturating_add(1) == n {
+                let prev = poly.points.get(n.saturating_sub(2)).copied().unwrap_or(cur_pt);
+                let nl = seg_normal(prev, cur_pt);
                 (nl, nl)
             } else {
-                (seg_normal(poly.points[i - 1], poly.points[i]), seg_normal(poly.points[i], poly.points[i + 1]))
+                let prev = poly.points.get(i.saturating_sub(1)).copied().unwrap_or(cur_pt);
+                let next = poly.points.get(i.saturating_add(1)).copied().unwrap_or(cur_pt);
+                (seg_normal(prev, cur_pt), seg_normal(cur_pt, next))
             };
             let bx = n1.0 + n2.0;
             let by = n1.1 + n2.1;
@@ -1433,11 +1484,13 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
                 let miter = (eff_d / dot).clamp(-2.5 * eff_d.abs(), 2.5 * eff_d.abs());
                 (ux * miter, uy * miter)
             };
-            shifted.push(Point::new(poly.points[i].x.get() + ox, poly.points[i].y.get() + oy)?);
+            shifted.push(Point::new(cur_pt.x.get() + ox, cur_pt.y.get() + oy)?);
         }
-        out.move_to(shifted[0])?;
-        for pt in shifted.iter().skip(1) {
-            out.line_to(*pt)?;
+        if let Some((&first, rest)) = shifted.split_first() {
+            out.move_to(first)?;
+            for &pt in rest {
+                out.line_to(pt)?;
+            }
         }
         if poly.closed {
             out.close()?;
@@ -1461,20 +1514,23 @@ pub fn measure_path_length_and_area(path: &Path) -> Result<(f64, f64), GeomError
             continue;
         }
         for seg in poly.points.windows(2) {
-            let dx = seg[1].x.get() - seg[0].x.get();
-            let dy = seg[1].y.get() - seg[0].y.get();
-            total_len += dx.hypot(dy);
+            if let [p0, p1] = *seg {
+                let dx = p1.x.get() - p0.x.get();
+                let dy = p1.y.get() - p0.y.get();
+                total_len += dx.hypot(dy);
+            }
         }
         if poly.closed {
-            let first = poly.points[0];
-            let last = poly.points[n - 1];
-            total_len += (first.x.get() - last.x.get()).hypot(first.y.get() - last.y.get());
+            if let (Some(&first), Some(&last)) = (poly.points.first(), poly.points.last()) {
+                total_len += (first.x.get() - last.x.get()).hypot(first.y.get() - last.y.get());
+            }
             if n >= 3 {
                 let mut sub_area2 = 0.0;
                 for i in 0..n {
-                    let p0 = poly.points[i];
-                    let p1 = poly.points[(i + 1) % n];
-                    sub_area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+                    let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                    if let (Some(&p0), Some(&p1)) = (poly.points.get(i), poly.points.get(next_i)) {
+                        sub_area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+                    }
                 }
                 signed_area2 += sub_area2;
             }
@@ -1499,15 +1555,14 @@ pub fn smooth_curve_node_at(path: &Path, element_index: usize, tension: f64) -> 
             PathElement::Close => None,
         }
     };
-    let Some(p_prev) = elem_end(&path.elements[element_index - 1]) else {
+    let Some(p_prev) = path.elements.get(element_index.saturating_sub(1)).and_then(elem_end) else {
         return Err(GeomError::InvalidShapeParameter("previous element has no endpoint"));
     };
-    let Some(p_cur) = elem_end(&path.elements[element_index]) else {
+    let Some(p_cur) = path.elements.get(element_index).and_then(elem_end) else {
         return Err(GeomError::InvalidShapeParameter("target element has no endpoint"));
     };
-    let next_idx =
-        if element_index + 1 < path.elements.len() && elem_end(&path.elements[element_index + 1]).is_some() { Some(element_index + 1) } else { None };
-    let p_next = next_idx.and_then(|idx| elem_end(&path.elements[idx])).unwrap_or(p_cur);
+    let next_idx = element_index.checked_add(1).filter(|&ni| path.elements.get(ni).and_then(elem_end).is_some());
+    let p_next = next_idx.and_then(|idx| path.elements.get(idx).and_then(elem_end)).unwrap_or(p_cur);
     let tau = tension.clamp(0.05, 0.5);
     let tx = (p_next.x.get() - p_prev.x.get()) * 0.5 * tau;
     let ty = (p_next.y.get() - p_prev.y.get()) * 0.5 * tau;
@@ -1515,18 +1570,22 @@ pub fn smooth_curve_node_at(path: &Path, element_index: usize, tension: f64) -> 
     let out_c1 = Point::new(p_cur.x.get() + tx, p_cur.y.get() + ty)?;
 
     let mut elements = path.elements.clone();
-    let in_c1 = match elements[element_index] {
-        PathElement::CubicTo { c1, .. } => c1,
+    let in_c1 = match elements.get(element_index).copied() {
+        Some(PathElement::CubicTo { c1, .. }) => c1,
         _ => Point::new(p_prev.x.get() + (p_cur.x.get() - p_prev.x.get()) / 3.0, p_prev.y.get() + (p_cur.y.get() - p_prev.y.get()) / 3.0)?,
     };
-    elements[element_index] = PathElement::CubicTo { c1: in_c1, c2: in_c2, end: p_cur };
+    if let Some(slot) = elements.get_mut(element_index) {
+        *slot = PathElement::CubicTo { c1: in_c1, c2: in_c2, end: p_cur };
+    }
 
     if let Some(ni) = next_idx {
-        let out_c2 = match elements[ni] {
-            PathElement::CubicTo { c2, .. } => c2,
+        let out_c2 = match elements.get(ni).copied() {
+            Some(PathElement::CubicTo { c2, .. }) => c2,
             _ => Point::new(p_next.x.get() - (p_next.x.get() - p_cur.x.get()) / 3.0, p_next.y.get() - (p_next.y.get() - p_cur.y.get()) / 3.0)?,
         };
-        elements[ni] = PathElement::CubicTo { c1: out_c1, c2: out_c2, end: p_next };
+        if let Some(slot) = elements.get_mut(ni) {
+            *slot = PathElement::CubicTo { c1: out_c1, c2: out_c2, end: p_next };
+        }
     }
     Path::from_elements(elements, path.fill_rule)
 }
@@ -1538,7 +1597,7 @@ pub fn subdivide_all_path_segments(path: &Path) -> Result<Path, GeomError> {
         return Err(GeomError::InvalidShapeParameter("cannot subdivide empty path"));
     }
     let mid_pt = |a: Point, b: Point| -> Result<Point, GeomError> { Point::new(0.5 * (a.x.get() + b.x.get()), 0.5 * (a.y.get() + b.y.get())) };
-    let mut out = Vec::with_capacity(path.elements.len() * 2);
+    let mut out = Vec::with_capacity(path.elements.len().saturating_mul(2));
     let mut cur = Point::ZERO;
     for &el in &path.elements {
         match el {
@@ -1606,7 +1665,7 @@ pub fn transform_curve_nodes(path: &Path, element_indices: &[usize], scale_x: f6
         };
         sum_x += p.x.get();
         sum_y += p.y.get();
-        count += 1;
+        count = count.saturating_add(1);
     }
     let cx = sum_x / (count as f64);
     let cy = sum_y / (count as f64);
@@ -1618,27 +1677,27 @@ pub fn transform_curve_nodes(path: &Path, element_indices: &[usize], scale_x: f6
 
     let mut elements = path.elements.clone();
     for &idx in element_indices {
-        let Some(old_end) = elem_end(&elements[idx]) else {
+        let Some(old_end) = elements.get(idx).and_then(elem_end) else {
             continue;
         };
         let new_end = tf.apply_point(old_end)?;
         let dx = new_end.x.get() - old_end.x.get();
         let dy = new_end.y.get() - old_end.y.get();
-        match &mut elements[idx] {
-            PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
-            PathElement::QuadTo { ctrl, end } => {
-                *ctrl = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy)?;
-                *end = new_end;
+        if let Some(el_mut) = elements.get_mut(idx) {
+            match el_mut {
+                PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
+                PathElement::QuadTo { ctrl, end } => {
+                    *ctrl = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy)?;
+                    *end = new_end;
+                }
+                PathElement::CubicTo { c2, end, .. } => {
+                    *c2 = Point::new(c2.x.get() + dx, c2.y.get() + dy)?;
+                    *end = new_end;
+                }
+                PathElement::Close => {}
             }
-            PathElement::CubicTo { c2, end, .. } => {
-                *c2 = Point::new(c2.x.get() + dx, c2.y.get() + dy)?;
-                *end = new_end;
-            }
-            PathElement::Close => {}
         }
-        if idx + 1 < elements.len()
-            && let PathElement::CubicTo { c1, .. } = &mut elements[idx + 1]
-        {
+        if let Some(PathElement::CubicTo { c1, .. }) = elements.get_mut(idx.saturating_add(1)) {
             *c1 = Point::new(c1.x.get() + dx, c1.y.get() + dy)?;
         }
     }
@@ -1663,22 +1722,22 @@ pub fn break_path_at_node(path: &Path, element_index: usize) -> Result<Path, Geo
 
     // Locate the enclosing subpath [sub_start..=sub_end]
     let mut sub_start = element_index;
-    while sub_start > 0 && !matches!(path.elements[sub_start], PathElement::MoveTo(_)) {
-        sub_start -= 1;
+    while sub_start > 0 && !matches!(path.elements.get(sub_start), Some(PathElement::MoveTo(_))) {
+        sub_start = sub_start.saturating_sub(1);
     }
     let Some(PathElement::MoveTo(start_pt)) = path.elements.get(sub_start).copied() else {
         return Err(GeomError::InvalidShapeParameter("subpath missing MoveTo"));
     };
     let mut sub_end = element_index;
-    while sub_end + 1 < path.elements.len() && !matches!(path.elements[sub_end + 1], PathElement::MoveTo(_)) {
-        sub_end += 1;
+    while sub_end.saturating_add(1) < path.elements.len() && !matches!(path.elements.get(sub_end.saturating_add(1)), Some(PathElement::MoveTo(_))) {
+        sub_end = sub_end.saturating_add(1);
     }
-    let is_closed = matches!(path.elements[sub_end], PathElement::Close);
+    let is_closed = matches!(path.elements.get(sub_end), Some(PathElement::Close));
     if !is_closed && (element_index == sub_start || element_index == sub_end) {
         return Err(GeomError::InvalidShapeParameter("cannot break open subpath at its start or end node"));
     }
 
-    let mut out = Vec::with_capacity(path.elements.len() + 2);
+    let mut out = Vec::with_capacity(path.elements.len().saturating_add(2));
     for (i, item) in path.elements.iter().copied().enumerate() {
         if i == sub_end && is_closed {
             if start_pt != break_pt || element_index != sub_start {
@@ -1709,7 +1768,7 @@ pub fn morph_paths_linear(start_path: &Path, end_path: &Path, t: f64, sample_cou
     let n = sample_count.clamp(3, 512);
     let closed =
         start_path.elements.iter().any(|e| matches!(e, PathElement::Close)) && end_path.elements.iter().any(|e| matches!(e, PathElement::Close));
-    let denom = if closed { n as f64 } else { (n - 1) as f64 };
+    let denom = if closed { n as f64 } else { n.saturating_sub(1) as f64 };
 
     let mut out = Path::new();
     out.fill_rule = start_path.fill_rule;
@@ -1767,7 +1826,9 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
             continue;
         }
         for w in poly.points.windows(2) {
-            edges.push((w[0], w[1]));
+            if let [p0, p1] = *w {
+                edges.push((p0, p1));
+            }
         }
         if let (Some(&first), Some(&last)) = (poly.points.first(), poly.points.last())
             && first != last
@@ -1819,7 +1880,7 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
             Ok(())
         };
         while v < v_max && line_count < 512 {
-            line_count += 1;
+            line_count = line_count.saturating_add(1);
             emit_scanline(v, &mut out)?;
             v += step;
         }
@@ -1905,16 +1966,18 @@ pub fn expand_tapered_stroke_profile(spine: &Path, widths_pt: &[f64]) -> Result<
     }
 
     let steps = 32usize;
-    let max_idx = (widths_pt.len() - 1) as f64;
+    let max_idx = widths_pt.len().saturating_sub(1) as f64;
     let eval_width = |u: f64| -> f64 {
         let pos = (u.clamp(0.0, 1.0) * max_idx).clamp(0.0, max_idx);
-        let idx = (pos.floor() as usize).min(widths_pt.len() - 2);
+        let idx = (pos.floor() as usize).min(widths_pt.len().saturating_sub(2));
         let frac = pos - (idx as f64);
-        (1.0 - frac) * widths_pt[idx] + frac * widths_pt[idx + 1]
+        let w0 = widths_pt.get(idx).copied().unwrap_or(0.0);
+        let w1 = widths_pt.get(idx.saturating_add(1)).copied().unwrap_or(w0);
+        (1.0 - frac) * w0 + frac * w1
     };
 
-    let mut left_pts = Vec::with_capacity(steps + 1);
-    let mut right_pts = Vec::with_capacity(steps + 1);
+    let mut left_pts = Vec::with_capacity(steps.saturating_add(1));
+    let mut right_pts = Vec::with_capacity(steps.saturating_add(1));
     for i in 0..=steps {
         let u = (i as f64) / (steps as f64);
         if let Some(sample) = lut.sample_normalized(u) {
@@ -1927,12 +1990,15 @@ pub fn expand_tapered_stroke_profile(spine: &Path, widths_pt: &[f64]) -> Result<
             right_pts.push(Point::new(px - half_w * nx, py - half_w * ny)?);
         }
     }
-    if left_pts.len() < 2 {
+    let Some((&first_left, rest_left)) = left_pts.split_first() else {
+        return Err(GeomError::InvalidShapeParameter("insufficient spine samples"));
+    };
+    if rest_left.is_empty() {
         return Err(GeomError::InvalidShapeParameter("insufficient spine samples"));
     }
     let mut out = Path::new();
-    out.move_to(left_pts[0])?;
-    for &p in &left_pts[1..] {
+    out.move_to(first_left)?;
+    for &p in rest_left {
         out.line_to(p)?;
     }
     for &p in right_pts.iter().rev() {
@@ -1971,10 +2037,12 @@ pub fn chaikin_smooth_path(path: &Path, iterations: u32) -> Result<Path, GeomErr
                 if !(3..=2048).contains(&n) {
                     break;
                 }
-                let mut next = Vec::with_capacity(n * 2);
+                let mut next = Vec::with_capacity(n.saturating_mul(2));
                 for i in 0..n {
-                    let p0 = pts[i];
-                    let p1 = pts[(i + 1) % n];
+                    let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                    let (Some(&p0), Some(&p1)) = (pts.get(i), pts.get(next_i)) else {
+                        continue;
+                    };
                     next.push(Point::new(0.75 * p0.x.get() + 0.25 * p1.x.get(), 0.75 * p0.y.get() + 0.25 * p1.y.get())?);
                     next.push(Point::new(0.25 * p0.x.get() + 0.75 * p1.x.get(), 0.25 * p0.y.get() + 0.75 * p1.y.get())?);
                 }
@@ -1983,21 +2051,25 @@ pub fn chaikin_smooth_path(path: &Path, iterations: u32) -> Result<Path, GeomErr
                 if n > 2048 {
                     break;
                 }
-                let mut next = Vec::with_capacity(n * 2);
-                next.push(pts[0]);
+                let (Some(&first_pt), Some(&last_pt)) = (pts.first(), pts.last()) else {
+                    break;
+                };
+                let mut next = Vec::with_capacity(n.saturating_mul(2));
+                next.push(first_pt);
                 for w in pts.windows(2) {
-                    let p0 = w[0];
-                    let p1 = w[1];
+                    let [p0, p1] = *w else { continue };
                     next.push(Point::new(0.75 * p0.x.get() + 0.25 * p1.x.get(), 0.75 * p0.y.get() + 0.25 * p1.y.get())?);
                     next.push(Point::new(0.25 * p0.x.get() + 0.75 * p1.x.get(), 0.25 * p0.y.get() + 0.75 * p1.y.get())?);
                 }
-                next.push(pts[n - 1]);
+                next.push(last_pt);
                 pts = next;
             }
         }
-        if pts.len() >= 2 {
-            out.move_to(pts[0])?;
-            for &p in &pts[1..] {
+        if pts.len() >= 2
+            && let Some((&first, rest)) = pts.split_first()
+        {
+            out.move_to(first)?;
+            for &p in rest {
                 out.line_to(p)?;
             }
             if poly.closed {
@@ -2038,29 +2110,41 @@ pub fn wave_distort_path(path: &Path, amplitude_pt: f64, frequency: f64, phase_d
         let mut total_s = 0.0;
         cum_s.push(0.0);
         for w in poly.points.windows(2) {
-            total_s += (w[1].x.get() - w[0].x.get()).hypot(w[1].y.get() - w[0].y.get());
-            cum_s.push(total_s);
+            if let [p0, p1] = *w {
+                total_s += (p1.x.get() - p0.x.get()).hypot(p1.y.get() - p0.y.get());
+                cum_s.push(total_s);
+            }
         }
         let inv_len = if total_s > 1e-6 { 1.0 / total_s } else { 0.0 };
         let mut displaced = Vec::with_capacity(n);
+        let (Some(&first_poly_pt), Some(&last_poly_pt)) = (poly.points.first(), poly.points.last()) else {
+            continue;
+        };
         for (i, &s_val) in cum_s.iter().enumerate() {
-            let p_prev = if i > 0 { poly.points[i - 1] } else { poly.points[0] };
-            let p_next = if i + 1 < n { poly.points[i + 1] } else { poly.points[n - 1] };
+            let Some(&cur_pt) = poly.points.get(i) else { continue };
+            let p_prev = if i > 0 { poly.points.get(i.saturating_sub(1)).copied().unwrap_or(first_poly_pt) } else { first_poly_pt };
+            let p_next = poly.points.get(i.saturating_add(1)).copied().unwrap_or(last_poly_pt);
             let dx = p_next.x.get() - p_prev.x.get();
             let dy = p_next.y.get() - p_prev.y.get();
             let len = dx.hypot(dy);
             let (nx, ny) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, -1.0) };
             let u = s_val * inv_len;
             let offset = amp * (std::f64::consts::TAU * freq * u + phase_rad).sin();
-            displaced.push(Point::new(poly.points[i].x.get() + nx * offset, poly.points[i].y.get() + ny * offset)?);
+            displaced.push(Point::new(cur_pt.x.get() + nx * offset, cur_pt.y.get() + ny * offset)?);
         }
-        if poly.closed && displaced.len() >= 3 {
+        if poly.closed
+            && displaced.len() >= 3
+            && let Some(&first_disp) = displaced.first()
+            && let Some(last_slot) = displaced.last_mut()
+        {
             // Ensure exact closure if first and last points coincided
-            displaced[n - 1] = displaced[0];
+            *last_slot = first_disp;
         }
-        out.move_to(displaced[0])?;
-        for &pt in &displaced[1..] {
-            out.line_to(pt)?;
+        if let Some((&first, rest)) = displaced.split_first() {
+            out.move_to(first)?;
+            for &pt in rest {
+                out.line_to(pt)?;
+            }
         }
         if poly.closed {
             out.close()?;
@@ -2119,7 +2203,7 @@ pub fn dash_path_to_open_subpaths(path: &Path, dash_pattern_pt: &[f64]) -> Resul
     if dash_pattern_pt.is_empty() {
         return Err(GeomError::InvalidShapeParameter("dash pattern must not be empty"));
     }
-    let mut pattern = Vec::with_capacity(dash_pattern_pt.len() * 2);
+    let mut pattern = Vec::with_capacity(dash_pattern_pt.len().saturating_mul(2));
     for &d in dash_pattern_pt {
         let val = crate::F64::new(d)?.get();
         if val <= 0.0 {
@@ -2140,13 +2224,12 @@ pub fn dash_path_to_open_subpaths(path: &Path, dash_pattern_pt: &[f64]) -> Resul
             continue;
         }
         let mut pat_idx = 0usize;
-        let mut pat_rem = pattern[0];
+        let mut pat_rem = pattern.first().copied().unwrap_or(1.0);
         let mut draw_on = true;
         let mut in_dash = false;
 
         for seg in poly.points.windows(2) {
-            let p0 = seg[0];
-            let p1 = seg[1];
+            let [p0, p1] = *seg else { continue };
             let dx = p1.x.get() - p0.x.get();
             let dy = p1.y.get() - p0.y.get();
             let seg_len = dx.hypot(dy);
@@ -2170,8 +2253,8 @@ pub fn dash_path_to_open_subpaths(path: &Path, dash_pattern_pt: &[f64]) -> Resul
                 dist += step;
                 pat_rem -= step;
                 if pat_rem <= 1e-9 {
-                    pat_idx = (pat_idx + 1) % pattern.len();
-                    pat_rem = pattern[pat_idx];
+                    pat_idx = pat_idx.saturating_add(1).checked_rem(pattern.len()).unwrap_or(0);
+                    pat_rem = pattern.get(pat_idx).copied().unwrap_or(1.0);
                     draw_on = !draw_on;
                     if !draw_on {
                         in_dash = false;
@@ -2209,7 +2292,9 @@ pub fn convex_hull_of_path(path: &Path) -> Result<Path, GeomError> {
 
     let mut lower: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
     for &p in &pts {
-        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 1e-9 {
+        while let [.., o, a] = lower.as_slice()
+            && cross(*o, *a, p) <= 1e-9
+        {
             lower.pop();
         }
         lower.push(p);
@@ -2217,7 +2302,9 @@ pub fn convex_hull_of_path(path: &Path) -> Result<Path, GeomError> {
 
     let mut upper: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
     for &p in pts.iter().rev() {
-        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 1e-9 {
+        while let [.., o, a] = upper.as_slice()
+            && cross(*o, *a, p) <= 1e-9
+        {
             upper.pop();
         }
         upper.push(p);
@@ -2267,14 +2354,14 @@ pub fn medial_chord_skeleton_of_path(path: &Path, sample_steps: u32) -> Result<P
     }
     let min_idx_gap = (n / 6).max(2);
     let mut midpoints = Vec::new();
-    for i in 0..n {
-        let pi = samples[i].point;
-        let ti = samples[i].tangent;
+    for (i, si) in samples.iter().enumerate() {
+        let pi = si.point;
+        let ti = si.tangent;
         let mut best_dist = f64::INFINITY;
         let mut best_mid = None;
         for (j, sj) in samples.iter().enumerate() {
             let diff = i.abs_diff(j);
-            let circ_gap = diff.min(n - diff);
+            let circ_gap = diff.min(n.saturating_sub(diff));
             if circ_gap < min_idx_gap {
                 continue;
             }
@@ -2338,13 +2425,15 @@ pub fn subdivide_path_by_max_segment_length(path: &Path, max_len_pt: f64) -> Res
     let mut out = Path::new();
     out.fill_rule = path.fill_rule;
     for poly in polys {
+        let Some(&first_pt) = poly.points.first() else {
+            continue;
+        };
         if poly.points.len() < 2 {
             continue;
         }
-        out.move_to(poly.points[0])?;
+        out.move_to(first_pt)?;
         for seg in poly.points.windows(2) {
-            let p0 = seg[0];
-            let p1 = seg[1];
+            let [p0, p1] = *seg else { continue };
             let dx = p1.x.get() - p0.x.get();
             let dy = p1.y.get() - p0.y.get();
             let dist = dx.hypot(dy);
@@ -2426,9 +2515,9 @@ pub fn laplacian_relax_closed_path(path: &Path, iterations: u32, lambda: f64) ->
         }
         let n = pts.len();
         if n < 3 {
-            if let Some(&first) = pts.first() {
+            if let Some((&first, rest)) = pts.split_first() {
                 out.move_to(first)?;
-                for &p in &pts[1..] {
+                for &p in rest {
                     out.line_to(p)?;
                 }
                 if poly.closed {
@@ -2440,22 +2529,25 @@ pub fn laplacian_relax_closed_path(path: &Path, iterations: u32, lambda: f64) ->
         for _ in 0..iters {
             for factor in [lam, mu] {
                 let prev_pts = pts.clone();
-                for i in 0..n {
-                    if !poly.closed && (i == 0 || i + 1 == n) {
+                for (i, slot) in pts.iter_mut().enumerate() {
+                    if !poly.closed && (i == 0 || i.saturating_add(1) == n) {
                         continue;
                     }
-                    let p_prev = prev_pts[(i + n - 1) % n];
-                    let p_curr = prev_pts[i];
-                    let p_next = prev_pts[(i + 1) % n];
-                    let lx = 0.5 * (p_prev.x.get() + p_next.x.get()) - p_curr.x.get();
-                    let ly = 0.5 * (p_prev.y.get() + p_next.y.get()) - p_curr.y.get();
-                    pts[i] = Point::new(p_curr.x.get() + factor * lx, p_curr.y.get() + factor * ly)?;
+                    let prev_idx = i.saturating_add(n).saturating_sub(1).checked_rem(n).unwrap_or(0);
+                    let next_idx = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                    if let (Some(&p_prev), Some(&p_curr), Some(&p_next)) = (prev_pts.get(prev_idx), prev_pts.get(i), prev_pts.get(next_idx)) {
+                        let lx = 0.5 * (p_prev.x.get() + p_next.x.get()) - p_curr.x.get();
+                        let ly = 0.5 * (p_prev.y.get() + p_next.y.get()) - p_curr.y.get();
+                        *slot = Point::new(p_curr.x.get() + factor * lx, p_curr.y.get() + factor * ly)?;
+                    }
                 }
             }
         }
-        out.move_to(pts[0])?;
-        for &p in &pts[1..] {
-            out.line_to(p)?;
+        if let Some((&first, rest)) = pts.split_first() {
+            out.move_to(first)?;
+            for &p in rest {
+                out.line_to(p)?;
+            }
         }
         if poly.closed {
             out.close()?;
@@ -2542,24 +2634,31 @@ pub fn interpolate_smooth_cubic_path(path: &Path, tension: f64) -> Result<Path, 
         if n < 2 {
             continue;
         }
-        out.move_to(pts[0])?;
+        let Some(&first) = pts.first() else {
+            continue;
+        };
+        out.move_to(first)?;
         if poly.closed && n >= 3 {
             for i in 0..n {
-                let p0 = pts[(i + n - 1) % n];
-                let p1 = pts[i];
-                let p2 = pts[(i + 1) % n];
-                let p3 = pts[(i + 2) % n];
-                let c1 = Point::new(p1.x.get() + (p2.x.get() - p0.x.get()) * s, p1.y.get() + (p2.y.get() - p0.y.get()) * s)?;
-                let c2 = Point::new(p2.x.get() - (p3.x.get() - p1.x.get()) * s, p2.y.get() - (p3.y.get() - p1.y.get()) * s)?;
-                out.cubic_to(c1, c2, p2)?;
+                let idx0 = i.saturating_add(n).saturating_sub(1).checked_rem(n).unwrap_or(0);
+                let idx2 = i.saturating_add(1).checked_rem(n).unwrap_or(0);
+                let idx3 = i.saturating_add(2).checked_rem(n).unwrap_or(0);
+                if let (Some(&p0), Some(&p1), Some(&p2), Some(&p3)) = (pts.get(idx0), pts.get(i), pts.get(idx2), pts.get(idx3)) {
+                    let c1 = Point::new(p1.x.get() + (p2.x.get() - p0.x.get()) * s, p1.y.get() + (p2.y.get() - p0.y.get()) * s)?;
+                    let c2 = Point::new(p2.x.get() - (p3.x.get() - p1.x.get()) * s, p2.y.get() - (p3.y.get() - p1.y.get()) * s)?;
+                    out.cubic_to(c1, c2, p2)?;
+                }
             }
             out.close()?;
         } else {
-            for i in 0..(n - 1) {
-                let p0 = if i == 0 { pts[0] } else { pts[i - 1] };
-                let p1 = pts[i];
-                let p2 = pts[i + 1];
-                let p3 = if i + 2 < n { pts[i + 2] } else { pts[n - 1] };
+            let Some(&last_pt) = pts.last() else {
+                continue;
+            };
+            for i in 0..n.saturating_sub(1) {
+                let p0 = if i == 0 { first } else { pts.get(i.saturating_sub(1)).copied().unwrap_or(first) };
+                let Some(&p1) = pts.get(i) else { continue };
+                let Some(&p2) = pts.get(i.saturating_add(1)) else { continue };
+                let p3 = pts.get(i.saturating_add(2)).copied().unwrap_or(last_pt);
                 let c1 = Point::new(p1.x.get() + (p2.x.get() - p0.x.get()) * s, p1.y.get() + (p2.y.get() - p0.y.get()) * s)?;
                 let c2 = Point::new(p2.x.get() - (p3.x.get() - p1.x.get()) * s, p2.y.get() - (p3.y.get() - p1.y.get()) * s)?;
                 out.cubic_to(c1, c2, p2)?;
@@ -2628,9 +2727,11 @@ pub fn flatten_path_to_polylines(path: &Path, tolerance_pt: f64) -> Result<Path,
         if pts.len() < 2 {
             continue;
         }
-        out.move_to(pts[0])?;
-        for &p in &pts[1..] {
-            out.line_to(p)?;
+        if let Some((&first, rest)) = pts.split_first() {
+            out.move_to(first)?;
+            for &p in rest {
+                out.line_to(p)?;
+            }
         }
         if poly.closed {
             out.close()?;
@@ -2678,7 +2779,7 @@ pub fn shear_warp_path_along_axis(path: &Path, bounds: Rect, shear_x_pt: f64, sh
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::arithmetic_side_effects, clippy::panic)]
 mod m26_tests {
     use super::*;
 

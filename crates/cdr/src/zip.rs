@@ -60,18 +60,18 @@ fn find_eocd_offset(bytes: &[u8]) -> Option<usize> {
         return None;
     }
     let min_offset = bytes.len().saturating_sub(22 + 65_535);
-    let mut pos = bytes.len() - 22;
+    let mut pos = bytes.len().saturating_sub(22);
     loop {
-        if bytes.get(pos..pos + 4) == Some(b"PK\x05\x06")
-            && let Some(comment_len) = read_u16_le(bytes, pos + 20)
-            && pos + 22 + usize::from(comment_len) == bytes.len()
+        if bytes.get(pos..pos.saturating_add(4)) == Some(b"PK\x05\x06")
+            && let Some(comment_len) = read_u16_le(bytes, pos.saturating_add(20))
+            && pos.saturating_add(22).saturating_add(usize::from(comment_len)) == bytes.len()
         {
             return Some(pos);
         }
         if pos == min_offset {
             break;
         }
-        pos -= 1;
+        pos = pos.saturating_sub(1);
     }
     None
 }
@@ -98,7 +98,7 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
     let eocd_pos = find_eocd_offset(bytes).ok_or(ProbeError::Truncated { offset: bytes.len() as u64, needed: 22, available: 0 })?;
 
     let total_entries = usize::from(
-        read_u16_le(bytes, eocd_pos + 10)
+        read_u16_le(bytes, eocd_pos.saturating_add(10))
             .ok_or(ProbeError::Invalid { offset: eocd_pos as u64, reason: "failed to read EOCD entry count".to_string() })?,
     );
 
@@ -106,10 +106,10 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
         return Err(ProbeError::LimitExceeded { limit: "max_zip_entries".to_string(), max: MAX_ZIP_ENTRIES });
     }
 
-    let cd_size = read_u32_le(bytes, eocd_pos + 12)
+    let cd_size = read_u32_le(bytes, eocd_pos.saturating_add(12))
         .ok_or(ProbeError::Invalid { offset: eocd_pos as u64, reason: "failed to read EOCD Central Directory size".to_string() })?
         as usize;
-    let cd_offset = read_u32_le(bytes, eocd_pos + 16)
+    let cd_offset = read_u32_le(bytes, eocd_pos.saturating_add(16))
         .ok_or(ProbeError::Invalid { offset: eocd_pos as u64, reason: "failed to read EOCD Central Directory offset".to_string() })?
         as usize;
 
@@ -129,24 +129,24 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
     let mut has_data_file_list = false;
 
     for _ in 0..total_entries {
-        if cursor + 46 > cd_end {
+        if cursor.saturating_add(46) > cd_end {
             return Err(ProbeError::Truncated { offset: cursor as u64, needed: 46, available: cd_end.saturating_sub(cursor) as u64 });
         }
-        if bytes.get(cursor..cursor + 4) != Some(b"PK\x01\x02") {
+        if bytes.get(cursor..cursor.saturating_add(4)) != Some(b"PK\x01\x02") {
             return Err(ProbeError::Invalid { offset: cursor as u64, reason: "invalid Central Directory entry signature".to_string() });
         }
 
-        let flags = read_u16_le(bytes, cursor + 8).unwrap_or(0);
-        let method = read_u16_le(bytes, cursor + 10).unwrap_or(0);
-        let crc32 = read_u32_le(bytes, cursor + 16).unwrap_or(0);
-        let compressed_size = read_u32_le(bytes, cursor + 20).unwrap_or(0);
-        let uncompressed_size = read_u32_le(bytes, cursor + 24).unwrap_or(0);
-        let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
-        let extra_len = usize::from(read_u16_le(bytes, cursor + 30).unwrap_or(0));
-        let comment_len = usize::from(read_u16_le(bytes, cursor + 32).unwrap_or(0));
-        let local_header_offset = read_u32_le(bytes, cursor + 42).unwrap_or(0);
+        let flags = read_u16_le(bytes, cursor.saturating_add(8)).unwrap_or(0);
+        let method = read_u16_le(bytes, cursor.saturating_add(10)).unwrap_or(0);
+        let crc32 = read_u32_le(bytes, cursor.saturating_add(16)).unwrap_or(0);
+        let compressed_size = read_u32_le(bytes, cursor.saturating_add(20)).unwrap_or(0);
+        let uncompressed_size = read_u32_le(bytes, cursor.saturating_add(24)).unwrap_or(0);
+        let name_len = usize::from(read_u16_le(bytes, cursor.saturating_add(28)).unwrap_or(0));
+        let extra_len = usize::from(read_u16_le(bytes, cursor.saturating_add(30)).unwrap_or(0));
+        let comment_len = usize::from(read_u16_le(bytes, cursor.saturating_add(32)).unwrap_or(0));
+        let local_header_offset = read_u32_le(bytes, cursor.saturating_add(42)).unwrap_or(0);
 
-        let name_start = cursor + 46;
+        let name_start = cursor.saturating_add(46);
         let name_end = name_start
             .checked_add(name_len)
             .ok_or(ProbeError::Invalid { offset: cursor as u64, reason: "ZIP entry name length overflow".to_string() })?;
@@ -158,7 +158,7 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
         if next_cursor > cd_end {
             return Err(ProbeError::Truncated {
                 offset: cursor as u64,
-                needed: (next_cursor - cursor) as u64,
+                needed: next_cursor.saturating_sub(cursor) as u64,
                 available: cd_end.saturating_sub(cursor) as u64,
             });
         }
@@ -200,14 +200,14 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
                 available: bytes.len().saturating_sub(lfh_offset) as u64,
             });
         }
-        if bytes.get(lfh_offset..lfh_offset + 4) != Some(b"PK\x03\x04") {
+        if bytes.get(lfh_offset..lfh_offset.saturating_add(4)) != Some(b"PK\x03\x04") {
             return Err(ProbeError::Invalid {
                 offset: u64::from(entry.local_header_offset),
                 reason: "invalid Local File Header signature for inner entry".to_string(),
             });
         }
-        let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset + 26).unwrap_or(0));
-        let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset + 28).unwrap_or(0));
+        let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(26)).unwrap_or(0));
+        let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(28)).unwrap_or(0));
         let data_start = lfh_offset.checked_add(30).and_then(|v| v.checked_add(lfh_name_len)).and_then(|v| v.checked_add(lfh_extra_len)).ok_or(
             ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "Local File Header data offset overflow".to_string() },
         )?;
@@ -247,32 +247,32 @@ pub fn inspect_zip_cdr(bytes: &[u8]) -> Result<ZipInspection, ProbeError> {
 /// from a ZIP-wrapped `.cdr` archive, supporting both `Stored` (`0`) and `Deflate` (`8`) entries.
 pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> Result<(ZipCdrRole, Vec<u8>), ProbeError> {
     let eocd_pos = find_eocd_offset(bytes).ok_or(ProbeError::Truncated { offset: bytes.len() as u64, needed: 22, available: 0 })?;
-    let total_entries = usize::from(read_u16_le(bytes, eocd_pos + 10).unwrap_or(0));
+    let total_entries = usize::from(read_u16_le(bytes, eocd_pos.saturating_add(10)).unwrap_or(0));
     if total_entries > MAX_ZIP_ENTRIES {
         return Err(ProbeError::LimitExceeded { limit: "max_zip_entries".to_string(), max: MAX_ZIP_ENTRIES });
     }
-    let cd_size = read_u32_le(bytes, eocd_pos + 12).unwrap_or(0) as usize;
-    let cd_offset = read_u32_le(bytes, eocd_pos + 16).unwrap_or(0) as usize;
+    let cd_size = read_u32_le(bytes, eocd_pos.saturating_add(12)).unwrap_or(0) as usize;
+    let cd_offset = read_u32_le(bytes, eocd_pos.saturating_add(16)).unwrap_or(0) as usize;
     let cd_end = cd_offset.saturating_add(cd_size).min(eocd_pos);
 
     let mut cursor = cd_offset;
     let mut primary: Option<(ZipCdrRole, CdEntry)> = None;
 
     for _ in 0..total_entries {
-        if cursor + 46 > cd_end || bytes.get(cursor..cursor + 4) != Some(b"PK\x01\x02") {
+        if cursor.saturating_add(46) > cd_end || bytes.get(cursor..cursor.saturating_add(4)) != Some(b"PK\x01\x02") {
             break;
         }
-        let flags = read_u16_le(bytes, cursor + 8).unwrap_or(0);
-        let method = read_u16_le(bytes, cursor + 10).unwrap_or(0);
-        let crc32 = read_u32_le(bytes, cursor + 16).unwrap_or(0);
-        let compressed_size = read_u32_le(bytes, cursor + 20).unwrap_or(0);
-        let uncompressed_size = read_u32_le(bytes, cursor + 24).unwrap_or(0);
-        let name_len = usize::from(read_u16_le(bytes, cursor + 28).unwrap_or(0));
-        let extra_len = usize::from(read_u16_le(bytes, cursor + 30).unwrap_or(0));
-        let comment_len = usize::from(read_u16_le(bytes, cursor + 32).unwrap_or(0));
-        let local_header_offset = read_u32_le(bytes, cursor + 42).unwrap_or(0);
+        let flags = read_u16_le(bytes, cursor.saturating_add(8)).unwrap_or(0);
+        let method = read_u16_le(bytes, cursor.saturating_add(10)).unwrap_or(0);
+        let crc32 = read_u32_le(bytes, cursor.saturating_add(16)).unwrap_or(0);
+        let compressed_size = read_u32_le(bytes, cursor.saturating_add(20)).unwrap_or(0);
+        let uncompressed_size = read_u32_le(bytes, cursor.saturating_add(24)).unwrap_or(0);
+        let name_len = usize::from(read_u16_le(bytes, cursor.saturating_add(28)).unwrap_or(0));
+        let extra_len = usize::from(read_u16_le(bytes, cursor.saturating_add(30)).unwrap_or(0));
+        let comment_len = usize::from(read_u16_le(bytes, cursor.saturating_add(32)).unwrap_or(0));
+        let local_header_offset = read_u32_le(bytes, cursor.saturating_add(42)).unwrap_or(0);
 
-        let name_start = cursor + 46;
+        let name_start = cursor.saturating_add(46);
         let Some(name_end) = name_start.checked_add(name_len) else { break };
         let Some(next_cursor) = name_end.checked_add(extra_len).and_then(|v| v.checked_add(comment_len)) else { break };
         if next_cursor > cd_end {
@@ -299,11 +299,11 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
     }
 
     let lfh_offset = entry.local_header_offset as usize;
-    if lfh_offset.checked_add(30).is_none_or(|end| end > bytes.len()) || bytes.get(lfh_offset..lfh_offset + 4) != Some(b"PK\x03\x04") {
+    if lfh_offset.checked_add(30).is_none_or(|end| end > bytes.len()) || bytes.get(lfh_offset..lfh_offset.saturating_add(4)) != Some(b"PK\x03\x04") {
         return Err(ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "invalid Local File Header".to_string() });
     }
-    let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset + 26).unwrap_or(0));
-    let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset + 28).unwrap_or(0));
+    let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(26)).unwrap_or(0));
+    let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(28)).unwrap_or(0));
     let data_start = lfh_offset
         .checked_add(30)
         .and_then(|v| v.checked_add(lfh_name_len))
@@ -375,7 +375,8 @@ pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     for (idx, &(name, data)) in entries.iter().enumerate() {
         let name_bytes = name.as_bytes();
         let len = data.len() as u32;
-        let crc = crcs[idx];
+        let crc = crcs.get(idx).copied().unwrap_or(0);
+        let local_off = offsets.get(idx).copied().unwrap_or(0);
         buf.extend_from_slice(b"PK\x01\x02");
         buf.extend_from_slice(&20u16.to_le_bytes());
         buf.extend_from_slice(&20u16.to_le_bytes());
@@ -392,11 +393,11 @@ pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u32.to_le_bytes());
-        buf.extend_from_slice(&offsets[idx].to_le_bytes());
+        buf.extend_from_slice(&local_off.to_le_bytes());
         buf.extend_from_slice(name_bytes);
     }
 
-    let cd_size = (buf.len() as u32) - cd_offset;
+    let cd_size = (buf.len() as u32).saturating_sub(cd_offset);
     let count = entries.len() as u16;
     buf.extend_from_slice(b"PK\x05\x06");
     buf.extend_from_slice(&0u16.to_le_bytes());
@@ -410,6 +411,7 @@ pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 pub(crate) mod tests {
     use super::*;
 

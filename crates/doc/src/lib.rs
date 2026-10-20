@@ -20,7 +20,7 @@ pub use style::{
 pub use text_layout::{ParagraphLayout, PositionedTextLine, TextCaseKind, advance_pt, apply_text_case, layout_paragraph_text};
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use std::collections::BTreeMap;
 

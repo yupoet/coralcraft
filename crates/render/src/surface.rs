@@ -86,7 +86,7 @@ pub struct Surface {
 impl Surface {
     /// Allocates a new [`Surface`] initialized to straight-RGBA background `bg_straight_rgba`.
     pub fn new(width: u32, height: u32, bg_straight_rgba: [u8; 4]) -> Result<Self, RenderError> {
-        let total = u64::from(width) * u64::from(height);
+        let total = u64::from(width).saturating_mul(u64::from(height));
         if width == 0 || height == 0 || width > MAX_SURFACE_SIDE || height > MAX_SURFACE_SIDE || total > MAX_SURFACE_PIXELS {
             return Err(RenderError::SurfaceTooLarge { width, height });
         }
@@ -98,8 +98,8 @@ impl Surface {
     #[must_use]
     pub fn get_premul(&self, x: u32, y: u32) -> [u8; 4] {
         if x < self.width && y < self.height {
-            let idx = (y as usize) * (self.width as usize) + (x as usize);
-            self.pixels[idx]
+            let idx = (y as usize).saturating_mul(self.width as usize).saturating_add(x as usize);
+            self.pixels.get(idx).copied().unwrap_or([0, 0, 0, 0])
         } else {
             [0, 0, 0, 0]
         }
@@ -123,8 +123,10 @@ impl Surface {
             return;
         }
         let src = straight_to_premul([rgb[0], rgb[1], rgb[2], a_u8]);
-        let idx = (y as usize) * (self.width as usize) + (x as usize);
-        self.pixels[idx] = src_over_premul(src, self.pixels[idx]);
+        let idx = (y as usize).saturating_mul(self.width as usize).saturating_add(x as usize);
+        if let Some(px) = self.pixels.get_mut(idx) {
+            *px = src_over_premul(src, *px);
+        }
     }
 
     /// Multiplies `child`'s premultiplied pixels by the 16-level coverage mask `mask_16` (`0..=16`)
@@ -139,10 +141,10 @@ impl Surface {
                 sp
             } else {
                 [
-                    ((u32::from(sp[0]) * cov + 8) / 16) as u8,
-                    ((u32::from(sp[1]) * cov + 8) / 16) as u8,
-                    ((u32::from(sp[2]) * cov + 8) / 16) as u8,
-                    ((u32::from(sp[3]) * cov + 8) / 16) as u8,
+                    (u32::from(sp[0]).saturating_mul(cov).saturating_add(8) / 16) as u8,
+                    (u32::from(sp[1]).saturating_mul(cov).saturating_add(8) / 16) as u8,
+                    (u32::from(sp[2]).saturating_mul(cov).saturating_add(8) / 16) as u8,
+                    (u32::from(sp[3]).saturating_mul(cov).saturating_add(8) / 16) as u8,
                 ]
             };
             *dst = src_over_premul(masked_src, *dst);
@@ -161,7 +163,12 @@ pub const fn straight_to_premul(rgba: [u8; 4]) -> [u8; 4] {
     if a == 0 {
         return [0, 0, 0, 0];
     }
-    [((rgba[0] as u32 * a + 127) / 255) as u8, ((rgba[1] as u32 * a + 127) / 255) as u8, ((rgba[2] as u32 * a + 127) / 255) as u8, rgba[3]]
+    [
+        ((rgba[0] as u32).saturating_mul(a).saturating_add(127) / 255) as u8,
+        ((rgba[1] as u32).saturating_mul(a).saturating_add(127) / 255) as u8,
+        ((rgba[2] as u32).saturating_mul(a).saturating_add(127) / 255) as u8,
+        rgba[3],
+    ]
 }
 
 /// Converts premultiplied RGBA8 to straight RGBA8.
@@ -176,7 +183,11 @@ pub const fn premul_to_straight(premul: [u8; 4]) -> [u8; 4] {
         return premul;
     }
     const fn unpremul(c: u8, a: u32) -> u8 {
-        let v = (c as u32 * 255 + (a / 2)) / a;
+        let num = (c as u32).saturating_mul(255).saturating_add(a / 2);
+        let v = match num.checked_div(a) {
+            Some(v) => v,
+            None => 0,
+        };
         if v > 255 { 255 } else { v as u8 }
     }
     [unpremul(premul[0], a), unpremul(premul[1], a), unpremul(premul[2], a), premul[3]]
@@ -193,9 +204,9 @@ pub const fn src_over_premul(src: [u8; 4], dst: [u8; 4]) -> [u8; 4] {
     if sa == 0 {
         return dst;
     }
-    let inv_sa = 255 - sa;
+    let inv_sa = 255u32.saturating_sub(sa);
     const fn blend(s: u8, d: u8, inv_sa: u32) -> u8 {
-        let v = (s as u32) + ((d as u32 * inv_sa + 127) / 255);
+        let v = (s as u32).saturating_add((d as u32).saturating_mul(inv_sa).saturating_add(127) / 255);
         if v > 255 { 255 } else { v as u8 }
     }
     [blend(src[0], dst[0], inv_sa), blend(src[1], dst[1], inv_sa), blend(src[2], dst[2], inv_sa), blend(src[3], dst[3], inv_sa)]

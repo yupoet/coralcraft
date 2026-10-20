@@ -154,8 +154,8 @@ pub fn layout_paragraph_text(spec: &ParagraphTextSpec) -> ParagraphLayout {
     let cols = spec.columns.max(1);
     let gutter = spec.gutter_pt.get().max(0.0);
 
-    let total_gutter = if cols > 1 { (cols - 1) as f64 * gutter } else { 0.0 };
-    let col_w = ((frame_w - total_gutter) / (cols as f64)).max(0.0);
+    let total_gutter = if cols > 1 { f64::from(cols.saturating_sub(1)) * gutter } else { 0.0 };
+    let col_w = ((frame_w - total_gutter) / f64::from(cols)).max(0.0);
 
     if col_w <= 1e-4 || frame_h <= 1e-4 {
         return ParagraphLayout { lines: Vec::new(), overflow: !spec.text.trim().is_empty(), column_count: cols, column_width_pt: col_w };
@@ -172,13 +172,13 @@ pub fn layout_paragraph_text(spec: &ParagraphTextSpec) -> ParagraphLayout {
     let space_width = SPACE_EM * font_size;
 
     for (para_idx, para) in paragraphs.iter().enumerate() {
-        let _is_last_para = para_idx + 1 == paragraphs.len();
+        let _is_last_para = para_idx.saturating_add(1) == paragraphs.len();
         let words: Vec<&str> = para.split_whitespace().collect();
 
         if words.is_empty() {
             if cursor_y + DESCENT_EM * font_size > frame_h {
-                if current_col + 1 < cols {
-                    current_col += 1;
+                if current_col.saturating_add(1) < cols {
+                    current_col = current_col.saturating_add(1);
                     cursor_y = ASCENT_EM * font_size;
                 } else {
                     overflow = true;
@@ -191,21 +191,20 @@ pub fn layout_paragraph_text(spec: &ParagraphTextSpec) -> ParagraphLayout {
         let mut line_words: Vec<&str> = Vec::new();
         let mut line_natural_w = 0.0;
 
-        let mut w_idx = 0;
-        while w_idx < words.len() {
-            let word = words[w_idx];
+        let mut w_idx = 0usize;
+        while let Some(&word) = words.get(w_idx) {
             let word_w = advance_pt(word, font_size);
 
             if line_words.is_empty() {
                 line_words.push(word);
                 line_natural_w = word_w;
-                w_idx += 1;
+                w_idx = w_idx.saturating_add(1);
             } else {
                 let test_w = line_natural_w + space_width + word_w;
                 if test_w <= col_w {
                     line_words.push(word);
                     line_natural_w = test_w;
-                    w_idx += 1;
+                    w_idx = w_idx.saturating_add(1);
                 } else {
                     emit_line(
                         &line_words,
@@ -270,8 +269,8 @@ fn emit_line(
     positioned_lines: &mut Vec<PositionedTextLine>,
 ) {
     if *cursor_y + DESCENT_EM * font_size > frame_h {
-        if *current_col + 1 < cols {
-            *current_col += 1;
+        if current_col.saturating_add(1) < cols {
+            *current_col = current_col.saturating_add(1);
             *cursor_y = ASCENT_EM * font_size;
         } else {
             *overflow = true;

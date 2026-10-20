@@ -5,7 +5,7 @@
 //! `cmx2raw` tools when available on `$PATH`, and return `Err` instead of silently truncating
 //! oversized paths.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use std::process::Command;
 

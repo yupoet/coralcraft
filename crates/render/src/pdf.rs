@@ -59,8 +59,8 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
     let margin = spec.margin_pt.get().max(0.0);
     let gutter = spec.gutter_pt.get().max(0.0);
 
-    let usable_w = (sheet_w - 2.0 * margin - f64::from(cols - 1) * gutter).max(10.0);
-    let usable_h = (sheet_h - 2.0 * margin - f64::from(rows - 1) * gutter).max(10.0);
+    let usable_w = (sheet_w - 2.0 * margin - f64::from(cols.saturating_sub(1)) * gutter).max(10.0);
+    let usable_h = (sheet_h - 2.0 * margin - f64::from(rows.saturating_sub(1)) * gutter).max(10.0);
     let cell_w = usable_w / f64::from(cols);
     let cell_h = usable_h / f64::from(rows);
 
@@ -70,9 +70,11 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
 
     for r in 0..rows {
         for c in 0..cols {
-            let cell_idx = (r * cols + c) as usize;
-            let page_idx = if doc.pages.len() == 1 { 0 } else { cell_idx % doc.pages.len() };
-            let page = &doc.pages[page_idx];
+            let cell_idx = r.saturating_mul(cols).saturating_add(c) as usize;
+            let page_idx = if doc.pages.len() == 1 { 0 } else { cell_idx.checked_rem(doc.pages.len()).unwrap_or(0) };
+            let Some(page) = doc.pages.get(page_idx) else {
+                continue;
+            };
             let pw = page.size.width.get().max(1.0);
             let ph = page.size.height.get().max(1.0);
             let scale = (cell_w / pw).min(cell_h / ph);
@@ -145,10 +147,10 @@ pub(crate) fn registration_target_centers(w: f64, h: f64) -> [(f64, f64); 4] {
 fn serialize_pdf_objects(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4096);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
-    let mut offsets = Vec::with_capacity(objects.len() + 1);
+    let mut offsets = Vec::with_capacity(objects.len().saturating_add(1));
     offsets.push(0usize);
     for (idx, obj_bytes) in objects.iter().enumerate() {
-        let obj_num = idx + 1;
+        let obj_num = idx.saturating_add(1);
         offsets.push(out.len());
         out.extend_from_slice(format!("{obj_num} 0 obj\n").as_bytes());
         out.extend_from_slice(obj_bytes);
@@ -157,7 +159,7 @@ fn serialize_pdf_objects(objects: &[Vec<u8>]) -> Vec<u8> {
     let xref_offset = out.len();
     let size = offsets.len();
     out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
-    for &off in &offsets[1..] {
+    for &off in offsets.get(1..).unwrap_or_default() {
         out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
@@ -183,7 +185,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
     //   page_obj = 4 + 2 * i
     //   content_obj = 5 + 2 * i
     let page_count = doc.pages.len();
-    let total_objects = 3 + 2 * page_count;
+    let total_objects = 3usize.saturating_add(2usize.saturating_mul(page_count));
     let mut objects: Vec<Vec<u8>> = Vec::with_capacity(total_objects);
 
     let mut kids_refs = String::new();
@@ -191,7 +193,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
         if !kids_refs.is_empty() {
             kids_refs.push(' ');
         }
-        let _ = write!(kids_refs, "{} 0 R", 4 + 2 * i);
+        let _ = write!(kids_refs, "{} 0 R", 4usize.saturating_add(2usize.saturating_mul(i)));
     }
 
     // 1: Catalog
@@ -201,8 +203,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
     // 3: Font /F1 (Helvetica)
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
 
-    for page_idx in 0..page_count {
-        let page = &doc.pages[page_idx];
+    for (page_idx, page) in doc.pages.iter().enumerate() {
         let w = page.size.width.get();
         let h = page.size.height.get();
         let raw_bleed = if prepress.bleed_pt.get() > 0.0 { prepress.bleed_pt.get() } else { page.bleed.get().max(0.0) };
@@ -223,7 +224,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
                 fmt_num(media_h)
             );
         }
-        let content_obj_num = 5 + 2 * page_idx;
+        let content_obj_num = 5usize.saturating_add(2usize.saturating_mul(page_idx));
         let _ = write!(page_dict, " /Resources << /Font << /F1 3 0 R >> >> /Contents {content_obj_num} 0 R >>");
         objects.push(page_dict.into_bytes());
 
@@ -251,7 +252,8 @@ fn build_page_content_stream(
     prepress: &PrepressOptions,
 ) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
-    let page = &doc.pages[page_index];
+    let page =
+        doc.pages.get(page_index).ok_or(RenderError::Doc(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() }))?;
     let media_h = h + 2.0 * bleed;
 
     let mut s = String::new();
@@ -452,7 +454,7 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
                     let max_r = (radius.get() * bw.hypot(bh)).max(1e-6);
                     for i in (0..bands).rev() {
                         let t = ((i as f64) + 0.5) / (bands as f64);
-                        let r = max_r * ((i + 1) as f64) / (bands as f64);
+                        let r = max_r * (i.saturating_add(1) as f64) / (bands as f64);
                         let rgb = interpolate_stops(stops, *blend_mode, t)?;
                         emit_pdf_color(s, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] }, false);
                         let _ = writeln!(s, "{} {} {} {} re f", fmt_num(cx - r), fmt_num(cy - r), fmt_num(2.0 * r), fmt_num(2.0 * r));
@@ -465,7 +467,7 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
                     let base_rad = angle_deg.get().to_radians();
                     for i in 0..bands {
                         let norm0 = (i as f64) / (bands as f64);
-                        let norm1 = ((i + 1) as f64) / (bands as f64);
+                        let norm1 = (i.saturating_add(1) as f64) / (bands as f64);
                         let norm_mid = 0.5 * (norm0 + norm1);
                         let t = (1.0 - (2.0 * norm_mid - 1.0).abs()).clamp(0.0, 1.0);
                         let rgb = interpolate_stops(stops, *blend_mode, t)?;
@@ -627,20 +629,17 @@ fn emit_pdf_node(s: &mut String, node: &ObjectNode) -> Result<(), RenderError> {
             return Ok(());
         }
         ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
-            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
-            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+            let w = (f64::from(*pixel_width) * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+            let h = (f64::from(*pixel_height) * 72.0 / dpi_y.get().max(1.0)).max(1.0);
             s.push_str("q\n");
             let _ = writeln!(s, "{} 0 0 {} 0 {} cm", fmt_num(w), fmt_num(-h), fmt_num(h));
             s.push_str("BI\n");
             let _ = writeln!(s, "/W {pixel_width}\n/H {pixel_height}\n/CS /DeviceRGB\n/BPC 8\n/F /AHx\nID");
-            let total_pixels = (*pixel_width as usize) * (*pixel_height as usize);
-            let mut hex = String::with_capacity(total_pixels * 6 + total_pixels / 16);
+            let total_pixels = (*pixel_width as usize).saturating_mul(*pixel_height as usize);
+            let mut hex = String::with_capacity(total_pixels.saturating_mul(6).saturating_add(total_pixels / 16));
             for i in 0..total_pixels {
-                let off = i * 4;
-                if off + 3 <= rgba_pixels.len() {
-                    let r = rgba_pixels[off];
-                    let g = rgba_pixels[off + 1];
-                    let b = rgba_pixels[off + 2];
+                let off = i.saturating_mul(4);
+                if let Some([r, g, b]) = rgba_pixels.get(off..off.saturating_add(3)).and_then(|s| <[u8; 3]>::try_from(s).ok()) {
                     let _ = write!(hex, "{r:02X}{g:02X}{b:02X}");
                 } else {
                     hex.push_str("000000");

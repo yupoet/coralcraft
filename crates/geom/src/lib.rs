@@ -50,7 +50,7 @@ pub use shapes::{
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
