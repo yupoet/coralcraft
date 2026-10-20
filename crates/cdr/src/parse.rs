@@ -811,6 +811,38 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                                             };
                                             decoded_fill = Some(FillStyle::Fountain { geometry, blend_mode, stops });
                                         }
+                                    } else if fill_type == 7 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
+                                        let mono_end = sub_pos.saturating_add(fill_spec_len);
+                                        let mut mono_pos = sub_pos.saturating_add(5);
+                                        while mono_pos < mono_end {
+                                            let Some(&mono_tag) = attr_slice.get(mono_pos) else {
+                                                break;
+                                            };
+                                            if mono_tag == 255 || mono_pos.saturating_add(3) > mono_end {
+                                                break;
+                                            }
+                                            let mono_len =
+                                                (read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                            if mono_tag == 1 && mono_pos.saturating_add(25) <= mono_end {
+                                                let bm_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(3)).unwrap_or(1);
+                                                let w_cdr = read_i32(ctx.endian, attr_slice, mono_pos.saturating_add(5)).unwrap_or(254_000);
+                                                let fg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(21)).unwrap_or(1) as usize;
+                                                let bg_idx = read_u16(ctx.endian, attr_slice, mono_pos.saturating_add(23)).unwrap_or(1) as usize;
+                                                let kind = match bm_idx {
+                                                    2 => coralcraft_doc::PatternKind::PolkaDot,
+                                                    3 => coralcraft_doc::PatternKind::HorizontalStripe,
+                                                    4 => coralcraft_doc::PatternKind::VerticalStripe,
+                                                    5 => coralcraft_doc::PatternKind::DiagonalCrosshatch,
+                                                    _ => coralcraft_doc::PatternKind::Checkerboard,
+                                                };
+                                                let fg_color = cmx_colors.get(fg_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                                let bg_color = cmx_colors.get(bg_idx.saturating_sub(1)).cloned().unwrap_or(Color::WHITE);
+                                                let raw_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
+                                                let tile_size_pt = F64::new((raw_pt * 1000.0).round() / 1000.0).unwrap_or(F64::ONE);
+                                                decoded_fill = Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt });
+                                            }
+                                            mono_pos = mono_pos.saturating_add(mono_len);
+                                        }
                                     }
                                     sub_pos = sub_pos.saturating_add(fill_spec_len);
                                     if attr_slice.get(sub_pos) == Some(&255) {
@@ -1345,15 +1377,20 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
         }
         7 => {
             if payload.len() >= 52 {
+                let pat_id = read_u32(endian, payload, 8).unwrap_or(1);
+                let kind = match pat_id {
+                    2 => coralcraft_doc::PatternKind::PolkaDot,
+                    3 => coralcraft_doc::PatternKind::HorizontalStripe,
+                    4 => coralcraft_doc::PatternKind::VerticalStripe,
+                    5 => coralcraft_doc::PatternKind::DiagonalCrosshatch,
+                    _ => coralcraft_doc::PatternKind::Checkerboard,
+                };
                 let w_cdr = read_i32(endian, payload, 12).unwrap_or(254_000);
                 let tile_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(1.0, 1000.0);
                 let fg_color = decode_cdr_color_v500(payload.get(28..40).unwrap_or_default(), endian, warnings).unwrap_or(Color::BLACK);
                 let bg_color = decode_cdr_color_v500(payload.get(40..52).unwrap_or_default(), endian, warnings).unwrap_or(Color::WHITE);
                 let tile_size_pt = F64::new(tile_pt).unwrap_or(F64::ONE);
-                return Some((
-                    fill_id,
-                    FillStyle::TwoColorPattern { kind: coralcraft_doc::PatternKind::Checkerboard, fg_color, bg_color, tile_size_pt },
-                ));
+                return Some((fill_id, FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }));
             }
             warnings.push(format!("W-FILL-UNSUPPORTED: fill_type 7 in fild#{fill_id} preserved as FillStyle::Unknown"));
             Some((fill_id, FillStyle::Unknown { tag: ChunkTag(*b"fild"), payload: RawPayload(payload.iter().copied().take(256).collect()) }))
@@ -2197,10 +2234,17 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
                 p.extend_from_slice(&off_pct.to_le_bytes());
             }
         }
-        FillStyle::TwoColorPattern { fg_color, bg_color, tile_size_pt, .. } => {
+        FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } => {
             p.extend_from_slice(&7u16.to_le_bytes());
             p.extend_from_slice(&0u16.to_le_bytes());
-            p.extend_from_slice(&1u32.to_le_bytes()); // pattern_id
+            let pat_id: u32 = match kind {
+                coralcraft_doc::PatternKind::PolkaDot => 2,
+                coralcraft_doc::PatternKind::HorizontalStripe => 3,
+                coralcraft_doc::PatternKind::VerticalStripe => 4,
+                coralcraft_doc::PatternKind::DiagonalCrosshatch => 5,
+                coralcraft_doc::PatternKind::Checkerboard | coralcraft_doc::PatternKind::Unknown => 1,
+            };
+            p.extend_from_slice(&pat_id.to_le_bytes()); // pattern_id
             let w_cdr = pt_to_cdr_i32(tile_size_pt.get().clamp(1.0, 1000.0));
             p.extend_from_slice(&w_cdr.to_le_bytes());
             p.extend_from_slice(&w_cdr.to_le_bytes());
@@ -2747,6 +2791,7 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
     let mut mask = 0u8;
     let mut fill_color_idx = 1u16;
     let mut cmx_fountain: Option<CmxFountainSpec> = None;
+    let mut cmx_mono_bm: Option<(u16, i32, u16, u16)> = None;
     if let Some(fill) = &node.fill {
         mask |= 0x01;
         match fill {
@@ -2786,6 +2831,21 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
                     stop_entries.push((c_idx, pos_pct));
                 }
                 cmx_fountain = Some(CmxFountainSpec { f_type, pad_pct, angle_micro, x_off, y_off, mode_raw, stop_entries });
+            }
+            FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } => {
+                let bm_idx: u16 = match kind {
+                    coralcraft_doc::PatternKind::PolkaDot => 2,
+                    coralcraft_doc::PatternKind::HorizontalStripe => 3,
+                    coralcraft_doc::PatternKind::VerticalStripe => 4,
+                    coralcraft_doc::PatternKind::DiagonalCrosshatch => 5,
+                    coralcraft_doc::PatternKind::Checkerboard | coralcraft_doc::PatternKind::Unknown => 1,
+                };
+                let w_cdr = pt_to_cdr_i32(tile_size_pt.get().clamp(1.0, 1000.0));
+                tables.colors.push(fg_color.clone());
+                let fg_idx = tables.colors.len() as u16;
+                tables.colors.push(bg_color.clone());
+                let bg_idx = tables.colors.len() as u16;
+                cmx_mono_bm = Some((bm_idx, w_cdr, fg_idx, bg_idx));
             }
             _ => {
                 let c = match fill {
@@ -2868,6 +2928,24 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
                 render_attr.extend_from_slice(&pos_pct.to_le_bytes());
             }
             render_attr.push(255u8); // EndTag (Fountain)
+            render_attr.push(255u8); // EndTag (FillSpec)
+        } else if let Some(&(bm_idx, w_cdr, fg_idx, bg_idx)) = cmx_mono_bm.as_ref() {
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
+            render_attr.extend_from_slice(&33u16.to_le_bytes()); // tagLength = 33
+            render_attr.extend_from_slice(&7u16.to_le_bytes()); // fillType = 7 (MonoBM)
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_MonoBM
+            render_attr.extend_from_slice(&27u16.to_le_bytes()); // subTagLength = 27
+            render_attr.extend_from_slice(&bm_idx.to_le_bytes());
+            render_attr.extend_from_slice(&w_cdr.to_le_bytes());
+            render_attr.extend_from_slice(&w_cdr.to_le_bytes());
+            render_attr.extend_from_slice(&0u16.to_le_bytes()); // xOff = 0
+            render_attr.extend_from_slice(&0u16.to_le_bytes()); // yOff = 0
+            render_attr.extend_from_slice(&0u16.to_le_bytes()); // interOff = 0
+            render_attr.extend_from_slice(&0u16.to_le_bytes()); // flags = 0
+            render_attr.extend_from_slice(&fg_idx.to_le_bytes());
+            render_attr.extend_from_slice(&bg_idx.to_le_bytes());
+            render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+            render_attr.push(255u8); // EndTag (MonoBM)
             render_attr.push(255u8); // EndTag (FillSpec)
         } else {
             render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec

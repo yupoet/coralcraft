@@ -160,6 +160,45 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
                 }
                 return Ok(());
             }
+            ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } => {
+                let pw = *pixel_width as usize;
+                let ph = *pixel_height as usize;
+                let needed = pw.saturating_mul(ph).saturating_mul(4);
+                if pw > 0
+                    && ph > 0
+                    && rgba_pixels.len() >= needed
+                    && let Some(pixel_slice) = rgba_pixels.get(..needed)
+                {
+                    let w_pt = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
+                    let h_pt = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
+                    let local_rect = coralcraft_geom::Rect::new(0.0, 0.0, w_pt, h_pt)?;
+                    let wb = world_tf.apply_rect_bbox(local_rect).unwrap_or(local_rect);
+                    let x0 = wb.x0.get();
+                    let y0_ps = page_h - wb.y1.get();
+                    let bw = wb.width().max(1.0);
+                    let bh = wb.height().max(1.0);
+                    let op = node.opacity.get().clamp(0.0, 1.0);
+                    let _ = writeln!(
+                        out,
+                        "gsave\n% Bitmap\n{} {} translate\n{} {} scale\n{pw} {ph} 8 [{pw} 0 0 -{ph} 0 {ph}]\ncurrentfile /ASCIIHexDecode filter false 3 colorimage",
+                        fmt_num(x0),
+                        fmt_num(y0_ps),
+                        fmt_num(bw),
+                        fmt_num(bh)
+                    );
+                    let (chunks, _) = pixel_slice.as_chunks::<4>();
+                    for &[r, g, b, a] in chunks {
+                        let eff_a = (f64::from(a) * op).round().clamp(0.0, 255.0) as u32;
+                        let inv_a = 255u32.saturating_sub(eff_a);
+                        let ro = (u32::from(r).saturating_mul(eff_a).saturating_add(255u32.saturating_mul(inv_a)).saturating_add(127) / 255) as u8;
+                        let go = (u32::from(g).saturating_mul(eff_a).saturating_add(255u32.saturating_mul(inv_a)).saturating_add(127) / 255) as u8;
+                        let bo = (u32::from(b).saturating_mul(eff_a).saturating_add(255u32.saturating_mul(inv_a)).saturating_add(127) / 255) as u8;
+                        let _ = write!(out, "{ro:02x}{go:02x}{bo:02x}");
+                    }
+                    out.push_str(">\ngrestore\n");
+                }
+                return Ok(());
+            }
             _ => {}
         }
     }
@@ -874,5 +913,64 @@ mod tests {
         assert_eq!(ell_spec.mode, EllipseMode::Full);
         assert!((ell_spec.rect.width() - 120.0).abs() < 1e-4);
         assert!((ell_spec.rect.height() - 60.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn export_eps_bitmap_colorimage_and_import_svg_smooth_curves_and_chained_transforms_m72() {
+        let mut doc = Document::new_a4_portrait();
+        let rgba = vec![
+            255, 0, 0, 255, // red
+            0, 255, 0, 255, // green
+            0, 0, 255, 255, // blue
+            255, 255, 0, 255, // yellow
+        ];
+        doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects.push(ObjectNode::new(
+            ObjectId(50),
+            Some("TestBmp".to_owned()),
+            ObjectKind::Bitmap { pixel_width: 2, pixel_height: 2, dpi_x: F64::new(72.0).unwrap(), dpi_y: F64::new(72.0).unwrap(), rgba_pixels: rgba },
+            None,
+            None,
+        ));
+        let eps = export_eps(&doc, 0).expect("export_eps with Bitmap");
+        assert!(eps.contains("false 3 colorimage"), "EPS should emit PostScript colorimage for ObjectKind::Bitmap: {eps}");
+        assert!(eps.contains("ff000000ff000000ffffff00"), "EPS should contain 24-bit RGB hex data: {eps}");
+
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300pt" height="200pt">
+  <path d="M 10 10 C 20 0 30 0 40 10 S 60 20 70 10 Q 80 0 90 10 T 110 10" fill="none" stroke="#112233" transform="translate(10, 20) scale(2) skewX(45)"/>
+</svg>"##;
+        let svg_doc = coralcraft_doc::import_svg(svg).expect("import_svg smooth curves & chained transforms");
+        let objs = &svg_doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 1);
+        let obj = objs.first().unwrap();
+        let ObjectKind::Path(p) = &obj.kind else {
+            panic!("expected ObjectKind::Path");
+        };
+        assert_eq!(p.elements.len(), 5, "expected MoveTo, CubicTo (C), CubicTo (S), QuadTo (Q), QuadTo (T)");
+        match p.elements.get(2) {
+            Some(PathElement::CubicTo { c1, c2, end }) => {
+                assert!(
+                    (c1.x.get() - 50.0).abs() < 1e-6 && (c1.y.get() - 20.0).abs() < 1e-6,
+                    "S must reflect previous c2 (30,0) across (40,10) to (50,20)"
+                );
+                assert!((c2.x.get() - 60.0).abs() < 1e-6 && (c2.y.get() - 20.0).abs() < 1e-6);
+                assert!((end.x.get() - 70.0).abs() < 1e-6 && (end.y.get() - 10.0).abs() < 1e-6);
+            }
+            other => panic!("expected CubicTo from S command, got {other:?}"),
+        }
+        match p.elements.get(4) {
+            Some(PathElement::QuadTo { ctrl, end }) => {
+                assert!(
+                    (ctrl.x.get() - 100.0).abs() < 1e-6 && (ctrl.y.get() - 20.0).abs() < 1e-6,
+                    "T must reflect previous ctrl (80,0) across (90,10) to (100,20)"
+                );
+                assert!((end.x.get() - 110.0).abs() < 1e-6 && (end.y.get() - 10.0).abs() < 1e-6);
+            }
+            other => panic!("expected QuadTo from T command, got {other:?}"),
+        }
+        let mapped = obj.transform.apply_point(Point::new(1.0, 1.0).unwrap()).unwrap();
+        assert!(
+            (mapped.x.get() - 14.0).abs() < 1e-4 && (mapped.y.get() - 22.0).abs() < 1e-4,
+            "translate(10,20)*scale(2)*skewX(45) on (1,1) -> (14,22), got {mapped:?}"
+        );
     }
 }

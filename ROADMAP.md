@@ -259,9 +259,14 @@
 71. **M71 CMX1 Fountain Fill (`fillType = 2`) Round-Trip, SVG Relative Path Commands (`m`/`l`/`h`/`v`/`H`/`V`/`q`/`c`), `<rect rx/ry>`, `rotate(...)` & `fill-rule="evenodd"` Import, and DXF `ARC`/`ELLIPSE` Import**:
     - `coralcraft-cdr`: Encoded and decoded CMX1 `fillType = 2` (`CMX_Tag_RenderAttr_FillSpec_Fountain` subtags `1` Base and `2` Color) for multi-stop Linear, Radial, Conical, and Square fountain fills in `write_cmx1` and `parse_cmx_commands_into_page`.
     - `coralcraft-doc`: Supported SVG relative path commands (`m`, `l`, `h`, `v`, `q`, `c`) and single-axis `H`/`V`, `<rect rx="..." ry="...">` rounded corners, `rotate(angle[, cx, cy])` transforms, and `fill-rule="evenodd"` in `import_svg`, plus AutoCAD DXF `ARC` (`EllipseMode::Arc`) and `ELLIPSE` (`EllipseMode::Full`) entity import in `import_dxf`.
+72. **M72 CDR7/CMX1 Two-Color Pattern (`fillType = 7` / `PatternKind`) Round-Trip, EPS Embedded Bitmap (`false 3 colorimage`) Export, and SVG Smooth Curves (`S`/`s`/`T`/`t`) & Chained `transform` Lists**:
+    - `coralcraft-cdr`: Preserved `PatternKind` (`Checkerboard`, `PolkaDot`, `HorizontalStripe`, `VerticalStripe`, `DiagonalCrosshatch`), `fg_color`, `bg_color`, and `tile_size_pt` across CDR7 `fild` (`fill_type = 7`) and CMX1 `CMX_Tag_RenderAttr_FillSpec_MonoBM` (`fillType = 7`).
+    - `coralcraft-render`: Rendered `ObjectKind::Bitmap` in `export_eps` using PostScript Level 2 `/ASCIIHexDecode filter false 3 colorimage` with alpha-over-white compositing.
+    - `coralcraft-doc`: Added SVG smooth cubic (`S`/`s`) and smooth quadratic (`T`/`t`) curve reflection commands plus chained `transform` lists (`translate`, `scale`, `rotate`, `skewX`, `skewY`, `matrix`) in `import_svg`.
 
 ## Changelog
 
+- 2026-10-21: M72 delivered (CDR7 `fild` & CMX1 `fillType = 7` `TwoColorPattern` `PatternKind` round-trip, EPS `ObjectKind::Bitmap` PostScript `/ASCIIHexDecode filter false 3 colorimage` export, and SVG `S/s/T/t` smooth curve commands & chained `transform` lists in `import_svg`).
 - 2026-10-21: M71 delivered (CMX1 `fillType = 2` multi-stop Linear/Radial/Conical/Square fountain fill round-trip in `write_cmx1` & `parse_cmx_commands_into_page`, SVG relative path commands `m/l/h/v/H/V/q/c`, `<rect rx/ry>`, `rotate(angle[,cx,cy])` & `fill-rule="evenodd"` in `import_svg`, and DXF `ARC`/`ELLIPSE` entity import in `import_dxf`).
 - 2026-10-21: M70 delivered (SVG `<line>`/`<polyline>`/`<polygon>` & stroke attribute import in `import_svg`, EPS `TwoColorPattern` clipped geometric tile rendering & EPS/DXF arrowhead marker emission, and workspace-wide `12/12` crate enforcement of `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"`).
 - 2026-10-21: M69 delivered (EPS Fountain Fill clipped PostScript `rectfill` shading bands, SVG `<g>` group hierarchy & `transform` import, CMX1 `rott` & `rdot` line-style/dash-array round-trip, and strict clippy lints in `coralcraft-ui-egui`).

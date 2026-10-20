@@ -232,7 +232,21 @@ fn parse_svg_transform(tag_slice: &str) -> Affine2 {
     let Some(raw) = extract_attr_str(tag_slice, "transform") else {
         return Affine2::IDENTITY;
     };
-    let s = raw.trim();
+    let mut acc = Affine2::IDENTITY;
+    let mut rem = raw.trim();
+    while let Some(close_idx) = rem.find(')') {
+        let end = close_idx.saturating_add(1);
+        let Some(part) = rem.get(..end) else {
+            break;
+        };
+        let single = parse_single_svg_transform(part.trim_start_matches(|c: char| c.is_whitespace() || c == ','));
+        acc = single.then(acc).unwrap_or(acc);
+        rem = rem.get(end..).unwrap_or_default().trim();
+    }
+    acc
+}
+
+fn parse_single_svg_transform(s: &str) -> Affine2 {
     if let Some(rest) = s.strip_prefix("matrix(")
         && let Some(inner) = rest.strip_suffix(')')
     {
@@ -277,6 +291,16 @@ fn parse_svg_transform(tag_slice: &str) -> Affine2 {
             [ang] => return Affine2::rotation_deg(*ang).unwrap_or(Affine2::IDENTITY),
             _ => {}
         }
+    } else if let Some(rest) = s.strip_prefix("skewX(")
+        && let Some(inner) = rest.strip_suffix(')')
+        && let Ok(deg) = inner.trim().parse::<f64>()
+    {
+        return Affine2::skew_deg(deg, 0.0).unwrap_or(Affine2::IDENTITY);
+    } else if let Some(rest) = s.strip_prefix("skewY(")
+        && let Some(inner) = rest.strip_suffix(')')
+        && let Ok(deg) = inner.trim().parse::<f64>()
+    {
+        return Affine2::skew_deg(0.0, deg).unwrap_or(Affine2::IDENTITY);
     }
     Affine2::IDENTITY
 }
@@ -312,8 +336,16 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     let mut cur_y = 0.0_f64;
     let mut sub_x = 0.0_f64;
     let mut sub_y = 0.0_f64;
+    let mut last_cubic_c2: Option<(f64, f64)> = None;
+    let mut last_quad_ctrl: Option<(f64, f64)> = None;
     while let Some(cmd) = tokens.get(i).map(String::as_str) {
         i = i.saturating_add(1);
+        if !matches!(cmd, "C" | "c" | "S" | "s") {
+            last_cubic_c2 = None;
+        }
+        if !matches!(cmd, "Q" | "q" | "T" | "t") {
+            last_quad_ctrl = None;
+        }
         match cmd {
             "M" | "m" if i.saturating_add(1) < tokens.len() => {
                 if let (Some(dx), Some(dy)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
@@ -366,10 +398,27 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                     let ctrl = Point::new(acx, acy)?;
                     let pt = Point::new(aex, aey)?;
                     path.quad_to(ctrl, pt)?;
+                    last_quad_ctrl = Some((acx, acy));
                     cur_x = aex;
                     cur_y = aey;
                 }
                 i = i.saturating_add(4);
+            }
+            "T" | "t" if i.saturating_add(1) < tokens.len() => {
+                if let (Some(ex), Some(ey)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
+                    let (acx, acy) = match last_quad_ctrl {
+                        Some((px, py)) => (2.0 * cur_x - px, 2.0 * cur_y - py),
+                        None => (cur_x, cur_y),
+                    };
+                    let (aex, aey) = if cmd == "t" { (cur_x + ex, cur_y + ey) } else { (ex, ey) };
+                    let ctrl = Point::new(acx, acy)?;
+                    let pt = Point::new(aex, aey)?;
+                    path.quad_to(ctrl, pt)?;
+                    last_quad_ctrl = Some((acx, acy));
+                    cur_x = aex;
+                    cur_y = aey;
+                }
+                i = i.saturating_add(2);
             }
             "C" | "c" if i.saturating_add(5) < tokens.len() => {
                 if let (Some(c1x), Some(c1y), Some(c2x), Some(c2y), Some(ex), Some(ey)) = (
@@ -389,10 +438,33 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                     let c2 = Point::new(ac2x, ac2y)?;
                     let pt = Point::new(aex, aey)?;
                     path.cubic_to(c1, c2, pt)?;
+                    last_cubic_c2 = Some((ac2x, ac2y));
                     cur_x = aex;
                     cur_y = aey;
                 }
                 i = i.saturating_add(6);
+            }
+            "S" | "s" if i.saturating_add(3) < tokens.len() => {
+                if let (Some(c2x), Some(c2y), Some(ex), Some(ey)) = (
+                    token_f64(&tokens, i),
+                    token_f64(&tokens, i.saturating_add(1)),
+                    token_f64(&tokens, i.saturating_add(2)),
+                    token_f64(&tokens, i.saturating_add(3)),
+                ) {
+                    let (ac1x, ac1y) = match last_cubic_c2 {
+                        Some((px, py)) => (2.0 * cur_x - px, 2.0 * cur_y - py),
+                        None => (cur_x, cur_y),
+                    };
+                    let (ac2x, ac2y, aex, aey) = if cmd == "s" { (cur_x + c2x, cur_y + c2y, cur_x + ex, cur_y + ey) } else { (c2x, c2y, ex, ey) };
+                    let c1 = Point::new(ac1x, ac1y)?;
+                    let c2 = Point::new(ac2x, ac2y)?;
+                    let pt = Point::new(aex, aey)?;
+                    path.cubic_to(c1, c2, pt)?;
+                    last_cubic_c2 = Some((ac2x, ac2y));
+                    cur_x = aex;
+                    cur_y = aey;
+                }
+                i = i.saturating_add(4);
             }
             "Z" | "z" => {
                 path.close()?;

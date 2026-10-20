@@ -1060,4 +1060,58 @@ mod tests {
             other => panic!("expected Radial Fountain fill on obj[1], got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_cdr7_and_cmx1_two_color_pattern_kind_roundtrip_m72() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle, PatternKind};
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let pat_fill = FillStyle::TwoColorPattern {
+            kind: PatternKind::DiagonalCrosshatch,
+            fg_color: Color::rgb8(180, 20, 40),
+            bg_color: Color::rgb8(240, 245, 250),
+            tile_size_pt: F64::new(18.0).unwrap(),
+        };
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(101),
+            Some("PatternBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 30.0, 150.0, 110.0).unwrap())),
+            Some(pat_fill),
+            Some(OutlineStyle::with_width(Color::rgb8(10, 20, 30), F64::new(1.5).unwrap())),
+        ));
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed_cdr7 = parse_document(&cdr7).expect("parse_document CDR7");
+        match &parsed_cdr7.document.pages[0].layers[0].objects[0].fill {
+            Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }) => {
+                assert_eq!(*kind, PatternKind::DiagonalCrosshatch);
+                assert_eq!(*fg_color, Color::rgb8(180, 20, 40));
+                assert_eq!(*bg_color, Color::rgb8(240, 245, 250));
+                assert!((tile_size_pt.get() - 18.0).abs() < 1e-2);
+            }
+            other => panic!("expected TwoColorPattern in CDR7, got {other:?}"),
+        }
+
+        let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
+        let pure_riff_sz = (pure_cmx.len() - 8) as u32;
+        pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
+
+        let parsed_cmx = parse_document(&pure_cmx).expect("parse standalone CMX1 with TwoColorPattern");
+        let obj0 = &parsed_cmx.document.pages[0].layers[0].objects[0];
+        match &obj0.fill {
+            Some(FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }) => {
+                assert_eq!(*kind, PatternKind::DiagonalCrosshatch);
+                assert_eq!(*fg_color, Color::rgb8(180, 20, 40));
+                assert_eq!(*bg_color, Color::rgb8(240, 245, 250));
+                assert!((tile_size_pt.get() - 18.0).abs() < 1e-2);
+            }
+            other => panic!("expected TwoColorPattern in pure CMX1, got {other:?}"),
+        }
+        let outl0 = obj0.outline.as_ref().expect("outline after TwoColorPattern fill");
+        assert_eq!(outl0.color, Color::rgb8(10, 20, 30));
+    }
 }
