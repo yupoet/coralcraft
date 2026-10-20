@@ -1375,6 +1375,64 @@ pub fn build_voronoi_mosaic_path(bounds: Rect, seeds: &[Point], cell_gap_pt: f64
     Ok(path)
 }
 
+/// Builds a parametric isometric 3D box [`Path`] (`Object -> Insert -> Isometric 3D Box`)
+/// centered at `center` (the central Y-junction vertex where the Top, Left, and Right faces meet),
+/// with axis dimensions `width_pt` (right-back $30^\circ$ axis), `depth_pt` (left-back $150^\circ$ axis),
+/// and `height_pt` (vertical down $+Y$ axis).
+///
+/// Generates three closed quadrilateral subpaths corresponding to the Top, Left, and Right faces.
+pub fn build_isometric_box_path(center: Point, width_pt: f64, depth_pt: f64, height_pt: f64) -> Result<Path, GeomError> {
+    let w = F64::new(width_pt)?.get();
+    let d = F64::new(depth_pt)?.get();
+    let h = F64::new(height_pt)?.get();
+    if w <= 0.0 || d <= 0.0 || h <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("isometric box dimensions must be positive"));
+    }
+    let cos30 = 3.0_f64.sqrt() * 0.5;
+    let sin30 = 0.5;
+    let cx = center.x.get();
+    let cy = center.y.get();
+
+    // Central Y-junction vertex
+    let v_center = center;
+    // Right-top corner (-30 deg up-right from center)
+    let v_right_top = Point::new(cx + w * cos30, cy - w * sin30)?;
+    // Left-top corner (-150 deg up-left from center)
+    let v_left_top = Point::new(cx - d * cos30, cy - d * sin30)?;
+    // Far-top apex
+    let v_top_apex = Point::new(cx + (w - d) * cos30, cy - (w + d) * sin30)?;
+    // Bottom-center vertex (+h down from center)
+    let v_bot_center = Point::new(cx, cy + h)?;
+    // Bottom-right vertex (+h down from v_right_top)
+    let v_bot_right = Point::new(v_right_top.x.get(), v_right_top.y.get() + h)?;
+    // Bottom-left vertex (+h down from v_left_top)
+    let v_bot_left = Point::new(v_left_top.x.get(), v_left_top.y.get() + h)?;
+
+    let mut path = Path::new();
+    // 1. Top diamond face
+    path.move_to(v_center)?;
+    path.line_to(v_right_top)?;
+    path.line_to(v_top_apex)?;
+    path.line_to(v_left_top)?;
+    path.close()?;
+
+    // 2. Left parallelogram face
+    path.move_to(v_center)?;
+    path.line_to(v_left_top)?;
+    path.line_to(v_bot_left)?;
+    path.line_to(v_bot_center)?;
+    path.close()?;
+
+    // 3. Right parallelogram face
+    path.move_to(v_center)?;
+    path.line_to(v_bot_center)?;
+    path.line_to(v_bot_right)?;
+    path.line_to(v_right_top)?;
+    path.close()?;
+
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1457,5 +1515,9 @@ mod m27_tests {
         .unwrap();
         let vor_closes = voronoi.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(vor_closes, 3);
+
+        let iso_box = build_isometric_box_path(Point::new(100.0, 100.0).unwrap(), 50.0, 40.0, 60.0).unwrap();
+        let box_closes = iso_box.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(box_closes, 3);
     }
 }

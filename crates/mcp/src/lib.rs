@@ -13,9 +13,9 @@ use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
-    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path,
-    build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path, build_three_point_curve_path,
-    build_voronoi_mosaic_path,
+    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path,
+    build_three_point_curve_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1041,6 +1041,26 @@ impl McpServer {
                         {
                             "name": "export_dxf_base64",
                             "description": "Exports a page to AutoCAD DXF (AC1009) and returns its byte length and base64-encoded payload.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_isometric_box",
+                            "description": "Adds a parametric 3D isometric box compound path (Top, Left, and Right closed faces) centered at (cx, cy).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "wave_distort_path",
+                            "description": "Applies a sinusoidal wave distortion along the local normals of an object's path.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "radial_scale_selection_positions",
+                            "description": "Scales the radial distance of selected objects from a center point and rotates their angular positions by twist_deg.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_cdr7_base64",
+                            "description": "Exports the document to RIFF CDR7 binary format and returns its byte length and base64-encoded payload.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -3084,6 +3104,43 @@ impl McpServer {
                     "dxf_base64": b64
                 }))
             }
+            "add_isometric_box" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let width_pt = args.get("width_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let depth_pt = args.get("depth_pt").and_then(Value::as_f64).unwrap_or(50.0);
+                let height_pt = args.get("height_pt").and_then(Value::as_f64).unwrap_or(70.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_isometric_box_path(center, width_pt, depth_pt, height_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Isometric 3D Box".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "isometric_box", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "wave_distort_path" => {
+                let target = self.resolve_target_id(args)?;
+                let amplitude_pt = F64::new(args.get("amplitude_pt").and_then(Value::as_f64).unwrap_or(4.0)).map_err(|e| e.to_string())?;
+                let frequency = F64::new(args.get("frequency").and_then(Value::as_f64).unwrap_or(4.0)).map_err(|e| e.to_string())?;
+                let phase_deg = F64::new(args.get("phase_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::WaveDistortObjectPath { object_id: target, amplitude_pt, frequency, phase_deg });
+                Ok(json!({ "wave_distorted": ok, "object_id": target.0 }))
+            }
+            "radial_scale_selection_positions" => {
+                self.apply_optional_selection(args);
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radial_scale = F64::new(args.get("radial_scale").and_then(Value::as_f64).unwrap_or(1.2)).map_err(|e| e.to_string())?;
+                let twist_deg = F64::new(args.get("twist_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::RadialScaleSelectionPositions { center, radial_scale, twist_deg });
+                Ok(json!({ "radial_scaled": ok, "radial_scale": radial_scale.get(), "twist_deg": twist_deg.get() }))
+            }
+            "export_cdr7_base64" => {
+                let bytes = write_cdr7(&self.engine.document).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&bytes);
+                Ok(json!({
+                    "cdr7_bytes": bytes.len(),
+                    "cdr7_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3113,7 +3170,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 188);
+        assert_eq!(tools, 192);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3228,5 +3285,31 @@ mod tests {
         ))
         .unwrap();
         assert!(dxf_b64_resp.result.unwrap()["structuredContent"]["dxf_bytes"].as_u64().unwrap() > 20);
+
+        let ibox_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"add_isometric_box","arguments":{"cx":100.0,"cy":100.0,"width_pt":50.0,"depth_pt":40.0,"height_pt":60.0}}}"#,
+            ),
+        )
+        .unwrap();
+        let ibox_id = ibox_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let wave_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{{"name":"wave_distort_path","arguments":{{"object_id":{ibox_id},"amplitude_pt":3.0,"frequency":4.0,"phase_deg":0.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(wave_resp.result.unwrap()["structuredContent"]["wave_distorted"].as_bool().unwrap());
+
+        let rscale_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"radial_scale_selection_positions","arguments":{{"selection":[{ibox_id},{vor_id}],"center_x":100.0,"center_y":100.0,"radial_scale":1.25,"twist_deg":15.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(rscale_resp.result.unwrap()["structuredContent"]["radial_scaled"].as_bool().unwrap());
+
+        let cdr_b64_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"export_cdr7_base64","arguments":{}}}"#),
+        )
+        .unwrap();
+        assert!(cdr_b64_resp.result.unwrap()["structuredContent"]["cdr7_bytes"].as_u64().unwrap() > 60);
     }
 }

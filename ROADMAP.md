@@ -187,9 +187,13 @@
 51. **M51 Voronoi Stained-Glass / Mosaic Generator (`build_voronoi_mosaic_path`), Multi-Stop Variable-Width Stroke Profile (`expand_tapered_stroke_profile`), Chaikin Corner-Cutting Curve Smoother (`chaikin_smooth_path`), DXF Base64 Export (`export_dxf_base64`), and 188 MCP Tools**:
     - `coralcraft-geom`: `build_voronoi_mosaic_path` (Sutherland-Hodgman half-plane bisector clipping with optional mortar gap inset), `expand_tapered_stroke_profile` (piecewise-linear multi-stop variable-width stroke ribbon), and `chaikin_smooth_path` ($1/4$ and $3/4$ Chaikin corner-cutting subdivision).
     - `coralcraft-engine` & `coralcraft-mcp`: `ApplyVariableWidthStroke`, `ChaikinSmoothObjectPath`, `add_voronoi_mosaic`, `apply_variable_width_stroke`, `chaikin_smooth_path`, `export_dxf_base64`, and **188 MCP tools**.
+52. **M52 Parametric Isometric 3D Box (`build_isometric_box_path`), Sinusoidal Wave Path Deformer (`wave_distort_path`), Polar Radial Scale & Twist (`RadialScaleSelectionPositions`), CDR7 Base64 Export (`export_cdr7_base64`), and 192 MCP Tools**:
+    - `coralcraft-geom`: `build_isometric_box_path` (3-face Top/Left/Right $30^\circ$ isometric box) and `wave_distort_path` (normal-directed sinusoidal wave displacement over normalized arc length).
+    - `coralcraft-engine` & `coralcraft-mcp`: `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `add_isometric_box`, `wave_distort_path`, `radial_scale_selection_positions`, `export_cdr7_base64`, and **192 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M52 delivered (`build_isometric_box_path` & `add_isometric_box`, `wave_distort_path` & `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `export_cdr7_base64`, 192 MCP tools).
 - 2026-10-20: M51 delivered (`build_voronoi_mosaic_path` & `add_voronoi_mosaic`, `expand_tapered_stroke_profile` & `ApplyVariableWidthStroke`, `chaikin_smooth_path` & `ChaikinSmoothObjectPath`, `export_dxf_base64`, 188 MCP tools).
 - 2026-10-20: M50 delivered (`BasicShapeKind` & `build_basic_shape_path`, `build_lsystem_path` & `add_lsystem_path`, `BooleanOp::Exclude` & `ExcludeSelection`, `ResolveSelectionOverlaps`, 184 MCP tools).
 - 2026-10-20: M49 delivered (`build_superformula_path` & `add_superformula_shape`, `project_path_axonometric` & `ProjectSelectionAxonometric`, `PackSelectionInGrid`, `export_eps_base64`, 180 MCP tools).

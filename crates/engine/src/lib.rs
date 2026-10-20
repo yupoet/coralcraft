@@ -13,7 +13,7 @@ use coralcraft_geom::{
     erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
     reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
-    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -316,6 +316,10 @@ pub enum EngineCommand {
     ApplyVariableWidthStroke { object_id: ObjectId, widths_pt: Vec<F64> },
     /// Smooths the polygonal/curve vertices of `object_id` via Chaikin corner-cutting (`1/4` and `3/4` subdivision) for `iterations` (`1..=6`) (`Object -> Shaping -> Smooth / Corner-Cut Curve`).
     ChaikinSmoothObjectPath { object_id: ObjectId, iterations: u32 },
+    /// Applies a sinusoidal wave distortion along the local normals of `object_id` (`Effects -> Distort -> Wave Distortion`).
+    WaveDistortObjectPath { object_id: ObjectId, amplitude_pt: F64, frequency: F64, phase_deg: F64 },
+    /// Scales the radial distance of each selected unlocked object's center from `center` by `radial_scale` and rotates its angular position around `center` by `twist_deg` (`Object -> Transformations -> Polar Scatter / Radial Scale`).
+    RadialScaleSelectionPositions { center: Point, radial_scale: F64, twist_deg: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4067,6 +4071,61 @@ impl EditorEngine {
                     return false;
                 }
             }
+            EngineCommand::WaveDistortObjectPath { object_id, amplitude_pt, frequency, phase_deg } => {
+                let amp = amplitude_pt.get();
+                let freq = frequency.get();
+                let phase = phase_deg.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(waved) = wave_distort_path(&base_path, amp, freq, phase)
+                    {
+                        obj.kind = ObjectKind::Path(waved);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::RadialScaleSelectionPositions { center, radial_scale, twist_deg } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let scale = radial_scale.get();
+                let twist_rad = twist_deg.get().to_radians();
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let vx = oc.x.get() - cx;
+                    let vy = oc.y.get() - cy;
+                    let r = vx.hypot(vy);
+                    if r > 1e-6 {
+                        let theta = vy.atan2(vx) + twist_rad;
+                        let r_new = r * scale;
+                        let nx = cx + r_new * theta.cos();
+                        let ny = cy + r_new * theta.sin();
+                        deltas.insert(obj.id, (nx - oc.x.get(), ny - oc.y.get()));
+                    }
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -4960,6 +5019,17 @@ mod tests {
         assert!(engine.execute(EngineCommand::ApplyVariableWidthStroke {
             object_id: xor_id,
             widths_pt: vec![F64::new(2.0).unwrap(), F64::new(10.0).unwrap(), F64::new(4.0).unwrap()],
+        }));
+        assert!(engine.execute(EngineCommand::WaveDistortObjectPath {
+            object_id: xor_id,
+            amplitude_pt: F64::new(3.0).unwrap(),
+            frequency: F64::new(4.0).unwrap(),
+            phase_deg: F64::new(0.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::RadialScaleSelectionPositions {
+            center: Point::new(100.0, 100.0).unwrap(),
+            radial_scale: F64::new(1.25).unwrap(),
+            twist_deg: F64::new(15.0).unwrap(),
         }));
     }
 }

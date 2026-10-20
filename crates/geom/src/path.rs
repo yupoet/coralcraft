@@ -1999,6 +1999,67 @@ pub fn chaikin_smooth_path(path: &Path, iterations: u32) -> Result<Path, GeomErr
     Ok(out)
 }
 
+/// Applies a sinusoidal wave distortion along the local normals of `path`
+/// (`Effects -> Distort -> Wave Distortion`).
+///
+/// Subdivides segments if needed and displaces each vertex along its local normal by
+/// `amplitude_pt * sin(2 * PI * frequency * (s / total_len) + phase_rad)`.
+pub fn wave_distort_path(path: &Path, amplitude_pt: f64, frequency: f64, phase_deg: f64) -> Result<Path, GeomError> {
+    let amp = crate::F64::new(amplitude_pt)?.get();
+    let freq = crate::F64::new(frequency)?.get();
+    let phase_rad = crate::F64::new(phase_deg)?.get().to_radians();
+    if freq <= 0.0 || freq > 128.0 {
+        return Err(GeomError::InvalidShapeParameter("wave frequency must be in (0, 128]"));
+    }
+    // Subdivide twice so straight edges have enough vertices to carry the wave
+    let dense = subdivide_all_path_segments(&subdivide_all_path_segments(path)?)?;
+    let polys = crate::flatten::flatten_path(&dense, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for poly in polys {
+        let n = poly.points.len();
+        if n < 2 {
+            continue;
+        }
+        let mut cum_s = Vec::with_capacity(n);
+        let mut total_s = 0.0;
+        cum_s.push(0.0);
+        for w in poly.points.windows(2) {
+            total_s += (w[1].x.get() - w[0].x.get()).hypot(w[1].y.get() - w[0].y.get());
+            cum_s.push(total_s);
+        }
+        let inv_len = if total_s > 1e-6 { 1.0 / total_s } else { 0.0 };
+        let mut displaced = Vec::with_capacity(n);
+        for (i, &s_val) in cum_s.iter().enumerate() {
+            let p_prev = if i > 0 { poly.points[i - 1] } else { poly.points[0] };
+            let p_next = if i + 1 < n { poly.points[i + 1] } else { poly.points[n - 1] };
+            let dx = p_next.x.get() - p_prev.x.get();
+            let dy = p_next.y.get() - p_prev.y.get();
+            let len = dx.hypot(dy);
+            let (nx, ny) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, -1.0) };
+            let u = s_val * inv_len;
+            let offset = amp * (std::f64::consts::TAU * freq * u + phase_rad).sin();
+            displaced.push(Point::new(poly.points[i].x.get() + nx * offset, poly.points[i].y.get() + ny * offset)?);
+        }
+        if poly.closed && displaced.len() >= 3 {
+            // Ensure exact closure if first and last points coincided
+            displaced[n - 1] = displaced[0];
+        }
+        out.move_to(displaced[0])?;
+        for &pt in &displaced[1..] {
+            out.line_to(pt)?;
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("wave distortion produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2081,5 +2142,8 @@ mod m26_tests {
 
         let chaikin = chaikin_smooth_path(&rect_path, 2).unwrap();
         assert!(chaikin.elements.len() > rect_path.elements.len());
+
+        let waved = wave_distort_path(&rect_path, 4.0, 3.0, 0.0).unwrap();
+        assert!(waved.elements.len() > rect_path.elements.len());
     }
 }
