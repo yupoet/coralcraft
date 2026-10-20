@@ -1646,6 +1646,55 @@ pub fn transform_curve_nodes(path: &Path, element_indices: &[usize], scale_x: f6
     Path::from_elements(elements, path.fill_rule)
 }
 
+/// Breaks a curve at `element_index` (`Shape Tool -> Break Curve`), splitting an open subpath into
+/// two open subpaths at the selected node or opening a closed subpath at the selected node.
+pub fn break_path_at_node(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    let Some(el) = path.elements.get(element_index) else {
+        return Err(GeomError::InvalidShapeParameter("element_index out of range"));
+    };
+    let elem_end = |e: &PathElement| -> Option<Point> {
+        match *e {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => Some(p),
+            PathElement::Close => None,
+        }
+    };
+    let Some(break_pt) = elem_end(el) else {
+        return Err(GeomError::InvalidShapeParameter("Close element cannot be broken"));
+    };
+
+    // Locate the enclosing subpath [sub_start..=sub_end]
+    let mut sub_start = element_index;
+    while sub_start > 0 && !matches!(path.elements[sub_start], PathElement::MoveTo(_)) {
+        sub_start -= 1;
+    }
+    let Some(PathElement::MoveTo(start_pt)) = path.elements.get(sub_start).copied() else {
+        return Err(GeomError::InvalidShapeParameter("subpath missing MoveTo"));
+    };
+    let mut sub_end = element_index;
+    while sub_end + 1 < path.elements.len() && !matches!(path.elements[sub_end + 1], PathElement::MoveTo(_)) {
+        sub_end += 1;
+    }
+    let is_closed = matches!(path.elements[sub_end], PathElement::Close);
+    if !is_closed && (element_index == sub_start || element_index == sub_end) {
+        return Err(GeomError::InvalidShapeParameter("cannot break open subpath at its start or end node"));
+    }
+
+    let mut out = Vec::with_capacity(path.elements.len() + 2);
+    for (i, item) in path.elements.iter().copied().enumerate() {
+        if i == sub_end && is_closed {
+            if start_pt != break_pt || element_index != sub_start {
+                out.push(PathElement::LineTo(start_pt));
+            }
+            continue;
+        }
+        out.push(item);
+        if i == element_index && element_index > sub_start {
+            out.push(PathElement::MoveTo(break_pt));
+        }
+    }
+    Path::from_elements(out, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1700,5 +1749,12 @@ mod m26_tests {
         let smoothed_node = smooth_curve_node_at(&poly, 1, 0.35).unwrap();
         assert!(matches!(smoothed_node.elements[1], PathElement::CubicTo { .. }));
         assert!(matches!(smoothed_node.elements[2], PathElement::CubicTo { .. }));
+
+        let broken_open = break_path_at_node(&poly, 1).unwrap();
+        let move_count = broken_open.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
+        assert_eq!(move_count, 2);
+
+        let broken_closed = break_path_at_node(&rect_path, 2).unwrap();
+        assert!(!broken_closed.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

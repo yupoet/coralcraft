@@ -820,6 +820,74 @@ pub fn build_banner_ribbon_path(bounds: Rect, fold_depth_pt: f64, swallowtail_de
     Ok(path)
 }
 
+/// Standard ISO 5807 / CorelDRAW Flowchart Symbol kinds (`Polygon Flyout -> Flowchart Shapes`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FlowchartSymbolKind {
+    /// Rectangular process step.
+    Process,
+    /// Diamond decision branch.
+    Decision,
+    /// Stadium / capsule start-or-end terminator.
+    Terminator,
+    /// Slanted parallelogram input/output data block.
+    Data,
+    /// Rectangle with a sinusoidal wavy bottom edge representing a document.
+    Document,
+}
+
+/// Builds a closed Flowchart Symbol [`Path`] inside `bounds` (`Polygon Flyout -> Flowchart Shapes`).
+pub fn build_flowchart_symbol_path(bounds: Rect, kind: FlowchartSymbolKind) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("flowchart symbol bounds must have positive area"));
+    }
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let xm = 0.5 * (x0 + x1);
+    let ym = 0.5 * (y0 + y1);
+
+    match kind {
+        FlowchartSymbolKind::Process => RectSpec::sharp(bounds).to_path(),
+        FlowchartSymbolKind::Decision => {
+            let mut path = Path::new();
+            path.move_to(Point::new(xm, y0)?)?;
+            path.line_to(Point::new(x1, ym)?)?;
+            path.line_to(Point::new(xm, y1)?)?;
+            path.line_to(Point::new(x0, ym)?)?;
+            path.close()?;
+            Ok(path)
+        }
+        FlowchartSymbolKind::Terminator => {
+            let r = 0.5 * w.min(h);
+            RectSpec::uniform(bounds, r, CornerKind::Round)?.to_path()
+        }
+        FlowchartSymbolKind::Data => {
+            let slant = 0.2 * w;
+            let mut path = Path::new();
+            path.move_to(Point::new(x0 + slant, y0)?)?;
+            path.line_to(Point::new(x1, y0)?)?;
+            path.line_to(Point::new(x1 - slant, y1)?)?;
+            path.line_to(Point::new(x0, y1)?)?;
+            path.close()?;
+            Ok(path)
+        }
+        FlowchartSymbolKind::Document => {
+            let wave = 0.12 * h;
+            let wy = y1 - wave;
+            let mut path = Path::new();
+            path.move_to(Point::new(x0, y0)?)?;
+            path.line_to(Point::new(x1, y0)?)?;
+            path.line_to(Point::new(x1, wy)?)?;
+            path.cubic_to(Point::new(x0 + 0.75 * w, wy - 1.5 * wave)?, Point::new(x0 + 0.25 * w, wy + 2.5 * wave)?, Point::new(x0, wy)?)?;
+            path.close()?;
+            Ok(path)
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -854,5 +922,16 @@ mod m27_tests {
         let banner = build_banner_ribbon_path(Rect::new(0.0, 0.0, 200.0, 60.0).unwrap(), 30.0, 12.0).unwrap();
         let banner_closes = banner.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(banner_closes, 3);
+
+        for kind in [
+            FlowchartSymbolKind::Process,
+            FlowchartSymbolKind::Decision,
+            FlowchartSymbolKind::Terminator,
+            FlowchartSymbolKind::Data,
+            FlowchartSymbolKind::Document,
+        ] {
+            let fc = build_flowchart_symbol_path(Rect::new(0.0, 0.0, 120.0, 60.0).unwrap(), kind).unwrap();
+            assert!(fc.elements.iter().any(|e| matches!(e, PathElement::Close)));
+        }
     }
 }

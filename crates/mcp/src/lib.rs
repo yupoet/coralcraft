@@ -10,10 +10,10 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
+    BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect, RectSpec, Unit,
     build_angular_dimension_path, build_banner_ribbon_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
-    build_connector_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path,
-    build_spiral_path, build_three_point_curve_path,
+    build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path,
+    build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -899,6 +899,26 @@ impl McpServer {
                         {
                             "name": "export_png_base64",
                             "description": "Rasterizes page_index at dpi (4x4 MSAA) to PNG and returns png_bytes length and RFC 4648 png_base64 string.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_flowchart_symbol",
+                            "description": "Adds a closed Flowchart Symbol (process, decision, terminator, data, document) inside (x, y, width, height).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "break_path_at_node",
+                            "description": "Breaks a curve at element_index on object_id, opening a closed subpath or splitting an open subpath into two (Shape Tool F10 -> Break Curve).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "equalize_selection_size",
+                            "description": "Scales all selected unlocked objects around their centers to match the width and/or height of the last selected key object.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_pdf_base64",
+                            "description": "Exports the entire multi-page document to ISO 32000-1 PDF 1.4 and returns pdf_bytes length and RFC 4648 pdf_base64 string.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2599,6 +2619,45 @@ impl McpServer {
                     "png_base64": b64
                 }))
             }
+            "add_flowchart_symbol" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(50.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(50.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(140.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(70.0);
+                let kind_str = args.get("symbol_kind").and_then(Value::as_str).unwrap_or("process");
+                let kind = match kind_str.to_ascii_lowercase().as_str() {
+                    "decision" | "diamond" => FlowchartSymbolKind::Decision,
+                    "terminator" | "capsule" | "start" | "end" => FlowchartSymbolKind::Terminator,
+                    "data" | "io" | "parallelogram" => FlowchartSymbolKind::Data,
+                    "document" | "doc" => FlowchartSymbolKind::Document,
+                    _ => FlowchartSymbolKind::Process,
+                };
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_flowchart_symbol_path(rect, kind).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Flowchart Symbol".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "flowchart_symbol", "symbol_kind": kind_str, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "break_path_at_node" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::BreakPathAtNode { object_id: target, element_index });
+                Ok(json!({ "path_broken": ok, "object_id": target.0, "element_index": element_index }))
+            }
+            "equalize_selection_size" => {
+                self.apply_optional_selection(args);
+                let match_width = args.get("match_width").and_then(Value::as_bool).unwrap_or(true);
+                let match_height = args.get("match_height").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::EqualizeSelectionSize { match_width, match_height });
+                Ok(json!({ "size_equalized": ok, "match_width": match_width, "match_height": match_height }))
+            }
+            "export_pdf_base64" => {
+                let pdf = export_pdf(&self.engine.document).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&pdf);
+                Ok(json!({
+                    "pdf_bytes": pdf.len(),
+                    "pdf_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2628,7 +2687,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 160);
+        assert_eq!(tools, 164);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -8,8 +8,8 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
-    artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
-    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
+    artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
+    delete_curve_node_at, delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
     roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
     trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
@@ -285,6 +285,10 @@ pub enum EngineCommand {
     TransformCurveNodes { object_id: ObjectId, element_indices: Vec<usize>, scale_x: F64, scale_y: F64, rotate_deg: F64 },
     /// Selects all unlocked visible objects on the active layer whose fill (`match_fill`) and/or outline (`match_outline`) color is within `tolerance_u8` of `color` (`Edit -> Find and Replace -> Find Objects by Color`).
     SelectByColor { color: Color, match_fill: bool, match_outline: bool, tolerance_u8: u8 },
+    /// Breaks a curve at `element_index` on `object_id`, opening a closed subpath or splitting an open subpath into two (`Shape Tool F10 -> Break Curve`).
+    BreakPathAtNode { object_id: ObjectId, element_index: usize },
+    /// Scales all selected unlocked objects around their centers to match the width (`match_width`) and/or height (`match_height`) of the last selected key object (`Object -> Align and Distribute -> Equalize Size`).
+    EqualizeSelectionSize { match_width: bool, match_height: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1225,6 +1229,23 @@ impl EditorEngine {
             }
             EngineCommand::SelectByColor { match_fill, match_outline, .. } => {
                 if !match_fill && !match_outline {
+                    return false;
+                }
+            }
+            EngineCommand::BreakPathAtNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| break_path_at_node(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
+                if !match_width && !match_height {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
                     return false;
                 }
             }
@@ -3486,6 +3507,52 @@ impl EditorEngine {
                     .map(|o| o.id)
                     .collect();
             }
+            EngineCommand::BreakPathAtNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = break_path_at_node(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
+                if let Some(&anchor_id) = self.selection.last()
+                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
+                {
+                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                    let target_w = anchor_bbox.width();
+                    let target_h = anchor_bbox.height();
+                    if target_w > 1e-6 && target_h > 1e-6 {
+                        self.for_each_selected_mut(|obj| {
+                            if obj.locked || obj.id == anchor_id {
+                                return;
+                            }
+                            let bbox = combined_selection_bounds(&[obj]);
+                            let cur_w = bbox.width();
+                            let cur_h = bbox.height();
+                            if cur_w <= 1e-6 || cur_h <= 1e-6 {
+                                return;
+                            }
+                            let sx = if match_width { target_w / cur_w } else { 1.0 };
+                            let sy = if match_height { target_h / cur_h } else { 1.0 };
+                            let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
+                            let cy = 0.5 * (bbox.y0.get() + bbox.y1.get());
+                            if let Ok(t1) = Affine2::translation(-cx, -cy)
+                                && let Ok(sc) = Affine2::scaling(sx, sy)
+                                && let Ok(t2) = Affine2::translation(cx, cy)
+                                && let Ok(step1) = t1.then(sc)
+                                && let Ok(tf) = step1.then(t2)
+                                && let Ok(composed) = obj.transform.then(tf)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                }
+            }
         }
         true
     }
@@ -4342,5 +4409,7 @@ mod tests {
             tolerance_u8: 255,
         }));
         assert!(!engine.selection.is_empty());
+        assert!(engine.execute(EngineCommand::BreakPathAtNode { object_id: sf_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::EqualizeSelectionSize { match_width: true, match_height: true }));
     }
 }

@@ -166,9 +166,13 @@
 44. **M44 Parametric Banner Ribbon (`build_banner_ribbon_path`), Shape Tool Curve Node Stretch/Rotate (`transform_curve_nodes`), Select By Color (`SelectByColor`), PNG Base64 Page Export (`export_png_base64`), and 160 MCP Tools**:
     - `coralcraft-geom`: `build_banner_ribbon_path` (`Banner Shapes -> Ribbon Banner`) and `transform_curve_nodes` (`Shape Tool F10 -> Stretch/Scale & Rotate Nodes`).
     - `coralcraft-engine` & `coralcraft-mcp`: `TransformCurveNodes`, `SelectByColor`, `add_banner_ribbon`, `transform_curve_nodes`, `select_by_color`, `export_png_base64`, and **160 MCP tools**.
+45. **M45 Parametric Flowchart Symbols (`build_flowchart_symbol_path`), Shape Tool Break Curve at Node (`break_path_at_node`), Equalize Selection Size (`EqualizeSelectionSize`), PDF Base64 Export (`export_pdf_base64`), and 164 MCP Tools**:
+    - `coralcraft-geom`: `FlowchartSymbolKind`, `build_flowchart_symbol_path` (`Flowchart Shapes -> Process/Decision/Terminator/Data/Document`), and `break_path_at_node` (`Shape Tool F10 -> Break Curve`).
+    - `coralcraft-engine` & `coralcraft-mcp`: `BreakPathAtNode`, `EqualizeSelectionSize`, `add_flowchart_symbol`, `break_path_at_node`, `equalize_selection_size`, `export_pdf_base64`, and **164 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M45 delivered (`build_flowchart_symbol_path` & `add_flowchart_symbol`, `break_path_at_node` & `BreakPathAtNode`, `EqualizeSelectionSize`, `export_pdf_base64`, 164 MCP tools).
 - 2026-10-20: M44 delivered (`build_banner_ribbon_path` & `add_banner_ribbon`, `transform_curve_nodes` & `TransformCurveNodes`, `SelectByColor`, `export_png_base64`, 160 MCP tools).
 - 2026-10-20: M43 delivered (`build_block_arrow_path` & `add_block_arrow`, `subdivide_all_path_segments` & `SubdividePathSegments`, `ConvertSelectionColors`, `import_coralcraft_json`, 156 MCP tools).
 - 2026-10-20: M42 delivered (`build_gear_wheel_path` & `add_gear_wheel`, `AlignCurveNodes`, `ShiftSelectionColors`, `export_coralcraft_json`, 152 MCP tools).

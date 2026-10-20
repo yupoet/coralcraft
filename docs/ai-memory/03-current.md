@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M44 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M45 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -42,9 +42,10 @@
   34. **M41: Polyline / Freehand Path Builder (`build_polyline_path`), Polar Circular Array Duplication (`CircularDuplicateSelection`), Fit Page to Selection (`FitPageToSelection`), Outline Cap/Join/Miter Controls (`SetOutlineCapAndJoin`), and 148 MCP Tools (`commit 1400b41`)**.
   35. **M42: Parametric Gear Wheel (`build_gear_wheel_path`), Shape Tool Curve Node Alignment (`AlignCurveNodes`), HSB Color Harmony Shifting (`ShiftSelectionColors`), Native `.coralcraft` JSON Export (`export_coralcraft_json`), and 152 MCP Tools (`commit 7e2eb2e`)**.
   36. **M43: Parametric Block Arrow (`build_block_arrow_path`), Midpoint Segment Subdivision (`subdivide_all_path_segments`), Vector Color Inversion & Grayscale (`ConvertSelectionColors`), Native `.coralcraft` JSON Import (`import_coralcraft_json`), and 156 MCP Tools (`commit ad62616`)**.
-  37. **M44: Parametric Banner Ribbon (`build_banner_ribbon_path`), Shape Tool Curve Node Stretch/Rotate (`transform_curve_nodes`), Select By Color (`SelectByColor`), PNG Base64 Page Export (`export_png_base64`), and 160 MCP Tools**:
-      - `coralcraft-geom`: Added `build_banner_ribbon_path` and `transform_curve_nodes`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `TransformCurveNodes`, `SelectByColor`, `add_banner_ribbon`, `transform_curve_nodes`, `select_by_color`, `export_png_base64`, and expanded MCP server to **160 tools**.
+  37. **M44: Parametric Banner Ribbon (`build_banner_ribbon_path`), Shape Tool Curve Node Stretch/Rotate (`transform_curve_nodes`), Select By Color (`SelectByColor`), PNG Base64 Page Export (`export_png_base64`), and 160 MCP Tools (`commit 6eff850`)**.
+  38. **M45: Parametric Flowchart Symbols (`build_flowchart_symbol_path`), Shape Tool Break Curve at Node (`break_path_at_node`), Equalize Selection Size (`EqualizeSelectionSize`), PDF Base64 Export (`export_pdf_base64`), and 164 MCP Tools**:
+      - `coralcraft-geom`: Added `FlowchartSymbolKind`, `build_flowchart_symbol_path`, and `break_path_at_node`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `BreakPathAtNode`, `EqualizeSelectionSize`, `add_flowchart_symbol`, `break_path_at_node`, `equalize_selection_size`, `export_pdf_base64`, and expanded MCP server to **164 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 
