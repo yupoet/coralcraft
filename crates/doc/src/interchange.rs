@@ -1360,7 +1360,6 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         return Err(DocError::InvalidDxf("missing ENTITIES section".to_owned()));
     }
     let mut doc = Document::new_a4_portrait();
-    let doc_page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
     let lines: Vec<&str> = dxf_str.lines().map(str::trim).collect();
 
     let mut pairs = Vec::with_capacity(lines.len() / 2);
@@ -1373,6 +1372,34 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             idx = idx.saturating_add(1);
         }
     }
+
+    for (hp_idx, &(c, v)) in pairs.iter().enumerate() {
+        if c == 9 && v == "$LIMMAX" {
+            let mut lim_w = 0.0;
+            let mut lim_h = 0.0;
+            let mut sub = hp_idx.saturating_add(1);
+            while let Some(&(sc, sv)) = pairs.get(sub) {
+                if sc == 9 || sc == 0 {
+                    break;
+                }
+                match sc {
+                    10 => lim_w = sv.parse::<f64>().unwrap_or(0.0),
+                    20 => lim_h = sv.parse::<f64>().unwrap_or(0.0),
+                    _ => {}
+                }
+                sub = sub.saturating_add(1);
+            }
+            if lim_w > 1.0
+                && lim_h > 1.0
+                && let Ok(sz) = Size::new(lim_w, lim_h)
+                && let Some(first_page) = doc.pages.first_mut()
+            {
+                first_page.size = sz;
+            }
+            break;
+        }
+    }
+    let doc_page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
 
     let mut saw_custom_layer = false;
     let mut blocks: BTreeMap<String, Vec<ObjectNode>> = BTreeMap::new();
@@ -1721,7 +1748,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             let sx = cx - bx_off;
             let sy = page_h - cy;
             let rx = mx.hypot(my);
-            let ry = rx * ratio.clamp(1e-3, 1.0);
+            let ry = rx * ratio.clamp(1e-3, 100.0);
             if rx > 0.0
                 && ry > 0.0
                 && let Ok(rect) = Rect::new(sx - rx, sy - ry, sx + rx, sy + ry)

@@ -1722,4 +1722,165 @@ mod tests {
         assert_eq!(p_grp.powerclip_children[0].name.as_deref(), Some("GrpPowerClip"));
         assert!(p_grp.residual.chunks.iter().any(|c| &c.tag.0 == b"grpc" && c.payload.0 == vec![9, 8, 7]));
     }
+
+    #[test]
+    fn write_cmx1_rclr_color_models_lens_transparency_and_shape_metadata_roundtrip_m81() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, LensKind, ObjectId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle};
+        use coralcraft_geom::{Affine2, CornerKind, EllipseMode, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let page = doc.pages.first_mut().expect("page 0");
+        let layer = page.layers.first_mut().expect("layer 0");
+
+        // 1. Parametric Rect with per-corner kinds, HSB fill, Uniform transparency, and transform/metadata
+        let mut r_node = ObjectNode::new(
+            ObjectId(1),
+            Some("CmxRoundedRect".to_owned()),
+            ObjectKind::Rect(RectSpec {
+                rect: Rect::new(40.0, 50.0, 180.0, 130.0).unwrap(),
+                radii: [F64::new(10.0).unwrap(), F64::new(15.0).unwrap(), F64::new(20.0).unwrap(), F64::new(5.0).unwrap()],
+                corner_kinds: [CornerKind::Round, CornerKind::Scalloped, CornerKind::Chamfered, CornerKind::Round],
+            }),
+            Some(FillStyle::uniform(Color::hsb(210.0, 0.75, 0.85).unwrap())),
+            None,
+        );
+        r_node.visible = false;
+        r_node.locked = true;
+        r_node.opacity = F64::new(0.8).unwrap();
+        r_node.transform = Affine2::translation(12.5, -7.5).unwrap();
+        r_node.transparency = Some(TransparencyStyle::uniform(0.65));
+        layer.objects.push(r_node);
+
+        // 2. Parametric Pie Ellipse with Spot color fill and Tinted Lens transparency
+        let spot_col = Color::spot("PANTONE 185 C", 0.8, [0.0, 0.91, 0.76, 0.0]).unwrap();
+        let mut e_node = ObjectNode::new(
+            ObjectId(2),
+            Some("CmxPieEllipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec {
+                rect: Rect::new(60.0, 160.0, 180.0, 260.0).unwrap(),
+                start_deg: F64::new(30.0).unwrap(),
+                end_deg: F64::new(240.0).unwrap(),
+                mode: EllipseMode::Pie,
+            }),
+            Some(FillStyle::uniform(spot_col.clone())),
+            None,
+        );
+        e_node.transparency =
+            Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color: Color::gray(0.3).unwrap(), rate: F64::new(0.45).unwrap() } });
+        layer.objects.push(e_node);
+
+        // 3. Star Polygon with Registration fill and Magnify Lens
+        let mut p_node = ObjectNode::new(
+            ObjectId(3),
+            Some("CmxStar".to_owned()),
+            ObjectKind::Polygon(PolygonSpec::star(Point::new(300.0, 200.0).unwrap(), 50.0, 22.0, 6, 15.0).unwrap()),
+            Some(FillStyle::uniform(Color::Registration)),
+            None,
+        );
+        p_node.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(2.5).unwrap() } });
+        layer.objects.push(p_node);
+
+        // 4. ArtisticText and ParagraphText inside a transformed Group
+        let atxt = ObjectNode::new(
+            ObjectId(4),
+            Some("CmxHeadline".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CMX Headline".to_owned(),
+                font_family: "Arial".to_owned(),
+                size_pt: F64::new(20.0).unwrap(),
+                position: Point::new(80.0, 320.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::gray(0.2).unwrap())),
+            None,
+        );
+        let ptxt_spec = ParagraphTextSpec::new(
+            Point::new(80.0, 360.0).unwrap(),
+            200.0,
+            90.0,
+            "CMX body paragraph",
+            "Times",
+            12.0,
+            1.25,
+            TextAlignment::Center,
+            2,
+            10.0,
+        )
+        .unwrap();
+        let ptxt = ObjectNode::new(
+            ObjectId(5),
+            Some("CmxParagraph".to_owned()),
+            ObjectKind::ParagraphText(Box::new(ptxt_spec.clone())),
+            Some(FillStyle::uniform(Color::cmyk(0.1, 0.2, 0.3, 0.4).unwrap())),
+            None,
+        );
+        let mut grp = ObjectNode::new(ObjectId(6), Some("CmxTextGroup".to_owned()), ObjectKind::Group { children: vec![atxt, ptxt] }, None, None);
+        grp.opacity = F64::new(0.9).unwrap();
+        grp.transform = Affine2::translation(5.0, 10.0).unwrap();
+        layer.objects.push(grp);
+
+        let bytes = write_cmx1(&doc).expect("write_cmx1 M81");
+        let parsed = parse_document(&bytes).expect("parse_document M81");
+        let p_lyr = &parsed.document.pages[0].layers[0];
+        assert_eq!(p_lyr.objects.len(), 4);
+
+        let o0 = &p_lyr.objects[0];
+        assert_eq!(o0.name.as_deref(), Some("CmxRoundedRect"));
+        assert!(!o0.visible);
+        assert!(o0.locked);
+        assert!((o0.opacity.get() - 0.8).abs() < 1e-6);
+        assert_eq!(o0.transform, Affine2::translation(12.5, -7.5).unwrap());
+        assert_eq!(o0.fill, Some(FillStyle::uniform(Color::hsb(210.0, 0.75, 0.85).unwrap())));
+        assert_eq!(o0.transparency, Some(TransparencyStyle::uniform(0.65)));
+        let ObjectKind::Rect(rs) = &o0.kind else {
+            panic!("expected ObjectKind::Rect, got {:?}", o0.kind);
+        };
+        assert_eq!(rs.corner_kinds, [CornerKind::Round, CornerKind::Scalloped, CornerKind::Chamfered, CornerKind::Round]);
+        assert!((rs.radii[1].get() - 15.0).abs() < 1e-6);
+
+        let o1 = &p_lyr.objects[1];
+        assert_eq!(o1.name.as_deref(), Some("CmxPieEllipse"));
+        assert_eq!(o1.fill, Some(FillStyle::uniform(spot_col)));
+        assert_eq!(
+            o1.transparency,
+            Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color: Color::gray(0.3).unwrap(), rate: F64::new(0.45).unwrap() } })
+        );
+        let ObjectKind::Ellipse(es) = &o1.kind else {
+            panic!("expected ObjectKind::Ellipse, got {:?}", o1.kind);
+        };
+        assert_eq!(es.mode, EllipseMode::Pie);
+        assert!((es.start_deg.get() - 30.0).abs() < 1e-6);
+        assert!((es.end_deg.get() - 240.0).abs() < 1e-6);
+
+        let o2 = &p_lyr.objects[2];
+        assert_eq!(o2.name.as_deref(), Some("CmxStar"));
+        assert_eq!(o2.fill, Some(FillStyle::uniform(Color::Registration)));
+        assert_eq!(o2.transparency, Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(2.5).unwrap() } }));
+        let ObjectKind::Polygon(ps) = &o2.kind else {
+            panic!("expected ObjectKind::Polygon, got {:?}", o2.kind);
+        };
+        assert_eq!(ps.points, 6);
+        assert!((ps.rotation_deg.get() - 15.0).abs() < 1e-6);
+
+        let o3 = &p_lyr.objects[3];
+        assert_eq!(o3.name.as_deref(), Some("CmxTextGroup"));
+        assert!((o3.opacity.get() - 0.9).abs() < 1e-6);
+        assert_eq!(o3.transform, Affine2::translation(5.0, 10.0).unwrap());
+        let ObjectKind::Group { children } = &o3.kind else {
+            panic!("expected ObjectKind::Group, got {:?}", o3.kind);
+        };
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].fill, Some(FillStyle::uniform(Color::gray(0.2).unwrap())));
+        let ObjectKind::ArtisticText { text, font_family, .. } = &children[0].kind else {
+            panic!("expected ArtisticText, got {:?}", children[0].kind);
+        };
+        assert_eq!(text, "CMX Headline");
+        assert_eq!(font_family, "Arial");
+        let ObjectKind::ParagraphText(pt) = &children[1].kind else {
+            panic!("expected ParagraphText, got {:?}", children[1].kind);
+        };
+        assert_eq!(pt.text, ptxt_spec.text);
+        assert_eq!(pt.alignment, TextAlignment::Center);
+        assert_eq!(pt.columns, 2);
+    }
 }

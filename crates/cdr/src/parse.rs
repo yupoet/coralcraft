@@ -513,9 +513,24 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         }
     }
 
-    // Pass 2: Extract `LIST page` chunks into `Page`s (and any top-level `LIST obj ` if outside a page)
+    // Pass 2: For CMX containers (`cont` + `page` instruction streams), decode CMX `page` chunks directly;
+    // otherwise extract `LIST page` chunks into `Page`s.
+    let is_cmx_stream = chunks.iter().any(|ch| &ch.fourcc == b"cont") && chunks.iter().any(|ch| &ch.fourcc == b"page" && ch.payload.len() >= 8);
+    if is_cmx_stream {
+        let style_tables = parse_cmx_style_tables(chunks, ctx.endian);
+        for (idx, ch) in chunks.iter().filter(|ch| &ch.fourcc == b"page" && ch.payload.len() >= 8).enumerate() {
+            let pnum = (idx.saturating_add(1)) as u64;
+            let mut cpage = default_a4_page(pnum);
+            cpage.size = ctx.default_page_size;
+            parse_single_cmx_page_chunk(&ch.payload, &style_tables, ctx, &mut cpage);
+            doc.pages.push(cpage);
+        }
+    }
+
     let mut raw_pages: Vec<&ParsedChunk> = Vec::new();
-    collect_page_lists_recursive(chunks, &mut raw_pages);
+    if !is_cmx_stream {
+        collect_page_lists_recursive(chunks, &mut raw_pages);
+    }
 
     for (idx, page_chunk) in raw_pages.iter().enumerate() {
         // When a CDR file has >= 2 `LIST page` blocks, the first `LIST page` (index 0) is CorelDRAW's Master Page
@@ -601,24 +616,109 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> CmxStyleTab
                             break;
                         }
                         let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                        if tag_id == 1 && pos.saturating_add(4) <= ch.payload.len() {
+                        let tag_end = pos.saturating_add(tag_len).min(ch.payload.len());
+                        if tag_id == 1 && pos.saturating_add(4) <= tag_end {
                             model = ch.payload.get(pos.saturating_add(3)).copied().unwrap_or(5);
-                        } else if tag_id == 2 && pos.saturating_add(7) <= ch.payload.len() {
+                        } else if tag_id == 2 && pos.saturating_add(7) <= tag_end {
                             let c0 = ch.payload.get(pos.saturating_add(3)).copied().unwrap_or(0);
                             let c1 = ch.payload.get(pos.saturating_add(4)).copied().unwrap_or(0);
                             let c2 = ch.payload.get(pos.saturating_add(5)).copied().unwrap_or(0);
                             let c3 = ch.payload.get(pos.saturating_add(6)).copied().unwrap_or(0);
-                            if model == 2 {
-                                if let Ok(cmyk) = Color::cmyk(
-                                    (f64::from(c0) / 100.0).clamp(0.0, 1.0),
-                                    (f64::from(c1) / 100.0).clamp(0.0, 1.0),
-                                    (f64::from(c2) / 100.0).clamp(0.0, 1.0),
-                                    (f64::from(c3) / 100.0).clamp(0.0, 1.0),
-                                ) {
-                                    col = cmyk;
+                            match model {
+                                1 => {
+                                    let density = read_u16(endian, &ch.payload, pos.saturating_add(5)).unwrap_or(100);
+                                    let tint = (f64::from(density) / 100.0).clamp(0.0, 1.0);
+                                    if let Ok(sp) = Color::spot("Spot", tint, [0.0, 0.0, 0.0, 1.0]) {
+                                        col = sp;
+                                    }
                                 }
-                            } else {
-                                col = Color::rgb8(c0, c1, c2);
+                                2 => {
+                                    if let Ok(cmyk) = Color::cmyk(
+                                        (f64::from(c0) / 100.0).clamp(0.0, 1.0),
+                                        (f64::from(c1) / 100.0).clamp(0.0, 1.0),
+                                        (f64::from(c2) / 100.0).clamp(0.0, 1.0),
+                                        (f64::from(c3) / 100.0).clamp(0.0, 1.0),
+                                    ) {
+                                        col = cmyk;
+                                    }
+                                }
+                                3 => {
+                                    if let Ok(cmyk) = Color::cmyk(
+                                        (f64::from(c0) / 255.0).clamp(0.0, 1.0),
+                                        (f64::from(c1) / 255.0).clamp(0.0, 1.0),
+                                        (f64::from(c2) / 255.0).clamp(0.0, 1.0),
+                                        (f64::from(c3) / 255.0).clamp(0.0, 1.0),
+                                    ) {
+                                        col = cmyk;
+                                    }
+                                }
+                                6 => {
+                                    let h_u16 = read_u16(endian, &ch.payload, pos.saturating_add(3)).unwrap_or(0);
+                                    if let Ok(hsb) = Color::hsb(
+                                        f64::from(h_u16).clamp(0.0, 360.0),
+                                        (f64::from(c2) / 255.0).clamp(0.0, 1.0),
+                                        (f64::from(c3) / 255.0).clamp(0.0, 1.0),
+                                    ) {
+                                        col = hsb;
+                                    }
+                                }
+                                8 => {
+                                    col = Color::Registration;
+                                }
+                                9 => {
+                                    if let Ok(g) = Color::gray((1.0 - f64::from(c0) / 255.0).clamp(0.0, 1.0)) {
+                                        col = g;
+                                    }
+                                }
+                                _ => {
+                                    col = Color::rgb8(c0, c1, c2);
+                                }
+                            }
+                        } else if tag_id == 10 && pos.saturating_add(7) <= tag_end {
+                            let body = ch.payload.get(pos.saturating_add(3)..tag_end).unwrap_or_default();
+                            match body.get(0..4) {
+                                Some(b"CMYK") if body.len() >= 36 => {
+                                    let c = read_f64(endian, body, 4).unwrap_or(0.0);
+                                    let m = read_f64(endian, body, 12).unwrap_or(0.0);
+                                    let y = read_f64(endian, body, 20).unwrap_or(0.0);
+                                    let k = read_f64(endian, body, 28).unwrap_or(0.0);
+                                    if let Ok(cmyk) = Color::cmyk(c, m, y, k) {
+                                        col = cmyk;
+                                    }
+                                }
+                                Some(b"HSB\0") if body.len() >= 28 => {
+                                    let h = read_f64(endian, body, 4).unwrap_or(0.0);
+                                    let s = read_f64(endian, body, 12).unwrap_or(0.0);
+                                    let b = read_f64(endian, body, 20).unwrap_or(0.0);
+                                    if let Ok(hsb) = Color::hsb(h, s, b) {
+                                        col = hsb;
+                                    }
+                                }
+                                Some(b"GRAY") if body.len() >= 12 => {
+                                    let k = read_f64(endian, body, 4).unwrap_or(0.0);
+                                    if let Ok(g) = Color::gray(k) {
+                                        col = g;
+                                    }
+                                }
+                                Some(b"REGI") => {
+                                    col = Color::Registration;
+                                }
+                                Some(b"SPOT") if body.len() >= 46 => {
+                                    let tint = read_f64(endian, body, 4).unwrap_or(1.0);
+                                    let fc = read_f64(endian, body, 12).unwrap_or(0.0);
+                                    let fm = read_f64(endian, body, 20).unwrap_or(0.0);
+                                    let fy = read_f64(endian, body, 28).unwrap_or(0.0);
+                                    let fk = read_f64(endian, body, 36).unwrap_or(0.0);
+                                    let nlen = usize::from(read_u16(endian, body, 44).unwrap_or(0));
+                                    let nend = 46usize.saturating_add(nlen).min(body.len());
+                                    if let Some(nslice) = body.get(46..nend)
+                                        && let Ok(nstr) = std::str::from_utf8(nslice)
+                                        && let Ok(sp) = Color::spot(nstr, tint, [fc, fm, fy, fk])
+                                    {
+                                        col = sp;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         pos = pos.saturating_add(tag_len);
@@ -742,10 +842,51 @@ fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> CmxStyleTab
     (colors, pens_pt, line_styles, dots, outlines)
 }
 
+type CmxParsedMeta = (Option<(Option<String>, bool, bool, F64)>, Option<Affine2>, Option<coralcraft_doc::TransparencyStyle>, Vec<u8>);
+
+fn decode_cmx_meta_tag(slice: &[u8], endian: Endian, version: u16, warnings: &mut Vec<String>) -> Option<CmxParsedMeta> {
+    if slice.len() < 8 || slice.get(0..4) != Some(b"CCMX") {
+        return None;
+    }
+    let omta_len = usize::from(read_u16(endian, slice, 4)?);
+    let omta_end = 6usize.checked_add(omta_len)?;
+    let omta = slice.get(6..omta_end).and_then(|s| decode_omta(s, endian));
+    let has_trfd = *slice.get(omta_end)?;
+    let mut cur = omta_end.saturating_add(1);
+    let trfd = if has_trfd == 1 && cur.saturating_add(48) <= slice.len() {
+        let a = read_f64(endian, slice, cur)?;
+        let b = read_f64(endian, slice, cur.saturating_add(8))?;
+        let c = read_f64(endian, slice, cur.saturating_add(16))?;
+        let d = read_f64(endian, slice, cur.saturating_add(24))?;
+        let tx = read_f64(endian, slice, cur.saturating_add(32))?;
+        let ty = read_f64(endian, slice, cur.saturating_add(40))?;
+        cur = cur.saturating_add(48);
+        Affine2::new(a, b, c, d, tx, ty).ok()
+    } else {
+        None
+    };
+    let has_trns = *slice.get(cur)?;
+    cur = cur.saturating_add(1);
+    let trns = if has_trns == 1 {
+        let trns_len = usize::from(read_u16(endian, slice, cur)?);
+        let trns_start = cur.saturating_add(2);
+        let trns_end = trns_start.checked_add(trns_len)?;
+        cur = trns_end;
+        slice.get(trns_start..trns_end).and_then(|s| decode_trns(s, endian, version, warnings))
+    } else {
+        None
+    };
+    let shape_len = usize::from(read_u16(endian, slice, cur)?);
+    let shape_start = cur.saturating_add(2);
+    let shape_end = shape_start.checked_add(shape_len)?.min(slice.len());
+    let shape_meta = slice.get(shape_start..shape_end).unwrap_or_default().to_vec();
+    Some((omta, trfd, trns, shape_meta))
+}
+
 fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mut ParserCtx, page: &mut Page) {
     let (cmx_colors, cmx_pens, cmx_line_styles, cmx_dots, cmx_outlines) = tables;
     let mut pos = 0usize;
-    let mut group_stack: Vec<Vec<ObjectNode>> = Vec::new();
+    let mut group_stack: Vec<(Vec<ObjectNode>, Option<CmxParsedMeta>)> = Vec::new();
     let mut has_explicit_layers = false;
     while pos.saturating_add(4) <= payload.len() {
         let sz_i16 = read_i16(ctx.endian, payload, pos).unwrap_or(0);
@@ -800,31 +941,66 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
                 lyr.locked = (flags & 0x04) != 0;
                 page.layers.push(lyr);
             }
-        } else if code == 14 {
+        } else if (code == 13 || code == 14) && inst_size >= 10 {
             // CMX_Command_BeginGroup
-            if group_stack.len() < 64 {
-                group_stack.push(Vec::new());
+            let mut tag_pos = pos.saturating_add(header_len);
+            let inst_end = pos.saturating_add(inst_size);
+            let mut grp_meta: Option<CmxParsedMeta> = None;
+            while tag_pos < inst_end {
+                let Some(&tag_id) = payload.get(tag_pos) else { break };
+                if tag_id == 255 || tag_pos.saturating_add(3) > inst_end {
+                    break;
+                }
+                let tag_len = (read_u16(ctx.endian, payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                if tag_id == 99 && tag_pos.saturating_add(tag_len) <= inst_end {
+                    let s = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                    grp_meta = decode_cmx_meta_tag(s, ctx.endian, 700, &mut Vec::new());
+                }
+                tag_pos = tag_pos.saturating_add(tag_len);
             }
-        } else if code == 15 {
+            if group_stack.len() < 64 {
+                group_stack.push((Vec::new(), grp_meta));
+            }
+        } else if code == 15 || (code == 14 && inst_size < 10) {
             // CMX_Command_EndGroup
-            if let Some(children) = group_stack.pop()
+            if let Some((children, grp_meta)) = group_stack.pop()
                 && !children.is_empty()
             {
                 let grp_id = ObjectId(ctx.alloc_id());
-                let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
-                if let Some(parent) = group_stack.last_mut() {
+                let mut grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                if let Some((omta, trfd, trns, _)) = grp_meta {
+                    if let Some((name, visible, locked, opacity)) = omta {
+                        if name.is_some() {
+                            grp_node.name = name;
+                        }
+                        grp_node.visible = visible;
+                        grp_node.locked = locked;
+                        grp_node.opacity = opacity;
+                    }
+                    if let Some(tf) = trfd {
+                        grp_node.transform = tf;
+                    }
+                    if let Some(t) = trns {
+                        grp_node.transparency = Some(t);
+                    }
+                }
+                if let Some((parent, _)) = group_stack.last_mut() {
                     parent.push(grp_node);
                 } else if let Some(layer) = page.layers.last_mut() {
                     layer.objects.push(grp_node);
                 }
             }
-        } else if code == 67 {
-            // CMX_Command_PolyCurve
+        } else if matches!(code, 66..=68) {
+            // CMX_Command_Ellipse (66), CMX_Command_PolyCurve (67), CMX_Command_Rectangle (68)
             let mut tag_pos = pos.saturating_add(header_len);
             let inst_end = pos.saturating_add(inst_size);
             let mut decoded_path: Option<Path> = None;
+            let mut decoded_kind: Option<ObjectKind> = None;
             let mut decoded_fill: Option<FillStyle> = None;
             let mut decoded_outline: Option<OutlineStyle> = None;
+            let mut decoded_transparency: Option<coralcraft_doc::TransparencyStyle> = None;
+            let mut decoded_meta: Option<CmxParsedMeta> = None;
+            let mut decoded_bbox: Option<Rect> = None;
             let mut has_render_attr = false;
             while tag_pos < inst_end {
                 let Some(&tag_id) = payload.get(tag_pos) else {
@@ -963,6 +1139,7 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
                             }
                         }
                         if (mask & 0x02) != 0 && sub_pos.saturating_add(5) <= attr_slice.len() {
+                            let outl_spec_len = (read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(1)).unwrap_or(5) as usize).max(3);
                             let o_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(1) as usize;
                             if let Some(&(ls_idx, c_idx, p_idx, dash_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
                                 let col = cmx_colors.get(usize::from(c_idx).saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
@@ -994,28 +1171,143 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
                             } else {
                                 decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
                             }
+                            sub_pos = sub_pos.saturating_add(outl_spec_len);
+                            if attr_slice.get(sub_pos) == Some(&255) {
+                                sub_pos = sub_pos.saturating_add(1);
+                            }
+                        }
+                        if (mask & 0x04) != 0 {
+                            while sub_pos < attr_slice.len() {
+                                let Some(&lens_tag) = attr_slice.get(sub_pos) else { break };
+                                if lens_tag == 255 {
+                                    break;
+                                }
+                                if sub_pos.saturating_add(3) > attr_slice.len() {
+                                    break;
+                                }
+                                let lens_len = (read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                let lens_end = sub_pos.saturating_add(lens_len).min(attr_slice.len());
+                                if lens_tag == 10 && sub_pos.saturating_add(3) < lens_end {
+                                    let trns_slice = attr_slice.get(sub_pos.saturating_add(3)..lens_end).unwrap_or_default();
+                                    decoded_transparency = decode_trns(trns_slice, ctx.endian, 700, &mut Vec::new());
+                                } else if lens_tag == 1 && decoded_transparency.is_none() && sub_pos.saturating_add(8) <= lens_end {
+                                    let l_type = attr_slice.get(sub_pos.saturating_add(3)).copied().unwrap_or(0);
+                                    if l_type == 1 && sub_pos.saturating_add(11) <= lens_end {
+                                        let tint_method = attr_slice.get(sub_pos.saturating_add(4)).copied().unwrap_or(0);
+                                        let rate_milli = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(5)).unwrap_or(500);
+                                        let c_ref = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(7)).unwrap_or(1) as usize;
+                                        let rate = (f64::from(rate_milli) / 1000.0).clamp(0.0, 1.0);
+                                        if tint_method == 0 {
+                                            if let Ok(op) = F64::new(rate) {
+                                                decoded_transparency = Some(coralcraft_doc::TransparencyStyle::Uniform { opacity: op });
+                                            }
+                                        } else if let Ok(r_f64) = F64::new(rate) {
+                                            let col = cmx_colors.get(c_ref.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                            decoded_transparency = Some(coralcraft_doc::TransparencyStyle::Lens {
+                                                kind: coralcraft_doc::LensKind::Tinted { color: col, rate: r_f64 },
+                                            });
+                                        }
+                                    } else if l_type == 2 {
+                                        let rate_centi = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(4)).unwrap_or(200);
+                                        if let Ok(fac) = F64::new((f64::from(rate_centi) / 100.0).max(1.0)) {
+                                            decoded_transparency = Some(coralcraft_doc::TransparencyStyle::Lens {
+                                                kind: coralcraft_doc::LensKind::Magnify { factor: fac },
+                                            });
+                                        }
+                                    }
+                                }
+                                sub_pos = sub_pos.saturating_add(lens_len);
+                            }
                         }
                     }
                 } else if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
                     let pt_slice = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
-                    if pt_slice.len() >= 2 {
+                    if code == 67 && pt_slice.len() >= 2 {
                         let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
                         let mut with_pad = Vec::with_capacity(4usize.saturating_add(pt_slice.len()));
                         with_pad.extend_from_slice(&(count as u16).to_le_bytes());
                         with_pad.extend_from_slice(&0u16.to_le_bytes());
                         with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
                         decoded_path = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size);
+                    } else if code == 68 && pt_slice.len() >= 20 {
+                        let cx_cdr = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 0).unwrap_or(0))).to_pt().get();
+                        let cy_cdr = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 4).unwrap_or(0))).to_pt().get();
+                        let w_pt = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 8).unwrap_or(0))).to_pt().get().abs().max(1.0);
+                        let h_pt = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 12).unwrap_or(0))).to_pt().get().abs().max(1.0);
+                        let r_pt = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 16).unwrap_or(0))).to_pt().get().abs().max(0.0);
+                        let cx = page.size.width.get() * 0.5 + cx_cdr;
+                        let cy = page.size.height.get() * 0.5 - cy_cdr;
+                        if let Ok(rect) = Rect::new(cx - 0.5 * w_pt, cy - 0.5 * h_pt, cx + 0.5 * w_pt, cy + 0.5 * h_pt) {
+                            decoded_bbox = Some(rect);
+                            let r_f64 = F64::new(r_pt).unwrap_or(F64::ZERO);
+                            decoded_kind =
+                                Some(ObjectKind::Rect(RectSpec { rect, radii: [r_f64; 4], corner_kinds: [coralcraft_geom::CornerKind::Round; 4] }));
+                        }
+                    } else if code == 66 && pt_slice.len() >= 29 {
+                        let cx_cdr = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 0).unwrap_or(0))).to_pt().get();
+                        let cy_cdr = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 4).unwrap_or(0))).to_pt().get();
+                        let w_pt = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 8).unwrap_or(0))).to_pt().get().abs().max(1.0);
+                        let h_pt = CdrUnit(i64::from(read_i32(ctx.endian, pt_slice, 12).unwrap_or(0))).to_pt().get().abs().max(1.0);
+                        let a1_deg = f64::from(read_i32(ctx.endian, pt_slice, 16).unwrap_or(0)) / 1_000_000.0;
+                        let a2_deg = f64::from(read_i32(ctx.endian, pt_slice, 20).unwrap_or(0)) / 1_000_000.0;
+                        let pie = pt_slice.get(28).copied().unwrap_or(0) != 0;
+                        let cx = page.size.width.get() * 0.5 + cx_cdr;
+                        let cy = page.size.height.get() * 0.5 - cy_cdr;
+                        if let Ok(rect) = Rect::new(cx - 0.5 * w_pt, cy - 0.5 * h_pt, cx + 0.5 * w_pt, cy + 0.5 * h_pt) {
+                            decoded_bbox = Some(rect);
+                            let mode = if (a1_deg - a2_deg).abs() < 1e-4 {
+                                coralcraft_geom::EllipseMode::Full
+                            } else if pie {
+                                coralcraft_geom::EllipseMode::Pie
+                            } else {
+                                coralcraft_geom::EllipseMode::Arc
+                            };
+                            decoded_kind = Some(ObjectKind::Ellipse(EllipseSpec {
+                                rect,
+                                start_deg: F64::new(a1_deg.rem_euclid(360.0)).unwrap_or(F64::ZERO),
+                                end_deg: F64::new(a2_deg.rem_euclid(360.0)).unwrap_or(F64::ZERO),
+                                mode,
+                            }));
+                        }
                     }
+                } else if tag_id == 3 && code == 67 && tag_pos.saturating_add(19) <= inst_end {
+                    let bbox_slice = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(19)).unwrap_or_default();
+                    decoded_bbox = decode_bbox(bbox_slice, ctx.endian, 700, page.size);
+                } else if tag_id == 99 && tag_pos.saturating_add(tag_len) <= inst_end {
+                    let meta_slice = payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                    decoded_meta = decode_cmx_meta_tag(meta_slice, ctx.endian, 700, &mut Vec::new());
                 }
                 tag_pos = tag_pos.saturating_add(tag_len);
             }
-            if let Some(path) = decoded_path {
+            if let Some((_, _, _, ref shape_meta)) = decoded_meta
+                && !shape_meta.is_empty()
+            {
+                decoded_kind = Some(decode_explicit_shape_payload(shape_meta, *b"loda", ctx.endian, 700, page.size, decoded_bbox, &mut Vec::new()));
+            }
+            if let Some(kind) = decoded_kind.or_else(|| decoded_path.map(ObjectKind::Path)) {
                 if !has_render_attr || (decoded_fill.is_none() && decoded_outline.is_none()) {
                     decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
                 }
                 let obj_id = ObjectId(ctx.alloc_id());
-                let obj_node = ObjectNode::new(obj_id, None, ObjectKind::Path(path), decoded_fill, decoded_outline);
-                if let Some(parent) = group_stack.last_mut() {
+                let mut obj_node = ObjectNode::new(obj_id, None, kind, decoded_fill, decoded_outline);
+                if let Some((omta, trfd, trns, _)) = decoded_meta {
+                    if let Some((name, visible, locked, opacity)) = omta {
+                        obj_node.name = name;
+                        obj_node.visible = visible;
+                        obj_node.locked = locked;
+                        obj_node.opacity = opacity;
+                    }
+                    if let Some(tf) = trfd {
+                        obj_node.transform = tf;
+                    }
+                    if let Some(t) = trns {
+                        decoded_transparency = Some(t);
+                    }
+                }
+                if let Some(t) = decoded_transparency {
+                    obj_node.transparency = Some(t);
+                }
+                if let Some((parent, _)) = group_stack.last_mut() {
                     parent.push(obj_node);
                 } else if let Some(layer) = page.layers.last_mut() {
                     layer.objects.push(obj_node);
@@ -1024,11 +1316,27 @@ fn parse_single_cmx_page_chunk(payload: &[u8], tables: &CmxStyleTables, ctx: &mu
         }
         pos = pos.saturating_add(inst_size);
     }
-    while let Some(children) = group_stack.pop() {
+    while let Some((children, grp_meta)) = group_stack.pop() {
         if !children.is_empty() {
             let grp_id = ObjectId(ctx.alloc_id());
-            let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
-            if let Some(parent) = group_stack.last_mut() {
+            let mut grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+            if let Some((omta, trfd, trns, _)) = grp_meta {
+                if let Some((name, visible, locked, opacity)) = omta {
+                    if name.is_some() {
+                        grp_node.name = name;
+                    }
+                    grp_node.visible = visible;
+                    grp_node.locked = locked;
+                    grp_node.opacity = opacity;
+                }
+                if let Some(tf) = trfd {
+                    grp_node.transform = tf;
+                }
+                if let Some(t) = trns {
+                    grp_node.transparency = Some(t);
+                }
+            }
+            if let Some((parent, _)) = group_stack.last_mut() {
                 parent.push(grp_node);
             } else if let Some(layer) = page.layers.last_mut() {
                 layer.objects.push(grp_node);
@@ -2071,8 +2379,24 @@ fn decode_cdr_color_v500(slice: &[u8], endian: Endian, warnings: &mut Vec<String
             )
             .ok()
         }
+        // HSB (`0x06`)
+        6 => {
+            let h_u16 = read_u16(endian, slice, 8).unwrap_or(0);
+            let (s, b) = if slice.get(2..4) == Some(b"CF") {
+                (f64::from(read_u16(endian, slice, 4).unwrap_or(0)) / 10000.0, f64::from(read_u16(endian, slice, 6).unwrap_or(0)) / 10000.0)
+            } else {
+                (f64::from(col2) / 255.0, f64::from(col3) / 255.0)
+            };
+            Color::hsb(f64::from(h_u16).clamp(0.0, 360.0), s.clamp(0.0, 1.0), b.clamp(0.0, 1.0)).ok()
+        }
         // Grayscale (`0x08` or `0x09`)
-        8 | 9 => Color::gray((f64::from(col0) / 255.0).clamp(0.0, 1.0)).ok(),
+        8 | 9 => {
+            let k =
+                if slice.get(2..4) == Some(b"CF") { f64::from(read_u16(endian, slice, 4).unwrap_or(0)) / 10000.0 } else { f64::from(col0) / 255.0 };
+            Color::gray(k.clamp(0.0, 1.0)).ok()
+        }
+        // Registration (`0x14 = 20`)
+        20 => Some(Color::Registration),
         other => {
             warnings.push(format!("W-COLOR-MODEL: unknown CDR color model {other:#06x}; using RGB fallback"));
             Some(Color::rgb8(col2, col1, col0))
@@ -2883,12 +3207,31 @@ fn append_riff_list(out: &mut Vec<u8>, list_type: [u8; 4], children_bytes: &[u8]
 fn encode_cdr_color_v500(c: &Color) -> [u8; 12] {
     let mut out = [0u8; 12];
     match c {
-        Color::Cmyk { c, m, y, k, .. } => {
+        Color::Cmyk { c, m, y, k } => {
             out[0..2].copy_from_slice(&2u16.to_le_bytes());
             out[8] = (c.get() * 100.0).round().clamp(0.0, 100.0) as u8;
             out[9] = (m.get() * 100.0).round().clamp(0.0, 100.0) as u8;
             out[10] = (y.get() * 100.0).round().clamp(0.0, 100.0) as u8;
             out[11] = (k.get() * 100.0).round().clamp(0.0, 100.0) as u8;
+        }
+        Color::Hsb { h, s, b } => {
+            out[0..2].copy_from_slice(&6u16.to_le_bytes());
+            out[2..4].copy_from_slice(b"CF");
+            out[4..6].copy_from_slice(&((s.get() * 10000.0).round().clamp(0.0, 10000.0) as u16).to_le_bytes());
+            out[6..8].copy_from_slice(&((b.get() * 10000.0).round().clamp(0.0, 10000.0) as u16).to_le_bytes());
+            out[8..10].copy_from_slice(&(h.get().round().clamp(0.0, 360.0) as u16).to_le_bytes());
+            out[10] = (s.get() * 255.0).round().clamp(0.0, 255.0) as u8;
+            out[11] = (b.get() * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+        Color::Gray { k } => {
+            out[0..2].copy_from_slice(&9u16.to_le_bytes());
+            out[2..4].copy_from_slice(b"CF");
+            out[4..6].copy_from_slice(&((k.get() * 10000.0).round().clamp(0.0, 10000.0) as u16).to_le_bytes());
+            out[8] = (k.get() * 255.0).round().clamp(0.0, 255.0) as u8;
+        }
+        Color::Registration => {
+            out[0..2].copy_from_slice(&20u16.to_le_bytes());
+            out[8..12].copy_from_slice(&[100, 100, 100, 100]);
         }
         _ => {
             let [r, g, b, _] = c.to_rgba8(1.0);
@@ -3665,25 +4008,94 @@ struct CmxFountainSpec {
     stop_entries: Vec<(u16, u16)>,
 }
 
+fn encode_cmx_meta_tag(node: &ObjectNode, cx: f64, cy: f64, bbox_payload: &[u8]) -> Option<Vec<u8>> {
+    let has_omta = node.name.is_some() || !node.visible || node.locked || (node.opacity.get() - 1.0).abs() > 1e-6;
+    let has_trfd = node.transform != Affine2::IDENTITY;
+    let has_trns = node.transparency.is_some();
+    let has_shape = !matches!(node.kind, ObjectKind::Path(_) | ObjectKind::Group { .. });
+    if !has_omta && !has_trfd && !has_trns && !has_shape {
+        return None;
+    }
+    let mut meta = Vec::new();
+    meta.extend_from_slice(b"CCMX");
+    if has_omta {
+        let omta = encode_omta_payload(node);
+        let omta_len = omta.len().min(usize::from(u16::MAX));
+        meta.extend_from_slice(&(omta_len as u16).to_le_bytes());
+        meta.extend_from_slice(omta.get(..omta_len).unwrap_or_default());
+    } else {
+        meta.extend_from_slice(&0u16.to_le_bytes());
+    }
+    if has_trfd {
+        meta.push(1u8);
+        meta.extend_from_slice(&node.transform.a.get().to_le_bytes());
+        meta.extend_from_slice(&node.transform.b.get().to_le_bytes());
+        meta.extend_from_slice(&node.transform.c.get().to_le_bytes());
+        meta.extend_from_slice(&node.transform.d.get().to_le_bytes());
+        meta.extend_from_slice(&node.transform.tx.get().to_le_bytes());
+        meta.extend_from_slice(&node.transform.ty.get().to_le_bytes());
+    } else {
+        meta.push(0u8);
+    }
+    if let Some(trns) = &node.transparency {
+        let tp = encode_trns_payload(trns);
+        let tp_len = tp.len().min(usize::from(u16::MAX));
+        meta.push(1u8);
+        meta.extend_from_slice(&(tp_len as u16).to_le_bytes());
+        meta.extend_from_slice(tp.get(..tp_len).unwrap_or_default());
+    } else {
+        meta.push(0u8);
+    }
+    if has_shape {
+        let mut shape_meta = Vec::new();
+        encode_explicit_shape_meta(node, cx, cy, bbox_payload, &mut shape_meta);
+        if shape_meta.len() <= 60_000 {
+            meta.extend_from_slice(&(shape_meta.len() as u16).to_le_bytes());
+            meta.extend_from_slice(&shape_meta);
+        } else {
+            meta.extend_from_slice(&0u16.to_le_bytes());
+        }
+    } else {
+        meta.extend_from_slice(&0u16.to_le_bytes());
+    }
+    if meta.len().saturating_add(3) <= usize::from(u16::MAX) { Some(meta) } else { None }
+}
+
 fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTables, page_cmds: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         // CMX_Command_BeginGroup (code = 14)
         let bbox = node_bbox_for_export(node);
-        let mut cmd = Vec::with_capacity(34);
-        cmd.extend_from_slice(&34i16.to_le_bytes()); // instructionSize = 34
-        cmd.extend_from_slice(&14i16.to_le_bytes()); // CMX_Command_BeginGroup
-        cmd.push(1u8); // CMX_Tag_BeginGroup_GroupSpecification
-        cmd.extend_from_slice(&29u16.to_le_bytes()); // tagLength = 29
-        cmd.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
-        cmd.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
-        cmd.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
-        cmd.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
-        cmd.extend_from_slice(&0u16.to_le_bytes()); // groupCount = 0
-        cmd.extend_from_slice(&(children.len().min(usize::from(u16::MAX)) as u16).to_le_bytes()); // commandCount
-        cmd.extend_from_slice(&0u32.to_le_bytes()); // commandSize = 0
-        cmd.extend_from_slice(&0u16.to_le_bytes()); // flags = 0
-        cmd.push(255u8); // CMX_Tag_EndTag
-        page_cmds.extend_from_slice(&cmd);
+        let mut bbox_payload = Vec::with_capacity(16);
+        bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+        bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+        bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+        bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+        let mut grp_body = Vec::with_capacity(30);
+        grp_body.push(1u8); // CMX_Tag_BeginGroup_GroupSpecification
+        grp_body.extend_from_slice(&29u16.to_le_bytes()); // tagLength = 29
+        grp_body.extend_from_slice(&bbox_payload);
+        grp_body.extend_from_slice(&0u16.to_le_bytes()); // groupCount = 0
+        grp_body.extend_from_slice(&(children.len().min(usize::from(u16::MAX)) as u16).to_le_bytes()); // commandCount
+        grp_body.extend_from_slice(&0u32.to_le_bytes()); // commandSize = 0
+        grp_body.extend_from_slice(&0u16.to_le_bytes()); // flags = 0
+        if let Some(meta) = encode_cmx_meta_tag(node, cx, cy, &bbox_payload) {
+            let tag_len = (3usize.saturating_add(meta.len())) as u16;
+            grp_body.push(99u8);
+            grp_body.extend_from_slice(&tag_len.to_le_bytes());
+            grp_body.extend_from_slice(&meta);
+        }
+        grp_body.push(255u8); // CMX_Tag_EndTag
+        if let Ok(inst_sz) = i16::try_from(4usize.saturating_add(grp_body.len())) {
+            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+            page_cmds.extend_from_slice(&14i16.to_le_bytes()); // CMX_Command_BeginGroup
+            page_cmds.extend_from_slice(&grp_body);
+        } else {
+            let inst_sz = (8usize.saturating_add(grp_body.len())) as i32;
+            page_cmds.extend_from_slice(&(-1i16).to_le_bytes());
+            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+            page_cmds.extend_from_slice(&14i16.to_le_bytes());
+            page_cmds.extend_from_slice(&grp_body);
+        }
 
         for child in children {
             encode_cmx_node(child, cx, cy, tables, page_cmds)?;
@@ -3816,6 +4228,9 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
         tables.outlines.push((ls_idx, c_idx, p_idx, dash_idx));
         outl_idx = tables.outlines.len() as u16;
     }
+    if node.transparency.is_some() {
+        mask |= 0x04;
+    }
     render_attr.push(mask);
     if (mask & 0x01) != 0 {
         if let Some(ftn) = &cmx_fountain {
@@ -3881,9 +4296,36 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
         render_attr.extend_from_slice(&outl_idx.to_le_bytes());
         render_attr.push(255u8); // EndTag (OutlineSpec)
     }
+    if let Some(trns) = &node.transparency {
+        let rate_pct = match trns {
+            coralcraft_doc::TransparencyStyle::Uniform { opacity } => {
+                ((1.0 - opacity.get().clamp(0.0, 1.0)) * 100.0).round().clamp(0.0, 100.0) as u16
+            }
+            _ => 50u16,
+        };
+        render_attr.push(1u8); // CMX_Tag_RenderAttr_LensSpec_Base
+        render_attr.extend_from_slice(&7u16.to_le_bytes()); // tagLength = 7
+        render_attr.push(1u8); // lensType = 1 (Glass/Transparency)
+        render_attr.push(0u8); // tintMethod = 0 (Average/Rate)
+        render_attr.extend_from_slice(&rate_pct.to_le_bytes());
+        let tp = encode_trns_payload(trns);
+        if tp.len().saturating_add(3) <= usize::from(u16::MAX) {
+            let tp_tag_len = (3usize.saturating_add(tp.len())) as u16;
+            render_attr.push(10u8);
+            render_attr.extend_from_slice(&tp_tag_len.to_le_bytes());
+            render_attr.extend_from_slice(&tp);
+        }
+        render_attr.push(255u8); // EndTag (LensSpec)
+    }
     let render_tag_len = (3usize.saturating_add(render_attr.len())) as u16;
 
     let bbox = node_bbox_for_export(node);
+    let mut bbox_payload = Vec::with_capacity(16);
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+    bbox_payload.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+
     let mut body = Vec::new();
     // Tag 1: CMX_Tag_PolyCurve_RenderingAttr
     body.push(1u8);
@@ -3901,10 +4343,13 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
     // Tag 3: CMX_Tag_Polycurve_BoundingBox
     body.push(3u8);
     body.extend_from_slice(&19u16.to_le_bytes());
-    body.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
-    body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
-    body.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
-    body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+    body.extend_from_slice(&bbox_payload);
+    if let Some(meta) = encode_cmx_meta_tag(node, cx, cy, &bbox_payload) {
+        let meta_tag_len = (3usize.saturating_add(meta.len())) as u16;
+        body.push(99u8);
+        body.extend_from_slice(&meta_tag_len.to_le_bytes());
+        body.extend_from_slice(&meta);
+    }
     // EndTag
     body.push(255u8);
 
@@ -4019,7 +4464,7 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         rclr.push(1u8); // CMX_Tag_DescrSection_Color_Base
         rclr.extend_from_slice(&5u16.to_le_bytes());
         match col {
-            Color::Cmyk { c, m, y, k, .. } => {
+            Color::Cmyk { c, m, y, k } => {
                 rclr.push(2u8); // CMYK100
                 rclr.push(0u8);
                 rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
@@ -4028,6 +4473,73 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
                 rclr.push((m.get() * 100.0).round().clamp(0.0, 100.0) as u8);
                 rclr.push((y.get() * 100.0).round().clamp(0.0, 100.0) as u8);
                 rclr.push((k.get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push(10u8);
+                rclr.extend_from_slice(&39u16.to_le_bytes());
+                rclr.extend_from_slice(b"CMYK");
+                rclr.extend_from_slice(&c.get().to_le_bytes());
+                rclr.extend_from_slice(&m.get().to_le_bytes());
+                rclr.extend_from_slice(&y.get().to_le_bytes());
+                rclr.extend_from_slice(&k.get().to_le_bytes());
+            }
+            Color::Hsb { h, s, b } => {
+                let h_u16 = h.get().round().clamp(0.0, 360.0) as u16;
+                rclr.push(6u8); // HSB
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.extend_from_slice(&h_u16.to_le_bytes());
+                rclr.push((s.get() * 255.0).round().clamp(0.0, 255.0) as u8);
+                rclr.push((b.get() * 255.0).round().clamp(0.0, 255.0) as u8);
+                rclr.push(10u8);
+                rclr.extend_from_slice(&31u16.to_le_bytes());
+                rclr.extend_from_slice(b"HSB\0");
+                rclr.extend_from_slice(&h.get().to_le_bytes());
+                rclr.extend_from_slice(&s.get().to_le_bytes());
+                rclr.extend_from_slice(&b.get().to_le_bytes());
+            }
+            Color::Gray { k } => {
+                rclr.push(9u8); // Gray
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&4u16.to_le_bytes());
+                rclr.push(((1.0 - k.get()) * 255.0).round().clamp(0.0, 255.0) as u8);
+                rclr.push(10u8);
+                rclr.extend_from_slice(&15u16.to_le_bytes());
+                rclr.extend_from_slice(b"GRAY");
+                rclr.extend_from_slice(&k.get().to_le_bytes());
+            }
+            Color::Registration => {
+                rclr.push(8u8); // Registration
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.extend_from_slice(&[0u8; 4]);
+                rclr.push(10u8);
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.extend_from_slice(b"REGI");
+            }
+            Color::Spot { name, tint, fallback_cmyk } => {
+                rclr.push(2u8); // CMYK100 fallback for libcdr
+                rclr.push(0u8);
+                rclr.push(2u8); // CMX_Tag_DescrSection_Color_ColorDescr
+                rclr.extend_from_slice(&7u16.to_le_bytes());
+                rclr.push((fallback_cmyk[0].get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((fallback_cmyk[1].get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((fallback_cmyk[2].get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                rclr.push((fallback_cmyk[3].get() * 100.0).round().clamp(0.0, 100.0) as u8);
+                let name_bytes = name.as_bytes();
+                let name_len = name_bytes.len().min(256);
+                let tag_len = (49usize.saturating_add(name_len)) as u16;
+                rclr.push(10u8);
+                rclr.extend_from_slice(&tag_len.to_le_bytes());
+                rclr.extend_from_slice(b"SPOT");
+                rclr.extend_from_slice(&tint.get().to_le_bytes());
+                rclr.extend_from_slice(&fallback_cmyk[0].get().to_le_bytes());
+                rclr.extend_from_slice(&fallback_cmyk[1].get().to_le_bytes());
+                rclr.extend_from_slice(&fallback_cmyk[2].get().to_le_bytes());
+                rclr.extend_from_slice(&fallback_cmyk[3].get().to_le_bytes());
+                rclr.extend_from_slice(&(name_len as u16).to_le_bytes());
+                rclr.extend_from_slice(name_bytes.get(..name_len).unwrap_or_default());
             }
             _ => {
                 let [r, g, b, _] = col.to_rgba8(1.0);

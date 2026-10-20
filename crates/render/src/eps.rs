@@ -478,10 +478,16 @@ fn emit_ps_color(out: &mut String, color: &Color) {
 pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderError> {
     let layers = doc.effective_layers_for_page(page_index, true)?;
     let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
+    let page_w = page.size.width.get();
     let page_h = page.size.height.get();
 
     let mut out = String::new();
-    out.push_str("0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n0\nENDSEC\n");
+    let _ = write!(
+        out,
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$LIMMIN\n10\n0\n20\n0\n9\n$LIMMAX\n10\n{}\n20\n{}\n0\nENDSEC\n",
+        fmt_num(page_w),
+        fmt_num(page_h)
+    );
     out.push_str("0\nSECTION\n2\nENTITIES\n");
 
     for layer in layers {
@@ -521,8 +527,60 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
         Some(FillStyle::Uniform { color }) => dxf_truecolor_attr(color),
         _ => String::new(),
     };
+    let mut poly_style_attrs = String::new();
+    if let Some(outline) = &node.outline {
+        poly_style_attrs.push_str(&dxf_truecolor_attr(&outline.color));
+        if !outline.is_hairline() && outline.width_pt.get() > 0.0 {
+            let lw_100mm = ((outline.width_pt.get() * 25.4 / 72.0) * 100.0).round().clamp(1.0, 2110.0) as i32;
+            let _ = writeln!(poly_style_attrs, "370\n{lw_100mm}");
+        }
+    } else if let Some(FillStyle::Uniform { color }) = &node.fill {
+        poly_style_attrs.push_str(&dxf_truecolor_attr(color));
+    }
     if node.effects.is_empty() {
         match &node.kind {
+            ObjectKind::Ellipse(spec) if world_tf == Affine2::IDENTITY => {
+                let rx = spec.rect.width() * 0.5;
+                let ry = spec.rect.height() * 0.5;
+                let cx = spec.rect.x0.get() + rx;
+                let cy_dxf = page_h - (spec.rect.y0.get() + ry);
+                if (rx - ry).abs() <= 1e-6 && rx > 0.0 {
+                    if spec.mode == coralcraft_geom::EllipseMode::Full {
+                        let _ = writeln!(
+                            out,
+                            "0\nCIRCLE\n8\n{layer_name}\n{poly_style_attrs}10\n{}\n20\n{}\n40\n{}",
+                            fmt_num(cx),
+                            fmt_num(cy_dxf),
+                            fmt_num(rx)
+                        );
+                        return Ok(());
+                    } else if spec.mode == coralcraft_geom::EllipseMode::Arc {
+                        let a0 = (-spec.end_deg.get()).rem_euclid(360.0);
+                        let a1 = (-spec.start_deg.get()).rem_euclid(360.0);
+                        let _ = writeln!(
+                            out,
+                            "0\nARC\n8\n{layer_name}\n{poly_style_attrs}10\n{}\n20\n{}\n40\n{}\n50\n{}\n51\n{}",
+                            fmt_num(cx),
+                            fmt_num(cy_dxf),
+                            fmt_num(rx),
+                            fmt_num(a0),
+                            fmt_num(a1)
+                        );
+                        return Ok(());
+                    }
+                } else if spec.mode == coralcraft_geom::EllipseMode::Full && rx > 0.0 && ry > 0.0 {
+                    let ratio = (ry / rx).clamp(1e-3, 100.0);
+                    let _ = writeln!(
+                        out,
+                        "0\nELLIPSE\n8\n{layer_name}\n{poly_style_attrs}10\n{}\n20\n{}\n11\n{}\n21\n0\n40\n{}\n41\n0\n42\n6.283185",
+                        fmt_num(cx),
+                        fmt_num(cy_dxf),
+                        fmt_num(rx),
+                        fmt_num(ratio)
+                    );
+                    return Ok(());
+                }
+            }
             ObjectKind::ArtisticText { text, size_pt, position, .. } => {
                 let clean = sanitize_dxf_text(text);
                 if !clean.is_empty() {
@@ -567,17 +625,6 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
     apply_deforming_effects(node, &mut local_path, &mut local_bbox);
     let world_path = local_path.transform(world_tf)?;
     let polys = flatten_path(&world_path, &FlattenOpts::default())?;
-
-    let mut poly_style_attrs = String::new();
-    if let Some(outline) = &node.outline {
-        poly_style_attrs.push_str(&dxf_truecolor_attr(&outline.color));
-        if !outline.is_hairline() && outline.width_pt.get() > 0.0 {
-            let lw_100mm = ((outline.width_pt.get() * 25.4 / 72.0) * 100.0).round().clamp(1.0, 2110.0) as i32;
-            let _ = writeln!(poly_style_attrs, "370\n{lw_100mm}");
-        }
-    } else if let Some(FillStyle::Uniform { color }) = &node.fill {
-        poly_style_attrs.push_str(&dxf_truecolor_attr(color));
-    }
 
     for poly in &polys {
         if poly.points.len() < 2 {
@@ -1237,5 +1284,74 @@ mod tests {
         assert_eq!(rpage.layers.get(1).unwrap().objects.len(), 1);
         let lbl = rpage.layers.get(1).unwrap().objects.first().unwrap();
         assert_eq!(lbl.fill, Some(FillStyle::uniform(Color::rgb8(0xDD, 0x44, 0x11))));
+    }
+
+    #[test]
+    fn export_dxf_and_import_dxf_roundtrip_page_size_circle_arc_and_ellipse_m81() {
+        use coralcraft_geom::{EllipseMode, EllipseSpec, Size};
+
+        let mut doc = Document::new_a4_portrait();
+        let page = doc.pages.first_mut().unwrap();
+        page.size = Size::new(792.0, 612.0).unwrap();
+        let objs = &mut page.layers.first_mut().unwrap().objects;
+
+        // 1. Circle (rx == ry == 40, mode == Full)
+        objs.push(ObjectNode::new(
+            ObjectId(1),
+            Some("MyCircle".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(60.0, 80.0, 140.0, 160.0).unwrap())),
+            None,
+            Some(OutlineStyle::with_width(Color::rgb8(0x11, 0x88, 0x33), F64::new(1.5).unwrap())),
+        ));
+
+        // 2. Circular Arc (rx == ry == 50, mode == Arc, 0..90 deg)
+        objs.push(ObjectNode::new(
+            ObjectId(2),
+            Some("MyArc".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::arc(Rect::new(200.0, 100.0, 300.0, 200.0).unwrap(), 0.0, 90.0).unwrap()),
+            None,
+            Some(OutlineStyle::hairline(Color::rgb8(0xCC, 0x22, 0x44))),
+        ));
+
+        // 3. Non-circular Full Ellipse (rx = 80, ry = 40)
+        objs.push(ObjectNode::new(
+            ObjectId(3),
+            Some("MyEllipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(360.0, 200.0, 520.0, 280.0).unwrap())),
+            None,
+            Some(OutlineStyle::hairline(Color::rgb8(0x22, 0x44, 0xCC))),
+        ));
+
+        let dxf = crate::export_dxf(&doc, 0).expect("export_dxf M81");
+        assert!(dxf.contains("0\nCIRCLE\n"), "export_dxf should emit native CIRCLE entity: {dxf}");
+        assert!(dxf.contains("0\nARC\n"), "export_dxf should emit native ARC entity: {dxf}");
+        assert!(dxf.contains("0\nELLIPSE\n"), "export_dxf should emit native ELLIPSE entity: {dxf}");
+
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf M81");
+        let rpage = reimported.pages.first().unwrap();
+        assert!((rpage.size.width.get() - 792.0).abs() < 1e-4 && (rpage.size.height.get() - 612.0).abs() < 1e-4);
+        let robjs = &rpage.layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 3);
+
+        let ObjectKind::Ellipse(c_spec) = &robjs.first().unwrap().kind else {
+            panic!("expected ObjectKind::Ellipse for CIRCLE, got {:?}", robjs.first().unwrap().kind);
+        };
+        assert_eq!(c_spec.mode, EllipseMode::Full);
+        assert!((c_spec.rect.x0.get() - 60.0).abs() < 1e-3 && (c_spec.rect.y0.get() - 80.0).abs() < 1e-3);
+        assert!((c_spec.rect.width() - 80.0).abs() < 1e-3 && (c_spec.rect.height() - 80.0).abs() < 1e-3);
+
+        let ObjectKind::Ellipse(a_spec) = &robjs.get(1).unwrap().kind else {
+            panic!("expected ObjectKind::Ellipse for ARC, got {:?}", robjs.get(1).unwrap().kind);
+        };
+        assert_eq!(a_spec.mode, EllipseMode::Arc);
+        assert!((a_spec.rect.x0.get() - 200.0).abs() < 1e-3 && (a_spec.rect.y0.get() - 100.0).abs() < 1e-3);
+        assert!((a_spec.start_deg.get() - 0.0).abs() < 1e-3 && (a_spec.end_deg.get() - 90.0).abs() < 1e-3);
+
+        let ObjectKind::Ellipse(e_spec) = &robjs.get(2).unwrap().kind else {
+            panic!("expected ObjectKind::Ellipse for ELLIPSE, got {:?}", robjs.get(2).unwrap().kind);
+        };
+        assert_eq!(e_spec.mode, EllipseMode::Full);
+        assert!((e_spec.rect.x0.get() - 360.0).abs() < 1e-3 && (e_spec.rect.y0.get() - 200.0).abs() < 1e-3);
+        assert!((e_spec.rect.width() - 160.0).abs() < 1e-3 && (e_spec.rect.height() - 80.0).abs() < 1e-3);
     }
 }
