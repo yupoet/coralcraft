@@ -2560,6 +2560,43 @@ pub fn interpolate_smooth_cubic_path(path: &Path, tension: f64) -> Result<Path, 
     Ok(out)
 }
 
+/// Applies a radial Pinch (`strength < 0.0`) or Punch (`strength > 0.0`, `strength` in `-0.95..=2.0`)
+/// warp to `path` within `radius_pt` around `center` (`Effects -> Distort -> Pinch / Punch Warp`).
+pub fn pinch_punch_warp_path(path: &Path, center: Point, radius_pt: f64, strength: f64) -> Result<Path, GeomError> {
+    let r_max = crate::f64_canon::F64::new(radius_pt)?.get();
+    let s = crate::f64_canon::F64::new(strength)?.get();
+    if path.elements.is_empty() || r_max <= 1.0 || !(-0.95..=2.0).contains(&s) {
+        return Err(GeomError::InvalidShapeParameter("invalid pinch/punch warp parameters"));
+    }
+    let dense = subdivide_path_by_max_segment_length(path, (r_max * 0.15).max(2.0))?;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let dx = p.x.get() - cx;
+        let dy = p.y.get() - cy;
+        let d = dx.hypot(dy);
+        if d <= 1e-9 || d >= r_max {
+            return Ok(p);
+        }
+        let falloff = 1.0 - (d / r_max);
+        let factor = (1.0 + s * falloff).max(0.05);
+        Point::new(cx + dx * factor, cy + dy * factor)
+    };
+    let mut out_elems = Vec::with_capacity(dense.elements.len());
+    for el in dense.elements {
+        match el {
+            PathElement::MoveTo(p) => out_elems.push(PathElement::MoveTo(warp_pt(p)?)),
+            PathElement::LineTo(p) => out_elems.push(PathElement::LineTo(warp_pt(p)?)),
+            PathElement::QuadTo { ctrl, end } => out_elems.push(PathElement::QuadTo { ctrl: warp_pt(ctrl)?, end: warp_pt(end)? }),
+            PathElement::CubicTo { c1, c2, end } => {
+                out_elems.push(PathElement::CubicTo { c1: warp_pt(c1)?, c2: warp_pt(c2)?, end: warp_pt(end)? });
+            }
+            PathElement::Close => out_elems.push(PathElement::Close),
+        }
+    }
+    Path::from_elements(out_elems, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2676,5 +2713,8 @@ mod m26_tests {
         let smooth_cubic = interpolate_smooth_cubic_path(&rect_path, 1.0).unwrap();
         let cubic_count = smooth_cubic.elements.iter().filter(|e| matches!(e, PathElement::CubicTo { .. })).count();
         assert_eq!(cubic_count, 4);
+
+        let pinched = pinch_punch_warp_path(&rect_path, Point::new(25.0, 20.0).unwrap(), 40.0, -0.5).unwrap();
+        assert!(pinched.elements.len() >= 10);
     }
 }

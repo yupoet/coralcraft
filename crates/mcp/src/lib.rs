@@ -18,8 +18,8 @@ use coralcraft_geom::{
     build_concentric_rings_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
     build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path,
     build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path,
-    build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
-    build_truchet_tiles_path, build_voronoi_mosaic_path,
+    build_rose_guilloche_path, build_sierpinski_triangle_path, build_spiral_path, build_spirograph_path, build_superformula_path,
+    build_three_point_curve_path, build_truchet_tiles_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{
     ImpositionSpec, PrepressOptions, RenderOpts, base64_decode, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed,
@@ -1477,6 +1477,54 @@ impl McpServer {
                                     "cpl_base64": { "type": "string" }
                                 },
                                 "required": ["cpl_base64"]
+                            }
+                        },
+                        {
+                            "name": "add_sierpinski_triangle",
+                            "description": "Inserts a Sierpinski gasket fractal compound path of 3^depth filled triangular subpaths on the active layer.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "x": { "type": "number" },
+                                    "y": { "type": "number" },
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" },
+                                    "depth": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "pinch_punch_object_path",
+                            "description": "Applies a radial Pinch (strength < 0) or Punch (strength > 0) warp to a path object within radius_pt around (center_x, center_y).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "center_x": { "type": "number" },
+                                    "center_y": { "type": "number" },
+                                    "radius_pt": { "type": "number" },
+                                    "strength": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "stack_selection",
+                            "description": "Packs all selected unlocked objects edge-to-edge horizontally or vertically with gap_pt separation.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "horizontal": { "type": "boolean" },
+                                    "gap_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "get_document_summary",
+                            "description": "Returns document-level statistics including title, units, page_count, master_layer_count, total_object_count, active_page_index, and selection_count.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
                             }
                         }
                     ]
@@ -4041,6 +4089,54 @@ impl McpServer {
                     "swatches": swatches
                 }))
             }
+            "add_sierpinski_triangle" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(140.0);
+                let depth = args.get("depth").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let bounds = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_sierpinski_triangle_path(bounds, depth).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Sierpinski Triangle".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "sierpinski_triangle", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "pinch_punch_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0)).map_err(|e| e.to_string())?;
+                let strength = F64::new(args.get("strength").and_then(Value::as_f64).unwrap_or(-0.4)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::PinchPunchObjectPath { object_id: target, center, radius_pt, strength });
+                Ok(json!({ "pinched_punched": ok, "object_id": target.0, "strength": strength.get() }))
+            }
+            "stack_selection" => {
+                self.apply_optional_selection(args);
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let gap_pt = F64::new(args.get("gap_pt").and_then(Value::as_f64).unwrap_or(8.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::StackSelection { horizontal, gap_pt });
+                Ok(json!({ "stacked": ok, "horizontal": horizontal, "gap_pt": gap_pt.get() }))
+            }
+            "get_document_summary" => {
+                let mut total_objects = 0usize;
+                for page in &self.engine.document.pages {
+                    for layer in &page.layers {
+                        total_objects += layer.objects.len();
+                    }
+                }
+                for layer in &self.engine.document.master_layers {
+                    total_objects += layer.objects.len();
+                }
+                Ok(json!({
+                    "title": self.engine.document.title,
+                    "units": format!("{:?}", self.engine.document.units),
+                    "page_count": self.engine.document.pages.len(),
+                    "master_layer_count": self.engine.document.master_layers.len(),
+                    "total_object_count": total_objects,
+                    "active_page_index": self.engine.current_page_index(),
+                    "selection_count": self.engine.selection.len()
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -4070,7 +4166,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 228);
+        assert_eq!(tools, 232);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4476,5 +4572,31 @@ mod tests {
         });
         let imp_cpl_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_cpl_req.to_string())).unwrap();
         assert!(imp_cpl_resp.result.unwrap()["structuredContent"]["swatch_count"].as_u64().unwrap() >= 1);
+
+        let sierp_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"add_sierpinski_triangle","arguments":{"x":40.0,"y":40.0,"width":140.0,"height":120.0,"depth":2}}}"#,
+            ),
+        )
+        .unwrap();
+        let sierp_id = sierp_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let pp_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{{"name":"pinch_punch_object_path","arguments":{{"object_id":{sierp_id},"center_x":110.0,"center_y":100.0,"radius_pt":80.0,"strength":-0.35}}}}}}"#
+        )))
+        .unwrap();
+        assert!(pp_resp.result.unwrap()["structuredContent"]["pinched_punched"].as_bool().unwrap());
+
+        let stack_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{{"name":"stack_selection","arguments":{{"selection":[{sierp_id},{truch_id}],"horizontal":true,"gap_pt":12.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(stack_resp.result.unwrap()["structuredContent"]["stacked"].as_bool().unwrap());
+
+        let sum_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"get_document_summary","arguments":{}}}"#),
+        )
+        .unwrap();
+        assert!(sum_resp.result.unwrap()["structuredContent"]["total_object_count"].as_u64().unwrap() >= 5);
     }
 }

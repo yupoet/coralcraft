@@ -217,9 +217,13 @@
 61. **M61 Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools**:
     - `coralcraft-geom`: `build_truchet_tiles_path` (deterministic $G^1$-continuous Smith quarter-circle Truchet tile maze) and `interpolate_smooth_cubic_path` ($C^1$ Catmull-Rom cubic Bézier curve interpolation).
     - `coralcraft-engine`, `coralcraft-render` & `coralcraft-mcp`: `base64_decode`, `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `add_truchet_tiles`, `smooth_polyline_to_cubic_beziers`, `orient_selection_to_center`, `import_cpl_palette_base64`, and **228 MCP tools**.
+62. **M62 Sierpinski Gasket Fractal (`build_sierpinski_triangle_path`), Radial Pinch/Punch Warp (`pinch_punch_warp_path` & `PinchPunchObjectPath`), Edge-to-Edge Stack Selection (`StackSelection`), Document Summary Inspection (`get_document_summary`), and 232 MCP Tools**:
+    - `coralcraft-geom`: `build_sierpinski_triangle_path` (recursive Sierpinski gasket fractal of $3^{\text{depth}}$ closed sub-triangles) and `pinch_punch_warp_path` (radial pinch/punch deformer).
+    - `coralcraft-engine` & `coralcraft-mcp`: `PinchPunchObjectPath`, `StackSelection`, `add_sierpinski_triangle`, `pinch_punch_object_path`, `stack_selection`, `get_document_summary`, and **232 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M62 delivered (`build_sierpinski_triangle_path` & `add_sierpinski_triangle`, `pinch_punch_warp_path` & `PinchPunchObjectPath`, `StackSelection`, `get_document_summary`, 232 MCP tools).
 - 2026-10-20: M61 delivered (`build_truchet_tiles_path` & `add_truchet_tiles`, `interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `base64_decode` & `import_cpl_palette_base64`, 228 MCP tools).
 - 2026-10-20: M60 delivered (`build_celtic_knot_ring_path` & `add_celtic_knot_ring`, `fit_circle_to_path_points` & `FitCircleToObjectPath`, `SnapSelectionToCircleRadius`, `export_svg_with_prepress`, 224 MCP tools).
 - 2026-10-20: M59 delivered (`build_halftone_wave_lines_path` & `add_halftone_wave_lines`, `laplacian_relax_closed_path` & `RelaxObjectPath`, `ApplyPaletteSwatchesToSelection`, `export_pdf_with_prepress_base64`, 220 MCP tools).

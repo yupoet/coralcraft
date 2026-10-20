@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M61 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M62 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -59,9 +59,10 @@
   51. **M58: Phyllotaxis Golden-Angle Spiral (`build_phyllotaxis_path`), Spherical Fish-Eye Lens Warp (`spherical_fisheye_warp_path` & `SphericalWarpObjectPath`), Gradient Selection Colorizer (`ColorizeSelectionByGradient`), XML Palette Import (`import_xml_palette`), and 216 MCP Tools (`commit e093fbe`)**.
   52. **M59: Sinusoidal Security Wave Guilloche (`build_halftone_wave_lines_path`), Taubin/Laplacian Curve Relaxation (`laplacian_relax_closed_path` & `RelaxObjectPath`), Apply Palette Swatches to Selection (`ApplyPaletteSwatchesToSelection`), Prepress PDF Base64 Export (`export_pdf_with_prepress_base64`), and 220 MCP Tools (`commit 2e6be90`)**.
   53. **M60: Braided Celtic Knot Ring (`build_celtic_knot_ring_path`), Least-Squares Kåsa Circle Fit (`fit_circle_to_path_points` & `FitCircleToObjectPath`), Snap Selection to Circle Radius (`SnapSelectionToCircleRadius`), Prepress SVG Export (`export_svg_with_prepress`), and 224 MCP Tools (`commit ee19379`)**.
-  54. **M61: Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools**:
-      - `coralcraft-geom` & `coralcraft-render`: Added `build_truchet_tiles_path`, `interpolate_smooth_cubic_path`, and `base64_decode`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `add_truchet_tiles`, `smooth_polyline_to_cubic_beziers`, `orient_selection_to_center`, `import_cpl_palette_base64`, and expanded MCP server to **228 tools**.
+  54. **M61: Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools (`commit 0e65dfb`)**.
+  55. **M62: Sierpinski Gasket Fractal (`build_sierpinski_triangle_path`), Radial Pinch/Punch Warp (`pinch_punch_warp_path` & `PinchPunchObjectPath`), Edge-to-Edge Stack Selection (`StackSelection`), Document Summary Inspection (`get_document_summary`), and 232 MCP Tools**:
+      - `coralcraft-geom`: Added `build_sierpinski_triangle_path` and `pinch_punch_warp_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `PinchPunchObjectPath`, `StackSelection`, `add_sierpinski_triangle`, `pinch_punch_object_path`, `stack_selection`, `get_document_summary`, and expanded MCP server to **232 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

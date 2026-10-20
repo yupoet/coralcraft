@@ -1791,6 +1791,46 @@ pub fn build_truchet_tiles_path(bounds: Rect, cols: u32, rows: u32, seed: u64) -
     Ok(path)
 }
 
+/// Builds a Sierpinski gasket fractal [`Path`] inside `bounds` of recursion `depth` (`0..=5`,
+/// generating $3^{\text{depth}}$ closed triangular subpaths) (`Object -> Insert -> Sierpinski Triangle`).
+pub fn build_sierpinski_triangle_path(bounds: Rect, depth: u32) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 || depth > 5 {
+        return Err(GeomError::InvalidShapeParameter("invalid Sierpinski triangle parameters"));
+    }
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let p_top = Point::new(0.5 * (x0 + x1), y0)?;
+    let p_br = Point::new(x1, y1)?;
+    let p_bl = Point::new(x0, y1)?;
+
+    let mut tris = vec![(p_top, p_br, p_bl)];
+    for _ in 0..depth {
+        let mut next = Vec::with_capacity(tris.len() * 3);
+        for (a, b, c) in tris {
+            let mab = Point::new(0.5 * (a.x.get() + b.x.get()), 0.5 * (a.y.get() + b.y.get()))?;
+            let mbc = Point::new(0.5 * (b.x.get() + c.x.get()), 0.5 * (b.y.get() + c.y.get()))?;
+            let mca = Point::new(0.5 * (c.x.get() + a.x.get()), 0.5 * (c.y.get() + a.y.get()))?;
+            next.push((a, mab, mca));
+            next.push((mab, b, mbc));
+            next.push((mca, mbc, c));
+        }
+        tris = next;
+    }
+
+    let mut path = Path::new();
+    for (a, b, c) in tris {
+        path.move_to(a)?;
+        path.line_to(b)?;
+        path.line_to(c)?;
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1911,5 +1951,9 @@ mod m27_tests {
         let truchet = build_truchet_tiles_path(Rect::new(0.0, 0.0, 120.0, 90.0).unwrap(), 4, 3, 42).unwrap();
         let truchet_moves = truchet.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
         assert_eq!(truchet_moves, 24);
+
+        let sierp = build_sierpinski_triangle_path(Rect::new(0.0, 0.0, 120.0, 100.0).unwrap(), 3).unwrap();
+        let sierp_closes = sierp.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(sierp_closes, 27);
     }
 }

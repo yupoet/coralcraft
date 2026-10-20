@@ -12,10 +12,10 @@ use coralcraft_geom::{
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, fit_circle_to_path_points,
     hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path,
-    measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric,
-    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
-    smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length,
-    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, pinch_punch_warp_path,
+    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
+    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments,
+    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -358,6 +358,10 @@ pub enum EngineCommand {
     SmoothPolylineToCubicBeziers { object_id: ObjectId, tension: F64 },
     /// Rotates each selected unlocked object around its own center to face radially away from (or toward) `center` plus `angle_offset_deg` (`Object -> Transformations -> Orient Selection to Center`).
     OrientSelectionToCenter { center: Point, angle_offset_deg: F64 },
+    /// Applies a radial Pinch (`strength < 0`) or Punch (`strength > 0`) warp to `object_id` within `radius_pt` around `center` (`Effects -> Distort -> Pinch / Punch Warp`).
+    PinchPunchObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64 },
+    /// Packs all selected unlocked objects edge-to-edge horizontally (`horizontal = true`) or vertically (`horizontal = false`) with `gap_pt` separation (`Object -> Align and Distribute -> Stack Selection`).
+    StackSelection { horizontal: bool, gap_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4641,6 +4645,70 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::PinchPunchObjectPath { object_id, center, radius_pt, strength } => {
+                let r_max = radius_pt.get();
+                let s = strength.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(warped) = pinch_punch_warp_path(&world_path, center, r_max, s)
+                    {
+                        obj.kind = ObjectKind::Path(warped);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::StackSelection { horizontal, gap_pt } => {
+                let gap = gap_pt.get();
+                let mut items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                if items.len() < 2 {
+                    return false;
+                }
+                if horizontal {
+                    items.sort_by_key(|a| a.1.x0);
+                    let mut cursor = items[0].1.x0.get();
+                    let mut deltas = BTreeMap::new();
+                    for (id, bbox) in items {
+                        let dx = cursor - bbox.x0.get();
+                        deltas.insert(id, (dx, 0.0));
+                        cursor += bbox.width() + gap;
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                } else {
+                    items.sort_by_key(|a| a.1.y0);
+                    let mut cursor = items[0].1.y0.get();
+                    let mut deltas = BTreeMap::new();
+                    for (id, bbox) in items {
+                        let dy = cursor - bbox.y0.get();
+                        deltas.insert(id, (0.0, dy));
+                        cursor += bbox.height() + gap;
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
         }
         true
     }
@@ -5614,5 +5682,13 @@ mod tests {
             center: Point::new(120.0, 120.0).unwrap(),
             angle_offset_deg: F64::new(90.0).unwrap(),
         }));
+        assert!(engine.execute(EngineCommand::PinchPunchObjectPath {
+            object_id: hull_id,
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(70.0).unwrap(),
+            strength: F64::new(-0.4).unwrap(),
+        }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::StackSelection { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
     }
 }
