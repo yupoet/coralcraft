@@ -48,7 +48,8 @@ fn render_block(tools: &[(String, String)]) -> String {
 #[test]
 fn docs_mcp_md_tool_list_matches_live_registry() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/mcp.md");
-    let doc = std::fs::read_to_string(&path).expect("docs/mcp.md must exist");
+    // Normalize line endings: Windows checkouts may convert the file to CRLF.
+    let doc = std::fs::read_to_string(&path).expect("docs/mcp.md must exist").replace("\r\n", "\n");
     let start = doc.find(BEGIN).expect("docs/mcp.md is missing the BEGIN GENERATED TOOL LIST marker");
     let end = doc.find(END).expect("docs/mcp.md is missing the END GENERATED TOOL LIST marker") + END.len();
     let expected = render_block(&live_tools());

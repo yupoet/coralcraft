@@ -359,10 +359,13 @@ pub fn handle_http_connection(stream: &mut TcpStream, session: &mut InteractiveG
         return write_response(stream, "403 Forbidden", "text/plain", b"forbidden");
     }
 
-    let content_len = parse_content_length(&header_str);
-    if content_len > MAX_BODY_BYTES {
-        return write_response(stream, "413 Payload Too Large", "text/plain", b"payload too large");
-    }
+    let Some(declared_len) = parse_content_length(&header_str) else {
+        return write_response(stream, "400 Bad Request", "text/plain", b"malformed content-length");
+    };
+    let content_len = match usize::try_from(declared_len) {
+        Ok(len) if len <= MAX_BODY_BYTES => len,
+        _ => return write_response(stream, "413 Payload Too Large", "text/plain", b"payload too large"),
+    };
     let mut body = buf.get(header_end..).unwrap_or_default().to_vec();
     body.truncate(content_len);
     while body.len() < content_len {
@@ -490,16 +493,13 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|idx| idx + 4)
 }
 
-fn parse_content_length(headers: &str) -> usize {
-    for line in headers.lines() {
-        if let Some((k, v)) = line.split_once(':')
-            && k.trim().eq_ignore_ascii_case("content-length")
-            && let Ok(len) = v.trim().parse::<usize>()
-        {
-            return len;
-        }
+/// Parses `Content-Length` as `u64` so values that do not fit a 32-bit `usize` are still seen as
+/// too large (rather than silently treated as 0). Absent header = 0; malformed = `None`.
+fn parse_content_length(headers: &str) -> Option<u64> {
+    match header_value(headers, "content-length") {
+        None => Some(0),
+        Some(v) => v.parse::<u64>().ok(),
     }
-    0
 }
 
 fn write_response(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -> Result<(), String> {
