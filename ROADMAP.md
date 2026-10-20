@@ -263,9 +263,13 @@
     - `coralcraft-cdr`: Preserved `PatternKind` (`Checkerboard`, `PolkaDot`, `HorizontalStripe`, `VerticalStripe`, `DiagonalCrosshatch`), `fg_color`, `bg_color`, and `tile_size_pt` across CDR7 `fild` (`fill_type = 7`) and CMX1 `CMX_Tag_RenderAttr_FillSpec_MonoBM` (`fillType = 7`).
     - `coralcraft-render`: Rendered `ObjectKind::Bitmap` in `export_eps` using PostScript Level 2 `/ASCIIHexDecode filter false 3 colorimage` with alpha-over-white compositing.
     - `coralcraft-doc`: Added SVG smooth cubic (`S`/`s`) and smooth quadratic (`T`/`t`) curve reflection commands plus chained `transform` lists (`translate`, `scale`, `rotate`, `skewX`, `skewY`, `matrix`) in `import_svg`.
+73. **M73 CDR7 Fountain Fill `edge_pad`, `center_x`/`center_y` & `FountainBlendMode` Round-Trip, SVG Elliptical Arc (`A`/`a`) & Inline CSS `style="..."` Import, and DXF `SOLID`/`MTEXT` Import**:
+    - `coralcraft-cdr`: Encoded and decoded CDR7 `fild` (`fill_type = 2`) `edge_pad`, `center_x`, `center_y`, and `FountainBlendMode` (`Direct`, `RainbowCw`, `RainbowCcw`) in `write_cdr7` and `decode_fild`.
+    - `coralcraft-doc`: Implemented W3C SVG 1.1 F.6.5/F.6.6 endpoint-to-center elliptical arc (`A`/`a`) cubic Bézier conversion and inline CSS `style="..."` presentation property fallback in `import_svg`, plus AutoCAD DXF `SOLID` (`1-2-4-3` quadrilateral/triangle vertex winding) and `MTEXT` (`\P` paragraph break cleanup) entity import in `import_dxf`.
 
 ## Changelog
 
+- 2026-10-21: M73 delivered (CDR7 `fild` `edge_pad`, `center_x`/`center_y` & `FountainBlendMode` round-trip, SVG `A`/`a` elliptical arc W3C F.6.5/F.6.6 conversion & inline CSS `style="..."` parsing in `import_svg`, and DXF `SOLID` & `MTEXT` entity import in `import_dxf`).
 - 2026-10-21: M72 delivered (CDR7 `fild` & CMX1 `fillType = 7` `TwoColorPattern` `PatternKind` round-trip, EPS `ObjectKind::Bitmap` PostScript `/ASCIIHexDecode filter false 3 colorimage` export, and SVG `S/s/T/t` smooth curve commands & chained `transform` lists in `import_svg`).
 - 2026-10-21: M71 delivered (CMX1 `fillType = 2` multi-stop Linear/Radial/Conical/Square fountain fill round-trip in `write_cmx1` & `parse_cmx_commands_into_page`, SVG relative path commands `m/l/h/v/H/V/q/c`, `<rect rx/ry>`, `rotate(angle[,cx,cy])` & `fill-rule="evenodd"` in `import_svg`, and DXF `ARC`/`ELLIPSE` entity import in `import_dxf`).
 - 2026-10-21: M70 delivered (SVG `<line>`/`<polyline>`/`<polygon>` & stroke attribute import in `import_svg`, EPS `TwoColorPattern` clipped geometric tile rendering & EPS/DXF arrowhead marker emission, and workspace-wide `12/12` crate enforcement of `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"`).

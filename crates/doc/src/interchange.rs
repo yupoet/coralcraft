@@ -164,7 +164,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             if let Some(pts_str) = extract_attr_str(tag_slice, "points")
                 && let Some(mut path) = parse_svg_points_path(pts_str, is_polygon)
             {
-                if extract_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
+                if extract_style_or_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
                     path.fill_rule = FillRule::EvenOdd;
                 }
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
@@ -183,7 +183,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 && let Ok(mut path) = parse_svg_path_d(d_str)
                 && !path.is_empty()
             {
-                if extract_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
+                if extract_style_or_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
                     path.fill_rule = FillRule::EvenOdd;
                 }
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
@@ -466,6 +466,23 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                 }
                 i = i.saturating_add(4);
             }
+            "A" | "a" if i.saturating_add(6) < tokens.len() => {
+                if let (Some(rx), Some(ry), Some(x_rot), Some(large_f), Some(sweep_f), Some(ex), Some(ey)) = (
+                    token_f64(&tokens, i),
+                    token_f64(&tokens, i.saturating_add(1)),
+                    token_f64(&tokens, i.saturating_add(2)),
+                    token_f64(&tokens, i.saturating_add(3)),
+                    token_f64(&tokens, i.saturating_add(4)),
+                    token_f64(&tokens, i.saturating_add(5)),
+                    token_f64(&tokens, i.saturating_add(6)),
+                ) {
+                    let (aex, aey) = if cmd == "a" { (cur_x + ex, cur_y + ey) } else { (ex, ey) };
+                    emit_svg_elliptical_arc(&mut path, cur_x, cur_y, rx, ry, x_rot, large_f.abs() > 0.5, sweep_f.abs() > 0.5, aex, aey)?;
+                    cur_x = aex;
+                    cur_y = aey;
+                }
+                i = i.saturating_add(7);
+            }
             "Z" | "z" => {
                 path.close()?;
                 cur_x = sub_x;
@@ -475,6 +492,84 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
         }
     }
     Ok(path)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_svg_elliptical_arc(
+    path: &mut Path,
+    x1: f64,
+    y1: f64,
+    rx_in: f64,
+    ry_in: f64,
+    x_axis_rot_deg: f64,
+    large_arc: bool,
+    sweep: bool,
+    x2: f64,
+    y2: f64,
+) -> Result<(), coralcraft_geom::GeomError> {
+    if (x1 - x2).hypot(y1 - y2) < 1e-9 {
+        return Ok(());
+    }
+    if rx_in.abs() < 1e-9 || ry_in.abs() < 1e-9 {
+        return path.line_to(Point::new(x2, y2)?);
+    }
+    let mut rx = rx_in.abs();
+    let mut ry = ry_in.abs();
+    let (sin_phi, cos_phi) = x_axis_rot_deg.to_radians().sin_cos();
+    let dx2 = 0.5 * (x1 - x2);
+    let dy2 = 0.5 * (y1 - y2);
+    let x1p = cos_phi * dx2 + sin_phi * dy2;
+    let y1p = -sin_phi * dx2 + cos_phi * dy2;
+    let lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    if lambda > 1.0 {
+        let s = lambda.sqrt();
+        rx *= s;
+        ry *= s;
+    }
+    let rx2 = rx * rx;
+    let ry2 = ry * ry;
+    let x1p2 = x1p * x1p;
+    let y1p2 = y1p * y1p;
+    let num = (rx2 * ry2 - rx2 * y1p2 - ry2 * x1p2).max(0.0);
+    let den = (rx2 * y1p2 + ry2 * x1p2).max(1e-12);
+    let coef = (if large_arc == sweep { -1.0 } else { 1.0 }) * (num / den).sqrt();
+    let cxp = coef * (rx * y1p / ry);
+    let cyp = coef * (-ry * x1p / rx);
+    let cx = cos_phi * cxp - sin_phi * cyp + 0.5 * (x1 + x2);
+    let cy = sin_phi * cxp + cos_phi * cyp + 0.5 * (y1 + y2);
+    let ux = (x1p - cxp) / rx;
+    let uy = (y1p - cyp) / ry;
+    let vx = (-x1p - cxp) / rx;
+    let vy = (-y1p - cyp) / ry;
+    let theta1 = uy.atan2(ux);
+    let mut dtheta = (ux * vy - uy * vx).atan2(ux * vx + uy * vy);
+    if !sweep && dtheta > 0.0 {
+        dtheta -= std::f64::consts::TAU;
+    } else if sweep && dtheta < 0.0 {
+        dtheta += std::f64::consts::TAU;
+    }
+    let n_segs = ((dtheta.abs() / (std::f64::consts::FRAC_PI_2 + 1e-6)).ceil() as usize).clamp(1, 4);
+    let step = dtheta / (n_segs as f64);
+    let alpha = (4.0 / 3.0) * (0.25 * step).tan();
+    for seg in 0..n_segs {
+        let t0 = theta1 + (seg as f64) * step;
+        let t1 = theta1 + (seg.saturating_add(1) as f64) * step;
+        let (s0, c0) = t0.sin_cos();
+        let (s1, c1) = t1.sin_cos();
+        let p0x = cx + rx * cos_phi * c0 - ry * sin_phi * s0;
+        let p0y = cy + rx * sin_phi * c0 + ry * cos_phi * s0;
+        let dp0x = -rx * cos_phi * s0 - ry * sin_phi * c0;
+        let dp0y = -rx * sin_phi * s0 + ry * cos_phi * c0;
+        let p1x = cx + rx * cos_phi * c1 - ry * sin_phi * s1;
+        let p1y = cy + rx * sin_phi * c1 + ry * cos_phi * s1;
+        let dp1x = -rx * cos_phi * s1 - ry * sin_phi * c1;
+        let dp1y = -rx * sin_phi * s1 + ry * cos_phi * c1;
+        let ctrl1 = Point::new(p0x + alpha * dp0x, p0y + alpha * dp0y)?;
+        let ctrl2 = Point::new(p1x - alpha * dp1x, p1y - alpha * dp1y)?;
+        let end = Point::new(p1x, p1y)?;
+        path.cubic_to(ctrl1, ctrl2, end)?;
+    }
+    Ok(())
 }
 
 fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
@@ -500,37 +595,37 @@ fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
 }
 
 fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineStyle>) {
-    let fill = match extract_attr_str(tag_slice, "fill") {
+    let fill = match extract_style_or_attr_str(tag_slice, "fill") {
         Some("none") | None => None,
-        Some(hex) => parse_hex_color(hex).map(FillStyle::uniform),
+        Some(hex) => parse_hex_color(hex.trim()).map(FillStyle::uniform),
     };
-    let outline = match extract_attr_str(tag_slice, "stroke") {
+    let outline = match extract_style_or_attr_str(tag_slice, "stroke") {
         Some("none") | None => None,
-        Some(hex) => parse_hex_color(hex).map(OutlineStyle::hairline),
+        Some(hex) => parse_hex_color(hex.trim()).map(OutlineStyle::hairline),
     };
     let mut outline = if fill.is_none() && outline.is_none() { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
     if let Some(st) = &mut outline {
-        if let Some(w) = parse_attr_f64(tag_slice, "stroke-width")
+        if let Some(w) = parse_style_or_attr_f64(tag_slice, "stroke-width")
             && w > 0.0
             && let Ok(w_f64) = F64::new(w)
         {
             st.width_pt = w_f64;
         }
-        if let Some(cap_str) = extract_attr_str(tag_slice, "stroke-linecap") {
+        if let Some(cap_str) = extract_style_or_attr_str(tag_slice, "stroke-linecap") {
             st.cap = match cap_str.trim() {
                 "round" => LineCap::Round,
                 "square" => LineCap::Square,
                 _ => LineCap::Butt,
             };
         }
-        if let Some(join_str) = extract_attr_str(tag_slice, "stroke-linejoin") {
+        if let Some(join_str) = extract_style_or_attr_str(tag_slice, "stroke-linejoin") {
             st.join = match join_str.trim() {
                 "round" => LineJoin::Round,
                 "bevel" => LineJoin::Bevel,
                 _ => LineJoin::Miter,
             };
         }
-        if let Some(dash_str) = extract_attr_str(tag_slice, "stroke-dasharray") {
+        if let Some(dash_str) = extract_style_or_attr_str(tag_slice, "stroke-dasharray") {
             let trimmed = dash_str.trim();
             if trimmed != "none" && !trimmed.is_empty() {
                 let mut dashes: Vec<F64> = trimmed
@@ -551,6 +646,27 @@ fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineS
         }
     }
     (fill, outline)
+}
+
+fn extract_style_or_attr_str<'a>(tag: &'a str, prop: &str) -> Option<&'a str> {
+    if let Some(v) = extract_attr_str(tag, prop) {
+        return Some(v);
+    }
+    let style = extract_attr_str(tag, "style")?;
+    for decl in style.split(';') {
+        if let Some((k, v)) = decl.split_once(':')
+            && k.trim() == prop
+        {
+            return Some(v.trim());
+        }
+    }
+    None
+}
+
+fn parse_style_or_attr_f64(tag: &str, prop: &str) -> Option<f64> {
+    let raw = extract_style_or_attr_str(tag, prop)?;
+    let trimmed = raw.trim_end_matches("pt").trim_end_matches("px").trim();
+    trimmed.parse::<f64>().ok()
 }
 
 fn parse_hex_color(s: &str) -> Option<Color> {
@@ -856,7 +972,54 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     );
                 }
             }
-        } else if code == 0 && val == "TEXT" {
+        } else if code == 0 && val == "SOLID" {
+            p = p.saturating_add(1);
+            let mut x0 = 0.0;
+            let mut y0 = 0.0;
+            let mut x1 = 0.0;
+            let mut y1 = 0.0;
+            let mut x2 = 0.0;
+            let mut y2 = 0.0;
+            let mut x3: Option<f64> = None;
+            let mut y3: Option<f64> = None;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => x0 = v.parse::<f64>().unwrap_or(0.0),
+                    20 => y0 = v.parse::<f64>().unwrap_or(0.0),
+                    11 => x1 = v.parse::<f64>().unwrap_or(0.0),
+                    21 => y1 = v.parse::<f64>().unwrap_or(0.0),
+                    12 => x2 = v.parse::<f64>().unwrap_or(0.0),
+                    22 => y2 = v.parse::<f64>().unwrap_or(0.0),
+                    13 => x3 = v.parse::<f64>().ok(),
+                    23 => y3 = v.parse::<f64>().ok(),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            let x3_v = x3.unwrap_or(x2);
+            let y3_v = y3.unwrap_or(y2);
+            if let (Ok(p0), Ok(p1), Ok(p2), Ok(p3)) =
+                (Point::new(x0, page_h - y0), Point::new(x1, page_h - y1), Point::new(x2, page_h - y2), Point::new(x3_v, page_h - y3_v))
+            {
+                let mut path = Path::new();
+                let _ = path.move_to(p0);
+                let _ = path.line_to(p1);
+                if p3 != p2 {
+                    let _ = path.line_to(p3);
+                }
+                let _ = path.line_to(p2);
+                let _ = path.close();
+                let id = doc.allocate_object_id();
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF Solid".to_owned()), ObjectKind::Path(path), Some(FillStyle::uniform(Color::BLACK)), None),
+                );
+            }
+        } else if code == 0 && (val == "TEXT" || val == "MTEXT") {
+            let is_mtext = val == "MTEXT";
             p = p.saturating_add(1);
             let mut tx = 0.0;
             let mut ty = 0.0;
@@ -870,21 +1033,25 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     10 => tx = v.parse::<f64>().unwrap_or(0.0),
                     20 => ty = v.parse::<f64>().unwrap_or(0.0),
                     40 => height = v.parse::<f64>().unwrap_or(12.0),
-                    1 => text_val = v.to_owned(),
+                    1 | 3 => text_val.push_str(v),
                     _ => {}
                 }
                 p = p.saturating_add(1);
+            }
+            if is_mtext {
+                text_val = text_val.replace("\\P", " ").replace("\\p", " ");
             }
             if !text_val.is_empty()
                 && let Ok(pos) = Point::new(tx, page_h - ty)
                 && let Ok(size_pt) = F64::new(height.max(1.0))
             {
                 let id = doc.allocate_object_id();
+                let label = if is_mtext { "DXF MText" } else { "DXF Text" };
                 push_to_first_layer(
                     &mut doc,
                     ObjectNode::new(
                         id,
-                        Some("DXF Text".to_owned()),
+                        Some(label.to_owned()),
                         ObjectKind::ArtisticText { text: text_val, font_family: "Sans".to_owned(), size_pt, position: pos },
                         Some(FillStyle::uniform(Color::BLACK)),
                         None,

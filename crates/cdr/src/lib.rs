@@ -1114,4 +1114,64 @@ mod tests {
         let outl0 = obj0.outline.as_ref().expect("outline after TwoColorPattern fill");
         assert_eq!(outl0.color, Color::rgb8(10, 20, 30));
     }
+
+    #[test]
+    fn write_cdr7_fountain_edge_pad_center_offset_and_blend_mode_roundtrip_m73() {
+        use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+        use coralcraft_doc::{Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let linear_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Linear { angle_deg: F64::new(30.0).unwrap(), edge_pad: F64::new(15.0).unwrap() },
+            blend_mode: FountainBlendMode::RainbowCcw,
+            stops: vec![FountainStop::new(0.0, Color::rgb8(250, 20, 40)).unwrap(), FountainStop::new(1.0, Color::rgb8(20, 200, 120)).unwrap()],
+        };
+        let conical_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Conical {
+                center_x: F64::new(0.65).unwrap(),
+                center_y: F64::new(0.35).unwrap(),
+                angle_deg: F64::new(-45.0).unwrap(),
+            },
+            blend_mode: FountainBlendMode::RainbowCw,
+            stops: vec![FountainStop::new(0.0, Color::rgb8(10, 80, 240)).unwrap(), FountainStop::new(1.0, Color::rgb8(240, 180, 10)).unwrap()],
+        };
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(111),
+            Some("CdrLinearPad".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 120.0, 80.0).unwrap())),
+            Some(linear_fill),
+            None,
+        ));
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(112),
+            Some("CdrConicalCenter".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(140.0, 20.0, 240.0, 120.0).unwrap())),
+            Some(conical_fill),
+            None,
+        ));
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 2);
+
+        match &objs[0].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Linear { angle_deg, edge_pad }, blend_mode, .. }) => {
+                assert!((angle_deg.get() - 30.0).abs() < 1e-3);
+                assert!((edge_pad.get() - 15.0).abs() < 1e-3);
+                assert_eq!(*blend_mode, FountainBlendMode::RainbowCcw);
+            }
+            other => panic!("expected Linear Fountain with edge_pad=15 and RainbowCcw, got {other:?}"),
+        }
+        match &objs[1].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Conical { center_x, center_y, angle_deg }, blend_mode, .. }) => {
+                assert!((center_x.get() - 0.65).abs() < 1e-2);
+                assert!((center_y.get() - 0.35).abs() < 1e-2);
+                assert!((angle_deg.get() - (-45.0)).abs() < 1e-3);
+                assert_eq!(*blend_mode, FountainBlendMode::RainbowCw);
+            }
+            other => panic!("expected Conical Fountain with center=(0.65,0.35) and RainbowCw, got {other:?}"),
+        }
+    }
 }

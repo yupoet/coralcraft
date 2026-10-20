@@ -973,4 +973,48 @@ mod tests {
             "translate(10,20)*scale(2)*skewX(45) on (1,1) -> (14,22), got {mapped:?}"
         );
     }
+
+    #[test]
+    fn import_svg_arc_command_inline_css_style_and_dxf_solid_mtext_m73() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300pt" height="200pt">
+  <path d="M 10 50 A 40 40 0 0 1 90 50 a 20 20 0 0 0 40 0" style="fill:#336699;stroke:#993300;stroke-width:3pt;stroke-linecap:round;stroke-linejoin:bevel;stroke-dasharray:5,3;fill-rule:evenodd"/>
+</svg>"##;
+        let svg_doc = coralcraft_doc::import_svg(svg).expect("import_svg A/a arc and inline CSS style");
+        let objs = &svg_doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 1);
+        let obj = objs.first().unwrap();
+        assert_eq!(obj.fill, Some(FillStyle::uniform(Color::rgb8(0x33, 0x66, 0x99))));
+        let outl = obj.outline.as_ref().expect("inline style stroke");
+        assert_eq!(outl.color, Color::rgb8(0x99, 0x33, 0x00));
+        assert!((outl.width_pt.get() - 3.0).abs() < 1e-6);
+        assert_eq!(outl.cap, LineCap::Round);
+        assert_eq!(outl.join, LineJoin::Bevel);
+        assert_eq!(outl.dash_pattern.len(), 2);
+        let ObjectKind::Path(p) = &obj.kind else {
+            panic!("expected ObjectKind::Path");
+        };
+        assert_eq!(p.fill_rule, FillRule::EvenOdd);
+        assert!(p.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })), "SVG A/a arc must produce CubicTo segments");
+        let Some(PathElement::CubicTo { end, .. }) = p.elements.last() else {
+            panic!("expected last element to be CubicTo ending at (130, 50)");
+        };
+        assert!((end.x.get() - 130.0).abs() < 1e-4 && (end.y.get() - 50.0).abs() < 1e-4);
+
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nSOLID\n10\n10.0\n20\n100.0\n11\n50.0\n21\n100.0\n12\n10.0\n22\n140.0\n13\n50.0\n23\n140.0\n0\nMTEXT\n10\n25.0\n20\n200.0\n40\n14.0\n1\nHello\\PWorld\n0\nENDSEC\n0\nEOF\n";
+        let dxf_doc = coralcraft_doc::import_dxf(dxf).expect("import_dxf SOLID and MTEXT");
+        let dxf_objs = &dxf_doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(dxf_objs.len(), 2, "expected SOLID and MTEXT imported from DXF");
+        let solid_obj = dxf_objs.first().unwrap();
+        assert_eq!(solid_obj.fill, Some(FillStyle::uniform(Color::BLACK)));
+        let ObjectKind::Path(solid_path) = &solid_obj.kind else {
+            panic!("expected ObjectKind::Path for DXF SOLID");
+        };
+        // DXF SOLID orders vertices 1(10,20) -> 2(11,21) -> 4(13,23) -> 3(12,22) -> Close
+        assert_eq!(solid_path.elements.len(), 5);
+        let ObjectKind::ArtisticText { text, size_pt, .. } = &dxf_objs.get(1).unwrap().kind else {
+            panic!("expected ObjectKind::ArtisticText for DXF MTEXT");
+        };
+        assert_eq!(text, "Hello World");
+        assert!((size_pt.get() - 14.0).abs() < 1e-6);
+    }
 }

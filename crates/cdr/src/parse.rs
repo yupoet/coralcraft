@@ -1296,8 +1296,15 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
         2 => {
             if payload.len() >= 56 {
                 let f_type = u16::from(*payload.get(8).unwrap_or(&0));
+                let edge_off = read_i32(endian, payload, 28).unwrap_or(0);
                 let angle_raw = read_i32(endian, payload, 32).unwrap_or(0);
+                let cx_off = read_i32(endian, payload, 36).unwrap_or(0);
+                let cy_off = read_i32(endian, payload, 40).unwrap_or(0);
+                let mode_raw = read_u32(endian, payload, 46).unwrap_or(0);
                 let angle_deg = (f64::from(angle_raw) / 1_000_000.0).clamp(-360.0, 360.0);
+                let cx_f = F64::new((0.5 + f64::from(cx_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                let cy_f = F64::new((0.5 - f64::from(cy_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                let edge_pad_f = F64::new(f64::from(edge_off.clamp(0, 49))).unwrap_or(F64::ZERO);
                 let num_stops = (read_u32(endian, payload, 52).unwrap_or(0) as usize).min(64);
                 let mut stops = Vec::with_capacity(num_stops.max(2));
                 for i in 0..num_stops {
@@ -1328,23 +1335,22 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
                     ];
                 }
                 let geometry = match f_type {
-                    2 => FountainGeometry::Radial {
-                        center_x: F64::HALF,
-                        center_y: F64::HALF,
-                        radius: F64::HALF,
-                        focal_x: F64::HALF,
-                        focal_y: F64::HALF,
-                    },
-                    3 => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO) },
+                    2 => FountainGeometry::Radial { center_x: cx_f, center_y: cy_f, radius: F64::HALF, focal_x: cx_f, focal_y: cy_f },
+                    3 => FountainGeometry::Conical { center_x: cx_f, center_y: cy_f, angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO) },
                     4 => FountainGeometry::Square {
-                        center_x: F64::HALF,
-                        center_y: F64::HALF,
+                        center_x: cx_f,
+                        center_y: cy_f,
                         radius: F64::HALF,
                         angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
                     },
-                    _ => FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
+                    _ => FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: edge_pad_f },
                 };
-                return Some((fill_id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops }));
+                let blend_mode = match mode_raw {
+                    1 => FountainBlendMode::RainbowCw,
+                    2 => FountainBlendMode::RainbowCcw,
+                    _ => FountainBlendMode::Direct,
+                };
+                return Some((fill_id, FillStyle::Fountain { geometry, blend_mode, stops }));
             }
             let f_type = read_u16(endian, payload, 6).unwrap_or(0);
             let angle_deg = f64::from(read_i16(endian, payload, 8).unwrap_or(0)).clamp(-360.0, 360.0);
@@ -2203,24 +2209,37 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
             p.extend_from_slice(&0u16.to_le_bytes());
             p.extend_from_slice(&encode_cdr_color_v500(c));
         }
-        FillStyle::Fountain { geometry, stops, .. } => {
+        FillStyle::Fountain { geometry, blend_mode, stops } => {
             p.extend_from_slice(&2u16.to_le_bytes());
             p.extend_from_slice(&0u16.to_le_bytes());
-            let (sub_type, angle_deg) = match geometry {
-                FountainGeometry::Radial { .. } => (2u8, 0.0),
-                FountainGeometry::Conical { angle_deg, .. } => (3u8, angle_deg.get()),
-                FountainGeometry::Square { angle_deg, .. } => (4u8, angle_deg.get()),
-                FountainGeometry::Linear { angle_deg, .. } => (1u8, angle_deg.get()),
+            let (sub_type, angle_deg, edge_off, cx_off, cy_off) = match geometry {
+                FountainGeometry::Radial { center_x, center_y, .. } => {
+                    (2u8, 0.0, 0i32, ((center_x.get() - 0.5) * 100.0).round() as i32, ((0.5 - center_y.get()) * 100.0).round() as i32)
+                }
+                FountainGeometry::Conical { center_x, center_y, angle_deg } => {
+                    (3u8, angle_deg.get(), 0i32, ((center_x.get() - 0.5) * 100.0).round() as i32, ((0.5 - center_y.get()) * 100.0).round() as i32)
+                }
+                FountainGeometry::Square { center_x, center_y, angle_deg, .. } => {
+                    (4u8, angle_deg.get(), 0i32, ((center_x.get() - 0.5) * 100.0).round() as i32, ((0.5 - center_y.get()) * 100.0).round() as i32)
+                }
+                FountainGeometry::Linear { angle_deg, edge_pad } => {
+                    (1u8, angle_deg.get(), edge_pad.get().round().clamp(0.0, 49.0) as i32, 0i32, 0i32)
+                }
+            };
+            let mode_raw: u32 = match blend_mode {
+                FountainBlendMode::Direct => 0,
+                FountainBlendMode::RainbowCw => 1,
+                FountainBlendMode::RainbowCcw => 2,
             };
             p.push(sub_type);
             p.extend_from_slice(&[0u8; 19]);
-            p.extend_from_slice(&0i32.to_le_bytes()); // edge_offset
+            p.extend_from_slice(&edge_off.to_le_bytes()); // edge_offset
             let angle_raw = (angle_deg.clamp(-360.0, 360.0) * 1_000_000.0).round() as i32;
             p.extend_from_slice(&angle_raw.to_le_bytes());
-            p.extend_from_slice(&0i32.to_le_bytes()); // center_x_offset
-            p.extend_from_slice(&0i32.to_le_bytes()); // center_y_offset
+            p.extend_from_slice(&cx_off.to_le_bytes()); // center_x_offset
+            p.extend_from_slice(&cy_off.to_le_bytes()); // center_y_offset
             p.extend_from_slice(&0u16.to_le_bytes()); // pad
-            p.extend_from_slice(&0u32.to_le_bytes()); // mode
+            p.extend_from_slice(&mode_raw.to_le_bytes()); // mode
             p.push(50u8); // mid_point
             p.push(0u8); // pad
             let stop_list: Vec<(Color, u32)> = if stops.is_empty() {
