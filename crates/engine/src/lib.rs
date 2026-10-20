@@ -10,8 +10,8 @@ use coralcraft_geom::{
     Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
-    delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
-    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
+    delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, fit_circle_to_path_points,
+    hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
     medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
     reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
     smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path,
@@ -350,6 +350,10 @@ pub enum EngineCommand {
     RelaxObjectPath { object_id: ObjectId, iterations: u32, lambda: F64 },
     /// Cycles `colors` across all selected unlocked objects in selection order, updating fill (`apply_to_fill`) and/or outline (`apply_to_outline`) (`Object -> Color -> Apply Palette Swatches to Selection`).
     ApplyPaletteSwatchesToSelection { colors: Vec<Color>, apply_to_fill: bool, apply_to_outline: bool },
+    /// Replaces `object_id` with a least-squares Kåsa algebraic circle fitted to its world-space path points (`Object -> Shaping -> Fit Circle to Curve`).
+    FitCircleToObjectPath { object_id: ObjectId },
+    /// Translates each selected unlocked object radially from `center` so its center lies on the circle of `radius_pt` (`Object -> Align and Distribute -> Snap Selection to Circle Radius`).
+    SnapSelectionToCircleRadius { center: Point, radius_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4532,6 +4536,58 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::FitCircleToObjectPath { object_id } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(circle_path) = fit_circle_to_path_points(&world_path)
+                    {
+                        obj.kind = ObjectKind::Path(circle_path);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::SnapSelectionToCircleRadius { center, radius_pt } => {
+                let r = radius_pt.get();
+                if r <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = oc.x.get() - cx;
+                    let dy = oc.y.get() - cy;
+                    let dist = dx.hypot(dy);
+                    let (ux, uy) = if dist > 1e-6 { (dx / dist, dy / dist) } else { (1.0, 0.0) };
+                    let target_x = cx + ux * r;
+                    let target_y = cy + uy * r;
+                    deltas.insert(obj.id, (target_x - oc.x.get(), target_y - oc.y.get()));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(tx, ty)) = deltas.get(&obj.id)
+                        && let Ok(t) = Affine2::translation(tx, ty)
+                        && let Ok(composed) = obj.transform.then(t)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5492,5 +5548,13 @@ mod tests {
             apply_to_fill: true,
             apply_to_outline: false,
         }));
+        assert!(engine.execute(EngineCommand::FitCircleToObjectPath { object_id: xor_id }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(
+            engine.execute(EngineCommand::SnapSelectionToCircleRadius {
+                center: Point::new(120.0, 120.0).unwrap(),
+                radius_pt: F64::new(65.0).unwrap(),
+            })
+        );
     }
 }

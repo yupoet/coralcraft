@@ -2455,6 +2455,60 @@ pub fn laplacian_relax_closed_path(path: &Path, iterations: u32, lambda: f64) ->
     Ok(out)
 }
 
+/// Fits a least-squares Kåsa algebraic circle to the flattened vertices of `path`
+/// and returns a closed 4-arc cubic Bézier circle [`Path`] (`Object -> Shaping -> Fit Circle to Curve`).
+pub fn fit_circle_to_path_points(path: &Path) -> Result<Path, GeomError> {
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for poly in polys {
+        let mut sub = poly.points;
+        if poly.closed && sub.len() >= 2 && sub.first().zip(sub.last()).is_some_and(|(a, b)| a == b) {
+            sub.pop();
+        }
+        for p in sub {
+            pts.push((p.x.get(), p.y.get()));
+        }
+    }
+    if pts.len() < 3 {
+        return Err(GeomError::InvalidShapeParameter("circle fit requires at least 3 points"));
+    }
+    let n = pts.len() as f64;
+    let mean_x = pts.iter().map(|p| p.0).sum::<f64>() / n;
+    let mean_y = pts.iter().map(|p| p.1).sum::<f64>() / n;
+
+    let mut suu = 0.0;
+    let mut suv = 0.0;
+    let mut svv = 0.0;
+    let mut suz = 0.0;
+    let mut svz = 0.0;
+    for &(x, y) in &pts {
+        let u = x - mean_x;
+        let v = y - mean_y;
+        let z = u * u + v * v;
+        suu += u * u;
+        suv += u * v;
+        svv += v * v;
+        suz += u * z;
+        svz += v * z;
+    }
+    let det = suu * svv - suv * suv;
+    if det.abs() <= 1e-9 {
+        return Err(GeomError::InvalidShapeParameter("points are collinear; cannot fit circle"));
+    }
+    let rhs_u = 0.5 * suz;
+    let rhs_v = 0.5 * svz;
+    let uc = (rhs_u * svv - rhs_v * suv) / det;
+    let vc = (suu * rhs_v - suv * rhs_u) / det;
+    let cx = mean_x + uc;
+    let cy = mean_y + vc;
+    let r = (uc * uc + vc * vc + (suu + svv) / n).sqrt();
+    if !r.is_finite() || r <= 1e-4 {
+        return Err(GeomError::InvalidShapeParameter("fitted circle radius is degenerate"));
+    }
+    let rect = Rect::new(cx - r, cy - r, cx + r, cy + r)?;
+    crate::shapes::EllipseSpec::full(rect).to_path()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2562,5 +2616,10 @@ mod m26_tests {
 
         let relaxed = laplacian_relax_closed_path(&dense, 3, 0.45).unwrap();
         assert!(relaxed.elements.len() >= 18);
+
+        let fitted_circle = fit_circle_to_path_points(&rect_path).unwrap();
+        let fb = fitted_circle.bounds().unwrap();
+        assert!((fb.center().unwrap().x.get() - 25.0).abs() < 1e-3);
+        assert!((fb.center().unwrap().y.get() - 20.0).abs() < 1e-3);
     }
 }

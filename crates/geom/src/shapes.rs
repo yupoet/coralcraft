@@ -1710,6 +1710,37 @@ pub fn build_halftone_wave_lines_path(bounds: Rect, line_count: u32, amplitude_p
     Ok(path)
 }
 
+/// Builds a two-strand braided Celtic knot ring [`Path`] centered at `center`
+/// (`Object -> Insert -> Celtic Knot Ring`) with base `radius_pt`, radial wave `amplitude_pt`,
+/// `lobes` (`3..=24`), and `steps` (`24..=1024`).
+pub fn build_celtic_knot_ring_path(center: Point, radius_pt: f64, amplitude_pt: f64, lobes: u32, steps: u32) -> Result<Path, GeomError> {
+    let r_base = F64::new(radius_pt)?.get();
+    let amp = F64::new(amplitude_pt)?.get();
+    if r_base <= 1.0 || amp <= 0.0 || amp >= r_base || !(3..=24).contains(&lobes) || steps < 24 {
+        return Err(GeomError::InvalidShapeParameter("invalid Celtic knot ring parameters"));
+    }
+    let n = steps.clamp(24, 1024);
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let k = f64::from(lobes);
+    let mut path = Path::new();
+    for strand in 0..2_u32 {
+        let phase = if strand == 0 { 0.0 } else { std::f64::consts::PI };
+        for i in 0..n {
+            let t = std::f64::consts::TAU * f64::from(i) / f64::from(n);
+            let r = r_base + amp * (k * t + phase).sin();
+            let pt = Point::new(cx + r * t.cos(), cy + r * t.sin())?;
+            if i == 0 {
+                path.move_to(pt)?;
+            } else {
+                path.line_to(pt)?;
+            }
+        }
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1822,5 +1853,9 @@ mod m27_tests {
         let waves = build_halftone_wave_lines_path(Rect::new(0.0, 0.0, 160.0, 80.0).unwrap(), 6, 4.0, 3.0).unwrap();
         let wave_moves = waves.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
         assert_eq!(wave_moves, 6);
+
+        let knot = build_celtic_knot_ring_path(Point::new(100.0, 100.0).unwrap(), 50.0, 8.0, 6, 72).unwrap();
+        let knot_closes = knot.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(knot_closes, 2);
     }
 }

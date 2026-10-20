@@ -14,15 +14,16 @@ use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteCh
 use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
-    build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
-    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_halftone_wave_lines_path, build_hilbert_curve_path,
-    build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path,
-    build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path,
-    build_spirograph_path, build_superformula_path, build_three_point_curve_path, build_voronoi_mosaic_path,
+    build_block_arrow_path, build_bspline_path, build_callout_path, build_celtic_knot_ring_path, build_complex_star_path,
+    build_concentric_rings_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
+    build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path,
+    build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path,
+    build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
+    build_voronoi_mosaic_path,
 };
 use coralcraft_render::{
     ImpositionSpec, PrepressOptions, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_pdf_with_prepress,
-    export_svg, render_page,
+    export_svg, export_svg_with_prepress, render_page,
 };
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
@@ -1370,6 +1371,57 @@ impl McpServer {
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
+                                    "crop_marks": { "type": "boolean" },
+                                    "registration_marks": { "type": "boolean" },
+                                    "bleed_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "add_celtic_knot_ring",
+                            "description": "Inserts a two-strand braided Celtic knot ring compound path on the active layer.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "cx": { "type": "number" },
+                                    "cy": { "type": "number" },
+                                    "radius_pt": { "type": "number" },
+                                    "amplitude_pt": { "type": "number" },
+                                    "lobes": { "type": "integer" },
+                                    "steps": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "fit_circle_to_object_path",
+                            "description": "Replaces a path object with a least-squares Kåsa algebraic circle fitted to its world-space path points.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "snap_selection_to_circle_radius",
+                            "description": "Translates each selected unlocked object radially from (center_x, center_y) so its center lies on the circle of radius_pt.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "center_x": { "type": "number" },
+                                    "center_y": { "type": "number" },
+                                    "radius_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "export_svg_with_prepress",
+                            "description": "Exports a page as an SVG 1.1 document string with prepress corner crop marks, Registration bullseye targets, and bleed.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "page_index": { "type": "integer" },
                                     "crop_marks": { "type": "boolean" },
                                     "registration_marks": { "type": "boolean" },
                                     "bleed_pt": { "type": "number" }
@@ -3847,6 +3899,45 @@ impl McpServer {
                     "pdf_prepress_base64": b64
                 }))
             }
+            "add_celtic_knot_ring" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius_pt = args.get("radius_pt").and_then(Value::as_f64).unwrap_or(55.0);
+                let amplitude_pt = args.get("amplitude_pt").and_then(Value::as_f64).unwrap_or(8.0);
+                let lobes = args.get("lobes").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(96) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_celtic_knot_ring_path(center, radius_pt, amplitude_pt, lobes, steps).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Celtic Knot Ring".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "celtic_knot_ring", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "fit_circle_to_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::FitCircleToObjectPath { object_id: target });
+                Ok(json!({ "circle_fitted": ok, "object_id": target.0 }))
+            }
+            "snap_selection_to_circle_radius" => {
+                self.apply_optional_selection(args);
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(80.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SnapSelectionToCircleRadius { center, radius_pt });
+                Ok(json!({ "snapped_to_circle_radius": ok, "radius_pt": radius_pt.get() }))
+            }
+            "export_svg_with_prepress" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
+                let registration_marks = args.get("registration_marks").and_then(Value::as_bool).unwrap_or(true);
+                let bleed_pt = F64::new(args.get("bleed_pt").and_then(Value::as_f64).unwrap_or(9.0)).map_err(|e| e.to_string())?;
+                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt };
+                let svg = export_svg_with_prepress(&self.engine.document, page_index, &opts).map_err(|e| e.to_string())?;
+                Ok(json!({
+                    "page_index": page_index,
+                    "svg_prepress_len": svg.len(),
+                    "svg": svg
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3876,7 +3967,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 220);
+        assert_eq!(tools, 224);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4214,5 +4305,33 @@ mod tests {
         )
         .unwrap();
         assert!(prep_pdf_resp.result.unwrap()["structuredContent"]["pdf_prepress_bytes"].as_u64().unwrap() > 200);
+
+        let knot_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"add_celtic_knot_ring","arguments":{"cx":150.0,"cy":150.0,"radius_pt":55.0,"amplitude_pt":8.0,"lobes":6,"steps":72}}}"#,
+            ),
+        )
+        .unwrap();
+        let knot_id = knot_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let fitc_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{{"name":"fit_circle_to_object_path","arguments":{{"object_id":{liss_id}}}}}}}"#
+        )))
+        .unwrap();
+        assert!(fitc_resp.result.unwrap()["structuredContent"]["circle_fitted"].as_bool().unwrap());
+
+        let snapc_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{{"name":"snap_selection_to_circle_radius","arguments":{{"selection":[{knot_id},{liss_id}],"center_x":150.0,"center_y":150.0,"radius_pt":75.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(snapc_resp.result.unwrap()["structuredContent"]["snapped_to_circle_radius"].as_bool().unwrap());
+
+        let prep_svg_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"export_svg_with_prepress","arguments":{"crop_marks":true,"registration_marks":true,"bleed_pt":9.0}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(prep_svg_resp.result.unwrap()["structuredContent"]["svg"].as_str().unwrap().contains("<svg"));
     }
 }
