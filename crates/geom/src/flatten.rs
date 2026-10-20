@@ -123,13 +123,18 @@ fn point_to_segment_dist_sq(px: f64, py: f64, x0: f64, y0: f64, dx: f64, dy: f64
     ex * ex + ey * ey
 }
 
-/// Elevates a quadratic Bézier `(p0, ctrl, end)` to an exact cubic Bézier and flattens it.
-pub fn flatten_quad(p0: Point, ctrl: Point, end: Point, opts: &FlattenOpts, sink: &mut dyn FnMut(Point)) {
+/// Elevates a quadratic Bézier `(p0, ctrl, end)` to its exact cubic Bézier control points `(c1, c2)`.
+pub fn elevate_quad_to_cubic(p0: Point, ctrl: Point, end: Point) -> Result<(Point, Point), GeomError> {
     let c1x = p0.x.get() + (2.0 / 3.0) * (ctrl.x.get() - p0.x.get());
     let c1y = p0.y.get() + (2.0 / 3.0) * (ctrl.y.get() - p0.y.get());
     let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
     let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
-    if let (Ok(c1), Ok(c2)) = (Point::new(c1x, c1y), Point::new(c2x, c2y)) {
+    Ok((Point::new(c1x, c1y)?, Point::new(c2x, c2y)?))
+}
+
+/// Elevates a quadratic Bézier `(p0, ctrl, end)` to an exact cubic Bézier and flattens it.
+pub fn flatten_quad(p0: Point, ctrl: Point, end: Point, opts: &FlattenOpts, sink: &mut dyn FnMut(Point)) {
+    if let Ok((c1, c2)) = elevate_quad_to_cubic(p0, ctrl, end) {
         flatten_cubic(p0, c1, c2, end, opts, sink);
     } else {
         sink(end);

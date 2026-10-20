@@ -102,17 +102,14 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
                     cur = p;
                 }
                 PathElement::QuadTo { ctrl, end } => {
-                    let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
-                    let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
-                    let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
-                    let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
+                    let (c1, c2) = coralcraft_geom::elevate_quad_to_cubic(cur, ctrl, end).unwrap_or((ctrl, ctrl));
                     let _ = writeln!(
                         buf,
                         "{} {} {} {} {} {} curveto",
-                        fmt_num(c1x),
-                        fmt_num(page_h - c1y),
-                        fmt_num(c2x),
-                        fmt_num(page_h - c2y),
+                        fmt_num(c1.x.get()),
+                        fmt_num(page_h - c1.y.get()),
+                        fmt_num(c2.x.get()),
+                        fmt_num(page_h - c2.y.get()),
                         fmt_num(end.x.get()),
                         fmt_num(page_h - end.y.get())
                     );

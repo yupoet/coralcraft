@@ -340,15 +340,7 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
 
 /// Computes the standard IEEE 802.3 CRC-32 checksum used by PKWARE ZIP headers.
 pub fn crc32_ieee(bytes: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in bytes {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
+    coralcraft_doc::crc32(bytes)
 }
 
 /// Builds a clean-room Stored (`method = 0`) ZIP archive in memory from `(entry_name, data)` pairs,

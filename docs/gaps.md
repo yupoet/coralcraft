@@ -63,7 +63,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [x] R7.3 Inflate: build fixed Huffman tables once, verify Adler-32/CRC-32, add fixed/dynamic test vectors. Add a `fuzz/` crate with nightly CI runs.
 
 **Phase 8: structural refactor**
-- [ ] R8.1 Split `engine/lib.rs` and `mcp/lib.rs` into modules. Deduplicate clipping, quad→cubic elevation, CRC-32, the xref writer and crop marks.
+- [x] R8.1 Split `engine/lib.rs` and `mcp/lib.rs` into modules. Deduplicate clipping, quad→cubic elevation, CRC-32, the xref writer and crop marks.
 
 ## Historical milestone log (M0–M64, checked before the 2026-10-20 review)
 

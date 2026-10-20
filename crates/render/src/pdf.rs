@@ -91,42 +91,10 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
                 }
             }
             if spec.crop_marks {
-                let off = 2.0;
-                let len = 8.0;
                 s.push_str("q\n1 1 1 1 K\n0.25 w\n");
-                let _ = writeln!(s, "{} 0 m {} 0 l 0 {} m 0 {} l S", fmt_num(-len), fmt_num(-off), fmt_num(-len), fmt_num(-off));
-                let _ = writeln!(
-                    s,
-                    "{} 0 m {} 0 l {} {} m {} {} l S",
-                    fmt_num(pw + off),
-                    fmt_num(pw + len),
-                    fmt_num(pw),
-                    fmt_num(-len),
-                    fmt_num(pw),
-                    fmt_num(-off)
-                );
-                let _ = writeln!(
-                    s,
-                    "{} {} m {} {} l 0 {} m 0 {} l S",
-                    fmt_num(-len),
-                    fmt_num(ph),
-                    fmt_num(-off),
-                    fmt_num(ph),
-                    fmt_num(ph + off),
-                    fmt_num(ph + len)
-                );
-                let _ = writeln!(
-                    s,
-                    "{} {} m {} {} l {} {} m {} {} l S",
-                    fmt_num(pw + off),
-                    fmt_num(ph),
-                    fmt_num(pw + len),
-                    fmt_num(ph),
-                    fmt_num(pw),
-                    fmt_num(ph + off),
-                    fmt_num(pw),
-                    fmt_num(ph + len)
-                );
+                for ((x0, y0), (x1, y1)) in crop_mark_segments(pw, ph, 2.0, 8.0) {
+                    let _ = writeln!(s, "{} {} m {} {} l S", fmt_num(x0), fmt_num(y0), fmt_num(x1), fmt_num(y1));
+                }
                 s.push_str("Q\n");
             }
             s.push_str("Q\n");
@@ -152,6 +120,29 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
     content_obj.extend_from_slice(b"endstream");
     objects.push(content_obj);
 
+    Ok(serialize_pdf_objects(&objects))
+}
+
+/// Returns the 8 corner crop-mark line segments `((x0, y0), (x1, y1))` for a trim box of `(w, h)`.
+pub(crate) fn crop_mark_segments(w: f64, h: f64, off: f64, len: f64) -> [((f64, f64), (f64, f64)); 8] {
+    [
+        ((-len, 0.0), (-off, 0.0)),
+        ((0.0, -len), (0.0, -off)),
+        ((w + off, 0.0), (w + len, 0.0)),
+        ((w, -len), (w, -off)),
+        ((-len, h), (-off, h)),
+        ((0.0, h + off), (0.0, h + len)),
+        ((w + off, h), (w + len, h)),
+        ((w, h + off), (w, h + len)),
+    ]
+}
+
+/// Returns the 4 registration target centers `(tx, ty)` around a trim box of `(w, h)`.
+pub(crate) fn registration_target_centers(w: f64, h: f64) -> [(f64, f64); 4] {
+    [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)]
+}
+
+fn serialize_pdf_objects(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::with_capacity(4096);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
     let mut offsets = Vec::with_capacity(objects.len() + 1);
@@ -170,7 +161,7 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
         out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
-    Ok(out)
+    out
 }
 
 /// Exports all pages of `doc` into a self-contained ISO 32000-1 PDF 1.4 byte vector.
@@ -248,33 +239,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
         objects.push(content_obj);
     }
 
-    // Serialize PDF file with exact byte-offset xref table
-    let mut out = Vec::with_capacity(4096);
-    out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
-
-    let mut offsets = Vec::with_capacity(objects.len() + 1);
-    offsets.push(0usize); // Object 0 free entry
-
-    for (idx, obj_bytes) in objects.iter().enumerate() {
-        let obj_num = idx + 1;
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{obj_num} 0 obj\n").as_bytes());
-        out.extend_from_slice(obj_bytes);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-
-    let xref_offset = out.len();
-    let size = offsets.len();
-    out.extend_from_slice(format!("xref\n0 {size}\n").as_bytes());
-    out.extend_from_slice(b"0000000000 65535 f \n");
-    for &off in &offsets[1..] {
-        // Exactly 20 bytes per entry: `%010d %05d n \n`
-        out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
-    }
-
-    out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
-
-    Ok(out)
+    Ok(serialize_pdf_objects(&objects))
 }
 
 fn build_page_content_stream(
@@ -316,49 +281,12 @@ fn build_page_content_stream(
     if prepress.crop_marks || prepress.registration_marks {
         s.push_str("q\n1 1 1 1 K\n0.25 w\n");
         if prepress.crop_marks {
-            let off = 3.0;
-            let len = 12.0;
-            // Top-left corner
-            let _ = writeln!(s, "{} 0 m {} 0 l 0 {} m 0 {} l S", fmt_num(-len), fmt_num(-off), fmt_num(-len), fmt_num(-off));
-            // Top-right corner
-            let _ = writeln!(
-                s,
-                "{} 0 m {} 0 l {} {} m {} {} l S",
-                fmt_num(w + off),
-                fmt_num(w + len),
-                fmt_num(w),
-                fmt_num(-len),
-                fmt_num(w),
-                fmt_num(-off)
-            );
-            // Bottom-left corner
-            let _ = writeln!(
-                s,
-                "{} {} m {} {} l 0 {} m 0 {} l S",
-                fmt_num(-len),
-                fmt_num(h),
-                fmt_num(-off),
-                fmt_num(h),
-                fmt_num(h + off),
-                fmt_num(h + len)
-            );
-            // Bottom-right corner
-            let _ = writeln!(
-                s,
-                "{} {} m {} {} l {} {} m {} {} l S",
-                fmt_num(w + off),
-                fmt_num(h),
-                fmt_num(w + len),
-                fmt_num(h),
-                fmt_num(w),
-                fmt_num(h + off),
-                fmt_num(w),
-                fmt_num(h + len)
-            );
+            for ((x0, y0), (x1, y1)) in crop_mark_segments(w, h, 3.0, 12.0) {
+                let _ = writeln!(s, "{} {} m {} {} l S", fmt_num(x0), fmt_num(y0), fmt_num(x1), fmt_num(y1));
+            }
         }
         if prepress.registration_marks {
-            let targets = [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)];
-            for (tx, ty) in targets {
+            for (tx, ty) in registration_target_centers(w, h) {
                 let r = 3.5;
                 let _ = writeln!(
                     s,
@@ -426,17 +354,14 @@ fn emit_pdf_path_ops(s: &mut String, path: &Path) {
             }
             PathElement::QuadTo { ctrl, end } => {
                 // Elevate quadratic Bézier (cur, ctrl, end) to exact cubic Bézier (cur, c1, c2, end)
-                let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
-                let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
-                let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
-                let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
+                let (c1, c2) = coralcraft_geom::elevate_quad_to_cubic(cur, ctrl, end).unwrap_or((ctrl, ctrl));
                 let _ = writeln!(
                     s,
                     "{} {} {} {} {} {} c",
-                    fmt_num(c1x),
-                    fmt_num(c1y),
-                    fmt_num(c2x),
-                    fmt_num(c2y),
+                    fmt_num(c1.x.get()),
+                    fmt_num(c1.y.get()),
+                    fmt_num(c2.x.get()),
+                    fmt_num(c2.y.get()),
                     fmt_num(end.x.get()),
                     fmt_num(end.y.get())
                 );

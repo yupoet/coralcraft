@@ -922,7 +922,9 @@ fn glyph_outline(ch: char) -> (f64, &'static [GlyphOp]) {
     }
 }
 
-fn clip_polygon_half_plane(pts: &[Point], origin: Point, nx: f64, ny: f64, offset: f64) -> Result<Vec<Point>, GeomError> {
+/// Clips a closed polygon `pts` against the half-plane `(p - origin) · (nx, ny) >= offset`
+/// using Sutherland–Hodgman polygon clipping.
+pub fn clip_polygon_half_plane(pts: &[Point], origin: Point, nx: f64, ny: f64, offset: f64) -> Result<Vec<Point>, GeomError> {
     if pts.len() < 3 {
         return Ok(Vec::new());
     }

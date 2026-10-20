@@ -1102,8 +1102,7 @@ pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Pat
             PathElement::CubicTo { c1, c2, end }
         }
         PathElement::QuadTo { ctrl, end } => {
-            let c1 = lerp(start, ctrl, 2.0 / 3.0)?;
-            let c2 = lerp(end, ctrl, 2.0 / 3.0)?;
+            let (c1, c2) = crate::flatten::elevate_quad_to_cubic(start, ctrl, end)?;
             PathElement::CubicTo { c1, c2, end }
         }
         PathElement::CubicTo { c1, c2, end } => PathElement::CubicTo { c1, c2, end },

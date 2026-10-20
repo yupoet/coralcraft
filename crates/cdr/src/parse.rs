@@ -1888,13 +1888,10 @@ fn encode_path_to_cdr_points_types(path: &Path, cx: f64, cy: f64) -> Result<CdrC
                 cur = pt;
             }
             coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
-                let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
-                let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
-                let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
-                let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
-                pts.push((pt_to_cdr_i32(c1x - cx), pt_to_cdr_i32(cy - c1y)));
+                let (c1, c2) = coralcraft_geom::elevate_quad_to_cubic(cur, ctrl, end).unwrap_or((ctrl, ctrl));
+                pts.push((pt_to_cdr_i32(c1.x.get() - cx), pt_to_cdr_i32(cy - c1.y.get())));
                 types.push(0xC0u8);
-                pts.push((pt_to_cdr_i32(c2x - cx), pt_to_cdr_i32(cy - c2y)));
+                pts.push((pt_to_cdr_i32(c2.x.get() - cx), pt_to_cdr_i32(cy - c2.y.get())));
                 types.push(0xC0u8);
                 pts.push((pt_to_cdr_i32(end.x.get() - cx), pt_to_cdr_i32(cy - end.y.get())));
                 types.push(0x80u8);
@@ -2168,15 +2165,12 @@ fn encode_path_as_loda_1e(path: &Path, cx: f64, cy: f64, loda: &mut Vec<u8>) {
                 cur = pt;
             }
             coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
-                let c1x = cur.x.get() + (2.0 / 3.0) * (ctrl.x.get() - cur.x.get());
-                let c1y = cur.y.get() + (2.0 / 3.0) * (ctrl.y.get() - cur.y.get());
-                let c2x = end.x.get() + (2.0 / 3.0) * (ctrl.x.get() - end.x.get());
-                let c2y = end.y.get() + (2.0 / 3.0) * (ctrl.y.get() - end.y.get());
+                let (c1, c2) = coralcraft_geom::elevate_quad_to_cubic(cur, ctrl, end).unwrap_or((ctrl, ctrl));
                 loda.push(0x80);
-                loda.extend_from_slice(&pt_to_cdr_i32(c1x - cx).to_le_bytes());
-                loda.extend_from_slice(&pt_to_cdr_i32(cy - c1y).to_le_bytes());
-                loda.extend_from_slice(&pt_to_cdr_i32(c2x - cx).to_le_bytes());
-                loda.extend_from_slice(&pt_to_cdr_i32(cy - c2y).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(c1.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c1.y.get()).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(c2.x.get() - cx).to_le_bytes());
+                loda.extend_from_slice(&pt_to_cdr_i32(cy - c2.y.get()).to_le_bytes());
                 loda.extend_from_slice(&pt_to_cdr_i32(end.x.get() - cx).to_le_bytes());
                 loda.extend_from_slice(&pt_to_cdr_i32(cy - end.y.get()).to_le_bytes());
                 cur = end;

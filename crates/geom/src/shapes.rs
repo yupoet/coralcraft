@@ -575,8 +575,8 @@ pub fn build_bspline_path(control_points: &[Point], closed: bool) -> Result<Path
 pub fn build_three_point_curve_path(start: Point, end: Point, through: Point) -> Result<Path, GeomError> {
     let qx = 2.0 * through.x.get() - 0.5 * (start.x.get() + end.x.get());
     let qy = 2.0 * through.y.get() - 0.5 * (start.y.get() + end.y.get());
-    let c1 = Point::new(start.x.get() + (2.0 / 3.0) * (qx - start.x.get()), start.y.get() + (2.0 / 3.0) * (qy - start.y.get()))?;
-    let c2 = Point::new(end.x.get() + (2.0 / 3.0) * (qx - end.x.get()), end.y.get() + (2.0 / 3.0) * (qy - end.y.get()))?;
+    let ctrl = Point::new(qx, qy)?;
+    let (c1, c2) = crate::flatten::elevate_quad_to_cubic(start, ctrl, end)?;
     let mut path = Path::new();
     path.move_to(start)?;
     path.cubic_to(c1, c2, end)?;
@@ -1304,36 +1304,6 @@ pub fn build_voronoi_mosaic_path(bounds: Rect, seeds: &[Point], cell_gap_pt: f64
     let y1 = bounds.y1.get();
     let base_cell = vec![Point::new(x0, y0)?, Point::new(x1, y0)?, Point::new(x1, y1)?, Point::new(x0, y1)?];
 
-    let clip_half_plane = |poly: &[Point], sx: f64, sy: f64, nx: f64, ny: f64, max_proj: f64| -> Result<Vec<Point>, GeomError> {
-        if poly.len() < 3 {
-            return Ok(Vec::new());
-        }
-        let eval = |p: Point| -> f64 { (p.x.get() - sx) * nx + (p.y.get() - sy) * ny - max_proj };
-        let mut out = Vec::with_capacity(poly.len() + 2);
-        let mut prev = poly[poly.len() - 1];
-        let mut d_prev = eval(prev);
-        for &curr in poly {
-            let d_curr = eval(curr);
-            let prev_in = d_prev <= 1e-9;
-            let curr_in = d_curr <= 1e-9;
-            if prev_in != curr_in {
-                let denom = d_prev - d_curr;
-                if denom.abs() > 1e-12 {
-                    let t = (d_prev / denom).clamp(0.0, 1.0);
-                    let ix = prev.x.get() + t * (curr.x.get() - prev.x.get());
-                    let iy = prev.y.get() + t * (curr.y.get() - prev.y.get());
-                    out.push(Point::new(ix, iy)?);
-                }
-            }
-            if curr_in {
-                out.push(curr);
-            }
-            prev = curr;
-            d_prev = d_curr;
-        }
-        Ok(out)
-    };
-
     let mut path = Path::new();
     for (i, &si) in seeds.iter().enumerate() {
         let mut cell = base_cell.clone();
@@ -1356,7 +1326,7 @@ pub fn build_voronoi_mosaic_path(bounds: Rect, seeds: &[Point], cell_gap_pt: f64
                 cell.clear();
                 break;
             }
-            cell = clip_half_plane(&cell, six, siy, nx, ny, max_proj)?;
+            cell = crate::boolean::clip_polygon_half_plane(&cell, si, -nx, -ny, -max_proj)?;
             if cell.len() < 3 {
                 break;
             }

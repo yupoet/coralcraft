@@ -126,40 +126,17 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
             "  <g id=\"prepress-marks\" fill=\"none\" stroke=\"#000000\" stroke-width=\"0.25\" data-color=\"Registration(CMYK 100,100,100,100)\">\n",
         );
         if prepress.crop_marks {
-            let off = 3.0;
-            let len = 12.0;
-            let _ = writeln!(
-                body,
-                "    <path class=\"crop-marks\" d=\"M {} 0 L {} 0 M 0 {} L 0 {} M {} 0 L {} 0 M {} {} L {} {} M {} {} L {} {} M 0 {} L 0 {} M {} {} L {} {} M {} {} L {} {}\"/>",
-                fmt_num(-len),
-                fmt_num(-off),
-                fmt_num(-len),
-                fmt_num(-off),
-                fmt_num(w + off),
-                fmt_num(w + len),
-                fmt_num(w),
-                fmt_num(-len),
-                fmt_num(w),
-                fmt_num(-off),
-                fmt_num(-len),
-                fmt_num(h),
-                fmt_num(-off),
-                fmt_num(h),
-                fmt_num(h + off),
-                fmt_num(h + len),
-                fmt_num(w + off),
-                fmt_num(h),
-                fmt_num(w + len),
-                fmt_num(h),
-                fmt_num(w),
-                fmt_num(h + off),
-                fmt_num(w),
-                fmt_num(h + len)
-            );
+            let mut d = String::new();
+            for (idx, ((x0, y0), (x1, y1))) in crate::pdf::crop_mark_segments(w, h, 3.0, 12.0).into_iter().enumerate() {
+                if idx > 0 {
+                    d.push(' ');
+                }
+                let _ = write!(d, "M {} {} L {} {}", fmt_num(x0), fmt_num(y0), fmt_num(x1), fmt_num(y1));
+            }
+            let _ = writeln!(body, "    <path class=\"crop-marks\" d=\"{d}\"/>");
         }
         if prepress.registration_marks {
-            let targets = [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)];
-            for (tx, ty) in targets {
+            for (tx, ty) in crate::pdf::registration_target_centers(w, h) {
                 let _ = writeln!(body, "    <circle class=\"registration-target\" cx=\"{}\" cy=\"{}\" r=\"3.5\"/>", fmt_num(tx), fmt_num(ty));
                 let _ = writeln!(
                     body,
