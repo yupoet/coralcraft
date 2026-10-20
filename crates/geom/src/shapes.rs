@@ -1677,6 +1677,39 @@ pub fn build_phyllotaxis_path(center: Point, max_radius_pt: f64, seed_count: u32
     Ok(path)
 }
 
+/// Builds a compound [`Path`] of `line_count` (`2..=64`) parallel sinusoidal guilloche / security
+/// wave lines spanning `bounds` with `amplitude_pt` and `frequency` cycles (`Object -> Insert -> Security Wave Lines`).
+pub fn build_halftone_wave_lines_path(bounds: Rect, line_count: u32, amplitude_pt: f64, frequency: f64) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    let amp = F64::new(amplitude_pt)?.get();
+    let freq = F64::new(frequency)?.get();
+    if w <= 0.0 || h <= 0.0 || !(2..=64).contains(&line_count) || amp < 0.0 || freq <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("invalid halftone wave lines parameters"));
+    }
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let steps = 48_u32;
+    let mut path = Path::new();
+    for row in 0..line_count {
+        let v = (f64::from(row) + 0.5) / f64::from(line_count);
+        let base_y = y0 + v * h;
+        let phase = f64::from(row) * 0.65;
+        for s in 0..=steps {
+            let u = f64::from(s) / f64::from(steps);
+            let x = x0 + u * w;
+            let y = base_y + amp * (std::f64::consts::TAU * freq * u + phase).sin();
+            let pt = Point::new(x, y)?;
+            if s == 0 {
+                path.move_to(pt)?;
+            } else {
+                path.line_to(pt)?;
+            }
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1785,5 +1818,9 @@ mod m27_tests {
         let phyllo = build_phyllotaxis_path(Point::new(100.0, 100.0).unwrap(), 60.0, 16, 3.0).unwrap();
         let phyllo_closes = phyllo.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(phyllo_closes, 16);
+
+        let waves = build_halftone_wave_lines_path(Rect::new(0.0, 0.0, 160.0, 80.0).unwrap(), 6, 4.0, 3.0).unwrap();
+        let wave_moves = waves.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
+        assert_eq!(wave_moves, 6);
     }
 }

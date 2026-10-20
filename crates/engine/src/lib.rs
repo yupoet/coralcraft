@@ -11,11 +11,11 @@ use coralcraft_geom::{
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
-    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, medial_chord_skeleton_of_path,
-    morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path,
-    subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
-    wave_distort_path,
+    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
+    medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
+    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
+    smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path,
+    transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -346,6 +346,10 @@ pub enum EngineCommand {
     SphericalWarpObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, magnification: F64 },
     /// Linearly interpolates fill (`apply_to_fill`) and/or outline (`apply_to_outline`) colors across all selected unlocked objects in selection order from `start_color` to `end_color` (`Effects -> Adjust -> Colorize Selection by Gradient`).
     ColorizeSelectionByGradient { start_color: Color, end_color: Color, apply_to_fill: bool, apply_to_outline: bool },
+    /// Globally relaxes all subpaths of `object_id` using shrinkage-compensated Taubin/Laplacian vertex smoothing over `iterations` (`1..=16`) with factor `lambda` (`Shape Tool F10 -> Global Curve Relaxation`).
+    RelaxObjectPath { object_id: ObjectId, iterations: u32, lambda: F64 },
+    /// Cycles `colors` across all selected unlocked objects in selection order, updating fill (`apply_to_fill`) and/or outline (`apply_to_outline`) (`Object -> Color -> Apply Palette Swatches to Selection`).
+    ApplyPaletteSwatchesToSelection { colors: Vec<Color>, apply_to_fill: bool, apply_to_outline: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4482,6 +4486,52 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::RelaxObjectPath { object_id, iterations, lambda } => {
+                let lam = lambda.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(relaxed) = laplacian_relax_closed_path(&base_path, iterations, lam)
+                    {
+                        obj.kind = ObjectKind::Path(relaxed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ApplyPaletteSwatchesToSelection { colors, apply_to_fill, apply_to_outline } => {
+                if colors.is_empty() || (!apply_to_fill && !apply_to_outline) {
+                    return false;
+                }
+                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
+                if sel_ids.is_empty() {
+                    return false;
+                }
+                let mut color_map = BTreeMap::new();
+                for (idx, id) in sel_ids.into_iter().enumerate() {
+                    color_map.insert(id, colors[idx % colors.len()].clone());
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(c) = color_map.get(&obj.id)
+                    {
+                        if apply_to_fill {
+                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
+                        }
+                        if apply_to_outline {
+                            if let Some(ol) = &mut obj.outline {
+                                ol.color = c.clone();
+                            } else {
+                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
+                            }
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -5435,6 +5485,12 @@ mod tests {
             end_color: Color::rgb8(40, 120, 240),
             apply_to_fill: true,
             apply_to_outline: true,
+        }));
+        assert!(engine.execute(EngineCommand::RelaxObjectPath { object_id: xor_id, iterations: 3, lambda: F64::new(0.45).unwrap() }));
+        assert!(engine.execute(EngineCommand::ApplyPaletteSwatchesToSelection {
+            colors: vec![Color::rgb8(220, 40, 60), Color::rgb8(40, 180, 90), Color::rgb8(50, 90, 220)],
+            apply_to_fill: true,
+            apply_to_outline: false,
         }));
     }
 }

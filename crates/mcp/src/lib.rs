@@ -15,12 +15,15 @@ use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
-    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_hilbert_curve_path, build_honeycomb_grid_path,
-    build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path,
-    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path,
-    build_three_point_curve_path, build_voronoi_mosaic_path,
+    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_halftone_wave_lines_path, build_hilbert_curve_path,
+    build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path,
+    build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path,
+    build_spirograph_path, build_superformula_path, build_three_point_curve_path, build_voronoi_mosaic_path,
 };
-use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
+use coralcraft_render::{
+    ImpositionSpec, PrepressOptions, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_pdf_with_prepress,
+    export_svg, render_page,
+};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1318,6 +1321,59 @@ impl McpServer {
                                     "xml_palette": { "type": "string" }
                                 },
                                 "required": ["xml_palette"]
+                            }
+                        },
+                        {
+                            "name": "add_halftone_wave_lines",
+                            "description": "Adds a compound path of parallel sinusoidal guilloche / security wave lines spanning a rectangular region.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "x": { "type": "number" },
+                                    "y": { "type": "number" },
+                                    "width": { "type": "number" },
+                                    "height": { "type": "number" },
+                                    "line_count": { "type": "integer" },
+                                    "amplitude_pt": { "type": "number" },
+                                    "frequency": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "relax_object_path",
+                            "description": "Globally relaxes all subpaths of a vector object using shrinkage-compensated Taubin/Laplacian vertex smoothing.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "iterations": { "type": "integer" },
+                                    "lambda": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "apply_palette_swatches_to_selection",
+                            "description": "Cycles a list of hex color swatches (e.g. ['#E63946', '#457B9D', '#2A9D8F']) across selected objects in selection order.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "hex_colors": { "type": "array", "items": { "type": "string" } },
+                                    "apply_to_fill": { "type": "boolean" },
+                                    "apply_to_outline": { "type": "boolean" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "export_pdf_with_prepress_base64",
+                            "description": "Exports the document to print-ready PDF 1.4 with corner crop marks, Registration (CMYK 100/100/100/100) bullseye targets, and bleed, returning byte length and base64-encoded payload.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "crop_marks": { "type": "boolean" },
+                                    "registration_marks": { "type": "boolean" },
+                                    "bleed_pt": { "type": "number" }
+                                }
                             }
                         }
                     ]
@@ -3739,6 +3795,58 @@ impl McpServer {
                     "swatches": swatches
                 }))
             }
+            "add_halftone_wave_lines" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(80.0);
+                let line_count = args.get("line_count").and_then(Value::as_u64).unwrap_or(8) as u32;
+                let amplitude_pt = args.get("amplitude_pt").and_then(Value::as_f64).unwrap_or(4.0);
+                let frequency = args.get("frequency").and_then(Value::as_f64).unwrap_or(3.0);
+                let bounds = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_halftone_wave_lines_path(bounds, line_count, amplitude_pt, frequency).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Halftone Wave Lines".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "halftone_wave_lines", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "relax_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let lambda = F64::new(args.get("lambda").and_then(Value::as_f64).unwrap_or(0.45)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::RelaxObjectPath { object_id: target, iterations, lambda });
+                Ok(json!({ "relaxed": ok, "object_id": target.0, "iterations": iterations }))
+            }
+            "apply_palette_swatches_to_selection" => {
+                self.apply_optional_selection(args);
+                let mut colors = Vec::new();
+                if let Some(arr) = args.get("hex_colors").and_then(Value::as_array) {
+                    for v in arr {
+                        if let Some(hex) = v.as_str()
+                            && let Ok(c) = Color::from_hex(hex)
+                        {
+                            colors.push(c);
+                        }
+                    }
+                }
+                if colors.is_empty() {
+                    colors = vec![Color::rgb8(230, 57, 70), Color::rgb8(69, 123, 157), Color::rgb8(42, 157, 143)];
+                }
+                let apply_to_fill = args.get("apply_to_fill").and_then(Value::as_bool).unwrap_or(true);
+                let apply_to_outline = args.get("apply_to_outline").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatchesToSelection { colors, apply_to_fill, apply_to_outline });
+                Ok(json!({ "swatches_applied": ok }))
+            }
+            "export_pdf_with_prepress_base64" => {
+                let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
+                let registration_marks = args.get("registration_marks").and_then(Value::as_bool).unwrap_or(true);
+                let bleed_pt = F64::new(args.get("bleed_pt").and_then(Value::as_f64).unwrap_or(9.0)).map_err(|e| e.to_string())?;
+                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt };
+                let pdf = export_pdf_with_prepress(&self.engine.document, &opts).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&pdf);
+                Ok(json!({
+                    "pdf_prepress_bytes": pdf.len(),
+                    "pdf_prepress_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3768,7 +3876,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 216);
+        assert_eq!(tools, 220);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4078,5 +4186,33 @@ mod tests {
         });
         let imp_xml_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_xml_req.to_string())).unwrap();
         assert!(imp_xml_resp.result.unwrap()["structuredContent"]["swatch_count"].as_u64().unwrap() >= 1);
+
+        let hwave_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"add_halftone_wave_lines","arguments":{"x":30.0,"y":30.0,"width":160.0,"height":80.0,"line_count":6,"amplitude_pt":4.0,"frequency":3.0}}}"#,
+            ),
+        )
+        .unwrap();
+        let hwave_id = hwave_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let relax_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":49,"method":"tools/call","params":{{"name":"relax_object_path","arguments":{{"object_id":{hwave_id},"iterations":3,"lambda":0.45}}}}}}"#
+        )))
+        .unwrap();
+        assert!(relax_resp.result.unwrap()["structuredContent"]["relaxed"].as_bool().unwrap());
+
+        let apsw_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r##"{{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{{"name":"apply_palette_swatches_to_selection","arguments":{{"selection":[{hwave_id},{phyllo_id},{liss_id}],"hex_colors":["#E63946","#457B9D","#2A9D8F"],"apply_to_fill":true,"apply_to_outline":true}}}}}}"##
+        )))
+        .unwrap();
+        assert!(apsw_resp.result.unwrap()["structuredContent"]["swatches_applied"].as_bool().unwrap());
+
+        let prep_pdf_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"export_pdf_with_prepress_base64","arguments":{"crop_marks":true,"registration_marks":true,"bleed_pt":9.0}}}"#,
+            ),
+        )
+        .unwrap();
+        assert!(prep_pdf_resp.result.unwrap()["structuredContent"]["pdf_prepress_bytes"].as_u64().unwrap() > 200);
     }
 }

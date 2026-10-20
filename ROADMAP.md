@@ -208,9 +208,13 @@
 58. **M58 Phyllotaxis Golden-Angle Spiral (`build_phyllotaxis_path`), Spherical Fish-Eye Lens Warp (`spherical_fisheye_warp_path` & `SphericalWarpObjectPath`), Gradient Selection Colorizer (`ColorizeSelectionByGradient`), XML Palette Import (`import_xml_palette`), and 216 MCP Tools**:
     - `coralcraft-geom`: `build_phyllotaxis_path` (Vogel $137.507764^\circ$ golden-angle sunflower pattern) and `spherical_fisheye_warp_path` (radial spherical lens warp with automatic segment densification).
     - `coralcraft-engine` & `coralcraft-mcp`: `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `add_phyllotaxis_pattern`, `spherical_warp_path`, `colorize_selection_by_gradient`, `import_xml_palette`, and **216 MCP tools**.
+59. **M59 Sinusoidal Security Wave Guilloche (`build_halftone_wave_lines_path`), Taubin/Laplacian Curve Relaxation (`laplacian_relax_closed_path` & `RelaxObjectPath`), Apply Palette Swatches to Selection (`ApplyPaletteSwatchesToSelection`), Prepress PDF Base64 Export (`export_pdf_with_prepress_base64`), and 220 MCP Tools**:
+    - `coralcraft-geom`: `build_halftone_wave_lines_path` (parallel phase-modulated sinusoidal guilloche wave lines) and `laplacian_relax_closed_path` (shrinkage-compensated Taubin $\lambda / \mu$ vertex smoothing).
+    - `coralcraft-engine` & `coralcraft-mcp`: `RelaxObjectPath`, `ApplyPaletteSwatchesToSelection`, `add_halftone_wave_lines`, `relax_object_path`, `apply_palette_swatches_to_selection`, `export_pdf_with_prepress_base64`, and **220 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M59 delivered (`build_halftone_wave_lines_path` & `add_halftone_wave_lines`, `laplacian_relax_closed_path` & `RelaxObjectPath`, `ApplyPaletteSwatchesToSelection`, `export_pdf_with_prepress_base64`, 220 MCP tools).
 - 2026-10-20: M58 delivered (`build_phyllotaxis_path` & `add_phyllotaxis_pattern`, `spherical_fisheye_warp_path` & `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `import_xml_palette`, 216 MCP tools).
 - 2026-10-20: M57 delivered (`build_lissajous_path` & `add_lissajous_curve`, `subdivide_path_by_max_segment_length` & `DensifyObjectPath`, `AlignSelectionToKeyObject`, `export_xml_palette`, 212 MCP tools).
 - 2026-10-20: M56 delivered (`build_hilbert_curve_path` & `add_hilbert_curve`, `medial_chord_skeleton_of_path` & `ExtractPathSkeleton`, `JitterSelectionTransforms`, `export_cpl_palette_base64`, 208 MCP tools).

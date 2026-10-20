@@ -2392,6 +2392,69 @@ pub fn spherical_fisheye_warp_path(path: &Path, center: Point, radius_pt: f64, m
     Path::from_elements(out_elems, path.fill_rule)
 }
 
+/// Applies global shrinkage-compensated Taubin ($\lambda / \mu$) Laplacian vertex relaxation
+/// across all subpaths of `path` for `iterations` (`1..=16`) with factor `lambda` (`0.05..=0.8`)
+/// (`Shape Tool F10 -> Global Curve Relaxation`).
+pub fn laplacian_relax_closed_path(path: &Path, iterations: u32, lambda: f64) -> Result<Path, GeomError> {
+    let lam = crate::f64_canon::F64::new(lambda)?.get();
+    if path.elements.is_empty() || iterations == 0 || !(0.05..=0.8).contains(&lam) {
+        return Err(GeomError::InvalidShapeParameter("invalid Laplacian relaxation parameters"));
+    }
+    let iters = iterations.clamp(1, 16);
+    // Shrinkage-compensating negative pass factor (Taubin 1995: 1/lambda + 1/mu = 0.1)
+    let mu = -lam / (1.0 - 0.1 * lam).max(0.2);
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for poly in polys {
+        let mut pts = poly.points;
+        if pts.len() >= 2 && poly.closed && pts.first().zip(pts.last()).is_some_and(|(a, b)| a == b) {
+            pts.pop();
+        }
+        let n = pts.len();
+        if n < 3 {
+            if let Some(&first) = pts.first() {
+                out.move_to(first)?;
+                for &p in &pts[1..] {
+                    out.line_to(p)?;
+                }
+                if poly.closed {
+                    out.close()?;
+                }
+            }
+            continue;
+        }
+        for _ in 0..iters {
+            for factor in [lam, mu] {
+                let prev_pts = pts.clone();
+                for i in 0..n {
+                    if !poly.closed && (i == 0 || i + 1 == n) {
+                        continue;
+                    }
+                    let p_prev = prev_pts[(i + n - 1) % n];
+                    let p_curr = prev_pts[i];
+                    let p_next = prev_pts[(i + 1) % n];
+                    let lx = 0.5 * (p_prev.x.get() + p_next.x.get()) - p_curr.x.get();
+                    let ly = 0.5 * (p_prev.y.get() + p_next.y.get()) - p_curr.y.get();
+                    pts[i] = Point::new(p_curr.x.get() + factor * lx, p_curr.y.get() + factor * ly)?;
+                }
+            }
+        }
+        out.move_to(pts[0])?;
+        for &p in &pts[1..] {
+            out.line_to(p)?;
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("relaxation produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2496,5 +2559,8 @@ mod m26_tests {
 
         let fisheye = spherical_fisheye_warp_path(&rect_path, Point::new(25.0, 20.0).unwrap(), 40.0, 1.8).unwrap();
         assert!(fisheye.elements.len() >= 10);
+
+        let relaxed = laplacian_relax_closed_path(&dense, 3, 0.45).unwrap();
+        assert!(relaxed.elements.len() >= 18);
     }
 }
