@@ -102,6 +102,10 @@ pub enum EngineCommand {
     CreateBlend { start_id: ObjectId, end_id: ObjectId, steps: u32 },
     /// Attaches a custom Bézier path spine object (`New Path`) to an existing Blend effect.
     AttachBlendSpine { blend_object_id: ObjectId, spine_object_id: ObjectId },
+    /// Applies a non-destructive 4-corner bilinear Envelope warp (`corners = [TL, TR, BR, BL]`) to `object_id`.
+    ApplyEnvelope { object_id: ObjectId, corners: [Point; 4] },
+    /// Applies a non-destructive Artistic Media variable-width calligraphic brush stroke to `object_id`.
+    ApplyArtisticBrush { object_id: ObjectId, start_width_pt: F64, end_width_pt: F64 },
     /// Bakes (expands) all live vector effects on the specified object into static geometry.
     ExpandEffects { object_id: ObjectId },
     /// Sets or removes object-level transparency on selected objects.
@@ -481,6 +485,8 @@ impl EditorEngine {
             EngineCommand::ApplyContour { object_id, .. }
             | EngineCommand::AddDropShadow { object_id, .. }
             | EngineCommand::AddExtrude { object_id, .. }
+            | EngineCommand::ApplyEnvelope { object_id, .. }
+            | EngineCommand::ApplyArtisticBrush { object_id, .. }
             | EngineCommand::ExpandEffects { object_id } => {
                 if self.selected_or_all_node(*object_id).is_none_or(|o| o.locked) {
                     return false;
@@ -1070,10 +1076,45 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ApplyEnvelope { object_id, corners } => {
+                let effect = VectorEffect::Envelope { corners };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::ApplyArtisticBrush { object_id, start_width_pt, end_width_pt } => {
+                let effect = VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
             EngineCommand::ExpandEffects { object_id } => {
                 self.for_each_node_mut(|obj| {
                     if obj.id == object_id && !obj.locked && !obj.effects.is_empty() {
-                        if let Some(base_path) = object_to_path(obj) {
+                        if let Some(mut base_path) = object_to_path(obj) {
+                            for effect in &obj.effects {
+                                match effect {
+                                    VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
+                                        if let Ok(p) =
+                                            coralcraft_geom::expand_artistic_brush_stroke(&base_path, start_width_pt.get(), end_width_pt.get())
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::Envelope { corners } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::warp_path_bilinear(&base_path, bbox, *corners)
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
                             obj.kind = ObjectKind::Path(base_path);
                         }
                         obj.effects.clear();
@@ -1543,5 +1584,24 @@ mod tests {
         engine.set_selection(vec![text_id]);
         assert!(engine.execute(EngineCommand::ConvertToCurves));
         assert!(matches!(engine.selected_or_all_node(text_id).unwrap().kind, ObjectKind::Path(_)));
+
+        // 9. ApplyEnvelope and ExpandEffects bake warped corner coordinates on welded_id
+        let corners =
+            [Point::new(10.0, 10.0).unwrap(), Point::new(150.0, 20.0).unwrap(), Point::new(160.0, 90.0).unwrap(), Point::new(0.0, 80.0).unwrap()];
+        assert!(engine.execute(EngineCommand::ApplyEnvelope { object_id: welded_id, corners }));
+        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
+        if let ObjectKind::Path(warped_path) = &engine.selected_or_all_node(welded_id).unwrap().kind {
+            let wb = warped_path.bounds().unwrap();
+            assert!((wb.x0.get() - 0.0).abs() < 1e-3);
+            assert!((wb.x1.get() - 160.0).abs() < 1e-3);
+        } else {
+            panic!("expected baked Path");
+        }
+        assert!(engine.execute(EngineCommand::ApplyArtisticBrush {
+            object_id: text_id,
+            start_width_pt: F64::new(12.0).unwrap(),
+            end_width_pt: F64::new(2.0).unwrap(),
+        }));
+        assert_eq!(engine.selected_or_all_node(text_id).unwrap().effects.len(), 1);
     }
 }

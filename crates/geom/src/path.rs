@@ -288,3 +288,79 @@ impl ArcLengthTable {
         Some(PathSample { point, tangent: s1.tangent, angle_deg: s1.angle_deg, s_pt: target_s })
     }
 }
+
+/// Applies a 4-corner bilinear Envelope warp (`corners = [TL, TR, BR, BL]`) to a [`Path`]
+/// relative to `src_bbox`.
+pub fn warp_path_bilinear(path: &Path, src_bbox: Rect, corners: [Point; 4]) -> Result<Path, GeomError> {
+    let w = src_bbox.width().max(1e-9);
+    let h = src_bbox.height().max(1e-9);
+    let min_x = src_bbox.x0.get();
+    let min_y = src_bbox.y0.get();
+    let [p00, p10, p11, p01] = corners;
+
+    let warp_pt = |pt: Point| -> Result<Point, GeomError> {
+        let u = (pt.x.get() - min_x) / w;
+        let v = (pt.y.get() - min_y) / h;
+        let w00 = (1.0 - u) * (1.0 - v);
+        let w10 = u * (1.0 - v);
+        let w11 = u * v;
+        let w01 = (1.0 - u) * v;
+        let x = w00 * p00.x.get() + w10 * p10.x.get() + w11 * p11.x.get() + w01 * p01.x.get();
+        let y = w00 * p00.y.get() + w10 * p10.y.get() + w11 * p11.y.get() + w01 * p01.y.get();
+        Point::new(x, y)
+    };
+
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for &el in &path.elements {
+        let mapped = match el {
+            PathElement::MoveTo(p) => PathElement::MoveTo(warp_pt(p)?),
+            PathElement::LineTo(p) => PathElement::LineTo(warp_pt(p)?),
+            PathElement::QuadTo { ctrl, end } => PathElement::QuadTo { ctrl: warp_pt(ctrl)?, end: warp_pt(end)? },
+            PathElement::CubicTo { c1, c2, end } => PathElement::CubicTo { c1: warp_pt(c1)?, c2: warp_pt(c2)?, end: warp_pt(end)? },
+            PathElement::Close => PathElement::Close,
+        };
+        out.elements.push(mapped);
+    }
+    Ok(out)
+}
+
+/// Expands a spine [`Path`] into a closed variable-width Artistic Media calligraphic brush ribbon
+/// tapering linearly from `start_width_pt` to `end_width_pt`.
+pub fn expand_artistic_brush_stroke(spine: &Path, start_width_pt: f64, end_width_pt: f64) -> Result<Path, GeomError> {
+    let lut = ArcLengthTable::from_path(spine)?;
+    if lut.samples.is_empty() {
+        return Ok(Path::new());
+    }
+    let steps = 24_usize;
+    let mut left_pts = Vec::with_capacity(steps + 1);
+    let mut right_pts = Vec::with_capacity(steps + 1);
+
+    for i in 0..=steps {
+        let u = (i as f64) / (steps as f64);
+        let Some(sample) = lut.sample_normalized(u) else {
+            continue;
+        };
+        let half_w = 0.5 * (start_width_pt + u * (end_width_pt - start_width_pt)).max(0.0);
+        let nx = -sample.tangent.1;
+        let ny = sample.tangent.0;
+        let lx = sample.point.x.get() + half_w * nx;
+        let ly = sample.point.y.get() + half_w * ny;
+        let rx = sample.point.x.get() - half_w * nx;
+        let ry = sample.point.y.get() - half_w * ny;
+        left_pts.push(Point::new(lx, ly)?);
+        right_pts.push(Point::new(rx, ry)?);
+    }
+
+    let mut out = Path::new();
+    if let Some(&first) = left_pts.first() {
+        out.move_to(first)?;
+        for &pt in &left_pts[1..] {
+            out.line_to(pt)?;
+        }
+        for &pt in right_pts.iter().rev() {
+            out.line_to(pt)?;
+        }
+        out.close()?;
+    }
+    Ok(out)
+}

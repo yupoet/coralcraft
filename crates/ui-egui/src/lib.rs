@@ -761,4 +761,31 @@ mod tests {
         let obj_after_undo = &ws.engine.document.pages[0].layers[0].objects[0];
         assert!(matches!(obj_after_undo.fill, Some(coralcraft_doc::FillStyle::Uniform { .. })));
     }
+
+    #[test]
+    fn paragraph_text_dashed_frame_and_red_overflow_indicator_render_on_workspace() {
+        let mut ws = DesktopWorkspace::default();
+        let spec = coralcraft_doc::ParagraphTextSpec::new(
+            Point::new(40.0, 40.0).unwrap(),
+            120.0,
+            24.0,
+            "Overflowing paragraph text frame with multiple lines of body copy inside CorelDRAW workspace",
+            "Sans",
+            14.0,
+            1.2,
+            coralcraft_doc::TextAlignment::Justify,
+            1,
+            10.0,
+        )
+        .unwrap();
+        ws.engine.execute(EngineCommand::AddObject {
+            name: Some("Body Copy Frame".to_owned()),
+            kind: coralcraft_doc::ObjectKind::ParagraphText(Box::new(spec)),
+        });
+
+        let out = ws.render_workspace_png().unwrap();
+        assert_eq!(out.surface.width, 1440);
+        assert_eq!(out.surface.height, 900);
+        assert!(out.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
 }

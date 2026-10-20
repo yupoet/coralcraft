@@ -93,6 +93,33 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
         }
     }
 
+    // 2c. Paragraph Text dashed frame outlines and red bottom-center overflow indicator handle
+    if let Ok(eff_layers) = ws.engine.document.effective_layers_for_page(ws.engine.current_page_index(), false) {
+        for layer in eff_layers {
+            for obj in &layer.objects {
+                if !obj.visible {
+                    continue;
+                }
+                if let coralcraft_doc::ObjectKind::ParagraphText(pt) = &obj.kind {
+                    let fx0 = page_x0 + ((pt.position.x.get() + obj.transform.tx.get()) * fit_scale).round() as i32;
+                    let fy0 = page_y0 + ((pt.position.y.get() + obj.transform.ty.get()) * fit_scale).round() as i32;
+                    let fx1 = page_x0 + ((pt.position.x.get() + pt.frame_width_pt.get() + obj.transform.tx.get()) * fit_scale).round() as i32;
+                    let fy1 = page_y0 + ((pt.position.y.get() + pt.frame_height_pt.get() + obj.transform.ty.get()) * fit_scale).round() as i32;
+                    draw_dashed_hline(&mut surface, fx0, fx1, fy0, 3, GUIDELINE_BLUE);
+                    draw_dashed_hline(&mut surface, fx0, fx1, fy1, 3, GUIDELINE_BLUE);
+                    draw_dashed_vline(&mut surface, fx0, fy0, fy1, 3, GUIDELINE_BLUE);
+                    draw_dashed_vline(&mut surface, fx1, fy0, fy1, 3, GUIDELINE_BLUE);
+                    let layout = coralcraft_doc::layout_paragraph_text(pt);
+                    if layout.overflow {
+                        let fmx = (fx0 + fx1) / 2;
+                        fill_rect(&mut surface, fmx - 4, fy1 - 3, 9, 7, SLASH_RED);
+                        stroke_rect(&mut surface, fmx - 4, fy1 - 3, 9, 7, PAPER_WHITE);
+                    }
+                }
+            }
+        }
+    }
+
     // 3. 8 solid `6×6` `#000000` Selection Handles + Center `X` marker
     if let Some(sel_bounds) = snap.selection_bounds {
         let sx0 = page_x0 + (sel_bounds.x0.get() * fit_scale).round() as i32;

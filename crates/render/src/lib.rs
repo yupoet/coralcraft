@@ -198,9 +198,31 @@ fn render_object_node(
         _ => {}
     }
 
-    let Some((local_path, local_bbox)) = extract_local_path_and_bbox(&node.kind)? else {
+    let Some((mut local_path, mut local_bbox)) = extract_local_path_and_bbox(&node.kind)? else {
         return Ok(());
     };
+
+    for effect in &node.effects {
+        match effect {
+            VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
+                if let Ok(brush_path) = coralcraft_geom::expand_artistic_brush_stroke(&local_path, start_width_pt.get(), end_width_pt.get())
+                    && let Some(bb) = brush_path.bounds()
+                {
+                    local_path = brush_path;
+                    local_bbox = bb;
+                }
+            }
+            VectorEffect::Envelope { corners } => {
+                if let Ok(warped) = coralcraft_geom::warp_path_bilinear(&local_path, local_bbox, *corners)
+                    && let Some(bb) = warped.bounds()
+                {
+                    local_path = warped;
+                    local_bbox = bb;
+                }
+            }
+            _ => {}
+        }
+    }
 
     if let Some(TransparencyStyle::Fountain { geometry, blend_mode, stops }) = &node.transparency {
         let mut offscreen = Surface::new(surface.width, surface.height, [0, 0, 0, 0])?;
@@ -1034,5 +1056,50 @@ mod tests {
         assert!(pdf_str.contains("1 1 1 1 K"));
         assert!(pdf_str.contains("/TrimBox"));
         assert!(pdf_str.contains("/BleedBox"));
+    }
+
+    #[test]
+    fn envelope_and_artistic_media_brush_effects_render_deformed_geometry() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(160.0, 120.0).unwrap();
+
+        // 1. Envelope warped rectangle shifted into (80..140, 10..50)
+        let mut env_rect = ObjectNode::new(
+            ObjectId(301),
+            Some("Warped Rect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 10.0, 50.0, 50.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(220, 40, 40))),
+            None,
+        );
+        env_rect.effects.push(VectorEffect::Envelope {
+            corners: [
+                Point::new(80.0, 10.0).unwrap(),
+                Point::new(140.0, 10.0).unwrap(),
+                Point::new(140.0, 50.0).unwrap(),
+                Point::new(80.0, 50.0).unwrap(),
+            ],
+        });
+        doc.pages[0].layers[0].objects.push(env_rect);
+
+        // 2. Artistic Media Brush stroke along y = 90 with start_width = 24 pt
+        let mut spine = Path::new();
+        spine.move_to(Point::new(20.0, 90.0).unwrap()).unwrap();
+        spine.line_to(Point::new(140.0, 90.0).unwrap()).unwrap();
+        let mut brush_obj = ObjectNode::new(
+            ObjectId(302),
+            Some("Calligraphic Stroke".to_owned()),
+            ObjectKind::Path(spine),
+            Some(FillStyle::uniform(Color::rgb8(20, 160, 80))),
+            None,
+        );
+        brush_obj.effects.push(VectorEffect::ArtisticMediaBrush { start_width_pt: F64::new(24.0).unwrap(), end_width_pt: F64::new(4.0).unwrap() });
+        doc.pages[0].layers[0].objects.push(brush_obj);
+
+        let out = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        // Original rect center (30, 30) should be transparent, warped center (110, 30) should be red
+        assert_eq!(out.surface.get_straight_rgba(30, 30)[3], 0);
+        assert!(out.surface.get_straight_rgba(110, 30)[0] > 200);
+        // Brush at (30, 82) is inside the thick start ribbon (90 ± 12)
+        assert!(out.surface.get_straight_rgba(30, 82)[1] > 120);
     }
 }

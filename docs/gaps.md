@@ -22,7 +22,10 @@
 - [x] 17. **[M9] Paragraph Text Frames (`ObjectKind::ParagraphText`) + Advanced Text Runs (`txtd`/`txts`)**: Multi-line word-wrapped text frames, multi-column flow, and CDR `txtd`/`txts` run extraction in `coralcraft-doc`, `coralcraft-cdr`, and `coralcraft-render`.
 - [x] 18. **[M9] Self-Contained Blend Spines (`BlendSpine`) & Interactive Effect Vectors**: Cumulative arc-length LUT, tangent/normal frame calculation along custom `BezierPath` spines, and interactive Drop Shadow / Contour handles in `coralcraft-doc`, `coralcraft-geom`, and `coralcraft-engine`.
 - [x] 19. **[M9] Prepress Marks (Crop Marks, Registration Targets, Bleed Box) in PDF/SVG Export**: Professional prepress output marks in `coralcraft-render`.
-- [ ] 20. **[M10] Envelope & Perspective 4-Corner Cage Distortion (`VectorEffect::Envelope`)**: Bilinear/Coons patch warp of vector paths in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
-- [ ] 21. **[M10] Calligraphic & Artistic Media Brush Stroke Profiles**: Variable-width stroke outlines along `Path` spines in `coralcraft-geom` and `coralcraft-render`.
-- [ ] 22. **[M10] Paragraph Text Frame Canvas Overlay & Red Overflow Indicator**: Dashed frame outline and bottom-center overflow handle in `coralcraft-ui-egui`.
+- [x] 20. **[M10] Envelope & Perspective 4-Corner Cage Distortion (`VectorEffect::Envelope`)**: Bilinear/Coons patch warp of vector paths in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
+- [x] 21. **[M10] Calligraphic & Artistic Media Brush Stroke Profiles**: Variable-width stroke outlines along `Path` spines in `coralcraft-geom` and `coralcraft-render`.
+- [x] 22. **[M10] Paragraph Text Frame Canvas Overlay & Red Overflow Indicator**: Dashed frame outline and bottom-center overflow handle in `coralcraft-ui-egui`.
+- [ ] 23. **[M11] Fit Text to Path (`Text -> Fit Text to Path`)**: Per-glyph placement and tangent rotation along an arbitrary `Path` spine using `ArcLengthTable` in `coralcraft-geom`, `coralcraft-engine`, `coralcraft-render`, and `coralcraft-mcp`.
+- [ ] 24. **[M11] Step and Repeat (`Edit -> Step and Repeat` / `Ctrl+Shift+D`)**: Parametric array duplication (`count`, `offset_x_pt`, `offset_y_pt`) with full undo/redo in `coralcraft-engine` and `coralcraft-mcp`.
+- [ ] 25. **[M11] CDR `enve` Envelope Chunk Round-Trip (`write_cdr7` & `parse_document`)**: Persist and restore `VectorEffect::Envelope` 4-corner cage coordinates in RIFF `CDR7` object streams.
 

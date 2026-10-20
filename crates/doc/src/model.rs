@@ -245,6 +245,18 @@ pub enum VectorEffect {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         spine: Option<Path>,
     },
+    /// Envelope 4-corner bilinear cage warp (`corners = [TL, TR, BR, BL]`).
+    Envelope {
+        /// Four target corner positions `[top_left, top_right, bottom_right, bottom_left]` in local coordinates.
+        corners: [Point; 4],
+    },
+    /// Artistic Media variable-width calligraphic brush stroke along the object's path spine.
+    ArtisticMediaBrush {
+        /// Starting ribbon width in typographic points.
+        start_width_pt: F64,
+        /// Ending ribbon width in typographic points.
+        end_width_pt: F64,
+    },
 }
 
 /// Object-level transparency and lens compositing (`Uniform` or `Fountain`).

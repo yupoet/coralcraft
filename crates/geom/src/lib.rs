@@ -21,7 +21,9 @@ pub use f64_canon::{BBox, EPS, F64, GeomError, Point, Rect, Size, constrain_angl
 pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
-pub use path::{ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample};
+pub use path::{
+    ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, warp_path_bilinear,
+};
 pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec};
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 
@@ -240,5 +242,29 @@ mod tests {
         assert!((s_three_quarters.point.x.get() - 100.0).abs() < 1e-4);
         assert!((s_three_quarters.point.y.get() - 50.0).abs() < 1e-4);
         assert!((s_three_quarters.angle_deg - 90.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn warp_path_bilinear_maps_corners_and_expand_artistic_brush_tapers() {
+        let bbox = Rect::new(0.0, 0.0, 100.0, 50.0).unwrap();
+        let rect_path = RectSpec::sharp(bbox).to_path().unwrap();
+        let corners =
+            [Point::new(10.0, 5.0).unwrap(), Point::new(110.0, 15.0).unwrap(), Point::new(120.0, 75.0).unwrap(), Point::new(0.0, 65.0).unwrap()];
+        let warped = warp_path_bilinear(&rect_path, bbox, corners).unwrap();
+        let wb = warped.bounds().unwrap();
+        assert!((wb.x0.get() - 0.0).abs() < 1e-6);
+        assert!((wb.x1.get() - 120.0).abs() < 1e-6);
+        assert!((wb.y0.get() - 5.0).abs() < 1e-6);
+        assert!((wb.y1.get() - 75.0).abs() < 1e-6);
+
+        let mut spine = Path::new();
+        spine.move_to(Point::new(0.0, 50.0).unwrap()).unwrap();
+        spine.line_to(Point::new(100.0, 50.0).unwrap()).unwrap();
+        let brush = expand_artistic_brush_stroke(&spine, 20.0, 4.0).unwrap();
+        let bb = brush.bounds().unwrap();
+        assert!((bb.x0.get() - 0.0).abs() < 1e-6);
+        assert!((bb.x1.get() - 100.0).abs() < 1e-6);
+        assert!((bb.y0.get() - 40.0).abs() < 1e-6);
+        assert!((bb.y1.get() - 60.0).abs() < 1e-6);
     }
 }
