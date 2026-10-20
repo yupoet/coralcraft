@@ -12,7 +12,7 @@ use coralcraft_geom::{
     delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
     roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
-    trace_bitmap_to_path, twirl_path_around_point,
+    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -281,6 +281,10 @@ pub enum EngineCommand {
     SubdividePathSegments { object_id: ObjectId },
     /// Converts all fills, fountain stops, two-color patterns, and outlines of the selection via sRGB inversion (`invert`) and/or BT.709 luminance grayscale (`grayscale`) (`Effects -> Transform -> Invert Colors` / `Edit -> Find and Replace -> Convert to Grayscale`).
     ConvertSelectionColors { invert: bool, grayscale: bool },
+    /// Scales (`scale_x`, `scale_y`) and rotates (`rotate_deg`) the curve nodes at `element_indices` on `object_id` around their centroid (`Shape Tool F10 -> Stretch/Scale & Rotate Nodes`).
+    TransformCurveNodes { object_id: ObjectId, element_indices: Vec<usize>, scale_x: F64, scale_y: F64, rotate_deg: F64 },
+    /// Selects all unlocked visible objects on the active layer whose fill (`match_fill`) and/or outline (`match_outline`) color is within `tolerance_u8` of `color` (`Edit -> Find and Replace -> Find Objects by Color`).
+    SelectByColor { color: Color, match_fill: bool, match_outline: bool, tolerance_u8: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1206,6 +1210,21 @@ impl EditorEngine {
                 }
                 let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
                 if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o)
+                            .is_some_and(|p| transform_curve_nodes(&p, element_indices, scale_x.get(), scale_y.get(), rotate_deg.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SelectByColor { match_fill, match_outline, .. } => {
+                if !match_fill && !match_outline {
                     return false;
                 }
             }
@@ -3424,6 +3443,49 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
+                let sx = scale_x.get();
+                let sy = scale_y.get();
+                let rot = rotate_deg.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = transform_curve_nodes(&base_path, &element_indices, sx, sy, rot)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SelectByColor { color, match_fill, match_outline, tolerance_u8 } => {
+                let [tr, tg, tb] = color.to_srgb8();
+                let tol = i32::from(tolerance_u8);
+                let matches_c = |c: &Color| -> bool {
+                    let [r, g, b] = c.to_srgb8();
+                    (i32::from(r) - i32::from(tr)).abs() <= tol
+                        && (i32::from(g) - i32::from(tg)).abs() <= tol
+                        && (i32::from(b) - i32::from(tb)).abs() <= tol
+                };
+                self.selection = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| {
+                        if o.locked || !o.visible {
+                            return false;
+                        }
+                        let fill_ok = match_fill
+                            && o.fill.as_ref().is_some_and(|f| match f {
+                                FillStyle::Uniform { color: fc } => matches_c(fc),
+                                FillStyle::Fountain { stops, .. } => stops.iter().any(|s| matches_c(&s.color)),
+                                FillStyle::TwoColorPattern { fg_color, bg_color, .. } => matches_c(fg_color) || matches_c(bg_color),
+                                FillStyle::Unknown { .. } => false,
+                            });
+                        let outline_ok = match_outline && o.outline.as_ref().is_some_and(|ol| matches_c(&ol.color));
+                        fill_ok || outline_ok
+                    })
+                    .map(|o| o.id)
+                    .collect();
+            }
         }
         true
     }
@@ -3565,7 +3627,13 @@ impl EditorEngine {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
                 let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
-                self.document.pages[page_idx].layers.last().map_or(&[], |l| l.objects.as_slice())
+                self.document.pages[page_idx]
+                    .layers
+                    .iter()
+                    .rev()
+                    .find(|l| l.role == LayerRole::Normal)
+                    .or_else(|| self.document.pages[page_idx].layers.last())
+                    .map_or(&[], |l| l.objects.as_slice())
             }
             ActivePageTarget::MasterPage => {
                 self.document.master_layers.iter().find(|l| l.role == LayerRole::MasterAllPages).map_or(&[], |l| l.objects.as_slice())
@@ -3606,11 +3674,11 @@ impl EditorEngine {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
                 let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
-                if self.document.pages[page_idx].layers.is_empty() {
+                if !self.document.pages[page_idx].layers.iter().any(|l| l.role == LayerRole::Normal) {
                     let layer_id = LayerId(self.document.allocate_object_id().0);
                     self.document.pages[page_idx].layers.push(Layer::new_normal(layer_id, "Layer 1"));
                 }
-                self.document.pages[page_idx].layers.last_mut().unwrap_or_else(|| unreachable!())
+                self.document.pages[page_idx].layers.iter_mut().rev().find(|l| l.role == LayerRole::Normal).unwrap_or_else(|| unreachable!())
             }
             ActivePageTarget::MasterPage => {
                 if let Some(pos) = self.document.master_layers.iter().position(|l| l.role == LayerRole::MasterAllPages) {
@@ -4260,5 +4328,19 @@ mod tests {
         }));
         assert!(engine.execute(EngineCommand::SubdividePathSegments { object_id: sf_id }));
         assert!(engine.execute(EngineCommand::ConvertSelectionColors { invert: true, grayscale: true }));
+        assert!(engine.execute(EngineCommand::TransformCurveNodes {
+            object_id: sf_id,
+            element_indices: vec![0, 1],
+            scale_x: F64::new(1.2).unwrap(),
+            scale_y: F64::new(0.8).unwrap(),
+            rotate_deg: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SelectByColor {
+            color: Color::rgb8(128, 128, 128),
+            match_fill: true,
+            match_outline: true,
+            tolerance_u8: 255,
+        }));
+        assert!(!engine.selection.is_empty());
     }
 }

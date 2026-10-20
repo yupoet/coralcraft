@@ -773,6 +773,53 @@ pub fn build_block_arrow_path(start: Point, end: Point, shaft_width_pt: f64, hea
     Ok(path)
 }
 
+/// Builds a compound 3-part heraldic Banner / Ribbon [`Path`] inside `bounds` with recessed
+/// side tails (`fold_depth_pt`) and V-shaped swallowtail notches (`swallowtail_depth_pt`)
+/// (`Polygon Flyout -> Banner Shapes`).
+pub fn build_banner_ribbon_path(bounds: Rect, fold_depth_pt: f64, swallowtail_depth_pt: f64) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    let fold_raw = F64::new(fold_depth_pt)?.get();
+    let tail_raw = F64::new(swallowtail_depth_pt)?.get();
+    if w <= 0.0 || h <= 0.0 || fold_raw < 0.0 || tail_raw < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("invalid banner ribbon dimensions"));
+    }
+    let fold = fold_raw.clamp(0.05 * w, 0.35 * w);
+    let tail = tail_raw.clamp(0.0, 0.8 * fold);
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let drop_y = 0.15 * h;
+    let tail_mid_y = y0 + drop_y + 0.5 * (h - drop_y);
+
+    let mut path = Path::new();
+    // 1. Left swallowtail wing
+    path.move_to(Point::new(x0, y0 + drop_y)?)?;
+    path.line_to(Point::new(x0 + fold, y0 + drop_y)?)?;
+    path.line_to(Point::new(x0 + fold, y1)?)?;
+    path.line_to(Point::new(x0, y1)?)?;
+    path.line_to(Point::new(x0 + tail, tail_mid_y)?)?;
+    path.close()?;
+
+    // 2. Right swallowtail wing
+    path.move_to(Point::new(x1 - fold, y0 + drop_y)?)?;
+    path.line_to(Point::new(x1, y0 + drop_y)?)?;
+    path.line_to(Point::new(x1 - tail, tail_mid_y)?)?;
+    path.line_to(Point::new(x1, y1)?)?;
+    path.line_to(Point::new(x1 - fold, y1)?)?;
+    path.close()?;
+
+    // 3. Central foreground banner panel
+    let inset = 0.6 * fold;
+    path.move_to(Point::new(x0 + inset, y0)?)?;
+    path.line_to(Point::new(x1 - inset, y0)?)?;
+    path.line_to(Point::new(x1 - inset, y1 - drop_y)?)?;
+    path.line_to(Point::new(x0 + inset, y1 - drop_y)?)?;
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -803,5 +850,9 @@ mod m27_tests {
 
         let arrow = build_block_arrow_path(Point::new(0.0, 50.0).unwrap(), Point::new(100.0, 50.0).unwrap(), 20.0, 40.0, 30.0).unwrap();
         assert_eq!(arrow.elements.len(), 8);
+
+        let banner = build_banner_ribbon_path(Rect::new(0.0, 0.0, 200.0, 60.0).unwrap(), 30.0, 12.0).unwrap();
+        let banner_closes = banner.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(banner_closes, 3);
     }
 }

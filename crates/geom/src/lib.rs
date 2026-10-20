@@ -29,12 +29,13 @@ pub use path::{
     convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, distort_path, expand_artistic_brush_stroke,
     fillet_path_corners, insert_curve_node_at, join_open_subpaths, measure_path_length_and_area, offset_open_or_closed_path,
     radial_push_path_around_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
-    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, twirl_path_around_point, warp_path_bilinear, warp_path_perspective,
+    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, warp_path_bilinear,
+    warp_path_perspective,
 };
 pub use shapes::{
-    CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_block_arrow_path, build_bspline_path, build_callout_path,
-    build_complex_star_path, build_connector_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path,
-    build_polyline_path, build_spiral_path, build_three_point_curve_path,
+    CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_banner_ribbon_path, build_block_arrow_path, build_bspline_path,
+    build_callout_path, build_complex_star_path, build_connector_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path,
+    build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
 };
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 

@@ -1580,6 +1580,72 @@ pub fn subdivide_all_path_segments(path: &Path) -> Result<Path, GeomError> {
     Path::from_elements(out, path.fill_rule)
 }
 
+/// Scales (`scale_x`, `scale_y`) and rotates (`rotate_deg`) the curve nodes at `element_indices`
+/// around their collective centroid (`Shape Tool F10 -> Stretch/Scale & Rotate Nodes`).
+pub fn transform_curve_nodes(path: &Path, element_indices: &[usize], scale_x: f64, scale_y: f64, rotate_deg: f64) -> Result<Path, GeomError> {
+    if !scale_x.is_finite() || !scale_y.is_finite() || !rotate_deg.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if scale_x.abs() <= 1e-6 || scale_y.abs() <= 1e-6 || element_indices.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("invalid node transform parameters"));
+    }
+    let elem_end = |el: &PathElement| -> Option<Point> {
+        match *el {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => Some(p),
+            PathElement::Close => None,
+        }
+    };
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut count = 0usize;
+    for &idx in element_indices {
+        let Some(el) = path.elements.get(idx) else {
+            return Err(GeomError::InvalidShapeParameter("element_index out of range"));
+        };
+        let Some(p) = elem_end(el) else {
+            return Err(GeomError::InvalidShapeParameter("Close element has no endpoint"));
+        };
+        sum_x += p.x.get();
+        sum_y += p.y.get();
+        count += 1;
+    }
+    let cx = sum_x / (count as f64);
+    let cy = sum_y / (count as f64);
+    let t1 = Affine2::translation(-cx, -cy)?;
+    let sc = Affine2::scaling(scale_x, scale_y)?;
+    let rot = Affine2::rotation_rad(rotate_deg.to_radians())?;
+    let t2 = Affine2::translation(cx, cy)?;
+    let tf = t1.then(sc)?.then(rot)?.then(t2)?;
+
+    let mut elements = path.elements.clone();
+    for &idx in element_indices {
+        let Some(old_end) = elem_end(&elements[idx]) else {
+            continue;
+        };
+        let new_end = tf.apply_point(old_end)?;
+        let dx = new_end.x.get() - old_end.x.get();
+        let dy = new_end.y.get() - old_end.y.get();
+        match &mut elements[idx] {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
+            PathElement::QuadTo { ctrl, end } => {
+                *ctrl = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy)?;
+                *end = new_end;
+            }
+            PathElement::CubicTo { c2, end, .. } => {
+                *c2 = Point::new(c2.x.get() + dx, c2.y.get() + dy)?;
+                *end = new_end;
+            }
+            PathElement::Close => {}
+        }
+        if idx + 1 < elements.len()
+            && let PathElement::CubicTo { c1, .. } = &mut elements[idx + 1]
+        {
+            *c1 = Point::new(c1.x.get() + dx, c1.y.get() + dy)?;
+        }
+    }
+    Path::from_elements(elements, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {

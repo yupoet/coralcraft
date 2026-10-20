@@ -11,11 +11,11 @@ use coralcraft_doc::{
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
-    build_angular_dimension_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path,
-    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path,
-    build_three_point_curve_path,
+    build_angular_dimension_path, build_banner_ribbon_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
+    build_connector_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path,
+    build_spiral_path, build_three_point_curve_path,
 };
-use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
+use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -879,6 +879,26 @@ impl McpServer {
                         {
                             "name": "import_coralcraft_json",
                             "description": "Loads a native .coralcraft JSON document string into the active EditorEngine.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_banner_ribbon",
+                            "description": "Adds a compound 3-part heraldic Banner / Ribbon Path inside bounds with recessed side folds and V-shaped swallowtail notches.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "transform_curve_nodes",
+                            "description": "Scales (scale_x, scale_y) and rotates (rotate_deg) the curve nodes at element_indices on an object around their centroid (Shape Tool F10).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "select_by_color",
+                            "description": "Selects all unlocked visible objects on the active layer whose fill and/or outline color is within tolerance_u8 of (r, g, b).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_png_base64",
+                            "description": "Rasterizes page_index at dpi (4x4 MSAA) to PNG and returns png_bytes length and RFC 4648 png_base64 string.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2526,6 +2546,59 @@ impl McpServer {
                 self.engine = EditorEngine::new(doc);
                 Ok(json!({ "status": "ok", "pages": pages }))
             }
+            "add_banner_ribbon" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(60.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(200.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(60.0);
+                let fold_depth_pt = args.get("fold_depth_pt").and_then(Value::as_f64).unwrap_or(30.0);
+                let swallowtail_depth_pt = args.get("swallowtail_depth_pt").and_then(Value::as_f64).unwrap_or(12.0);
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_banner_ribbon_path(rect, fold_depth_pt, swallowtail_depth_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Banner Ribbon".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "banner_ribbon", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "transform_curve_nodes" => {
+                let target = self.resolve_target_id(args)?;
+                let element_indices: Vec<usize> = args
+                    .get("element_indices")
+                    .and_then(Value::as_array)
+                    .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                    .unwrap_or_else(|| vec![0, 1]);
+                let scale_x = F64::new(args.get("scale_x").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
+                let scale_y = F64::new(args.get("scale_y").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
+                let rotate_deg = F64::new(args.get("rotate_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::TransformCurveNodes { object_id: target, element_indices, scale_x, scale_y, rotate_deg });
+                Ok(json!({ "nodes_transformed": ok, "object_id": target.0 }))
+            }
+            "select_by_color" => {
+                let r = args.get("r").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let g = args.get("g").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let b = args.get("b").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let match_fill = args.get("match_fill").and_then(Value::as_bool).unwrap_or(true);
+                let match_outline = args.get("match_outline").and_then(Value::as_bool).unwrap_or(false);
+                let tolerance_u8 = args.get("tolerance_u8").and_then(Value::as_u64).unwrap_or(16).min(255) as u8;
+                let ok = self.engine.execute(EngineCommand::SelectByColor { color: Color::rgb8(r, g, b), match_fill, match_outline, tolerance_u8 });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|i| i.0).collect();
+                Ok(json!({ "selected_by_color": ok, "selection": ids }))
+            }
+            "export_png_base64" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let dpi = args.get("dpi").and_then(Value::as_f64).unwrap_or(72.0).clamp(18.0, 600.0);
+                let opts = RenderOpts {
+                    scale: dpi / 72.0,
+                    transparent_background: args.get("transparent_background").and_then(Value::as_bool).unwrap_or(false),
+                    export_mode: true,
+                };
+                let out = render_page(&self.engine.document, page_index, &opts).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&out.png_bytes);
+                Ok(json!({
+                    "width_px": out.surface.width,
+                    "height_px": out.surface.height,
+                    "png_bytes": out.png_bytes.len(),
+                    "png_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2555,7 +2628,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 156);
+        assert_eq!(tools, 160);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
