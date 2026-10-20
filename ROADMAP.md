@@ -205,9 +205,13 @@
 57. **M57 Harmonic Lissajous Curve (`build_lissajous_path`), Max-Length Path Segment Densifier (`subdivide_path_by_max_segment_length` & `DensifyObjectPath`), Align Selection to Key Object (`AlignSelectionToKeyObject`), XML Palette Export (`export_xml_palette`), and 212 MCP Tools**:
     - `coralcraft-geom`: `build_lissajous_path` (closed harmonic Lissajous / Bowditch curve) and `subdivide_path_by_max_segment_length` (uniform max-length edge subdivision).
     - `coralcraft-engine` & `coralcraft-mcp`: `DensifyObjectPath`, `AlignSelectionToKeyObject`, `add_lissajous_curve`, `densify_object_path`, `align_selection_to_key_object`, `export_xml_palette`, and **212 MCP tools**.
+58. **M58 Phyllotaxis Golden-Angle Spiral (`build_phyllotaxis_path`), Spherical Fish-Eye Lens Warp (`spherical_fisheye_warp_path` & `SphericalWarpObjectPath`), Gradient Selection Colorizer (`ColorizeSelectionByGradient`), XML Palette Import (`import_xml_palette`), and 216 MCP Tools**:
+    - `coralcraft-geom`: `build_phyllotaxis_path` (Vogel $137.507764^\circ$ golden-angle sunflower pattern) and `spherical_fisheye_warp_path` (radial spherical lens warp with automatic segment densification).
+    - `coralcraft-engine` & `coralcraft-mcp`: `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `add_phyllotaxis_pattern`, `spherical_warp_path`, `colorize_selection_by_gradient`, `import_xml_palette`, and **216 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M58 delivered (`build_phyllotaxis_path` & `add_phyllotaxis_pattern`, `spherical_fisheye_warp_path` & `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `import_xml_palette`, 216 MCP tools).
 - 2026-10-20: M57 delivered (`build_lissajous_path` & `add_lissajous_curve`, `subdivide_path_by_max_segment_length` & `DensifyObjectPath`, `AlignSelectionToKeyObject`, `export_xml_palette`, 212 MCP tools).
 - 2026-10-20: M56 delivered (`build_hilbert_curve_path` & `add_hilbert_curve`, `medial_chord_skeleton_of_path` & `ExtractPathSkeleton`, `JitterSelectionTransforms`, `export_cpl_palette_base64`, 208 MCP tools).
 - 2026-10-20: M55 delivered (`build_honeycomb_grid_path` & `add_honeycomb_grid`, `convex_hull_of_path` & `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `export_pdf_imposed_base64`, 204 MCP tools).

@@ -3,7 +3,9 @@
 #![recursion_limit = "512"]
 
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
-use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, serialize_binary_cpl, serialize_xml_palette};
+use coralcraft_color::{
+    Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, parse_xml_palette, serialize_binary_cpl, serialize_xml_palette,
+};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
     ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json,
@@ -14,9 +16,9 @@ use coralcraft_geom::{
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
     build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_hilbert_curve_path, build_honeycomb_grid_path,
-    build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path,
-    build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
-    build_voronoi_mosaic_path,
+    build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path,
+    build_three_point_curve_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1259,6 +1261,63 @@ impl McpServer {
                                 "properties": {
                                     "palette_name": { "type": "string" }
                                 }
+                            }
+                        },
+                        {
+                            "name": "add_phyllotaxis_pattern",
+                            "description": "Adds a Vogel golden-angle (137.507764 deg) sunflower / phyllotaxis spiral pattern of circular seed florets.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "cx": { "type": "number" },
+                                    "cy": { "type": "number" },
+                                    "max_radius_pt": { "type": "number" },
+                                    "seed_count": { "type": "integer" },
+                                    "dot_radius_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "spherical_warp_path",
+                            "description": "Applies a CorelDRAW Fish-Eye / Spherical Lens radial warp to a vector object within radius_pt of (center_x, center_y).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "center_x": { "type": "number" },
+                                    "center_y": { "type": "number" },
+                                    "radius_pt": { "type": "number" },
+                                    "magnification": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "colorize_selection_by_gradient",
+                            "description": "Linearly interpolates fill and/or outline sRGB colors across selected objects in selection order from start RGB to end RGB.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "start_r": { "type": "integer" },
+                                    "start_g": { "type": "integer" },
+                                    "start_b": { "type": "integer" },
+                                    "end_r": { "type": "integer" },
+                                    "end_g": { "type": "integer" },
+                                    "end_b": { "type": "integer" },
+                                    "apply_to_fill": { "type": "boolean" },
+                                    "apply_to_outline": { "type": "boolean" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "import_xml_palette",
+                            "description": "Parses a CorelDRAW XML palette (<palette>...</palette>) and returns its name and decoded swatches.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "xml_palette": { "type": "string" }
+                                },
+                                "required": ["xml_palette"]
                             }
                         }
                     ]
@@ -3618,6 +3677,68 @@ impl McpServer {
                     "xml_palette": xml
                 }))
             }
+            "add_phyllotaxis_pattern" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let max_radius_pt = args.get("max_radius_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let seed_count = args.get("seed_count").and_then(Value::as_u64).unwrap_or(24) as u32;
+                let dot_radius_pt = args.get("dot_radius_pt").and_then(Value::as_f64).unwrap_or(3.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_phyllotaxis_path(center, max_radius_pt, seed_count, dot_radius_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Phyllotaxis Pattern".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "phyllotaxis_pattern", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "spherical_warp_path" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("center_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("center_y").and_then(Value::as_f64).unwrap_or(150.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0)).map_err(|e| e.to_string())?;
+                let magnification = F64::new(args.get("magnification").and_then(Value::as_f64).unwrap_or(1.6)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SphericalWarpObjectPath { object_id: target, center, radius_pt, magnification });
+                Ok(json!({ "spherical_warped": ok, "object_id": target.0, "magnification": magnification.get() }))
+            }
+            "colorize_selection_by_gradient" => {
+                self.apply_optional_selection(args);
+                let sr = args.get("start_r").and_then(Value::as_u64).unwrap_or(240).min(255) as u8;
+                let sg = args.get("start_g").and_then(Value::as_u64).unwrap_or(50).min(255) as u8;
+                let sb = args.get("start_b").and_then(Value::as_u64).unwrap_or(50).min(255) as u8;
+                let er = args.get("end_r").and_then(Value::as_u64).unwrap_or(40).min(255) as u8;
+                let eg = args.get("end_g").and_then(Value::as_u64).unwrap_or(120).min(255) as u8;
+                let eb = args.get("end_b").and_then(Value::as_u64).unwrap_or(240).min(255) as u8;
+                let apply_to_fill = args.get("apply_to_fill").and_then(Value::as_bool).unwrap_or(true);
+                let apply_to_outline = args.get("apply_to_outline").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::ColorizeSelectionByGradient {
+                    start_color: Color::rgb8(sr, sg, sb),
+                    end_color: Color::rgb8(er, eg, eb),
+                    apply_to_fill,
+                    apply_to_outline,
+                });
+                Ok(json!({ "colorized_by_gradient": ok }))
+            }
+            "import_xml_palette" => {
+                let xml = args.get("xml_palette").and_then(Value::as_str).ok_or_else(|| "Missing xml_palette string".to_owned())?;
+                let pal = parse_xml_palette(xml).map_err(|e| e.to_string())?;
+                let swatches: Vec<Value> = pal
+                    .swatches
+                    .iter()
+                    .map(|sw| {
+                        let [r, g, b] = sw.color.to_srgb8();
+                        json!({
+                            "name": sw.name,
+                            "hex": format!("#{r:02X}{g:02X}{b:02X}"),
+                            "r": r,
+                            "g": g,
+                            "b": b
+                        })
+                    })
+                    .collect();
+                Ok(json!({
+                    "palette_name": pal.name,
+                    "swatch_count": swatches.len(),
+                    "swatches": swatches
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3647,7 +3768,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 212);
+        assert_eq!(tools, 216);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3921,6 +4042,41 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"export_xml_palette","arguments":{"palette_name":"M57 Palette"}}}"#,
         ))
         .unwrap();
-        assert!(xml_pal_resp.result.unwrap()["structuredContent"]["xml_palette"].as_str().unwrap().contains("<palette"));
+        let xml_pal_str = xml_pal_resp.result.unwrap()["structuredContent"]["xml_palette"].as_str().unwrap().to_owned();
+        assert!(xml_pal_str.contains("<palette"));
+
+        let phyllo_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"add_phyllotaxis_pattern","arguments":{"cx":140.0,"cy":140.0,"max_radius_pt":55.0,"seed_count":16,"dot_radius_pt":3.0}}}"#,
+            ),
+        )
+        .unwrap();
+        let phyllo_id = phyllo_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let swarp_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":45,"method":"tools/call","params":{{"name":"spherical_warp_path","arguments":{{"object_id":{liss_id},"center_x":140.0,"center_y":140.0,"radius_pt":60.0,"magnification":1.6}}}}}}"#
+        )))
+        .unwrap();
+        assert!(swarp_resp.result.unwrap()["structuredContent"]["spherical_warped"].as_bool().unwrap());
+
+        let cgrad_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{{"name":"colorize_selection_by_gradient","arguments":{{"selection":[{phyllo_id},{liss_id}],"start_r":240,"start_g":40,"start_b":60,"end_r":40,"end_g":140,"end_b":240,"apply_to_fill":true,"apply_to_outline":true}}}}}}"#
+        )))
+        .unwrap();
+        assert!(cgrad_resp.result.unwrap()["structuredContent"]["colorized_by_gradient"].as_bool().unwrap());
+
+        let imp_xml_req = json!({
+            "jsonrpc": "2.0",
+            "id": 47,
+            "method": "tools/call",
+            "params": {
+                "name": "import_xml_palette",
+                "arguments": {
+                    "xml_palette": xml_pal_str
+                }
+            }
+        });
+        let imp_xml_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_xml_req.to_string())).unwrap();
+        assert!(imp_xml_resp.result.unwrap()["structuredContent"]["swatch_count"].as_u64().unwrap() >= 1);
     }
 }

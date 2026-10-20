@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M57 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M58 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -55,9 +55,10 @@
   47. **M54: Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools (`commit 6f24791`)**.
   48. **M55: Hexagonal Honeycomb Lattice (`build_honeycomb_grid_path`), Monotone-Chain Convex Hull (`convex_hull_of_path` & `ConvexHullSelection`), Arrange Selection on Circle (`ArrangeSelectionOnCircle`), Imposed PDF Base64 Export (`export_pdf_imposed_base64`), and 204 MCP Tools (`commit 9f7ad34`)**.
   49. **M56: Space-Filling Hilbert Fractal Curve (`build_hilbert_curve_path`), Medial-Chord Centerline Skeleton (`medial_chord_skeleton_of_path` & `ExtractPathSkeleton`), Deterministic Transform Jitter (`JitterSelectionTransforms`), Binary `.cpl` Palette Base64 Export (`export_cpl_palette_base64`), and 208 MCP Tools (`commit 4feb087`)**.
-  50. **M57: Harmonic Lissajous Curve (`build_lissajous_path`), Max-Length Path Segment Densifier (`subdivide_path_by_max_segment_length` & `DensifyObjectPath`), Align Selection to Key Object (`AlignSelectionToKeyObject`), XML Palette Export (`export_xml_palette`), and 212 MCP Tools**:
-      - `coralcraft-geom`: Added `build_lissajous_path` and `subdivide_path_by_max_segment_length`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `DensifyObjectPath`, `AlignSelectionToKeyObject`, `add_lissajous_curve`, `densify_object_path`, `align_selection_to_key_object`, `export_xml_palette`, and expanded MCP server to **212 tools**.
+  50. **M57: Harmonic Lissajous Curve (`build_lissajous_path`), Max-Length Path Segment Densifier (`subdivide_path_by_max_segment_length` & `DensifyObjectPath`), Align Selection to Key Object (`AlignSelectionToKeyObject`), XML Palette Export (`export_xml_palette`), and 212 MCP Tools (`commit d5ab27a`)**.
+  51. **M58: Phyllotaxis Golden-Angle Spiral (`build_phyllotaxis_path`), Spherical Fish-Eye Lens Warp (`spherical_fisheye_warp_path` & `SphericalWarpObjectPath`), Gradient Selection Colorizer (`ColorizeSelectionByGradient`), XML Palette Import (`import_xml_palette`), and 216 MCP Tools**:
+      - `coralcraft-geom`: Added `build_phyllotaxis_path` and `spherical_fisheye_warp_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SphericalWarpObjectPath`, `ColorizeSelectionByGradient`, `add_phyllotaxis_pattern`, `spherical_warp_path`, `colorize_selection_by_gradient`, `import_xml_palette`, and expanded MCP server to **216 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

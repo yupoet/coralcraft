@@ -1651,6 +1651,32 @@ pub fn build_lissajous_path(
     Ok(path)
 }
 
+/// Builds a Vogel golden-angle ($137.507764^\circ$) sunflower / phyllotaxis [`Path`] centered at `center`
+/// (`Object -> Insert -> Phyllotaxis Golden Spiral`) with `seed_count` (`4..=256`) circular seed florets
+/// of radius `dot_radius_pt` distributed inside `max_radius_pt`.
+pub fn build_phyllotaxis_path(center: Point, max_radius_pt: f64, seed_count: u32, dot_radius_pt: f64) -> Result<Path, GeomError> {
+    let r_max = F64::new(max_radius_pt)?.get();
+    let r_dot = F64::new(dot_radius_pt)?.get();
+    if r_max <= 1.0 || r_dot <= 0.2 || r_dot >= r_max || !(4..=256).contains(&seed_count) {
+        return Err(GeomError::InvalidShapeParameter("invalid phyllotaxis parameters"));
+    }
+    let golden_angle_rad = 137.507_764_050_037_85_f64.to_radians();
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let scale_c = (r_max - r_dot) / f64::from(seed_count - 1).sqrt();
+    let mut path = Path::new();
+    for i in 0..seed_count {
+        let r = scale_c * f64::from(i).sqrt();
+        let theta = f64::from(i) * golden_angle_rad;
+        let sx = cx + r * theta.cos();
+        let sy = cy + r * theta.sin();
+        let rect = Rect::new(sx - r_dot, sy - r_dot, sx + r_dot, sy + r_dot)?;
+        let circle = EllipseSpec::full(rect).to_path()?;
+        path.elements.extend(circle.elements);
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1755,5 +1781,9 @@ mod m27_tests {
 
         let liss = build_lissajous_path(Point::new(100.0, 100.0).unwrap(), 60.0, 45.0, 3, 2, 45.0, 96).unwrap();
         assert!(liss.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let phyllo = build_phyllotaxis_path(Point::new(100.0, 100.0).unwrap(), 60.0, 16, 3.0).unwrap();
+        let phyllo_closes = phyllo.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(phyllo_closes, 16);
     }
 }

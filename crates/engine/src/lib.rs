@@ -13,8 +13,9 @@ use coralcraft_geom::{
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
     insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, medial_chord_skeleton_of_path,
     morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
-    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path,
+    subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -341,6 +342,10 @@ pub enum EngineCommand {
     DensifyObjectPath { object_id: ObjectId, max_len_pt: F64 },
     /// Aligns all selected unlocked objects to a stationary `key_object_id` according to `mode` (`Object -> Align and Distribute -> Align to Key Object`).
     AlignSelectionToKeyObject { key_object_id: ObjectId, mode: AlignMode },
+    /// Applies a CorelDRAW Fish-Eye / Spherical Lens radial warp to `object_id` within `radius_pt` of `center` at `magnification` (`Effects -> Lens -> Fish Eye Warp`).
+    SphericalWarpObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, magnification: F64 },
+    /// Linearly interpolates fill (`apply_to_fill`) and/or outline (`apply_to_outline`) colors across all selected unlocked objects in selection order from `start_color` to `end_color` (`Effects -> Adjust -> Colorize Selection by Gradient`).
+    ColorizeSelectionByGradient { start_color: Color, end_color: Color, apply_to_fill: bool, apply_to_outline: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4422,6 +4427,61 @@ impl EditorEngine {
                     return false;
                 }
             }
+            EngineCommand::SphericalWarpObjectPath { object_id, center, radius_pt, magnification } => {
+                let r_lens = radius_pt.get();
+                let mag = magnification.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(warped) = spherical_fisheye_warp_path(&world_path, center, r_lens, mag)
+                    {
+                        obj.kind = ObjectKind::Path(warped);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ColorizeSelectionByGradient { start_color, end_color, apply_to_fill, apply_to_outline } => {
+                if !apply_to_fill && !apply_to_outline {
+                    return false;
+                }
+                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
+                if sel_ids.is_empty() {
+                    return false;
+                }
+                let n = sel_ids.len();
+                let [r0, g0, b0] = start_color.to_srgb8();
+                let [r1, g1, b1] = end_color.to_srgb8();
+                let mut color_map = BTreeMap::new();
+                for (idx, id) in sel_ids.into_iter().enumerate() {
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
+                    let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
+                    let b = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
+                    color_map.insert(id, Color::rgb8(r, g, b));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(c) = color_map.get(&obj.id)
+                    {
+                        if apply_to_fill {
+                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
+                        }
+                        if apply_to_outline {
+                            if let Some(ol) = &mut obj.outline {
+                                ol.color = c.clone();
+                            } else {
+                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
+                            }
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -5364,5 +5424,17 @@ mod tests {
         assert!(engine.execute(EngineCommand::DensifyObjectPath { object_id: xor_id, max_len_pt: F64::new(8.0).unwrap() }));
         engine.set_selection(vec![xor_id, hull_id]);
         assert!(engine.execute(EngineCommand::AlignSelectionToKeyObject { key_object_id: xor_id, mode: AlignMode::CenterToPage }));
+        assert!(engine.execute(EngineCommand::SphericalWarpObjectPath {
+            object_id: xor_id,
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            magnification: F64::new(1.5).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ColorizeSelectionByGradient {
+            start_color: Color::rgb8(240, 60, 40),
+            end_color: Color::rgb8(40, 120, 240),
+            apply_to_fill: true,
+            apply_to_outline: true,
+        }));
     }
 }

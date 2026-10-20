@@ -2353,6 +2353,45 @@ pub fn subdivide_path_by_max_segment_length(path: &Path, max_len_pt: f64) -> Res
     Ok(out)
 }
 
+/// Applies a CorelDRAW Fish-Eye / Spherical Lens geometric warp to `path` within `radius_pt`
+/// of `center` at `magnification` (`0.2..=5.0`) (`Effects -> Lens -> Fish Eye Warp`).
+pub fn spherical_fisheye_warp_path(path: &Path, center: Point, radius_pt: f64, magnification: f64) -> Result<Path, GeomError> {
+    let r_lens = crate::f64_canon::F64::new(radius_pt)?.get();
+    let mag = crate::f64_canon::F64::new(magnification)?.get();
+    if path.elements.is_empty() || r_lens <= 1.0 || !(0.2..=5.0).contains(&mag) {
+        return Err(GeomError::InvalidShapeParameter("invalid spherical fisheye warp parameters"));
+    }
+    let dense = subdivide_path_by_max_segment_length(path, (r_lens * 0.15).max(2.0))?;
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let exp = 1.0 / mag;
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let dx = p.x.get() - cx;
+        let dy = p.y.get() - cy;
+        let d = dx.hypot(dy);
+        if d <= 1e-9 || d >= r_lens {
+            return Ok(p);
+        }
+        let u = (d / r_lens).clamp(0.0, 1.0);
+        let d_new = r_lens * u.powf(exp);
+        let scale = d_new / d;
+        Point::new(cx + dx * scale, cy + dy * scale)
+    };
+    let mut out_elems = Vec::with_capacity(dense.elements.len());
+    for el in dense.elements {
+        match el {
+            PathElement::MoveTo(p) => out_elems.push(PathElement::MoveTo(warp_pt(p)?)),
+            PathElement::LineTo(p) => out_elems.push(PathElement::LineTo(warp_pt(p)?)),
+            PathElement::QuadTo { ctrl, end } => out_elems.push(PathElement::QuadTo { ctrl: warp_pt(ctrl)?, end: warp_pt(end)? }),
+            PathElement::CubicTo { c1, c2, end } => {
+                out_elems.push(PathElement::CubicTo { c1: warp_pt(c1)?, c2: warp_pt(c2)?, end: warp_pt(end)? });
+            }
+            PathElement::Close => out_elems.push(PathElement::Close),
+        }
+    }
+    Path::from_elements(out_elems, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2454,5 +2493,8 @@ mod m26_tests {
 
         let dense = subdivide_path_by_max_segment_length(&rect_path, 10.0).unwrap();
         assert!(dense.elements.len() >= 18);
+
+        let fisheye = spherical_fisheye_warp_path(&rect_path, Point::new(25.0, 20.0).unwrap(), 40.0, 1.8).unwrap();
+        assert!(fisheye.elements.len() >= 10);
     }
 }
