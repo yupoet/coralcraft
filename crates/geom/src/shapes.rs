@@ -432,3 +432,94 @@ pub fn build_graph_paper_path(rect: Rect, columns: u32, rows: u32) -> Result<Pat
     }
     Ok(path)
 }
+
+/// Builds a straight or orthogonal (Manhattan Z-elbow) connector path between `p1` and `p2`,
+/// optionally rounding the 90-degree elbows by `corner_radius`.
+pub fn build_connector_path(p1: Point, p2: Point, orthogonal: bool, corner_radius: f64) -> Result<Path, GeomError> {
+    if !corner_radius.is_finite() || corner_radius < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("connector corner_radius must be non-negative"));
+    }
+    let mut path = Path::new();
+    path.move_to(p1)?;
+    if !orthogonal || (p1.x.get() - p2.x.get()).abs() <= EPS || (p1.y.get() - p2.y.get()).abs() <= EPS {
+        path.line_to(p2)?;
+        return Ok(path);
+    }
+    let mid_x = 0.5 * (p1.x.get() + p2.x.get());
+    path.line_to(Point::new(mid_x, p1.y.get())?)?;
+    path.line_to(Point::new(mid_x, p2.y.get())?)?;
+    path.line_to(p2)?;
+    if corner_radius > EPS { crate::path::fillet_path_corners(&path, corner_radius, CornerKind::Round) } else { Ok(path) }
+}
+
+/// Builds a closed rectangular speech/annotation callout box (`box_rect`) with a triangular pointer tail
+/// attached to the box edge closest to `target_pt` and pointing to `target_pt`.
+pub fn build_callout_path(box_rect: Rect, target_pt: Point, tail_width: f64) -> Result<Path, GeomError> {
+    let w = box_rect.width();
+    let h = box_rect.height();
+    if w <= EPS || h <= EPS || !tail_width.is_finite() || tail_width <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("invalid callout rectangle or tail_width"));
+    }
+    let x0 = box_rect.x0.get();
+    let y0 = box_rect.y0.get();
+    let x1 = box_rect.x1.get();
+    let y1 = box_rect.y1.get();
+    let tx = target_pt.x.get();
+    let ty = target_pt.y.get();
+
+    // Determine which of the 4 edges (0=bottom, 1=top, 2=left, 3=right) is closest to target_pt
+    let d_bottom = (ty - y1).abs();
+    let d_top = (ty - y0).abs();
+    let d_left = (tx - x0).abs();
+    let d_right = (tx - x1).abs();
+    let mut best_edge = 0u8;
+    let mut best_d = d_bottom;
+    if d_top < best_d {
+        best_d = d_top;
+        best_edge = 1;
+    }
+    if d_left < best_d {
+        best_d = d_left;
+        best_edge = 2;
+    }
+    if d_right < best_d {
+        best_edge = 3;
+    }
+
+    let hw_x = (0.5 * tail_width).min(0.35 * w);
+    let hw_y = (0.5 * tail_width).min(0.35 * h);
+    let mid_x = tx.clamp(x0 + hw_x, x1 - hw_x);
+    let mid_y = ty.clamp(y0 + hw_y, y1 - hw_y);
+
+    let mut path = Path::new();
+    path.move_to(Point::new(x0, y0)?)?;
+    // Top edge: (x0, y0) -> (x1, y0)
+    if best_edge == 1 {
+        path.line_to(Point::new(mid_x - hw_x, y0)?)?;
+        path.line_to(target_pt)?;
+        path.line_to(Point::new(mid_x + hw_x, y0)?)?;
+    }
+    path.line_to(Point::new(x1, y0)?)?;
+    // Right edge: (x1, y0) -> (x1, y1)
+    if best_edge == 3 {
+        path.line_to(Point::new(x1, mid_y - hw_y)?)?;
+        path.line_to(target_pt)?;
+        path.line_to(Point::new(x1, mid_y + hw_y)?)?;
+    }
+    path.line_to(Point::new(x1, y1)?)?;
+    // Bottom edge: (x1, y1) -> (x0, y1)
+    if best_edge == 0 {
+        path.line_to(Point::new(mid_x + hw_x, y1)?)?;
+        path.line_to(target_pt)?;
+        path.line_to(Point::new(mid_x - hw_x, y1)?)?;
+    }
+    path.line_to(Point::new(x0, y1)?)?;
+    // Left edge: (x0, y1) -> (x0, y0)
+    if best_edge == 2 {
+        path.line_to(Point::new(x0, mid_y + hw_y)?)?;
+        path.line_to(target_pt)?;
+        path.line_to(Point::new(x0, mid_y - hw_y)?)?;
+    }
+    path.close()?;
+    Ok(path)
+}

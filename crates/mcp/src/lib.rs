@@ -5,7 +5,10 @@ use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
-use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_graph_paper_path, build_spiral_path};
+use coralcraft_geom::{
+    BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
+    build_spiral_path,
+};
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
 use serde::{Deserialize, Serialize};
@@ -315,6 +318,31 @@ impl McpServer {
                         {
                             "name": "export_pdf_imposed_byte_len",
                             "description": "Exports an N-Up imposed press sheet (rows x cols with margins, gutters, and crop marks) to PDF 1.4.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_connector",
+                            "description": "Adds a straight or orthogonal (Manhattan Z-elbow) connector line with optional corner_radius.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_callout",
+                            "description": "Adds a closed rectangular callout box with a pointer tail directed at (target_x, target_y).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "combine_selection",
+                            "description": "Combines >= 2 selected objects into a single EvenOdd compound path (Ctrl+L).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "break_apart_selection",
+                            "description": "Breaks apart compound paths into separate subpath objects (Ctrl+K).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "adjust_bitmap",
+                            "description": "Applies brightness, contrast, BT.709 grayscale, and/or color inversion to a bitmap object.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -830,6 +858,53 @@ impl McpServer {
                 let pdf = export_pdf_imposed(&self.engine.document, &spec).map_err(|e| e.to_string())?;
                 Ok(json!({ "pdf_imposed_bytes": pdf.len() }))
             }
+            "add_connector" => {
+                let x1 = args.get("x1").and_then(Value::as_f64).unwrap_or(20.0);
+                let y1 = args.get("y1").and_then(Value::as_f64).unwrap_or(20.0);
+                let x2 = args.get("x2").and_then(Value::as_f64).unwrap_or(140.0);
+                let y2 = args.get("y2").and_then(Value::as_f64).unwrap_or(100.0);
+                let orthogonal = args.get("orthogonal").and_then(Value::as_bool).unwrap_or(true);
+                let corner_radius = args.get("corner_radius").and_then(Value::as_f64).unwrap_or(0.0);
+                let p1 = Point::new(x1, y1).map_err(|e| e.to_string())?;
+                let p2 = Point::new(x2, y2).map_err(|e| e.to_string())?;
+                let path = build_connector_path(p1, p2, orthogonal, corner_radius).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Connector".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "connector", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "add_callout" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(120.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(60.0);
+                let tx = args.get("target_x").and_then(Value::as_f64).unwrap_or(100.0);
+                let ty = args.get("target_y").and_then(Value::as_f64).unwrap_or(130.0);
+                let tail_w = args.get("tail_width").and_then(Value::as_f64).unwrap_or(16.0);
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let target_pt = Point::new(tx, ty).map_err(|e| e.to_string())?;
+                let path = build_callout_path(rect, target_pt, tail_w).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Callout".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "callout", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "combine_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::CombineSelection);
+                Ok(json!({ "combined": ok, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "break_apart_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::BreakApartSelection);
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "broken_apart": ok, "selected_ids": ids }))
+            }
+            "adjust_bitmap" => {
+                let target = self.resolve_target_id(args)?;
+                let brightness = F64::new(args.get("brightness").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let contrast = F64::new(args.get("contrast").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let grayscale = args.get("grayscale").and_then(Value::as_bool).unwrap_or(false);
+                let invert = args.get("invert").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::AdjustBitmap { object_id: target, brightness, contrast, grayscale, invert });
+                Ok(json!({ "bitmap_adjusted": ok, "object_id": target.0 }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -859,7 +934,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 45);
+        assert_eq!(tools, 50);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -25,7 +25,10 @@ pub use path::{
     ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, fillet_path_corners,
     warp_path_bilinear, warp_path_perspective,
 };
-pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_graph_paper_path, build_spiral_path};
+pub use shapes::{
+    CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
+    build_spiral_path,
+};
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 
 #[cfg(test)]
@@ -285,5 +288,12 @@ mod tests {
 
         let grid = build_graph_paper_path(bbox, 4, 3).unwrap();
         assert_eq!(grid.elements.len(), 4 * 3 * 5); // 12 cells * (MoveTo + 3 LineTo + Close)
+
+        let conn = build_connector_path(Point::new(10.0, 20.0).unwrap(), Point::new(110.0, 80.0).unwrap(), true, 6.0).unwrap();
+        assert!(conn.elements.len() >= 6);
+
+        let callout = build_callout_path(bbox, Point::new(50.0, 90.0).unwrap(), 16.0).unwrap();
+        let cb = callout.bounds().unwrap();
+        assert!((cb.y1.get() - 90.0).abs() < 1e-6);
     }
 }

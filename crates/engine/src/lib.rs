@@ -6,7 +6,9 @@ use coralcraft_doc::{
     Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual, TransparencyStyle,
     VectorEffect,
 };
-use coralcraft_geom::{Affine2, BooleanOp, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths};
+use coralcraft_geom::{
+    Affine2, BooleanOp, CornerKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths,
+};
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
     build_property_bar_schema, combined_selection_bounds, object_local_bounds,
@@ -122,6 +124,12 @@ pub enum EngineCommand {
     SetTransparency { transparency: Option<TransparencyStyle> },
     /// Copies Fill, Outline, and/or Vector Effects from `source_id` to all selected objects (`Edit -> Copy Properties From...`).
     CopyPropertiesFrom { source_id: ObjectId, copy_fill: bool, copy_outline: bool, copy_effects: bool },
+    /// Combines `>= 2` selected objects into a single compound `ObjectKind::Path` with `FillRule::EvenOdd` (`Object -> Combine` / `Ctrl+L`).
+    CombineSelection,
+    /// Splits compound `ObjectKind::Path` objects at each `MoveTo` boundary into independent `ObjectNode`s (`Object -> Break Apart` / `Ctrl+K`).
+    BreakApartSelection,
+    /// Applies non-destructive/undoable per-pixel brightness, contrast, BT.709 grayscale, and color inversion to an `ObjectKind::Bitmap` (`Bitmaps -> Mode / Effects -> Adjust`).
+    AdjustBitmap { object_id: ObjectId, brightness: F64, contrast: F64, grayscale: bool, invert: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -544,6 +552,30 @@ impl EditorEngine {
                 let sel = &self.selection;
                 let has_target = self.current_target_objects().iter().any(|o| !o.locked && o.id != *source_id && sel.contains(&o.id));
                 if !has_target {
+                    return false;
+                }
+            }
+            EngineCommand::CombineSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::BreakApartSelection => {
+                let sel = &self.selection;
+                let has_compound = self.current_target_objects().iter().any(|o| {
+                    !o.locked
+                        && sel.contains(&o.id)
+                        && matches!(&o.kind, ObjectKind::Path(p) if p.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count() >= 2)
+                });
+                if !has_compound {
+                    return false;
+                }
+            }
+            EngineCommand::AdjustBitmap { object_id, .. } => {
+                let is_bmp = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::Bitmap { .. }));
+                if !is_bmp {
                     return false;
                 }
             }
@@ -1363,6 +1395,122 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::CombineSelection => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut combined_elements = Vec::new();
+                let mut anchor_fill = None;
+                let mut anchor_outline = None;
+                let mut sel_indices = Vec::new();
+                for (idx, obj) in layer.objects.iter().enumerate() {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let Some(local_p) = object_to_path(obj)
+                        && let Ok(world_p) = local_p.transform(obj.transform)
+                    {
+                        combined_elements.extend(world_p.elements);
+                        anchor_fill = obj.fill.clone();
+                        anchor_outline = obj.outline.clone();
+                        sel_indices.push(idx);
+                    }
+                }
+                if sel_indices.len() < 2 {
+                    return false;
+                }
+                let combined_path = Path { elements: combined_elements, fill_rule: FillRule::EvenOdd };
+                let new_node =
+                    ObjectNode::new(new_id, Some("Combined Path".to_owned()), ObjectKind::Path(combined_path), anchor_fill, anchor_outline);
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                let mut inserted = false;
+                for (idx, obj) in layer.objects.drain(..).enumerate() {
+                    if sel_indices.contains(&idx) {
+                        if !inserted {
+                            remaining.push(new_node.clone());
+                            inserted = true;
+                        }
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                layer.objects = remaining;
+                self.selection = vec![new_id];
+            }
+            EngineCommand::BreakApartSelection => {
+                let sel = self.selection.clone();
+                let mut next_id_val = self.document.next_id;
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len() + 4);
+                let mut new_sel = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let ObjectKind::Path(ref path) = obj.kind
+                    {
+                        let mut subpaths: Vec<Vec<PathElement>> = Vec::new();
+                        for &el in &path.elements {
+                            if matches!(el, PathElement::MoveTo(_)) || subpaths.is_empty() {
+                                subpaths.push(vec![el]);
+                            } else if let Some(last) = subpaths.last_mut() {
+                                last.push(el);
+                            }
+                        }
+                        if subpaths.len() >= 2 {
+                            for (k, elems) in subpaths.into_iter().enumerate() {
+                                let part_id = ObjectId(next_id_val);
+                                next_id_val += 1;
+                                let mut part_node = obj.clone();
+                                part_node.id = part_id;
+                                part_node.name = Some(format!("Subpath {}", k + 1));
+                                part_node.kind = ObjectKind::Path(Path { elements: elems, fill_rule: FillRule::NonZero });
+                                new_objects.push(part_node);
+                                new_sel.push(part_id);
+                            }
+                            continue;
+                        }
+                    }
+                    new_objects.push(obj);
+                }
+                layer.objects = new_objects;
+                self.document.next_id = next_id_val;
+                if !new_sel.is_empty() {
+                    self.selection = new_sel;
+                }
+            }
+            EngineCommand::AdjustBitmap { object_id, brightness, contrast, grayscale, invert } => {
+                let b_adj = brightness.get().clamp(-1.0, 1.0);
+                let c_adj = contrast.get().clamp(-0.99, 0.99);
+                let c_factor = (1.0 + c_adj) / (1.0 - c_adj);
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::Bitmap { rgba_pixels, .. } = &mut obj.kind
+                    {
+                        for px in rgba_pixels.chunks_exact_mut(4) {
+                            let mut r = f64::from(px[0]) / 255.0;
+                            let mut g = f64::from(px[1]) / 255.0;
+                            let mut b = f64::from(px[2]) / 255.0;
+                            if grayscale {
+                                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                                r = lum;
+                                g = lum;
+                                b = lum;
+                            }
+                            r = (c_factor * (r + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            g = (c_factor * (g + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            b = (c_factor * (b + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            if invert {
+                                r = 1.0 - r;
+                                g = 1.0 - g;
+                                b = 1.0 - b;
+                            }
+                            px[0] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
+                            px[1] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+                            px[2] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -1862,5 +2010,11 @@ mod tests {
         engine.set_selection(vec![welded_id]);
         assert!(engine.execute(EngineCommand::CopyPropertiesFrom { source_id: text_id, copy_fill: true, copy_outline: true, copy_effects: true }));
         assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 1);
+
+        // 12. CombineSelection (Ctrl+L) and BreakApartSelection (Ctrl+K)
+        engine.set_selection(vec![welded_id, text_id]);
+        assert!(engine.execute(EngineCommand::CombineSelection));
+        assert!(engine.execute(EngineCommand::BreakApartSelection));
+        assert!(engine.selection.len() >= 2);
     }
 }
