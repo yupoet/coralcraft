@@ -1483,16 +1483,85 @@ fn push_dxf_node(
     }
 }
 
-fn dxf_make_outline(aci: Option<i32>, truecolor: Option<i32>, lw_100mm: Option<i32>) -> OutlineStyle {
+fn dxf_make_outline(
+    aci: Option<i32>,
+    truecolor: Option<i32>,
+    lw_100mm: Option<i32>,
+    ltype_name: Option<&str>,
+    ltypes: &BTreeMap<String, Vec<F64>>,
+) -> OutlineStyle {
     let col = dxf_aci_to_color(aci, truecolor);
-    if let Some(lw) = lw_100mm
+    let mut outl = if let Some(lw) = lw_100mm
         && lw > 0
         && let Ok(w_pt) = F64::new((f64::from(lw) * 0.01 * 72.0 / 25.4).clamp(0.05, 288.0))
     {
         OutlineStyle::with_width(col, w_pt)
     } else {
         OutlineStyle::hairline(col)
+    };
+    if let Some(lt) = ltype_name.map(str::trim)
+        && !lt.is_empty()
+        && !lt.eq_ignore_ascii_case("CONTINUOUS")
+        && !lt.eq_ignore_ascii_case("BYLAYER")
+        && !lt.eq_ignore_ascii_case("BYBLOCK")
+        && let Some(pat) = ltypes.get(&lt.to_ascii_uppercase())
+    {
+        outl.dash_pattern = pat.clone();
     }
+    outl
+}
+
+fn try_decode_dxf_rounded_rect(verts: &[(f64, f64, f64)], bx_off: f64, page_h: f64) -> Option<RectSpec> {
+    if verts.len() != 8 {
+        return None;
+    }
+    let s_verts: Vec<(f64, f64, f64)> = verts.iter().map(|&(vx, vy, b)| (vx - bx_off, page_h - vy, b)).collect();
+    let v0 = *s_verts.first()?;
+    let v1 = *s_verts.get(1)?;
+    let v2 = *s_verts.get(2)?;
+    let v3 = *s_verts.get(3)?;
+    let v4 = *s_verts.get(4)?;
+    let v5 = *s_verts.get(5)?;
+    let v6 = *s_verts.get(6)?;
+    let v7 = *s_verts.get(7)?;
+    let q_bulge = std::f64::consts::SQRT_2 - 1.0;
+    if v0.2.abs() > 1e-3
+        || v2.2.abs() > 1e-3
+        || v4.2.abs() > 1e-3
+        || v6.2.abs() > 1e-3
+        || (v1.2.abs() - q_bulge).abs() > 1e-2
+        || (v3.2.abs() - q_bulge).abs() > 1e-2
+        || (v5.2.abs() - q_bulge).abs() > 1e-2
+        || (v7.2.abs() - q_bulge).abs() > 1e-2
+    {
+        return None;
+    }
+    let min_x = s_verts.iter().map(|v| v.0).fold(f64::INFINITY, f64::min);
+    let max_x = s_verts.iter().map(|v| v.0).fold(f64::NEG_INFINITY, f64::max);
+    let min_y = s_verts.iter().map(|v| v.1).fold(f64::INFINITY, f64::min);
+    let max_y = s_verts.iter().map(|v| v.1).fold(f64::NEG_INFINITY, f64::max);
+    let r = (v0.0 - min_x).abs();
+    if r <= 1e-4
+        || (v0.1 - min_y).abs() > 1e-2
+        || (v1.1 - min_y).abs() > 1e-2
+        || (v1.0 - (max_x - r)).abs() > 1e-2
+        || (v2.0 - max_x).abs() > 1e-2
+        || (v2.1 - (min_y + r)).abs() > 1e-2
+        || (v3.0 - max_x).abs() > 1e-2
+        || (v3.1 - (max_y - r)).abs() > 1e-2
+        || (v4.1 - max_y).abs() > 1e-2
+        || (v4.0 - (max_x - r)).abs() > 1e-2
+        || (v5.1 - max_y).abs() > 1e-2
+        || (v5.0 - (min_x + r)).abs() > 1e-2
+        || (v6.0 - min_x).abs() > 1e-2
+        || (v6.1 - (max_y - r)).abs() > 1e-2
+        || (v7.0 - min_x).abs() > 1e-2
+        || (v7.1 - (min_y + r)).abs() > 1e-2
+    {
+        return None;
+    }
+    let rect = Rect::new(min_x, min_y, max_x, max_y).ok()?;
+    RectSpec::uniform(rect, r, CornerKind::Round).ok()
 }
 
 /// Imports an AutoCAD ASCII DXF (`SECTION` / `BLOCKS` / `ENTITIES`) string into a [`Document`].
@@ -1545,11 +1614,37 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
     let mut saw_custom_layer = false;
     let mut blocks: BTreeMap<String, Vec<ObjectNode>> = BTreeMap::new();
     let mut active_block: Option<(String, f64, f64, Vec<ObjectNode>)> = None;
+    let mut ltypes: BTreeMap<String, Vec<F64>> = BTreeMap::new();
 
     let mut p = 0usize;
     while let Some(&(code, val)) = pairs.get(p) {
         let (bx_off, page_h) = if let Some((_, bx, by, _)) = &active_block { (*bx, *by) } else { (0.0, doc_page_h) };
-        if code == 0 && val == "BLOCK" {
+        if code == 0 && val == "LTYPE" {
+            p = p.saturating_add(1);
+            let mut lt_name = String::new();
+            let mut dashes = Vec::new();
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    2 if lt_name.is_empty() => lt_name = v.trim().to_ascii_uppercase(),
+                    49 => {
+                        if let Ok(dv) = v.parse::<f64>()
+                            && dv.abs() > 0.0
+                            && let Ok(f) = F64::new(dv.abs())
+                        {
+                            dashes.push(f);
+                        }
+                    }
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            if !lt_name.is_empty() && !dashes.is_empty() && dashes.len() <= 32 {
+                ltypes.insert(lt_name, dashes);
+            }
+        } else if code == 0 && val == "BLOCK" {
             p = p.saturating_add(1);
             let mut bname = String::new();
             let mut bx = 0.0;
@@ -1625,6 +1720,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         } else if code == 0 && val == "LINE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut lw_100mm: Option<i32> = None;
@@ -1638,6 +1734,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     370 => lw_100mm = v.parse::<i32>().ok(),
@@ -1659,12 +1756,19 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     &mut saw_custom_layer,
                     &mut active_block,
                     layer_name,
-                    ObjectNode::new(id, Some("DXF Line".to_owned()), ObjectKind::Path(path), None, Some(dxf_make_outline(aci, truecolor, lw_100mm))),
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Line".to_owned()),
+                        ObjectKind::Path(path),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
+                    ),
                 );
             }
         } else if code == 0 && val == "POLYLINE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut lw_100mm: Option<i32> = None;
@@ -1675,6 +1779,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     370 => lw_100mm = v.parse::<i32>().ok(),
@@ -1758,13 +1863,14 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some("DXF Polyline".to_owned()),
                         ObjectKind::Path(path),
                         None,
-                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                     ),
                 );
             }
         } else if code == 0 && val == "CIRCLE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut lw_100mm: Option<i32> = None;
@@ -1777,6 +1883,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     370 => lw_100mm = v.parse::<i32>().ok(),
@@ -1803,13 +1910,14 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some("DXF Circle".to_owned()),
                         ObjectKind::Ellipse(EllipseSpec::full(rect)),
                         None,
-                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                     ),
                 );
             }
         } else if code == 0 && val == "ARC" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut lw_100mm: Option<i32> = None;
@@ -1824,6 +1932,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     370 => lw_100mm = v.parse::<i32>().ok(),
@@ -1853,13 +1962,14 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some("DXF Arc".to_owned()),
                         ObjectKind::Ellipse(spec),
                         None,
-                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                     ),
                 );
             }
         } else if code == 0 && val == "ELLIPSE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut lw_100mm: Option<i32> = None;
@@ -1874,6 +1984,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     370 => lw_100mm = v.parse::<i32>().ok(),
@@ -1900,7 +2011,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     Some("DXF Ellipse".to_owned()),
                     ObjectKind::Ellipse(EllipseSpec::full(rect)),
                     None,
-                    Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                    Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                 );
                 let ang_deg = (-my).atan2(mx).to_degrees();
                 if ang_deg.abs() > 1e-6
@@ -1914,6 +2025,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         } else if code == 0 && val == "LWPOLYLINE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut closed = false;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
@@ -1925,6 +2037,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
@@ -1944,7 +2057,22 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 p = p.saturating_add(1);
             }
-            if verts.len() >= 2
+            if closed && let Some(rspec) = try_decode_dxf_rounded_rect(&verts, bx_off, page_h) {
+                let id = doc.allocate_object_id();
+                push_dxf_node(
+                    &mut doc,
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF RoundedRect".to_owned()),
+                        ObjectKind::Rect(rspec),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
+                    ),
+                );
+            } else if verts.len() >= 2
                 && let Some(&(fx, fy, _)) = verts.first()
                 && let Ok(first) = Point::new(fx - bx_off, page_h - fy)
             {
@@ -1986,13 +2114,14 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some("DXF LwPolyline".to_owned()),
                         ObjectKind::Path(path),
                         None,
-                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                     ),
                 );
             }
         } else if code == 0 && val == "SPLINE" {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut ltype_name: Option<&str> = None;
             let mut closed = false;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
@@ -2005,6 +2134,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    6 => ltype_name = Some(v),
                     70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
@@ -2064,7 +2194,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some("DXF Spline".to_owned()),
                         ObjectKind::Path(path),
                         None,
-                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm, ltype_name, &ltypes)),
                     ),
                 );
             }
@@ -2131,11 +2261,13 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             let is_mtext = val == "MTEXT";
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
+            let mut style_font: Option<&str> = None;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
             let mut tx = 0.0;
             let mut ty = 0.0;
             let mut height = 12.0;
+            let mut rot_deg = 0.0_f64;
             let mut text_val = String::new();
             while let Some(&(c, v)) = pairs.get(p) {
                 if c == 0 {
@@ -2143,11 +2275,13 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 match c {
                     8 => layer_name = Some(v),
+                    7 => style_font = Some(v),
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
                     10 => tx = v.parse::<f64>().unwrap_or(0.0),
                     20 => ty = v.parse::<f64>().unwrap_or(0.0),
                     40 => height = v.parse::<f64>().unwrap_or(12.0),
+                    50 => rot_deg = v.parse::<f64>().unwrap_or(0.0),
                     1 | 3 => text_val.push_str(v),
                     _ => {}
                 }
@@ -2163,19 +2297,27 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 let id = doc.allocate_object_id();
                 let label = if is_mtext { "DXF MText" } else { "DXF Text" };
                 let fill_col = dxf_aci_to_color(aci, truecolor);
-                push_dxf_node(
-                    &mut doc,
-                    &mut saw_custom_layer,
-                    &mut active_block,
-                    layer_name,
-                    ObjectNode::new(
-                        id,
-                        Some(label.to_owned()),
-                        ObjectKind::ArtisticText { text: text_val, font_family: "Sans".to_owned(), size_pt, position: pos },
-                        Some(FillStyle::uniform(fill_col)),
-                        None,
-                    ),
+                let font_family =
+                    style_font.map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("STANDARD")).unwrap_or("Sans").to_owned();
+                let mut node = ObjectNode::new(
+                    id,
+                    Some(label.to_owned()),
+                    ObjectKind::ArtisticText { text: text_val, font_family, size_pt, position: pos },
+                    Some(FillStyle::uniform(fill_col)),
+                    None,
                 );
+                if !is_mtext && rot_deg.abs() > 1e-6 {
+                    let screen_deg = (-rot_deg).rem_euclid(360.0);
+                    if let (Ok(t0), Ok(rot), Ok(t1)) = (
+                        Affine2::translation(-pos.x.get(), -pos.y.get()),
+                        Affine2::rotation_deg(screen_deg),
+                        Affine2::translation(pos.x.get(), pos.y.get()),
+                    ) && let Ok(tr) = t0.then(rot).and_then(|m| m.then(t1))
+                    {
+                        node.transform = tr;
+                    }
+                }
+                push_dxf_node(&mut doc, &mut saw_custom_layer, &mut active_block, layer_name, node);
             }
         } else {
             p = p.saturating_add(1);

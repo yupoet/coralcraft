@@ -201,14 +201,31 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
                     let endian = if inner_bytes.get(0..4) == Some(b"RIFX") { Endian::Big } else { Endian::Little };
                     let form_v = inner_bytes.get(11).and_then(|&b| crate::decode_cdr_version_char(b));
                     let v = inner_version.and_then(|iv| iv.effective_version).or(form_v).unwrap_or(1400);
-                    parse_riff_stream(&inner_bytes, endian, v, &mut doc, &mut parse_warnings);
+                    let mut ctx = ParserCtx {
+                        endian,
+                        version: v,
+                        default_page_size: default_a4_page(1).size,
+                        fills: BTreeMap::new(),
+                        outlines: BTreeMap::new(),
+                        next_id: 100,
+                        chunks_seen: 0,
+                        decompress_budget: MAX_FILE_DECOMPRESSED_BYTES,
+                        inside_cmpr: false,
+                    };
+                    parse_riff_stream_with_ctx(&inner_bytes, &mut ctx, &mut doc, &mut parse_warnings);
                     if *has_data_file_list && let Ok(aux_streams) = crate::zip::extract_zip_data_file_streams(bytes, MAX_DECOMPRESSED_BYTES) {
                         for (_name, stream_bytes) in aux_streams {
                             if stream_bytes.get(0..4) == Some(b"RIFF") || stream_bytes.get(0..4) == Some(b"RIFX") {
-                                let aux_endian = if stream_bytes.get(0..4) == Some(b"RIFX") { Endian::Big } else { Endian::Little };
-                                parse_riff_stream(&stream_bytes, aux_endian, v, &mut doc, &mut parse_warnings);
+                                ctx.endian = if stream_bytes.get(0..4) == Some(b"RIFX") { Endian::Big } else { Endian::Little };
+                                parse_riff_stream_with_ctx(&stream_bytes, &mut ctx, &mut doc, &mut parse_warnings);
                             }
                         }
+                    }
+                    doc.next_id = ctx.next_id;
+                    if doc.pages.is_empty() {
+                        let mut page = default_a4_page(1);
+                        page.size = ctx.default_page_size;
+                        doc.pages.push(page);
                     }
                 }
                 Err(e) => {
@@ -290,16 +307,6 @@ fn parse_riff_stream_with_budget(
     warnings: &mut Vec<String>,
     decompress_budget: usize,
 ) {
-    if bytes.len() < 12 {
-        return;
-    }
-    let declared_size = read_u32(endian, bytes, 4).unwrap_or(0) as usize;
-    let end = (8usize.saturating_add(declared_size)).min(bytes.len());
-    if end < 12 {
-        warnings.push(format!("W-TRUNCATED-RIFF: declared RIFF payload size {declared_size} is smaller than 4-byte form tag"));
-        return;
-    }
-
     let mut ctx = ParserCtx {
         endian,
         version,
@@ -311,10 +318,28 @@ fn parse_riff_stream_with_budget(
         decompress_budget,
         inside_cmpr: false,
     };
-
-    let top_chunks = walk_chunk_sequence(bytes.get(12..end).unwrap_or_default(), 12, None, &mut ctx, 0, warnings);
-    process_chunk_tree(&top_chunks, &mut ctx, doc, warnings);
+    parse_riff_stream_with_ctx(bytes, &mut ctx, doc, warnings);
     doc.next_id = ctx.next_id;
+    if doc.pages.is_empty() {
+        let mut page = default_a4_page(1);
+        page.size = ctx.default_page_size;
+        doc.pages.push(page);
+    }
+}
+
+fn parse_riff_stream_with_ctx(bytes: &[u8], ctx: &mut ParserCtx, doc: &mut Document, warnings: &mut Vec<String>) {
+    if bytes.len() < 12 {
+        return;
+    }
+    let declared_size = read_u32(ctx.endian, bytes, 4).unwrap_or(0) as usize;
+    let end = (8usize.saturating_add(declared_size)).min(bytes.len());
+    if end < 12 {
+        warnings.push(format!("W-TRUNCATED-RIFF: declared RIFF payload size {declared_size} is smaller than 4-byte form tag"));
+        return;
+    }
+
+    let top_chunks = walk_chunk_sequence(bytes.get(12..end).unwrap_or_default(), 12, None, ctx, 0, warnings);
+    process_chunk_tree(&top_chunks, ctx, doc, warnings);
 }
 
 fn walk_chunk_sequence(
@@ -576,16 +601,12 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
             // Also check for standalone CMX `page` instruction streams when no `LIST page` is present
             let style_tables = parse_cmx_style_tables(chunks, ctx.endian);
             let cmx_page_chunks: Vec<&ParsedChunk> = chunks.iter().filter(|ch| &ch.fourcc == b"page" && ch.payload.len() >= 8).collect();
-            if cmx_page_chunks.is_empty() {
-                doc.pages.push(page);
-            } else {
-                for (idx, ch) in cmx_page_chunks.iter().enumerate() {
-                    let pnum = (idx.saturating_add(1)) as u64;
-                    let mut cpage = default_a4_page(pnum);
-                    cpage.size = ctx.default_page_size;
-                    parse_single_cmx_page_chunk(&ch.payload, &style_tables, ctx, &mut cpage);
-                    doc.pages.push(cpage);
-                }
+            for (idx, ch) in cmx_page_chunks.iter().enumerate() {
+                let pnum = (idx.saturating_add(1)) as u64;
+                let mut cpage = default_a4_page(pnum);
+                cpage.size = ctx.default_page_size;
+                parse_single_cmx_page_chunk(&ch.payload, &style_tables, ctx, &mut cpage);
+                doc.pages.push(cpage);
             }
         }
     }
@@ -3374,6 +3395,17 @@ pub fn write_cdrx_zip(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     Ok(crate::zip::build_stored_zip(&[("mimetype", mimetype), ("content/riffData.cdr", &inner_riff), ("META-INF/metadata.xml", metadata.as_bytes())]))
 }
 
+/// Writes a [`Document`] into a clean-room X6+ multi-stream ZIP-wrapped `.cdr` container (`PK\x03\x04`
+/// containing `mimetype`, `content/root.dat` with `RIFF....CDRG` v1600 document metadata, master layers,
+/// and shared `fild`/`outl` resources, `content/dataFileList.dat`, and per-page `content/data/page{N}.dat`
+/// RIFF streams).
+///
+/// The emitted container satisfies `probe(&bytes)` (`CdrContainer::Zip`, `ZipCdrRole::RootDat`,
+/// `has_data_file_list = true`, `effective_version = Some(1600)`) and round-trips through `parse_document(&bytes)`.
+pub fn write_cdrx6_zip(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    write_cdrx6_zip_document(doc)
+}
+
 fn pt_to_cdr_i32(pt: f64) -> i32 {
     let cdr = coralcraft_geom::Pt::new(pt).and_then(coralcraft_geom::Pt::try_to_cdr_ticks).map(|u| u.0).unwrap_or(0);
     cdr.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
@@ -3776,6 +3808,16 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
 }
 
 fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) -> Result<(), ProbeError> {
+    encode_object_into_layer_ext(node, page_size, next_style_id, None, layer_children)
+}
+
+fn encode_object_into_layer_ext(
+    node: &ObjectNode,
+    page_size: Size,
+    next_style_id: &mut u32,
+    mut shared_styles: Option<&mut Vec<u8>>,
+    layer_children: &mut Vec<u8>,
+) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         let mut grp_children = Vec::new();
         let cx = page_size.width.get() * 0.5;
@@ -3821,7 +3863,7 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         if !node.powerclip_children.is_empty() {
             let mut pclp_children = Vec::new();
             for pc in &node.powerclip_children {
-                encode_object_into_layer(pc, page_size, next_style_id, &mut pclp_children)?;
+                encode_object_into_layer_ext(pc, page_size, next_style_id, shared_styles.as_deref_mut(), &mut pclp_children)?;
             }
             append_riff_list(&mut grp_children, *b"pclp", &pclp_children);
         }
@@ -3831,7 +3873,7 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
             }
         }
         for child in children {
-            encode_object_into_layer(child, page_size, next_style_id, &mut grp_children)?;
+            encode_object_into_layer_ext(child, page_size, next_style_id, shared_styles.as_deref_mut(), &mut grp_children)?;
         }
         append_riff_list(layer_children, *b"grp ", &grp_children);
         return Ok(());
@@ -3874,14 +3916,22 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         fill_id = *next_style_id;
         *next_style_id = next_style_id.saturating_add(1);
         let fp = encode_fild_payload(fill_id, fill);
-        append_riff_chunk(&mut obj_children, *b"fild", &fp);
+        if let Some(root_st) = shared_styles.as_deref_mut() {
+            append_riff_chunk(root_st, *b"fild", &fp);
+        } else {
+            append_riff_chunk(&mut obj_children, *b"fild", &fp);
+        }
     }
     let mut outl_id = 0u32;
     if let Some(outl) = &node.outline {
         outl_id = *next_style_id;
         *next_style_id = next_style_id.saturating_add(1);
         let op = encode_outl_payload(outl_id, outl);
-        append_riff_chunk(&mut obj_children, *b"outl", &op);
+        if let Some(root_st) = shared_styles.as_deref_mut() {
+            append_riff_chunk(root_st, *b"outl", &op);
+        } else {
+            append_riff_chunk(&mut obj_children, *b"outl", &op);
+        }
     }
 
     if let Some(trns) = &node.transparency {
@@ -3897,7 +3947,7 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     if !node.powerclip_children.is_empty() {
         let mut pclp_children = Vec::new();
         for child in &node.powerclip_children {
-            encode_object_into_layer(child, page_size, next_style_id, &mut pclp_children)?;
+            encode_object_into_layer_ext(child, page_size, next_style_id, shared_styles.as_deref_mut(), &mut pclp_children)?;
         }
         append_riff_list(&mut obj_children, *b"pclp", &pclp_children);
     }
@@ -3982,7 +4032,7 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
         if !u.children.is_empty() {
             let mut uchl_children = Vec::new();
             for uch in &u.children {
-                encode_object_into_layer(uch, page_size, next_style_id, &mut uchl_children)?;
+                encode_object_into_layer_ext(uch, page_size, next_style_id, shared_styles.as_deref_mut(), &mut uchl_children)?;
             }
             append_riff_list(&mut obj_children, *b"uchl", &uchl_children);
         }
@@ -4185,6 +4235,112 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     out.extend_from_slice(&form_type);
     out.extend_from_slice(&body);
     Ok(out)
+}
+
+fn write_cdrx6_zip_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    let version = 1600u16;
+    let mcfg_off = 12usize;
+    let mut root_body = Vec::new();
+    append_riff_chunk(&mut root_body, *b"vrsn", &version.to_le_bytes());
+    let dmta = encode_dmta_payload(doc);
+    append_riff_chunk(&mut root_body, *b"dmta", &dmta);
+    if doc.palette != coralcraft_color::Palette::default_workspace_palette() {
+        let xml_pal = coralcraft_color::serialize_xml_palette(&doc.palette);
+        append_riff_chunk(&mut root_body, *b"plte", xml_pal.as_bytes());
+    }
+    for rc in &doc.residual.chunks {
+        if !matches!(&rc.tag.0, b"vrsn" | b"dmta" | b"plte" | b"mcfg" | b"fild" | b"outl" | b"LIST") && !rc.payload.0.is_empty() {
+            append_riff_chunk(&mut root_body, rc.tag.0, &rc.payload.0);
+        }
+    }
+
+    let mut next_style_id = 1u32;
+    let mut shared_styles = Vec::new();
+    if !doc.master_layers.is_empty() {
+        let master_page_size = doc.pages.first().map(|p| p.size).unwrap_or_else(|| default_a4_page(1).size);
+        let mut mstr_children = Vec::new();
+        for mlayer in &doc.master_layers {
+            let mut layer_children = Vec::new();
+            let lmta = encode_lmta_payload(mlayer);
+            append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for rc in &mlayer.residual.chunks {
+                if !matches!(&rc.tag.0, b"lmta" | b"LIST") && !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut layer_children, rc.tag.0, &rc.payload.0);
+                }
+            }
+            for obj in &mlayer.objects {
+                encode_object_into_layer_ext(obj, master_page_size, &mut next_style_id, Some(&mut shared_styles), &mut layer_children)?;
+            }
+            append_riff_list(&mut mstr_children, *b"layr", &layer_children);
+        }
+        append_riff_list(&mut root_body, *b"mstr", &mstr_children);
+    }
+
+    let mut page_entries: Vec<(String, Vec<u8>)> = Vec::with_capacity(doc.pages.len());
+    let mut data_file_list = String::new();
+    for (p_idx, page) in doc.pages.iter().enumerate() {
+        let p_num = p_idx.saturating_add(1);
+        let rel_path = format!("data/page{p_num}.dat");
+        let zip_path = format!("content/data/page{p_num}.dat");
+        data_file_list.push_str(&rel_path);
+        data_file_list.push('\n');
+
+        let mut page_children = Vec::new();
+        let mut mcfg = vec![0u8; mcfg_off];
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.width.get()).to_le_bytes());
+        mcfg.extend_from_slice(&pt_to_cdr_i32(page.size.height.get()).to_le_bytes());
+        append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
+        let pmta = encode_pmta_payload(page);
+        append_riff_chunk(&mut page_children, *b"pmta", &pmta);
+        for rc in &page.residual.chunks {
+            if !matches!(&rc.tag.0, b"mcfg" | b"pmta" | b"LIST") && !rc.payload.0.is_empty() {
+                append_riff_chunk(&mut page_children, rc.tag.0, &rc.payload.0);
+            }
+        }
+        for layer in &page.layers {
+            let mut layer_children = Vec::new();
+            let lmta = encode_lmta_payload(layer);
+            append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for rc in &layer.residual.chunks {
+                if !matches!(&rc.tag.0, b"lmta" | b"LIST") && !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut layer_children, rc.tag.0, &rc.payload.0);
+                }
+            }
+            for obj in &layer.objects {
+                encode_object_into_layer_ext(obj, page.size, &mut next_style_id, Some(&mut shared_styles), &mut layer_children)?;
+            }
+            append_riff_list(&mut page_children, *b"layr", &layer_children);
+        }
+
+        let mut p_body = Vec::new();
+        append_riff_chunk(&mut p_body, *b"vrsn", &version.to_le_bytes());
+        append_riff_list(&mut p_body, *b"page", &page_children);
+        let p_riff_size = 4u32.saturating_add(p_body.len() as u32);
+        let mut p_riff = Vec::with_capacity(8usize.saturating_add(p_riff_size as usize));
+        p_riff.extend_from_slice(b"RIFF");
+        p_riff.extend_from_slice(&p_riff_size.to_le_bytes());
+        p_riff.extend_from_slice(b"CDRG");
+        p_riff.extend_from_slice(&p_body);
+        page_entries.push((zip_path, p_riff));
+    }
+
+    root_body.extend_from_slice(&shared_styles);
+    let root_riff_size = 4u32.saturating_add(root_body.len() as u32);
+    let mut root_riff = Vec::with_capacity(8usize.saturating_add(root_riff_size as usize));
+    root_riff.extend_from_slice(b"RIFF");
+    root_riff.extend_from_slice(&root_riff_size.to_le_bytes());
+    root_riff.extend_from_slice(b"CDRG");
+    root_riff.extend_from_slice(&root_body);
+
+    let mimetype: &[u8] = b"application/x-vnd.corel.zcf.draw.document+zip";
+    let mut zip_entries: Vec<(&str, &[u8])> = Vec::with_capacity(3usize.saturating_add(page_entries.len()));
+    zip_entries.push(("mimetype", mimetype));
+    zip_entries.push(("content/root.dat", &root_riff));
+    zip_entries.push(("content/dataFileList.dat", data_file_list.as_bytes()));
+    for (p_name, p_bytes) in &page_entries {
+        zip_entries.push((p_name.as_str(), p_bytes.as_slice()));
+    }
+    Ok(crate::zip::build_stored_zip(&zip_entries))
 }
 
 struct CmxWriteTables {

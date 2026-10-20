@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 
 pub use crate::error::{ProbeError, ProbeWarning};
 pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_raw, inflate_zlib};
-pub use crate::parse::{ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cdrx_zip, write_cmx1};
+pub use crate::parse::{
+    ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cdrx_zip, write_cdrx6_zip, write_cmx1,
+};
 pub use crate::riff::{ChunkSummary, Endian, RiffInspection};
 pub use crate::zip::{ZipCdrRole, ZipInspection, build_stored_zip, crc32_ieee, extract_zip_primary_riff};
 
@@ -2116,5 +2118,122 @@ mod tests {
         assert_eq!(u.children.len(), 1);
         assert_eq!(u.children[0].name.as_deref(), Some("UnsupInner"));
         assert!(u.residual.chunks.iter().any(|c| &c.tag.0 == b"ures" && c.payload.0 == vec![7, 6, 5]));
+    }
+
+    #[test]
+    fn write_cdrx6_zip_multi_stream_root_dat_and_page_streams_roundtrip_m84() {
+        use std::collections::BTreeMap;
+
+        use coralcraft_color::{Color, Palette, PaletteSwatch};
+        use coralcraft_doc::{
+            ArrowheadKind, ChunkTag, Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId,
+            RawChunk, RawPayload, Residual,
+        };
+        use coralcraft_geom::{EllipseSpec, F64, Rect, RectSpec, Size, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "X6 Multi-Stream Architecture".to_owned();
+        doc.units = Unit::Mm;
+        doc.palette = Palette {
+            name: "X6 Swatches".to_owned(),
+            guid: Some("x6-guid-001".to_owned()),
+            swatches: vec![PaletteSwatch { name: "Teal".to_owned(), color: Color::rgb8(10, 140, 140) }],
+        };
+        doc.residual.chunks.push(RawChunk { tag: ChunkTag(*b"x6dc"), flags: 0, slot: 0, payload: RawPayload(vec![0xDE, 0xAD]), src_offset: 0 });
+
+        doc.master_layers[0].name = "Master Footer".to_owned();
+        doc.master_layers[0].role = LayerRole::MasterAllPages;
+        doc.master_layers[0].objects.push(ObjectNode::new(
+            ObjectId(1),
+            Some("MasterBar".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(0.0, 800.0, 595.0, 840.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(20, 30, 40))),
+            None,
+        ));
+
+        let page1 = &mut doc.pages[0];
+        page1.name = "Sheet 1".to_owned();
+        page1.size = Size::new(500.0, 400.0).unwrap();
+        let mut p1_outl = OutlineStyle::with_width(Color::rgb8(200, 40, 60), F64::new(2.0).unwrap());
+        p1_outl.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()];
+        p1_outl.end_arrow = ArrowheadKind::Triangle;
+        page1.layers[0].objects.push(ObjectNode::new(
+            ObjectId(2),
+            Some("Page1Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 40.0, 150.0, 120.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(10, 140, 140))),
+            Some(p1_outl),
+        ));
+
+        let mut layer2 = Layer::new_normal(LayerId(10), "Sheet 2 Layer");
+        layer2.objects.push(ObjectNode::new(
+            ObjectId(3),
+            Some("Page2Circle".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(60.0, 80.0, 180.0, 200.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(240, 180, 30))),
+            Some(OutlineStyle::with_width(Color::rgb8(30, 60, 180), F64::new(3.0).unwrap())),
+        ));
+        doc.pages.push(Page {
+            id: PageId(2),
+            name: "Sheet 2".to_owned(),
+            size: Size::new(600.0, 500.0).unwrap(),
+            bleed: F64::new(9.0).unwrap(),
+            background: Some(FillStyle::uniform(Color::rgb8(250, 250, 245))),
+            layers: vec![layer2],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        });
+
+        let zip_bytes = crate::write_cdrx6_zip(&doc).expect("write_cdrx6_zip M84");
+        let rep = probe(&zip_bytes).expect("probe X6 ZIP");
+        assert_eq!(
+            rep.container,
+            CdrContainer::Zip {
+                primary_entry: "content/root.dat".to_owned(),
+                role: ZipCdrRole::RootDat,
+                has_data_file_list: true,
+                entry_count: 5,
+                inner_version: Some(VersionInfo {
+                    form_version_byte: b'G',
+                    form_version: Some(1600),
+                    vrsn_chunk: Some(1600),
+                    effective_version: Some(1600),
+                }),
+            }
+        );
+
+        let (_, root_bytes) = crate::zip::extract_zip_primary_riff(&zip_bytes, MAX_DECOMPRESSED_BYTES).expect("extract root.dat");
+        assert!(
+            !root_bytes.windows(8).any(|w| &w[0..4] == b"LIST" && &w[4..8] == b"page"),
+            "X6 content/root.dat must hold shared styles/metadata without embedded LIST page chunks"
+        );
+        let aux = crate::zip::extract_zip_data_file_streams(&zip_bytes, MAX_DECOMPRESSED_BYTES).expect("extract page streams");
+        assert_eq!(aux.len(), 2, "expected 2 per-page auxiliary streams in content/data/");
+
+        let parsed = parse_document(&zip_bytes).expect("parse_document X6 multi-stream ZIP");
+        let pdoc = &parsed.document;
+        assert_eq!(pdoc.title, "X6 Multi-Stream Architecture");
+        assert_eq!(pdoc.units, Unit::Mm);
+        assert_eq!(pdoc.palette.swatches.len(), 1);
+        assert_eq!(pdoc.master_layers.len(), 1);
+        assert_eq!(pdoc.master_layers[0].objects.len(), 1);
+        assert_eq!(pdoc.pages.len(), 2, "must parse exactly the 2 page streams without synthesizing an extra empty page for root.dat");
+
+        assert_eq!(pdoc.pages[0].name, "Sheet 1");
+        assert!((pdoc.pages[0].size.width.get() - 500.0).abs() < 1e-2);
+        let p1_obj = &pdoc.pages[0].layers[0].objects[0];
+        assert_eq!(p1_obj.name.as_deref(), Some("Page1Box"));
+        assert_eq!(p1_obj.fill, Some(FillStyle::uniform(Color::rgb8(10, 140, 140))));
+        let p1_ro = p1_obj.outline.as_ref().expect("Page1Box shared outline from root.dat");
+        assert_eq!(p1_ro.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()]);
+        assert_eq!(p1_ro.end_arrow, ArrowheadKind::Triangle);
+
+        assert_eq!(pdoc.pages[1].name, "Sheet 2");
+        assert!((pdoc.pages[1].size.width.get() - 600.0).abs() < 1e-2);
+        assert!((pdoc.pages[1].bleed.get() - 9.0).abs() < 1e-4);
+        let p2_obj = &pdoc.pages[1].layers[0].objects[0];
+        assert_eq!(p2_obj.name.as_deref(), Some("Page2Circle"));
+        assert_eq!(p2_obj.fill, Some(FillStyle::uniform(Color::rgb8(240, 180, 30))));
+        assert!((p2_obj.outline.as_ref().unwrap().width_pt.get() - 3.0).abs() < 1e-2);
     }
 }

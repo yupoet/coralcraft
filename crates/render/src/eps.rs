@@ -481,6 +481,16 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
     let page_w = page.size.width.get();
     let page_h = page.size.height.get();
 
+    let mut ltypes: Vec<Vec<coralcraft_geom::F64>> = Vec::new();
+    for layer in &layers {
+        if !layer.visible || layer.opacity.get() <= 0.0 {
+            continue;
+        }
+        for node in &layer.objects {
+            collect_dxf_ltypes_recursive(node, &mut ltypes);
+        }
+    }
+
     let mut out = String::new();
     let _ = write!(
         out,
@@ -488,6 +498,19 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         fmt_num(page_w),
         fmt_num(page_h)
     );
+    if !ltypes.is_empty() {
+        let _ = writeln!(out, "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n{}", ltypes.len());
+        for (idx, pat) in ltypes.iter().enumerate() {
+            let name = format!("DASH_{}", idx.saturating_add(1));
+            let total_len: f64 = pat.iter().map(|d| d.get().abs()).sum();
+            let _ = writeln!(out, "0\nLTYPE\n2\n{name}\n70\n0\n3\nDashed line\n72\n65\n73\n{}\n40\n{}", pat.len(), fmt_num(total_len));
+            for (di, d) in pat.iter().enumerate() {
+                let signed = if di.is_multiple_of(2) { d.get().abs() } else { -d.get().abs() };
+                let _ = writeln!(out, "49\n{}", fmt_num(signed));
+            }
+        }
+        out.push_str("0\nENDTAB\n0\nENDSEC\n");
+    }
     out.push_str("0\nSECTION\n2\nENTITIES\n");
 
     for layer in layers {
@@ -496,7 +519,7 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         }
         let safe_layer_name = sanitize_dxf_name(&layer.name);
         for node in &layer.objects {
-            emit_dxf_node(&mut out, node, Affine2::IDENTITY, &safe_layer_name, page_h)?;
+            emit_dxf_node(&mut out, node, Affine2::IDENTITY, &safe_layer_name, page_h, &ltypes)?;
         }
     }
 
@@ -507,14 +530,41 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
     Ok(out)
 }
 
-fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_name: &str, page_h: f64) -> Result<(), RenderError> {
+fn collect_dxf_ltypes_recursive(node: &ObjectNode, ltypes: &mut Vec<Vec<coralcraft_geom::F64>>) {
+    if !node.visible || node.opacity.get() <= 0.0 {
+        return;
+    }
+    if let Some(outline) = &node.outline
+        && !outline.dash_pattern.is_empty()
+        && !ltypes.contains(&outline.dash_pattern)
+    {
+        ltypes.push(outline.dash_pattern.clone());
+    }
+    if let ObjectKind::Group { children } = &node.kind {
+        for ch in children {
+            collect_dxf_ltypes_recursive(ch, ltypes);
+        }
+    }
+    for pc in &node.powerclip_children {
+        collect_dxf_ltypes_recursive(pc, ltypes);
+    }
+}
+
+fn emit_dxf_node(
+    out: &mut String,
+    node: &ObjectNode,
+    parent_tf: Affine2,
+    layer_name: &str,
+    page_h: f64,
+    ltypes: &[Vec<coralcraft_geom::F64>],
+) -> Result<(), RenderError> {
     if !node.visible || node.opacity.get() <= 0.0 {
         return Ok(());
     }
     let world_tf = node.transform.then(parent_tf)?;
     if let ObjectKind::Group { children } = &node.kind {
         for ch in children {
-            emit_dxf_node(out, ch, world_tf, layer_name, page_h)?;
+            emit_dxf_node(out, ch, world_tf, layer_name, page_h, ltypes)?;
         }
         return Ok(());
     }
@@ -534,11 +584,62 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
             let lw_100mm = ((outline.width_pt.get() * 25.4 / 72.0) * 100.0).round().clamp(1.0, 2110.0) as i32;
             let _ = writeln!(poly_style_attrs, "370\n{lw_100mm}");
         }
+        if !outline.dash_pattern.is_empty()
+            && let Some(lt_idx) = ltypes.iter().position(|p| p == &outline.dash_pattern)
+        {
+            let _ = writeln!(poly_style_attrs, "6\nDASH_{}", lt_idx.saturating_add(1));
+        }
     } else if let Some(FillStyle::Uniform { color }) = &node.fill {
         poly_style_attrs.push_str(&dxf_truecolor_attr(color));
     }
     if node.effects.is_empty() {
         match &node.kind {
+            ObjectKind::Rect(spec)
+                if world_tf == Affine2::IDENTITY
+                    && spec.radii[0].get() > 1e-6
+                    && spec.corner_kinds == [coralcraft_geom::CornerKind::Round; 4]
+                    && (spec.radii[0].get() - spec.radii[1].get()).abs() <= 1e-6
+                    && (spec.radii[0].get() - spec.radii[2].get()).abs() <= 1e-6
+                    && (spec.radii[0].get() - spec.radii[3].get()).abs() <= 1e-6
+                    && node.outline.as_ref().is_none_or(|o| {
+                        o.start_arrow == coralcraft_doc::ArrowheadKind::None && o.end_arrow == coralcraft_doc::ArrowheadKind::None
+                    }) =>
+            {
+                let w = spec.rect.width();
+                let h = spec.rect.height();
+                let r = spec.radii[0].get().clamp(0.0, 0.5 * w.min(h));
+                if r > 1e-6 {
+                    let x0 = spec.rect.x0.get();
+                    let y0 = spec.rect.y0.get();
+                    let x1 = spec.rect.x1.get();
+                    let y1 = spec.rect.y1.get();
+                    let bulge = fmt_num(-(std::f64::consts::SQRT_2 - 1.0));
+                    let _ = writeln!(
+                        out,
+                        "0\nLWPOLYLINE\n8\n{layer_name}\n{poly_style_attrs}90\n8\n70\n1\n10\n{}\n20\n{}\n10\n{}\n20\n{}\n42\n{bulge}\n10\n{}\n20\n{}\n10\n{}\n20\n{}\n42\n{bulge}\n10\n{}\n20\n{}\n10\n{}\n20\n{}\n42\n{bulge}\n10\n{}\n20\n{}\n10\n{}\n20\n{}\n42\n{bulge}",
+                        fmt_num(x0 + r),
+                        fmt_num(page_h - y0),
+                        fmt_num(x1 - r),
+                        fmt_num(page_h - y0),
+                        fmt_num(x1),
+                        fmt_num(page_h - (y0 + r)),
+                        fmt_num(x1),
+                        fmt_num(page_h - (y1 - r)),
+                        fmt_num(x1 - r),
+                        fmt_num(page_h - y1),
+                        fmt_num(x0 + r),
+                        fmt_num(page_h - y1),
+                        fmt_num(x0),
+                        fmt_num(page_h - (y1 - r)),
+                        fmt_num(x0),
+                        fmt_num(page_h - (y0 + r)),
+                    );
+                    for pc in &node.powerclip_children {
+                        emit_dxf_node(out, pc, world_tf, layer_name, page_h, ltypes)?;
+                    }
+                    return Ok(());
+                }
+            }
             ObjectKind::Ellipse(spec) if world_tf == Affine2::IDENTITY => {
                 let rx = spec.rect.width() * 0.5;
                 let ry = spec.rect.height() * 0.5;
@@ -581,7 +682,7 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
                     return Ok(());
                 }
             }
-            ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+            ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
                 let clean = sanitize_dxf_text(text);
                 if !clean.is_empty() {
                     let world_pt = world_tf.apply_point(*position)?;
@@ -593,6 +694,14 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
                         fmt_num(page_h - world_pt.y.get()),
                         fmt_num(h_pt)
                     );
+                    if !font_family.is_empty() && font_family != "Sans" {
+                        let _ = writeln!(out, "7\n{}", sanitize_dxf_text(font_family));
+                    }
+                    let screen_deg = world_tf.b.get().atan2(world_tf.a.get()).to_degrees();
+                    if screen_deg.abs() > 1e-6 {
+                        let dxf_ccw = (-screen_deg).rem_euclid(360.0);
+                        let _ = writeln!(out, "50\n{}", fmt_num(dxf_ccw));
+                    }
                 }
                 return Ok(());
             }
@@ -657,7 +766,7 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
     }
 
     for pc in &node.powerclip_children {
-        emit_dxf_node(out, pc, world_tf, layer_name, page_h)?;
+        emit_dxf_node(out, pc, world_tf, layer_name, page_h, ltypes)?;
     }
 
     Ok(())
@@ -1518,5 +1627,82 @@ mod tests {
         assert_eq!(rpc.name.as_deref(), Some("ClippedBadge"));
         assert_eq!(rpc.fill, Some(FillStyle::uniform(Color::rgb8(0x30, 0xA0, 0xE0))));
         assert!(matches!(rpc.kind, ObjectKind::Ellipse(_)));
+    }
+
+    #[test]
+    fn export_dxf_and_import_dxf_roundtrip_ltype_dashes_rotated_text_and_rounded_lwpolyline_m84() {
+        let mut doc = Document::new_a4_portrait();
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+
+        // 1. Dashed open line path
+        let mut line_path = Path::new();
+        line_path.move_to(Point::new(30.0, 40.0).unwrap()).unwrap();
+        line_path.line_to(Point::new(230.0, 40.0).unwrap()).unwrap();
+        let mut line_outl = OutlineStyle::with_width(Color::rgb8(0x10, 0x50, 0x90), F64::new(2.0).unwrap());
+        line_outl.dash_pattern = vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap(), F64::new(2.0).unwrap(), F64::new(4.0).unwrap()];
+        objs.push(ObjectNode::new(ObjectId(1), Some("DashedLine".to_owned()), ObjectKind::Path(line_path), None, Some(line_outl)));
+
+        // 2. Parametric rounded rectangle with dashed outline
+        let rspec = RectSpec::uniform(Rect::new(40.0, 80.0, 200.0, 180.0).unwrap(), 15.0, coralcraft_geom::CornerKind::Round).unwrap();
+        let mut rect_outl = OutlineStyle::with_width(Color::rgb8(0xCC, 0x33, 0x22), F64::new(1.5).unwrap());
+        rect_outl.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(3.0).unwrap()];
+        objs.push(ObjectNode::new(ObjectId(2), Some("RoundedRect".to_owned()), ObjectKind::Rect(rspec), None, Some(rect_outl)));
+
+        // 3. Rotated ArtisticText with custom font_family
+        let pos = Point::new(120.0, 260.0).unwrap();
+        let mut txt_node = ObjectNode::new(
+            ObjectId(3),
+            Some("RotatedLabel".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CAD Callout".to_owned(),
+                font_family: "Courier".to_owned(),
+                size_pt: F64::new(16.0).unwrap(),
+                position: pos,
+            },
+            Some(FillStyle::uniform(Color::rgb8(0x22, 0x88, 0x44))),
+            None,
+        );
+        let t0 = Affine2::translation(-pos.x.get(), -pos.y.get()).unwrap();
+        let rot = Affine2::rotation_deg(30.0).unwrap();
+        let t1 = Affine2::translation(pos.x.get(), pos.y.get()).unwrap();
+        txt_node.transform = t0.then(rot).unwrap().then(t1).unwrap();
+        objs.push(txt_node);
+
+        let dxf = crate::export_dxf(&doc, 0).expect("export_dxf M84");
+        assert!(dxf.contains("0\nTABLE\n2\nLTYPE\n"), "export_dxf must emit TABLES LTYPE section for dashed strokes: {dxf}");
+        assert!(dxf.contains("0\nLWPOLYLINE\n"), "export_dxf must emit native LWPOLYLINE with bulge for rounded RectSpec: {dxf}");
+        assert!(dxf.contains("\n7\nCourier\n"), "export_dxf must emit group code 7 font style for ArtisticText: {dxf}");
+        assert!(dxf.contains("\n50\n330\n"), "export_dxf must emit group code 50 CCW rotation angle for ArtisticText: {dxf}");
+
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf M84");
+        let robjs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 3);
+
+        let r0_outl = robjs.first().unwrap().outline.as_ref().expect("dashed line outline");
+        assert_eq!(r0_outl.dash_pattern, vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap(), F64::new(2.0).unwrap(), F64::new(4.0).unwrap()]);
+
+        let r1 = robjs.get(1).unwrap();
+        let ObjectKind::Rect(r_rect) = &r1.kind else {
+            panic!("expected rounded LWPOLYLINE to round-trip to ObjectKind::Rect, got {:?}", r1.kind);
+        };
+        assert!((r_rect.rect.x0.get() - 40.0).abs() < 1e-3 && (r_rect.rect.y0.get() - 80.0).abs() < 1e-3);
+        assert!((r_rect.rect.x1.get() - 200.0).abs() < 1e-3 && (r_rect.rect.y1.get() - 180.0).abs() < 1e-3);
+        for rad in &r_rect.radii {
+            assert!((rad.get() - 15.0).abs() < 1e-2, "expected corner radius 15.0, got {}", rad.get());
+        }
+        let r1_outl = r1.outline.as_ref().expect("rounded rect outline");
+        assert_eq!(r1_outl.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(3.0).unwrap()]);
+
+        let r2 = robjs.get(2).unwrap();
+        let ObjectKind::ArtisticText { text, font_family, size_pt, position } = &r2.kind else {
+            panic!("expected ObjectKind::ArtisticText, got {:?}", r2.kind);
+        };
+        assert_eq!(text, "CAD Callout");
+        assert_eq!(font_family, "Courier");
+        assert!((size_pt.get() - 16.0).abs() < 1e-4);
+        assert!((position.x.get() - 120.0).abs() < 1e-3 && (position.y.get() - 260.0).abs() < 1e-3);
+        let probe_pt = r2.transform.apply_point(Point::new(140.0, 260.0).unwrap()).unwrap();
+        let orig_pt = t0.then(rot).unwrap().then(t1).unwrap().apply_point(Point::new(140.0, 260.0).unwrap()).unwrap();
+        assert!((probe_pt.x.get() - orig_pt.x.get()).abs() < 1e-3 && (probe_pt.y.get() - orig_pt.y.get()).abs() < 1e-3);
     }
 }
