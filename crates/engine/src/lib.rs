@@ -308,6 +308,10 @@ pub enum EngineCommand {
     ProjectSelectionAxonometric { plane: AxonometricPlane },
     /// Packs all selected unlocked objects into a multi-column grid starting at `origin` with `cols` columns and `gap_pt` horizontal and vertical spacing (`Object -> Align and Distribute -> Pack in Grid`).
     PackSelectionInGrid { origin: Point, cols: u32, gap_pt: F64 },
+    /// Computes the symmetric difference (XOR / Exclude) of `>= 2` selected unlocked objects (`Object -> Shaping -> Exclude`).
+    ExcludeSelection,
+    /// Iteratively separates overlapping selected objects by repulsion so adjacent bounding boxes maintain at least `min_gap_pt` clearance (`Object -> Align and Distribute -> Resolve Overlaps`).
+    ResolveSelectionOverlaps { min_gap_pt: F64, iterations: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1340,6 +1344,22 @@ impl EditorEngine {
                 }
                 let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
                 if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ExcludeSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
+                if *iterations == 0 || min_gap_pt.get() < 0.0 || !min_gap_pt.get().is_finite() {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
                     return false;
                 }
             }
@@ -3916,6 +3936,93 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ExcludeSelection => {
+                let sel = self.selection.clone();
+                let candidates: Vec<ObjectNode> =
+                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                if candidates.len() >= 2
+                    && let Some(first_path) = object_to_path(&candidates[0]).and_then(|p| p.transform(candidates[0].transform).ok())
+                {
+                    let mut acc = first_path;
+                    for cand in candidates.iter().skip(1) {
+                        if let Some(wp) = object_to_path(cand).and_then(|p| p.transform(cand.transform).ok())
+                            && let Ok(excluded) = boolean_paths(&acc, &wp, BooleanOp::Exclude)
+                        {
+                            acc = excluded;
+                        }
+                    }
+                    let anchor = candidates.last().unwrap_or(&candidates[0]);
+                    let new_id = self.document.allocate_object_id();
+                    let new_node =
+                        ObjectNode::new(new_id, Some("Excluded Path".to_owned()), ObjectKind::Path(acc), anchor.fill.clone(), anchor.outline.clone());
+                    let remove_ids: Vec<ObjectId> = candidates.iter().map(|c| c.id).collect();
+                    let layer = self.target_layer_mut();
+                    layer.objects.retain(|o| !remove_ids.contains(&o.id));
+                    layer.objects.push(new_node);
+                    self.selection = vec![new_id];
+                }
+            }
+            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
+                let gap = min_gap_pt.get().max(0.0);
+                let iters = iterations.clamp(1, 200);
+                let mut boxes: Vec<(ObjectId, f64, f64, f64, f64, f64, f64)> = self
+                    .selected_nodes()
+                    .into_iter()
+                    .filter(|o| !o.locked)
+                    .map(|o| {
+                        let b = combined_selection_bounds(&[o]);
+                        (o.id, b.x0.get(), b.y0.get(), b.width(), b.height(), b.x0.get(), b.y0.get())
+                    })
+                    .collect();
+                let n = boxes.len();
+                for _ in 0..iters {
+                    let mut any_moved = false;
+                    for i in 0..n {
+                        for j in (i + 1)..n {
+                            let cxi = boxes[i].1 + 0.5 * boxes[i].3;
+                            let cyi = boxes[i].2 + 0.5 * boxes[i].4;
+                            let cxj = boxes[j].1 + 0.5 * boxes[j].3;
+                            let cyj = boxes[j].2 + 0.5 * boxes[j].4;
+                            let req_dx = 0.5 * (boxes[i].3 + boxes[j].3) + gap;
+                            let req_dy = 0.5 * (boxes[i].4 + boxes[j].4) + gap;
+                            let dx = cxj - cxi;
+                            let dy = cyj - cyi;
+                            let pen_x = req_dx - dx.abs();
+                            let pen_y = req_dy - dy.abs();
+                            if pen_x > 1e-6 && pen_y > 1e-6 {
+                                any_moved = true;
+                                if pen_x <= pen_y {
+                                    let dir = if dx.abs() > 1e-6 { dx.signum() } else { 1.0 };
+                                    let push = 0.5 * pen_x * dir;
+                                    boxes[i].1 -= push;
+                                    boxes[j].1 += push;
+                                } else {
+                                    let dir = if dy.abs() > 1e-6 { dy.signum() } else { 1.0 };
+                                    let push = 0.5 * pen_y * dir;
+                                    boxes[i].2 -= push;
+                                    boxes[j].2 += push;
+                                }
+                            }
+                        }
+                    }
+                    if !any_moved {
+                        break;
+                    }
+                }
+                let mut deltas = BTreeMap::new();
+                for (id, x, y, _, _, orig_x, orig_y) in boxes {
+                    deltas.insert(id, (x - orig_x, y - orig_y));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -4802,5 +4909,7 @@ mod tests {
             cols: 2,
             gap_pt: F64::new(10.0).unwrap(),
         }));
+        assert!(engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt: F64::new(16.0).unwrap(), iterations: 10 }));
+        assert!(engine.execute(EngineCommand::ExcludeSelection));
     }
 }

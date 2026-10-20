@@ -10,11 +10,11 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect,
-    RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_block_arrow_path, build_bspline_path,
-    build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
-    build_impact_rays_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path,
-    build_superformula_path, build_three_point_curve_path,
+    AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
+    PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
+    build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
+    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path,
+    build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1001,6 +1001,26 @@ impl McpServer {
                             "name": "export_eps_base64",
                             "description": "Exports page_index to clean-room EPSF-3.0 Encapsulated PostScript and returns eps_bytes length and RFC 4648 eps_base64 string.",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_basic_shape",
+                            "description": "Adds a closed CorelDRAW Basic Shape Path (heart, cross, lightning, crescent_moon, teardrop, diamond) inside (x, y, width, height).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_lsystem_path",
+                            "description": "Adds a procedural Lindenmayer System (L-System) fractal or organic coral/branching Path starting at (origin_x, origin_y).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "exclude_selection",
+                            "description": "Computes the symmetric difference (XOR / Exclude) of >= 2 selected unlocked objects with EvenOdd fill rule.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "resolve_selection_overlaps",
+                            "description": "Iteratively separates overlapping selected objects by force-directed AABB repulsion to maintain min_gap_pt clearance.",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -1256,6 +1276,7 @@ impl McpServer {
                     "intersect" => BooleanOp::Intersect,
                     "front_minus_back" => BooleanOp::FrontMinusBack,
                     "back_minus_front" => BooleanOp::BackMinusFront,
+                    "exclude" | "xor" => BooleanOp::Exclude,
                     other => return Err(format!("Unsupported boolean op: {other}")),
                 };
                 let ok = self.engine.execute(EngineCommand::BooleanSelection { op });
@@ -2930,6 +2951,52 @@ impl McpServer {
                     "eps_base64": b64
                 }))
             }
+            "add_basic_shape" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(50.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(50.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(100.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(100.0);
+                let kind_str = args.get("shape_kind").and_then(Value::as_str).unwrap_or("heart");
+                let kind = match kind_str.to_ascii_lowercase().as_str() {
+                    "cross" | "plus" => BasicShapeKind::Cross,
+                    "lightning" | "bolt" => BasicShapeKind::Lightning,
+                    "crescent_moon" | "moon" => BasicShapeKind::CrescentMoon,
+                    "teardrop" | "drop" => BasicShapeKind::Teardrop,
+                    "diamond" | "rhombus" => BasicShapeKind::Diamond,
+                    _ => BasicShapeKind::Heart,
+                };
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_basic_shape_path(rect, kind).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Basic Shape".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "basic_shape", "shape_kind": kind_str, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "add_lsystem_path" => {
+                let ox = args.get("origin_x").and_then(Value::as_f64).unwrap_or(150.0);
+                let oy = args.get("origin_y").and_then(Value::as_f64).unwrap_or(200.0);
+                let origin = Point::new(ox, oy).map_err(|e| e.to_string())?;
+                let axiom = args.get("axiom").and_then(Value::as_str).unwrap_or("F");
+                let rule_sym = args.get("rule_symbol").and_then(Value::as_str).unwrap_or("F");
+                let rule_rep = args.get("rule_replacement").and_then(Value::as_str).unwrap_or("F[+F]F[-F]F");
+                let turn_angle_deg = args.get("turn_angle_deg").and_then(Value::as_f64).unwrap_or(25.0);
+                let step_pt = args.get("step_pt").and_then(Value::as_f64).unwrap_or(8.0);
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let rules = [(rule_sym, rule_rep)];
+                let path = build_lsystem_path(origin, axiom, &rules, turn_angle_deg, step_pt, iterations).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("L-System Path".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "lsystem_path", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "exclude_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::ExcludeSelection);
+                Ok(json!({ "excluded": ok, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "resolve_selection_overlaps" => {
+                self.apply_optional_selection(args);
+                let min_gap_pt = F64::new(args.get("min_gap_pt").and_then(Value::as_f64).unwrap_or(8.0)).map_err(|e| e.to_string())?;
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(20) as u32;
+                let ok = self.engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations });
+                Ok(json!({ "overlaps_resolved": ok, "min_gap_pt": min_gap_pt.get(), "iterations": iterations }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2959,7 +3026,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 180);
+        assert_eq!(tools, 184);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3020,5 +3087,33 @@ mod tests {
         .unwrap();
         let pdf_len = pdf_resp.result.unwrap()["structuredContent"]["pdf_bytes"].as_u64().unwrap();
         assert!(pdf_len > 200);
+
+        let bs_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"add_basic_shape","arguments":{"x":40.0,"y":40.0,"width":100.0,"height":90.0,"shape_kind":"heart"}}}"#,
+            ),
+        )
+        .unwrap();
+        let bs_id = bs_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let lsys_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"add_lsystem_path","arguments":{"origin_x":80.0,"origin_y":120.0,"axiom":"F","rule_symbol":"F","rule_replacement":"F[+F]F[-F]F","turn_angle_deg":25.0,"step_pt":8.0,"iterations":2}}}"#,
+            ),
+        )
+        .unwrap();
+        let lsys_id = lsys_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let rso_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{{"name":"resolve_selection_overlaps","arguments":{{"selection":[{bs_id},{lsys_id}],"min_gap_pt":10.0,"iterations":12}}}}}}"#
+        )))
+        .unwrap();
+        assert!(rso_resp.result.unwrap()["structuredContent"]["overlaps_resolved"].as_bool().unwrap());
+
+        let excl_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{{"name":"exclude_selection","arguments":{{"selection":[{bs_id},{lsys_id}]}}}}}}"#
+        )))
+        .unwrap();
+        assert!(excl_resp.result.unwrap()["structuredContent"]["excluded"].as_bool().unwrap());
     }
 }

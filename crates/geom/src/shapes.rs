@@ -1067,6 +1067,228 @@ pub fn build_superformula_path(center: Point, radius: f64, m: f64, n1: f64, n2: 
     Ok(path)
 }
 
+/// CorelDRAW Basic Shapes flyout family (`Object -> Insert -> Basic Shapes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BasicShapeKind {
+    /// Symmetric dual-lobe heart shape.
+    Heart,
+    /// Orthogonal 12-vertex cross / plus sign.
+    Cross,
+    /// Jagged 6-vertex lightning bolt.
+    Lightning,
+    /// Concave crescent moon silhouette.
+    CrescentMoon,
+    /// Pointed-apex circular-bulb teardrop.
+    Teardrop,
+    /// Rhombic 4-vertex diamond.
+    Diamond,
+}
+
+/// Builds a closed CorelDRAW Basic Shape [`Path`] inside `bounds` (`Basic Shapes Tool`).
+pub fn build_basic_shape_path(bounds: Rect, kind: BasicShapeKind) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    if w <= 0.0 || h <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("basic shape bounds must have positive width and height"));
+    }
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let cx = 0.5 * (x0 + x1);
+    let cy = 0.5 * (y0 + y1);
+
+    let mut path = Path::new();
+    match kind {
+        BasicShapeKind::Diamond => {
+            path.move_to(Point::new(cx, y0)?)?;
+            path.line_to(Point::new(x1, cy)?)?;
+            path.line_to(Point::new(cx, y1)?)?;
+            path.line_to(Point::new(x0, cy)?)?;
+            path.close()?;
+        }
+        BasicShapeKind::Cross => {
+            let ax0 = x0 + 0.32 * w;
+            let ax1 = x0 + 0.68 * w;
+            let ay0 = y0 + 0.32 * h;
+            let ay1 = y0 + 0.68 * h;
+            for (idx, (px, py)) in [
+                (ax0, y0),
+                (ax1, y0),
+                (ax1, ay0),
+                (x1, ay0),
+                (x1, ay1),
+                (ax1, ay1),
+                (ax1, y1),
+                (ax0, y1),
+                (ax0, ay1),
+                (x0, ay1),
+                (x0, ay0),
+                (ax0, ay0),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let pt = Point::new(px, py)?;
+                if idx == 0 {
+                    path.move_to(pt)?;
+                } else {
+                    path.line_to(pt)?;
+                }
+            }
+            path.close()?;
+        }
+        BasicShapeKind::Lightning => {
+            for (idx, (u, v)) in [(0.58, 0.0), (0.15, 0.52), (0.48, 0.52), (0.32, 1.0), (0.85, 0.42), (0.50, 0.42)].into_iter().enumerate() {
+                let pt = Point::new(x0 + u * w, y0 + v * h)?;
+                if idx == 0 {
+                    path.move_to(pt)?;
+                } else {
+                    path.line_to(pt)?;
+                }
+            }
+            path.close()?;
+        }
+        BasicShapeKind::Heart => {
+            let top_cleft = Point::new(cx, y0 + 0.25 * h)?;
+            let bot_tip = Point::new(cx, y1)?;
+            let left_mid = Point::new(x0, y0 + 0.35 * h)?;
+            let right_mid = Point::new(x1, y0 + 0.35 * h)?;
+            path.move_to(top_cleft)?;
+            path.cubic_to(Point::new(cx - 0.15 * w, y0)?, Point::new(x0, y0)?, left_mid)?;
+            path.cubic_to(Point::new(x0, y0 + 0.65 * h)?, Point::new(cx - 0.15 * w, y0 + 0.85 * h)?, bot_tip)?;
+            path.cubic_to(Point::new(cx + 0.15 * w, y0 + 0.85 * h)?, Point::new(x1, y0 + 0.65 * h)?, right_mid)?;
+            path.cubic_to(Point::new(x1, y0)?, Point::new(cx + 0.15 * w, y0)?, top_cleft)?;
+            path.close()?;
+        }
+        BasicShapeKind::Teardrop => {
+            let apex = Point::new(cx, y0)?;
+            let bot = Point::new(cx, y1)?;
+            let left = Point::new(x0, y0 + 0.62 * h)?;
+            let right = Point::new(x1, y0 + 0.62 * h)?;
+            path.move_to(apex)?;
+            path.cubic_to(Point::new(x1, y0 + 0.30 * h)?, Point::new(x1, y0 + 0.45 * h)?, right)?;
+            path.cubic_to(Point::new(x1, y0 + 0.85 * h)?, Point::new(cx + 0.28 * w, y1)?, bot)?;
+            path.cubic_to(Point::new(cx - 0.28 * w, y1)?, Point::new(x0, y0 + 0.85 * h)?, left)?;
+            path.cubic_to(Point::new(x0, y0 + 0.45 * h)?, Point::new(x0, y0 + 0.30 * h)?, apex)?;
+            path.close()?;
+        }
+        BasicShapeKind::CrescentMoon => {
+            let top_tip = Point::new(x0 + 0.68 * w, y0)?;
+            let bot_tip = Point::new(x0 + 0.68 * w, y1)?;
+            path.move_to(top_tip)?;
+            path.cubic_to(Point::new(x0 - 0.12 * w, y0 + 0.12 * h)?, Point::new(x0 - 0.12 * w, y0 + 0.88 * h)?, bot_tip)?;
+            path.cubic_to(Point::new(x0 + 0.26 * w, y0 + 0.72 * h)?, Point::new(x0 + 0.26 * w, y0 + 0.28 * h)?, top_tip)?;
+            path.close()?;
+        }
+    }
+    Ok(path)
+}
+
+/// Builds a procedural Lindenmayer System (L-System) turtle graphics [`Path`] starting at `origin`
+/// with initial `axiom`, production `rules` (`&[(symbol, replacement)]`), `turn_angle_deg`,
+/// forward `step_pt`, and `iterations` (`0..=7`).
+///
+/// Supported turtle commands:
+/// - `'F' | 'G' | 'A' | 'B' | '0' | '1'`: Move forward by `step_pt` while drawing (`LineTo`).
+/// - `'f'`: Move forward by `step_pt` without drawing (`MoveTo`).
+/// - `'+'`: Turn right by `+turn_angle_deg`.
+/// - `'-'`: Turn left by `-turn_angle_deg`.
+/// - `'['`: Push current `(position, heading)` onto the branch stack.
+/// - `']'`: Pop `(position, heading)` from the branch stack.
+pub fn build_lsystem_path(
+    origin: Point,
+    axiom: &str,
+    rules: &[(&str, &str)],
+    turn_angle_deg: f64,
+    step_pt: f64,
+    iterations: u32,
+) -> Result<Path, GeomError> {
+    let turn_rad = F64::new(turn_angle_deg)?.get().to_radians();
+    let step = F64::new(step_pt)?.get();
+    if axiom.trim().is_empty() || step <= 0.0 || iterations > 7 {
+        return Err(GeomError::InvalidShapeParameter("invalid L-system parameters"));
+    }
+
+    let mut current_str = axiom.to_owned();
+    let max_symbols = 8_192usize;
+    for _ in 0..iterations {
+        let mut next_str = String::with_capacity(current_str.len().saturating_mul(2).min(max_symbols));
+        for ch in current_str.chars() {
+            let mut matched = None;
+            for &(lhs, rhs) in rules {
+                if lhs.starts_with(ch) && lhs.chars().count() == 1 {
+                    matched = Some(rhs);
+                    break;
+                }
+            }
+            if let Some(rep) = matched {
+                if next_str.len() + rep.len() > max_symbols {
+                    break;
+                }
+                next_str.push_str(rep);
+            } else {
+                if next_str.len() + ch.len_utf8() > max_symbols {
+                    break;
+                }
+                next_str.push(ch);
+            }
+        }
+        current_str = next_str;
+    }
+
+    let mut path = Path::new();
+    let mut cur_pt = origin;
+    let mut heading_rad = -std::f64::consts::FRAC_PI_2;
+    let mut stack: Vec<(Point, f64)> = Vec::new();
+    let mut pen_down_at_cur = false;
+
+    for ch in current_str.chars() {
+        match ch {
+            'F' | 'G' | 'A' | 'B' | '0' | '1' => {
+                let (s, c) = heading_rad.sin_cos();
+                let next_pt = Point::new(cur_pt.x.get() + step * c, cur_pt.y.get() + step * s)?;
+                if !pen_down_at_cur {
+                    path.move_to(cur_pt)?;
+                    pen_down_at_cur = true;
+                }
+                path.line_to(next_pt)?;
+                cur_pt = next_pt;
+            }
+            'f' => {
+                let (s, c) = heading_rad.sin_cos();
+                cur_pt = Point::new(cur_pt.x.get() + step * c, cur_pt.y.get() + step * s)?;
+                pen_down_at_cur = false;
+            }
+            '+' => {
+                heading_rad += turn_rad;
+            }
+            '-' => {
+                heading_rad -= turn_rad;
+            }
+            '[' => {
+                if stack.len() < 256 {
+                    stack.push((cur_pt, heading_rad));
+                }
+            }
+            ']' => {
+                if let Some((saved_pt, saved_heading)) = stack.pop() {
+                    cur_pt = saved_pt;
+                    heading_rad = saved_heading;
+                    pen_down_at_cur = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if path.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("L-system produced no drawable segments"));
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1125,5 +1347,20 @@ mod m27_tests {
 
         let sf = build_superformula_path(Point::new(100.0, 100.0).unwrap(), 50.0, 6.0, 1.0, 7.0, 8.0, 64).unwrap();
         assert!(sf.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        for kind in [
+            BasicShapeKind::Heart,
+            BasicShapeKind::Cross,
+            BasicShapeKind::Lightning,
+            BasicShapeKind::CrescentMoon,
+            BasicShapeKind::Teardrop,
+            BasicShapeKind::Diamond,
+        ] {
+            let bs = build_basic_shape_path(Rect::new(10.0, 20.0, 110.0, 100.0).unwrap(), kind).unwrap();
+            assert!(bs.elements.iter().any(|e| matches!(e, PathElement::Close)));
+        }
+
+        let lsys = build_lsystem_path(Point::new(50.0, 50.0).unwrap(), "F", &[("F", "F+F-F-F+F")], 90.0, 10.0, 2).unwrap();
+        assert!(lsys.elements.len() >= 10);
     }
 }

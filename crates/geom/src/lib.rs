@@ -33,10 +33,11 @@ pub use path::{
     subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{
-    CornerKind, EllipseMode, EllipseSpec, FlowchartSymbolKind, KAPPA, PolygonSpec, RectSpec, build_banner_ribbon_path, build_barcode_path,
-    build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
-    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
-    build_rose_guilloche_path, build_spiral_path, build_superformula_path, build_three_point_curve_path,
+    BasicShapeKind, CornerKind, EllipseMode, EllipseSpec, FlowchartSymbolKind, KAPPA, PolygonSpec, RectSpec, build_banner_ribbon_path,
+    build_barcode_path, build_basic_shape_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
+    build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_lsystem_path,
+    build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path,
+    build_three_point_curve_path,
 };
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 

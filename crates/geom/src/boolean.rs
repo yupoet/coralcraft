@@ -27,6 +27,8 @@ pub enum BooleanOp {
     FrontMinusBack,
     /// Subtracts the upper (front) object from the lower (back) object in z-order.
     BackMinusFront,
+    /// Symmetric difference (XOR): retains non-overlapping areas $(A \setminus B) \cup (B \setminus A)$ with `FillRule::EvenOdd`.
+    Exclude,
 }
 
 /// Executes a 2D boolean operation between a subject path and a clip path.
@@ -35,16 +37,17 @@ pub enum BooleanOp {
 /// - [`BooleanOp::Weld`] returns a compound path containing both disjoint contours.
 /// - [`BooleanOp::Trim`] or [`BooleanOp::FrontMinusBack`] returns the subject untouched.
 /// - [`BooleanOp::Intersect`] returns an empty path.
+/// - [`BooleanOp::Exclude`] returns the symmetric difference with [`crate::FillRule::EvenOdd`].
 pub fn boolean_paths(subj: &Path, clip: &Path, op: BooleanOp) -> Result<Path, GeomError> {
     if subj.elements.is_empty() {
         return match op {
-            BooleanOp::Weld => Ok(clip.clone()),
+            BooleanOp::Weld | BooleanOp::Exclude => Ok(clip.clone()),
             _ => Ok(Path::new()),
         };
     }
     if clip.elements.is_empty() {
         return match op {
-            BooleanOp::Weld | BooleanOp::Trim | BooleanOp::FrontMinusBack => Ok(subj.clone()),
+            BooleanOp::Weld | BooleanOp::Trim | BooleanOp::FrontMinusBack | BooleanOp::Exclude => Ok(subj.clone()),
             _ => Ok(Path::new()),
         };
     }
@@ -87,6 +90,23 @@ pub fn boolean_paths(subj: &Path, clip: &Path, op: BooleanOp) -> Result<Path, Ge
                 return Ok(clip.clone());
             }
             merge_polylines(&clip_polys, &subj_polys, BooleanOp::Trim)
+        }
+        BooleanOp::Exclude => {
+            if !overlaps {
+                let mut out = subj.clone();
+                out.fill_rule = crate::FillRule::EvenOdd;
+                for el in &clip.elements {
+                    out.elements.push(*el);
+                }
+                return Ok(out);
+            }
+            let a_minus_b = merge_polylines(&subj_polys, &clip_polys, BooleanOp::Trim)?;
+            let b_minus_a = merge_polylines(&clip_polys, &subj_polys, BooleanOp::Trim)?;
+            let mut out =
+                Path { elements: Vec::with_capacity(a_minus_b.elements.len() + b_minus_a.elements.len()), fill_rule: crate::FillRule::EvenOdd };
+            out.elements.extend(a_minus_b.elements);
+            out.elements.extend(b_minus_a.elements);
+            Ok(out)
         }
     }
 }
@@ -242,7 +262,7 @@ fn merge_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp
                         add_polyline_to_path(&loop_pts, true, &mut out_path)?;
                     }
                 }
-                BooleanOp::FrontMinusBack | BooleanOp::BackMinusFront => {}
+                BooleanOp::FrontMinusBack | BooleanOp::BackMinusFront | BooleanOp::Exclude => {}
             }
         }
     }
@@ -844,6 +864,12 @@ mod tests {
         let inter = boolean_paths(&r1, &r2, BooleanOp::Intersect).expect("intersect");
         let inter_bounds = inter.bounds().expect("intersect bounds");
         assert!(inter_bounds.width() <= 50.0);
+
+        // 3b. Exclude (XOR)
+        let excl = boolean_paths(&r1, &r2, BooleanOp::Exclude).expect("exclude");
+        assert_eq!(excl.fill_rule, crate::path::FillRule::EvenOdd);
+        let excl_closes = excl.elements.iter().filter(|e| matches!(e, crate::path::PathElement::Close)).count();
+        assert_eq!(excl_closes, 2);
 
         // 4. Knife cut splits rectangle into 2 closed subpaths
         let cut = knife_cut_path_by_line(&r1, Point::new(-10.0, 25.0).unwrap(), Point::new(60.0, 25.0).unwrap(), 2.0).expect("knife cut");
