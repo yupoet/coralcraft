@@ -7,12 +7,12 @@ use coralcraft_doc::{
     ParagraphTextSpec, Residual, TextAlignment, TextCaseKind, TransparencyStyle, VectorEffect, apply_text_case,
 };
 use coralcraft_geom::{
-    Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
+    Affine2, ArcLengthTable, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
-    delete_curve_node_at, delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
-    measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, radial_push_path_around_point, reference_point,
-    reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point,
-    subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, insert_curve_node_at, join_open_subpaths,
+    knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, radial_push_path_around_point,
+    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
+    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -293,6 +293,12 @@ pub enum EngineCommand {
     MorphBetweenObjects { start_id: ObjectId, end_id: ObjectId, t: F64, sample_count: usize },
     /// Spaces all selected unlocked objects (`>= 2`) along the horizontal (`horizontal = true`) or vertical (`horizontal = false`) axis with an exact gap `gap_pt` between adjacent bounding boxes (`Object -> Align and Distribute -> Space with Exact Gap`).
     DistributeExactGap { horizontal: bool, gap_pt: F64 },
+    /// Splits two selected overlapping closed objects into non-overlapping regions (`A \ B`, `A ∩ B`, `B \ A`) (`Object -> Shaping -> Divide`).
+    DivideSelection,
+    /// Positions all selected unlocked objects other than `spine_object_id` evenly along the normalized arc length of `spine_object_id` (`Object -> Align and Distribute -> Distribute Along Path`).
+    DistributeSelectionAlongPath { spine_object_id: ObjectId, rotate_to_tangent: bool },
+    /// Globally replaces colors matching `from_color` within `tolerance_u8` with `to_color` across fills, fountain stops, two-color patterns, and outlines (`Edit -> Find and Replace -> Replace Objects -> Replace a Color`).
+    RecolorArtwork { from_color: Color, to_color: Color, tolerance_u8: u8, selection_only: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1269,6 +1275,29 @@ impl EditorEngine {
                 }
                 let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
                 if unlocked_count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::DivideSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::DistributeSelectionAlongPath { spine_object_id, .. } => {
+                let valid_spine = self
+                    .selected_or_all_node(*spine_object_id)
+                    .and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                    .and_then(|p| ArcLengthTable::from_path(&p).ok())
+                    .is_some_and(|lut| lut.total_length() > 1e-6);
+                let has_targets = self.selected_nodes().iter().any(|o| !o.locked && o.id != *spine_object_id);
+                if !valid_spine || !has_targets {
+                    return false;
+                }
+            }
+            EngineCommand::RecolorArtwork { selection_only, .. } => {
+                if *selection_only && self.selected_nodes().iter().all(|o| o.locked) {
                     return false;
                 }
             }
@@ -3626,6 +3655,130 @@ impl EditorEngine {
                     });
                 }
             }
+            EngineCommand::DivideSelection => {
+                let sel = self.selection.clone();
+                let candidates: Vec<ObjectNode> =
+                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                if candidates.len() >= 2
+                    && let Some(pa) = object_to_path(&candidates[0]).and_then(|p| p.transform(candidates[0].transform).ok())
+                    && let Some(pb) = object_to_path(&candidates[1]).and_then(|p| p.transform(candidates[1].transform).ok())
+                    && let Ok(regions) = divide_overlapping_paths(&pa, &pb)
+                {
+                    let id_a = candidates[0].id;
+                    let id_b = candidates[1].id;
+                    let mut new_ids = Vec::with_capacity(regions.len());
+                    let mut new_nodes = Vec::with_capacity(regions.len());
+                    for (idx, reg) in regions.into_iter().enumerate() {
+                        let new_id = self.document.allocate_object_id();
+                        let src = if idx == 2 { &candidates[1] } else { &candidates[0] };
+                        let node = ObjectNode::new(
+                            new_id,
+                            Some(format!("Divided Region {}", idx + 1)),
+                            ObjectKind::Path(reg),
+                            src.fill.clone(),
+                            src.outline.clone(),
+                        );
+                        new_ids.push(new_id);
+                        new_nodes.push(node);
+                    }
+                    let layer = self.target_layer_mut();
+                    layer.objects.retain(|o| o.id != id_a && o.id != id_b);
+                    layer.objects.extend(new_nodes);
+                    self.selection = new_ids;
+                }
+            }
+            EngineCommand::DistributeSelectionAlongPath { spine_object_id, rotate_to_tangent } => {
+                if let Some(spine_obj) = self.selected_or_all_node(spine_object_id).cloned()
+                    && let Some(spine_path) = object_to_path(&spine_obj).and_then(|p| p.transform(spine_obj.transform).ok())
+                    && let Ok(lut) = ArcLengthTable::from_path(&spine_path)
+                {
+                    let targets: Vec<(ObjectId, Point)> = self
+                        .selected_nodes()
+                        .into_iter()
+                        .filter(|o| !o.locked && o.id != spine_object_id)
+                        .filter_map(|o| combined_selection_bounds(&[o]).center().ok().map(|c| (o.id, c)))
+                        .collect();
+                    let n = targets.len();
+                    let mut transforms = BTreeMap::new();
+                    for (idx, (id, cur_c)) in targets.into_iter().enumerate() {
+                        let u = if n <= 1 { 0.5 } else { (idx as f64) / ((n - 1) as f64) };
+                        if let Some(sample) = lut.sample_normalized(u) {
+                            let dx = sample.point.x.get() - cur_c.x.get();
+                            let dy = sample.point.y.get() - cur_c.y.get();
+                            if rotate_to_tangent {
+                                if let Ok(t1) = Affine2::translation(-cur_c.x.get(), -cur_c.y.get())
+                                    && let Ok(rot) = Affine2::rotation_rad(sample.angle_deg.to_radians())
+                                    && let Ok(t2) = Affine2::translation(sample.point.x.get(), sample.point.y.get())
+                                    && let Ok(s1) = t1.then(rot)
+                                    && let Ok(tf) = s1.then(t2)
+                                {
+                                    transforms.insert(id, tf);
+                                }
+                            } else if let Ok(tf) = Affine2::translation(dx, dy) {
+                                transforms.insert(id, tf);
+                            }
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&tf) = transforms.get(&obj.id)
+                            && let Ok(composed) = obj.transform.then(tf)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::RecolorArtwork { from_color, to_color, tolerance_u8, selection_only } => {
+                let [tr, tg, tb] = from_color.to_srgb8();
+                let tol = i32::from(tolerance_u8);
+                let matches_c = |c: &Color| -> bool {
+                    let [r, g, b] = c.to_srgb8();
+                    (i32::from(r) - i32::from(tr)).abs() <= tol
+                        && (i32::from(g) - i32::from(tg)).abs() <= tol
+                        && (i32::from(b) - i32::from(tb)).abs() <= tol
+                };
+                let recolor_node = |obj: &mut ObjectNode| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => {
+                                if matches_c(color) {
+                                    *color = to_color.clone();
+                                }
+                            }
+                            FillStyle::Fountain { stops, .. } => {
+                                for s in stops {
+                                    if matches_c(&s.color) {
+                                        s.color = to_color.clone();
+                                    }
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                if matches_c(fg_color) {
+                                    *fg_color = to_color.clone();
+                                }
+                                if matches_c(bg_color) {
+                                    *bg_color = to_color.clone();
+                                }
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(ol) = &mut obj.outline
+                        && matches_c(&ol.color)
+                    {
+                        ol.color = to_color.clone();
+                    }
+                };
+                if selection_only {
+                    self.for_each_selected_mut(recolor_node);
+                } else {
+                    self.for_each_node_mut(recolor_node);
+                }
+            }
         }
         true
     }
@@ -4486,5 +4639,16 @@ mod tests {
         assert!(engine.execute(EngineCommand::EqualizeSelectionSize { match_width: true, match_height: true }));
         assert!(engine.execute(EngineCommand::DistributeExactGap { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
         assert!(engine.execute(EngineCommand::MorphBetweenObjects { start_id: sf_id, end_id: off_id, t: F64::new(0.5).unwrap(), sample_count: 16 }));
+        let morph_id = engine.selection[0];
+        engine.set_selection(vec![sf_id, off_id]);
+        assert!(engine.execute(EngineCommand::DistributeSelectionAlongPath { spine_object_id: morph_id, rotate_to_tangent: true }));
+        assert!(engine.execute(EngineCommand::RecolorArtwork {
+            from_color: Color::rgb8(128, 128, 128),
+            to_color: Color::rgb8(20, 140, 220),
+            tolerance_u8: 255,
+            selection_only: false,
+        }));
+        engine.set_selection(vec![sf_id, off_id]);
+        assert!(engine.execute(EngineCommand::DivideSelection));
     }
 }

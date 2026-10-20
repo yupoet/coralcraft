@@ -918,6 +918,70 @@ pub fn build_rose_guilloche_path(center: Point, radius: f64, petals_k: u32, poin
     Ok(path)
 }
 
+/// Builds a compound vector Barcode [`Path`] inside `bounds` encoding `digits` (`Object -> Insert -> Barcode`).
+/// Uses a clean-room 7-module L-code digit encoding with start (`101`), center (`01010`), and end (`101`) guard bars.
+pub fn build_barcode_path(bounds: Rect, digits: &str) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    let clean: Vec<u8> = digits.bytes().filter(|b| b.is_ascii_digit()).collect();
+    if w <= 0.0 || h <= 0.0 || clean.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("barcode requires positive bounds and at least one digit"));
+    }
+    const L_PATTERNS: [u8; 10] = [
+        0b000_1101, // 0
+        0b001_1001, // 1
+        0b001_0011, // 2
+        0b011_1101, // 3
+        0b010_0011, // 4
+        0b011_0001, // 5
+        0b010_1111, // 6
+        0b011_1011, // 7
+        0b011_0111, // 8
+        0b000_1011, // 9
+    ];
+    let mut modules = Vec::with_capacity(clean.len() * 7 + 11);
+    modules.extend_from_slice(&[true, false, true]); // start guard
+    let half = clean.len() / 2;
+    for (idx, &d) in clean.iter().take(24).enumerate() {
+        if idx == half && half > 0 {
+            modules.extend_from_slice(&[false, true, false, true, false]); // center guard
+        }
+        let pat = L_PATTERNS[(d - b'0') as usize];
+        for bit in (0..7).rev() {
+            modules.push(((pat >> bit) & 1) != 0);
+        }
+    }
+    modules.extend_from_slice(&[true, false, true]); // end guard
+
+    let quiet = 4usize;
+    let total_mods = modules.len() + 2 * quiet;
+    let mod_w = w / (total_mods as f64);
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let y1 = bounds.y1.get();
+
+    let mut path = Path::new();
+    let mut i = 0usize;
+    while i < modules.len() {
+        if !modules[i] {
+            i += 1;
+            continue;
+        }
+        let run_start = i;
+        while i < modules.len() && modules[i] {
+            i += 1;
+        }
+        let bx0 = x0 + ((quiet + run_start) as f64) * mod_w;
+        let bx1 = x0 + ((quiet + i) as f64) * mod_w;
+        path.move_to(Point::new(bx0, y0)?)?;
+        path.line_to(Point::new(bx1, y0)?)?;
+        path.line_to(Point::new(bx1, y1)?)?;
+        path.line_to(Point::new(bx0, y1)?)?;
+        path.close()?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -966,5 +1030,9 @@ mod m27_tests {
 
         let rose = build_rose_guilloche_path(Point::new(100.0, 100.0).unwrap(), 50.0, 5, 12).unwrap();
         assert!(rose.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let barcode = build_barcode_path(Rect::new(0.0, 0.0, 180.0, 60.0).unwrap(), "012345678905").unwrap();
+        let bar_closes = barcode.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert!(bar_closes >= 10);
     }
 }

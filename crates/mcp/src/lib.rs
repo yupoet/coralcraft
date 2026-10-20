@@ -11,9 +11,9 @@ use coralcraft_doc::{
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect, RectSpec, Unit,
-    build_angular_dimension_path, build_banner_ribbon_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
-    build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path,
-    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_three_point_curve_path,
+    build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_block_arrow_path, build_bspline_path, build_callout_path,
+    build_complex_star_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
+    build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -939,6 +939,26 @@ impl McpServer {
                         {
                             "name": "extract_document_palette",
                             "description": "Scans all objects in the document and returns the deduplicated list of colors (hex, r, g, b) used in fills, fountain stops, patterns, and outlines.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_barcode",
+                            "description": "Adds a compound vector Barcode Path inside (x, y, width, height) encoding ASCII digits with start, center, and end guard bars.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "divide_selection",
+                            "description": "Splits two selected overlapping closed objects into non-overlapping regions (A \\ B, A ∩ B, B \\ A) (Object -> Shaping -> Divide).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "distribute_selection_along_path",
+                            "description": "Positions all selected unlocked objects other than spine_object_id evenly along the normalized arc length of spine_object_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "recolor_artwork",
+                            "description": "Globally replaces colors matching (from_r, from_g, from_b) within tolerance_u8 with (to_r, to_g, to_b) across fills, gradients, patterns, and outlines.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2744,6 +2764,49 @@ impl McpServer {
                 }
                 Ok(json!({ "color_count": colors.len(), "colors": colors }))
             }
+            "add_barcode" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(50.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(50.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(180.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(60.0);
+                let digits = args.get("digits").and_then(Value::as_str).unwrap_or("012345678905");
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_barcode_path(rect, digits).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Barcode".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "barcode", "digits": digits, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "divide_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::DivideSelection);
+                let ids: Vec<u64> = self.engine.selection.iter().map(|i| i.0).collect();
+                Ok(json!({ "divided": ok, "region_ids": ids }))
+            }
+            "distribute_selection_along_path" => {
+                self.apply_optional_selection(args);
+                let spine_object_id =
+                    ObjectId(args.get("spine_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing spine_object_id".to_owned())?);
+                let rotate_to_tangent = args.get("rotate_to_tangent").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::DistributeSelectionAlongPath { spine_object_id, rotate_to_tangent });
+                Ok(json!({ "distributed_along_path": ok, "spine_object_id": spine_object_id.0 }))
+            }
+            "recolor_artwork" => {
+                self.apply_optional_selection(args);
+                let fr = args.get("from_r").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let fg = args.get("from_g").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let fb = args.get("from_b").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let tr = args.get("to_r").and_then(Value::as_u64).unwrap_or(0) as u8;
+                let tg = args.get("to_g").and_then(Value::as_u64).unwrap_or(120) as u8;
+                let tb = args.get("to_b").and_then(Value::as_u64).unwrap_or(215) as u8;
+                let tolerance_u8 = args.get("tolerance_u8").and_then(Value::as_u64).unwrap_or(16).min(255) as u8;
+                let selection_only = args.get("selection_only").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::RecolorArtwork {
+                    from_color: Color::rgb8(fr, fg, fb),
+                    to_color: Color::rgb8(tr, tg, tb),
+                    tolerance_u8,
+                    selection_only,
+                });
+                Ok(json!({ "recolored": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2773,7 +2836,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 168);
+        assert_eq!(tools, 172);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

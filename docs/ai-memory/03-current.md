@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M46 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M47 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -44,9 +44,10 @@
   36. **M43: Parametric Block Arrow (`build_block_arrow_path`), Midpoint Segment Subdivision (`subdivide_all_path_segments`), Vector Color Inversion & Grayscale (`ConvertSelectionColors`), Native `.coralcraft` JSON Import (`import_coralcraft_json`), and 156 MCP Tools (`commit ad62616`)**.
   37. **M44: Parametric Banner Ribbon (`build_banner_ribbon_path`), Shape Tool Curve Node Stretch/Rotate (`transform_curve_nodes`), Select By Color (`SelectByColor`), PNG Base64 Page Export (`export_png_base64`), and 160 MCP Tools (`commit 6eff850`)**.
   38. **M45: Parametric Flowchart Symbols (`build_flowchart_symbol_path`), Shape Tool Break Curve at Node (`break_path_at_node`), Equalize Selection Size (`EqualizeSelectionSize`), PDF Base64 Export (`export_pdf_base64`), and 164 MCP Tools (`commit cffa843`)**.
-  39. **M46: Parametric Rose Guilloche Curves (`build_rose_guilloche_path`), Topological Arc-Length Path Morphing (`morph_paths_linear`), Exact Gap Distribution (`DistributeExactGap`), Document Color Palette Extractor (`extract_document_palette`), and 168 MCP Tools**:
-      - `coralcraft-geom`: Added `build_rose_guilloche_path` and `morph_paths_linear`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `MorphBetweenObjects`, `DistributeExactGap`, `add_rose_guilloche`, `morph_between_objects`, `distribute_exact_gap`, `extract_document_palette`, and expanded MCP server to **168 tools**.
+  39. **M46: Parametric Rose Guilloche Curves (`build_rose_guilloche_path`), Topological Arc-Length Path Morphing (`morph_paths_linear`), Exact Gap Distribution (`DistributeExactGap`), Document Color Palette Extractor (`extract_document_palette`), and 168 MCP Tools (`commit ff712a0`)**.
+  40. **M47: Vector Barcode Generator (`build_barcode_path`), Boolean Divide (`divide_overlapping_paths`), Distribute Selection Along Path (`DistributeSelectionAlongPath`), Global Recolor Artwork (`RecolorArtwork`), and 172 MCP Tools**:
+      - `coralcraft-geom`: Added `build_barcode_path` and `divide_overlapping_paths`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, `add_barcode`, `divide_selection`, `distribute_selection_along_path`, `recolor_artwork`, and expanded MCP server to **172 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

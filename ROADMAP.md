@@ -172,9 +172,13 @@
 46. **M46 Parametric Rose Guilloche Curves (`build_rose_guilloche_path`), Topological Arc-Length Path Morphing (`morph_paths_linear`), Exact Gap Distribution (`DistributeExactGap`), Document Color Palette Extractor (`extract_document_palette`), and 168 MCP Tools**:
     - `coralcraft-geom`: `build_rose_guilloche_path` (Rhodonea / guilloche curve $r(\theta) = R \cos(k \theta)$) and `morph_paths_linear` (normalized arc-length contour morphing).
     - `coralcraft-engine` & `coralcraft-mcp`: `MorphBetweenObjects`, `DistributeExactGap`, `add_rose_guilloche`, `morph_between_objects`, `distribute_exact_gap`, `extract_document_palette`, and **168 MCP tools**.
+47. **M47 Vector Barcode Generator (`build_barcode_path`), Boolean Divide (`divide_overlapping_paths`), Distribute Selection Along Path (`DistributeSelectionAlongPath`), Global Recolor Artwork (`RecolorArtwork`), and 172 MCP Tools**:
+    - `coralcraft-geom`: `build_barcode_path` (`Object -> Insert -> Barcode`) and `divide_overlapping_paths` (`Object -> Shaping -> Divide`).
+    - `coralcraft-engine` & `coralcraft-mcp`: `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, `add_barcode`, `divide_selection`, `distribute_selection_along_path`, `recolor_artwork`, and **172 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M47 delivered (`build_barcode_path` & `add_barcode`, `divide_overlapping_paths` & `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, 172 MCP tools).
 - 2026-10-20: M46 delivered (`build_rose_guilloche_path` & `add_rose_guilloche`, `morph_paths_linear` & `MorphBetweenObjects`, `DistributeExactGap`, `extract_document_palette`, 168 MCP tools).
 - 2026-10-20: M45 delivered (`build_flowchart_symbol_path` & `add_flowchart_symbol`, `break_path_at_node` & `BreakPathAtNode`, `EqualizeSelectionSize`, `export_pdf_base64`, 164 MCP tools).
 - 2026-10-20: M44 delivered (`build_banner_ribbon_path` & `add_banner_ribbon`, `transform_curve_nodes` & `TransformCurveNodes`, `SelectByColor`, `export_png_base64`, 160 MCP tools).

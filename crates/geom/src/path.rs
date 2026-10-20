@@ -1737,6 +1737,24 @@ pub fn morph_paths_linear(start_path: &Path, end_path: &Path, t: f64, sample_cou
     Ok(out)
 }
 
+/// Splits two overlapping closed paths `subject` and `clip` into up to three non-overlapping
+/// regions (`subject \ clip`, `subject ∩ clip`, `clip \ subject`) (`Object -> Shaping -> Divide`).
+pub fn divide_overlapping_paths(subject: &Path, clip: &Path) -> Result<Vec<Path>, GeomError> {
+    use crate::boolean::{BooleanOp, boolean_paths};
+    let mut regions = Vec::with_capacity(3);
+    for op in [BooleanOp::FrontMinusBack, BooleanOp::Intersect, BooleanOp::BackMinusFront] {
+        if let Ok(part) = boolean_paths(subject, clip, op)
+            && !part.elements.is_empty()
+        {
+            regions.push(part);
+        }
+    }
+    if regions.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("divide produced no non-empty regions"));
+    }
+    Ok(regions)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1801,5 +1819,9 @@ mod m26_tests {
 
         let morphed = morph_paths_linear(&rect_path, &poly, 0.5, 16).unwrap();
         assert_eq!(morphed.elements.len(), 16);
+
+        let rect2 = crate::shapes::RectSpec::sharp(crate::Rect::new(25.0, 15.0, 75.0, 55.0).unwrap()).to_path().unwrap();
+        let divided = divide_overlapping_paths(&rect_path, &rect2).unwrap();
+        assert_eq!(divided.len(), 3);
     }
 }
