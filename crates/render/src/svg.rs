@@ -173,6 +173,9 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
     svg.push_str(&body);
     svg.push_str("</svg>\n");
 
+    if svg.len() > crate::pdf::MAX_PDF_EXPORT_BYTES {
+        return Err(RenderError::ExportOutputTooLarge { bytes: svg.len(), max: crate::pdf::MAX_PDF_EXPORT_BYTES });
+    }
     Ok(svg)
 }
 

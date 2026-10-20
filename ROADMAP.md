@@ -9,12 +9,12 @@
 
 | Dimension | Current (re-estimated) | Main gaps |
 | --- | ---: | --- |
-| Workspace & engineering gates | 94% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across 8 crates (`color`, `cdr`, `doc`, `render`, `geom`, `tools`, `coralcraft-cli`, and `xtask`). |
+| Workspace & engineering gates | 95% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across 9 crates (`color`, `cdr`, `doc`, `render`, `geom`, `tools`, `coralcraft`, `coralcraft-cli`, and `xtask`). |
 | CDR format: `probe` | 85% | Hardened walker + CRC-32/Adler-32 validation + `libcdr` `cdr2raw` local differential oracle. |
-| CDR format: `parse` | 85% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `LIST grp ` / CMX1 `BeginGroup`/`EndGroup` hierarchical group preservation + X6+ `content/dataFileList.dat` multi-stream extraction (`extract_zip_data_file_streams`). |
+| CDR format: `parse` | 86% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `LIST grp ` / CMX1 `BeginGroup`/`EndGroup` + `rclr`/`rpen`/`rotl` style preservation + X6+ `content/dataFileList.dat` multi-stream extraction (`extract_zip_data_file_streams`). |
 | CDR/CMX format: `write` | 78% | Kaitai-aligned CDR7 `loda` offset-table, `LIST grp ` hierarchical groups, and CMX1 `BeginGroup`/`EndGroup` + tag-1/tag-2 writers with strict payload bounds checking and `libcdr` `cdr2raw`/`cmx2raw` differential tests. |
 | Document model & `.coralcraft` | 90% | `Document::validate()` enforced on load/engine init; forward-compatible `#[serde(other)]` enum variants; deterministic mutation tests (`import_svg`, `import_dxf`, `load_bytes`); checked 32-bit offsets. |
-| Rendering & vector export | 86% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`, and `MAX_PDF_EXPORT_BYTES` (128 MiB) budget guard; EPS/DXF group transform composition, `eofill`, and name sanitization. |
+| Rendering & vector export | 88% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`; `MAX_PDF_EXPORT_BYTES` (128 MiB) budget guard across PDF/SVG/EPS/DXF; EPS PowerClip (`clip`/`eoclip`), `behind_fill`, `scale_with_object`, and `setlinecap`/`setlinejoin`. |
 | Geometry (booleans, offsets, warps) | 82% | Clean-room planar subdivision polygon boolean clipper with canonical `VertexPool`, hole/island support, area-identity and 2D grid-oracle property tests, plus `OffsetJoinKind` (`Miter`, `Round`, `Bevel`) circular arc-fan path offsetting. |
 | Tools, panels & interactive UI | 80% | Native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), `rfd` dialogs, `arboard` clipboard, and WASM web canvas entry point. |
 | Print & prepress | 85% | Deduplicated `emit_crop_and_registration_marks`, ISO 15930 PDF/X-1a `/OutputIntents` (`/S /GTS_PDFX`), N-Up PDF sheet imposition, and native PDF shading/pattern/opacity dictionaries. |
@@ -240,9 +240,14 @@
     - `coralcraft-geom`: Added `OffsetJoinKind` (`Miter`, `Round`, `Bevel`) and `offset_path_with_join` emitting circular arc fans at rounded corners and bevel chamfers.
     - `coralcraft-cdr`: Added CMX1 `CMX_Command_BeginGroup` (`code = 14`) and `CMX_Command_EndGroup` (`code = 15`) emission in `write_cmx1` and hierarchical group reconstruction in `parse_cmx_commands_into_page`.
     - `coralcraft-render`, `coralcraft-cli` & `xtask`: Added `MAX_PDF_EXPORT_BYTES` (`128 MiB`) output budget guard (`RenderError::ExportOutputTooLarge`), and enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` in `coralcraft-cli` and `xtask` (8 of 12 workspace crates now enforced).
+67. **M67 EPS PowerClip Clipping (`gsave`/`clip`/`eoclip`/`grestore`), `behind_fill`, `scale_with_object` & `setlinecap`/`setlinejoin`, SVG/EPS/DXF Output Budget Guards, CMX1 `rclr`/`rpen`/`rotl` & `RenderingAttr` Style Parsing, and `coralcraft` App Strict Lints**:
+    - `coralcraft-render`: Upgraded `export_eps` with PostScript PowerClip clipping (`gsave`/`clip`/`eoclip`/`grestore`), `behind_fill` stroke ordering, `scale_with_object` linewidth scaling, and `setlinecap`/`setlinejoin`; enforced `MAX_PDF_EXPORT_BYTES` (`128 MiB`) across `export_svg_with_prepress`, `export_eps`, and `export_dxf`.
+    - `coralcraft-cdr`: Parsed CMX1 `rclr`, `rpen`, and `rotl` style tables and `PolyCurve` Tag 1 (`RenderingAttr`) in `parse_cmx_commands_into_page`.
+    - `apps/coralcraft`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` in `apps/coralcraft` (9 of 12 workspace crates now enforced).
 
 ## Changelog
 
+- 2026-10-21: M67 delivered (EPS PowerClip `clip`/`eoclip`, `behind_fill`, `scale_with_object` & `setlinecap`/`setlinejoin`, SVG/EPS/DXF output budget guards, CMX1 `rclr`/`rpen`/`rotl` & `RenderingAttr` style parsing in `coralcraft-cdr`, and strict clippy lints in `apps/coralcraft`).
 - 2026-10-21: M66 delivered (`OffsetJoinKind` & `offset_path_with_join` circular arc-fan / bevel joins in `coralcraft-geom`, CMX1 `BeginGroup`/`EndGroup` round-trip in `coralcraft-cdr`, `MAX_PDF_EXPORT_BYTES` guard in `coralcraft-render`, and strict clippy lints in `coralcraft-cli` & `xtask`).
 - 2026-10-21: M65 delivered (`LIST grp ` hierarchical group parse/write round-trip, `extract_zip_data_file_streams` X6+ multi-stream loader, forward-compatible `#[serde(other)]` enum variants in `coralcraft-doc`, PDF/X-1a `/OutputIntents` in `export_pdf_with_prepress`, and strict clippy lints in `coralcraft-tools`).
 - 2026-10-20: M64 delivered (`build_dragon_curve_path` & `add_dragon_curve`, `shear_warp_path_along_axis` & `ShearWarpObjectPath`, `RotateSelectionProgressively`, `import_coralcraft_zip_base64`, 240 MCP tools).

@@ -853,22 +853,23 @@ mod tests {
 
     #[test]
     fn write_cmx1_begin_group_end_group_roundtrip_m66() {
-        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode};
-        use coralcraft_geom::{EllipseSpec, Rect, RectSpec};
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle};
+        use coralcraft_geom::{EllipseSpec, F64, Rect, RectSpec};
 
         let mut doc = Document::new_a4_portrait();
         let child_a = ObjectNode::new(
             ObjectId(51),
             Some("ChildRect".to_owned()),
             ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 30.0, 90.0, 70.0).unwrap())),
-            None,
-            None,
+            Some(FillStyle::uniform(Color::rgb8(210, 45, 60))),
+            Some(OutlineStyle::with_width(Color::rgb8(10, 20, 30), F64::new(3.0).unwrap())),
         );
         let child_b = ObjectNode::new(
             ObjectId(52),
             Some("ChildEllipse".to_owned()),
             ObjectKind::Ellipse(EllipseSpec::full(Rect::new(110.0, 40.0, 170.0, 100.0).unwrap())),
-            None,
+            Some(FillStyle::uniform(Color::cmyk(0.5, 0.2, 0.0, 0.1).unwrap())),
             None,
         );
         let grp = ObjectNode::new(ObjectId(53), Some("Group".to_owned()), ObjectKind::Group { children: vec![child_a, child_b] }, None, None);
@@ -882,7 +883,7 @@ mod tests {
             other => panic!("expected ObjectKind::Group, got {other:?}"),
         }
 
-        // Also test standalone CMX1 `page` chunk (without trailing `LIST page`) containing `BeginGroup`/`EndGroup`
+        // Also test standalone CMX1 `page` + `rclr`/`rpen`/`rotl` chunks (without trailing `LIST page`)
         let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
         let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
         let pure_riff_sz = (pure_cmx.len() - 8) as u32;
@@ -890,7 +891,14 @@ mod tests {
         let parsed_pure = parse_document(&pure_cmx).expect("parse standalone CMX1 page commands");
         assert_eq!(parsed_pure.document.pages[0].layers[0].objects.len(), 1);
         match &parsed_pure.document.pages[0].layers[0].objects[0].kind {
-            ObjectKind::Group { children } => assert_eq!(children.len(), 2),
+            ObjectKind::Group { children } => {
+                assert_eq!(children.len(), 2);
+                assert_eq!(children[0].fill, Some(FillStyle::uniform(Color::rgb8(210, 45, 60))));
+                let outl = children[0].outline.as_ref().expect("outline from CMX1 rotl/rpen");
+                assert_eq!(outl.color, Color::rgb8(10, 20, 30));
+                assert!((outl.width_pt.get() - 3.0).abs() < 1e-2);
+                assert_eq!(children[1].fill, Some(FillStyle::uniform(Color::cmyk(0.5, 0.2, 0.0, 0.1).unwrap())));
+            }
             other => panic!("expected ObjectKind::Group from CMX1 BeginGroup/EndGroup, got {other:?}"),
         }
     }

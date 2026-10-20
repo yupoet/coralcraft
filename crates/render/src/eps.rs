@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, VectorEffect};
+use coralcraft_doc::{Document, FillStyle, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, VectorEffect};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, PathElement, Point, Rect, RectSpec, flatten_path};
 
 use crate::extract_local_path_and_bbox;
@@ -68,6 +68,9 @@ pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderErr
     out.push_str("grestore\n");
     out.push_str("showpage\n");
     out.push_str("%%EOF\n");
+    if out.len() > crate::pdf::MAX_PDF_EXPORT_BYTES {
+        return Err(RenderError::ExportOutputTooLarge { bytes: out.len(), max: crate::pdf::MAX_PDF_EXPORT_BYTES });
+    }
     Ok(out)
 }
 
@@ -135,6 +138,12 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
         }
     };
 
+    let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
+
+    if behind_fill && let Some(outline) = &node.outline {
+        emit_eps_stroke(out, &emit_ps_path, outline, world_tf);
+    }
+
     if let Some(fill) = &node.fill {
         let color = match fill {
             FillStyle::Uniform { color } => Some(color),
@@ -153,25 +162,59 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
         }
     }
 
-    for pc in &node.powerclip_children {
-        emit_eps_node(out, pc, world_tf, page_h)?;
+    if !node.powerclip_children.is_empty() {
+        out.push_str("gsave\n");
+        emit_ps_path(out);
+        if world_path.fill_rule == FillRule::EvenOdd {
+            out.push_str("eoclip\nnewpath\n");
+        } else {
+            out.push_str("clip\nnewpath\n");
+        }
+        for pc in &node.powerclip_children {
+            emit_eps_node(out, pc, world_tf, page_h)?;
+        }
+        out.push_str("grestore\n");
     }
 
-    if let Some(outline) = &node.outline {
-        let w = if outline.is_hairline() { 0.24 } else { outline.width_pt.get().max(0.1) };
-        emit_ps_color(out, &outline.color);
-        let _ = writeln!(out, "{} setlinewidth", fmt_num(w));
-        if outline.dash_pattern.is_empty() {
-            out.push_str("[] 0 setdash\n");
-        } else {
-            let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
-            let _ = writeln!(out, "[{}] 0 setdash", joined.join(" "));
-        }
-        emit_ps_path(out);
-        out.push_str("stroke\n");
+    if !behind_fill && let Some(outline) = &node.outline {
+        emit_eps_stroke(out, &emit_ps_path, outline, world_tf);
     }
 
     Ok(())
+}
+
+fn emit_eps_stroke(out: &mut String, emit_ps_path: &dyn Fn(&mut String), outline: &OutlineStyle, world_tf: Affine2) {
+    let mut w = if outline.is_hairline() { 0.24 } else { outline.width_pt.get().max(0.1) };
+    if outline.scale_with_object && !outline.is_hairline() {
+        let a = world_tf.a.get();
+        let b = world_tf.b.get();
+        let c = world_tf.c.get();
+        let d = world_tf.d.get();
+        let scale = ((a * a + b * b + c * c + d * d) * 0.5).sqrt();
+        if scale.is_finite() && scale > 0.0 {
+            w *= scale;
+        }
+    }
+    let cap_code = match outline.cap {
+        LineCap::Butt => 0,
+        LineCap::Round => 1,
+        LineCap::Square => 2,
+    };
+    let join_code = match outline.join {
+        LineJoin::Miter => 0,
+        LineJoin::Round => 1,
+        LineJoin::Bevel => 2,
+    };
+    emit_ps_color(out, &outline.color);
+    let _ = writeln!(out, "{} setlinewidth\n{cap_code} setlinecap\n{join_code} setlinejoin", fmt_num(w));
+    if outline.dash_pattern.is_empty() {
+        out.push_str("[] 0 setdash\n");
+    } else {
+        let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
+        let _ = writeln!(out, "[{}] 0 setdash", joined.join(" "));
+    }
+    emit_ps_path(out);
+    out.push_str("stroke\n");
 }
 
 fn emit_ps_color(out: &mut String, color: &Color) {
@@ -211,6 +254,9 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
     }
 
     out.push_str("0\nENDSEC\n0\nEOF\n");
+    if out.len() > crate::pdf::MAX_PDF_EXPORT_BYTES {
+        return Err(RenderError::ExportOutputTooLarge { bytes: out.len(), max: crate::pdf::MAX_PDF_EXPORT_BYTES });
+    }
     Ok(out)
 }
 
@@ -299,4 +345,46 @@ pub(crate) fn apply_deforming_effects(node: &ObjectNode, local_path: &mut Path, 
         }
     }
     let _ = RectSpec::sharp(*local_bbox);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use coralcraft_doc::ObjectId;
+    use coralcraft_geom::F64;
+
+    #[test]
+    fn export_eps_powerclip_behind_fill_and_scale_with_object_m67() {
+        let mut doc = Document::new_a4_portrait();
+        let mut outl = OutlineStyle::with_width(Color::BLACK, F64::new(2.0).unwrap());
+        outl.behind_fill = true;
+        outl.scale_with_object = true;
+        outl.cap = LineCap::Round;
+        outl.join = LineJoin::Bevel;
+        let mut parent = ObjectNode::new(
+            ObjectId(10),
+            Some("Parent".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 10.0, 90.0, 90.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(200, 50, 50))),
+            Some(outl),
+        );
+        parent.transform = Affine2::scaling(3.0, 3.0).unwrap();
+        let child = ObjectNode::new(
+            ObjectId(11),
+            Some("ClippedChild".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 60.0, 60.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(50, 50, 200))),
+            None,
+        );
+        parent.powerclip_children.push(child);
+        doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects.push(parent);
+
+        let eps = export_eps(&doc, 0).expect("export_eps");
+        let stroke_pos = eps.find("6 setlinewidth\n1 setlinecap\n2 setlinejoin").expect("scaled behind_fill stroke");
+        let fill_pos = eps.find("\nfill\n").expect("fill");
+        let clip_pos = eps.find("\nclip\nnewpath\n").expect("PowerClip clip scope");
+        assert!(stroke_pos < fill_pos, "behind_fill stroke must precede fill in EPS output");
+        assert!(fill_pos < clip_pos, "PowerClip clip scope must follow fill");
+    }
 }

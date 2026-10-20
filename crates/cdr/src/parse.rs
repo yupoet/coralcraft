@@ -498,7 +498,111 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
     }
 }
 
+fn parse_cmx_style_tables(chunks: &[ParsedChunk], endian: Endian) -> (Vec<Color>, Vec<f64>, Vec<(u16, u16)>) {
+    let mut colors = Vec::new();
+    let mut pens_pt = Vec::new();
+    let mut outlines = Vec::new();
+
+    for ch in chunks {
+        match &ch.fourcc {
+            b"rclr" if ch.payload.len() >= 2 => {
+                let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    let mut model = 5u8;
+                    let mut col = Color::BLACK;
+                    while pos < ch.payload.len() {
+                        let Some(&tag_id) = ch.payload.get(pos) else { break };
+                        if tag_id == 255 {
+                            pos = pos.saturating_add(1);
+                            break;
+                        }
+                        if pos.saturating_add(3) > ch.payload.len() {
+                            break;
+                        }
+                        let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 1 && pos.saturating_add(4) <= ch.payload.len() {
+                            model = ch.payload.get(pos.saturating_add(3)).copied().unwrap_or(5);
+                        } else if tag_id == 2 && pos.saturating_add(7) <= ch.payload.len() {
+                            let c0 = ch.payload.get(pos.saturating_add(3)).copied().unwrap_or(0);
+                            let c1 = ch.payload.get(pos.saturating_add(4)).copied().unwrap_or(0);
+                            let c2 = ch.payload.get(pos.saturating_add(5)).copied().unwrap_or(0);
+                            let c3 = ch.payload.get(pos.saturating_add(6)).copied().unwrap_or(0);
+                            if model == 2 {
+                                if let Ok(cmyk) = Color::cmyk(
+                                    (f64::from(c0) / 100.0).clamp(0.0, 1.0),
+                                    (f64::from(c1) / 100.0).clamp(0.0, 1.0),
+                                    (f64::from(c2) / 100.0).clamp(0.0, 1.0),
+                                    (f64::from(c3) / 100.0).clamp(0.0, 1.0),
+                                ) {
+                                    col = cmyk;
+                                }
+                            } else {
+                                col = Color::rgb8(c0, c1, c2);
+                            }
+                        }
+                        pos = pos.saturating_add(tag_len);
+                    }
+                    colors.push(col);
+                }
+            }
+            b"rpen" if ch.payload.len() >= 2 => {
+                let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    let mut w_pt = 1.0_f64;
+                    while pos < ch.payload.len() {
+                        let Some(&tag_id) = ch.payload.get(pos) else { break };
+                        if tag_id == 255 {
+                            pos = pos.saturating_add(1);
+                            break;
+                        }
+                        if pos.saturating_add(3) > ch.payload.len() {
+                            break;
+                        }
+                        let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 1 && pos.saturating_add(7) <= ch.payload.len() {
+                            let w_cdr = read_i32(endian, &ch.payload, pos.saturating_add(3)).unwrap_or(0);
+                            w_pt = CdrUnit(i64::from(w_cdr)).to_pt().get().abs().clamp(0.1, 288.0);
+                        }
+                        pos = pos.saturating_add(tag_len);
+                    }
+                    pens_pt.push(w_pt);
+                }
+            }
+            b"rotl" if ch.payload.len() >= 2 => {
+                let count = (read_u16(endian, &ch.payload, 0).unwrap_or(0) as usize).min(4096);
+                let mut pos = 2usize;
+                for _ in 0..count {
+                    let mut c_idx = 1u16;
+                    let mut p_idx = 1u16;
+                    while pos < ch.payload.len() {
+                        let Some(&tag_id) = ch.payload.get(pos) else { break };
+                        if tag_id == 255 {
+                            pos = pos.saturating_add(1);
+                            break;
+                        }
+                        if pos.saturating_add(3) > ch.payload.len() {
+                            break;
+                        }
+                        let tag_len = (read_u16(endian, &ch.payload, pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                        if tag_id == 1 && pos.saturating_add(15) <= ch.payload.len() {
+                            c_idx = read_u16(endian, &ch.payload, pos.saturating_add(7)).unwrap_or(1);
+                            p_idx = read_u16(endian, &ch.payload, pos.saturating_add(11)).unwrap_or(1);
+                        }
+                        pos = pos.saturating_add(tag_len);
+                    }
+                    outlines.push((c_idx, p_idx));
+                }
+            }
+            _ => {}
+        }
+    }
+    (colors, pens_pt, outlines)
+}
+
 fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, page: &mut Page) {
+    let (cmx_colors, cmx_pens, cmx_outlines) = parse_cmx_style_tables(chunks, ctx.endian);
     for ch in chunks {
         if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
             let mut pos = 0usize;
@@ -538,6 +642,10 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                     // CMX_Command_PolyCurve
                     let mut tag_pos = pos.saturating_add(header_len);
                     let inst_end = pos.saturating_add(inst_size);
+                    let mut decoded_path: Option<Path> = None;
+                    let mut decoded_fill: Option<FillStyle> = None;
+                    let mut decoded_outline: Option<OutlineStyle> = None;
+                    let mut has_render_attr = false;
                     while tag_pos < inst_end {
                         let Some(&tag_id) = ch.payload.get(tag_pos) else {
                             break;
@@ -546,7 +654,37 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                             break;
                         }
                         let tag_len = (read_u16(ctx.endian, &ch.payload, tag_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
-                        if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
+                        if tag_id == 1 && tag_pos.saturating_add(tag_len) <= inst_end {
+                            has_render_attr = true;
+                            let attr_slice = ch.payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
+                            if let Some(&mask) = attr_slice.first() {
+                                let mut sub_pos = 1usize;
+                                if (mask & 0x01) != 0 && sub_pos.saturating_add(3) <= attr_slice.len() {
+                                    let fill_spec_len = (read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                    let fill_type = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(0);
+                                    if fill_type == 1 && sub_pos.saturating_add(10) <= attr_slice.len() {
+                                        let c_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(8)).unwrap_or(1) as usize;
+                                        if let Some(col) = cmx_colors.get(c_idx.saturating_sub(1)) {
+                                            decoded_fill = Some(FillStyle::uniform(col.clone()));
+                                        }
+                                    }
+                                    sub_pos = sub_pos.saturating_add(fill_spec_len);
+                                    if attr_slice.get(sub_pos) == Some(&255) {
+                                        sub_pos = sub_pos.saturating_add(1);
+                                    }
+                                }
+                                if (mask & 0x02) != 0 && sub_pos.saturating_add(5) <= attr_slice.len() {
+                                    let o_idx = read_u16(ctx.endian, attr_slice, sub_pos.saturating_add(3)).unwrap_or(1) as usize;
+                                    if let Some(&(c_idx, p_idx)) = cmx_outlines.get(o_idx.saturating_sub(1)) {
+                                        let col = cmx_colors.get(usize::from(c_idx).saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                        let w_pt = cmx_pens.get(usize::from(p_idx).saturating_sub(1)).copied().unwrap_or(1.0);
+                                        decoded_outline = Some(OutlineStyle::with_width(col, F64::new(w_pt).unwrap_or(F64::ONE)));
+                                    } else {
+                                        decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
+                                    }
+                                }
+                            }
+                        } else if tag_id == 2 && tag_pos.saturating_add(tag_len) <= inst_end {
                             let pt_slice = ch.payload.get(tag_pos.saturating_add(3)..tag_pos.saturating_add(tag_len)).unwrap_or_default();
                             if pt_slice.len() >= 2 {
                                 let count = read_u16(ctx.endian, pt_slice, 0).unwrap_or(0) as usize;
@@ -554,19 +692,22 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                                 with_pad.extend_from_slice(&(count as u16).to_le_bytes());
                                 with_pad.extend_from_slice(&0u16.to_le_bytes());
                                 with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
-                                if let Some(path) = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size) {
-                                    let obj_id = ObjectId(ctx.alloc_id());
-                                    let obj_node =
-                                        ObjectNode::new(obj_id, None, ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK)));
-                                    if let Some(parent) = group_stack.last_mut() {
-                                        parent.push(obj_node);
-                                    } else if let Some(layer) = page.layers.first_mut() {
-                                        layer.objects.push(obj_node);
-                                    }
-                                }
+                                decoded_path = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size);
                             }
                         }
                         tag_pos = tag_pos.saturating_add(tag_len);
+                    }
+                    if let Some(path) = decoded_path {
+                        if !has_render_attr || (decoded_fill.is_none() && decoded_outline.is_none()) {
+                            decoded_outline = Some(OutlineStyle::hairline(Color::BLACK));
+                        }
+                        let obj_id = ObjectId(ctx.alloc_id());
+                        let obj_node = ObjectNode::new(obj_id, None, ObjectKind::Path(path), decoded_fill, decoded_outline);
+                        if let Some(parent) = group_stack.last_mut() {
+                            parent.push(obj_node);
+                        } else if let Some(layer) = page.layers.first_mut() {
+                            layer.objects.push(obj_node);
+                        }
                     }
                 }
                 pos = pos.saturating_add(inst_size);

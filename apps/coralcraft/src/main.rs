@@ -83,15 +83,15 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut input_path: Option<String> = None;
     let mut render_out: Option<String> = None;
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    let mut i = 0_usize;
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
             "--mcp" => mcp_mode = true,
             "--gui" => gui_mode = true,
             "--dump-workspace" => dump_workspace = true,
             "--json" => json_mode = true,
             "--render-out" => {
-                i += 1;
+                i = i.saturating_add(1);
                 let Some(val) = args.get(i) else {
                     return Err("--render-out requires a file path".to_owned());
                 };
@@ -120,7 +120,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 return Err(format!("unknown argument `{other}`"));
             }
         }
-        i += 1;
+        i = i.saturating_add(1);
     }
 
     if mcp_mode {
