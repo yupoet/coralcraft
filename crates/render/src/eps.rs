@@ -491,6 +491,17 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         }
     }
 
+    let mut blocks_body = String::new();
+    for layer in &layers {
+        if !layer.visible || layer.opacity.get() <= 0.0 {
+            continue;
+        }
+        let safe_layer_name = sanitize_dxf_name(&layer.name);
+        for node in &layer.objects {
+            collect_dxf_blocks_recursive(&mut blocks_body, node, &safe_layer_name, page_h, &ltypes)?;
+        }
+    }
+
     let mut out = String::new();
     let _ = write!(
         out,
@@ -511,6 +522,11 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         }
         out.push_str("0\nENDTAB\n0\nENDSEC\n");
     }
+    if !blocks_body.is_empty() {
+        out.push_str("0\nSECTION\n2\nBLOCKS\n");
+        out.push_str(&blocks_body);
+        out.push_str("0\nENDSEC\n");
+    }
     out.push_str("0\nSECTION\n2\nENTITIES\n");
 
     for layer in layers {
@@ -528,6 +544,106 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         return Err(RenderError::ExportOutputTooLarge { bytes: out.len(), max: crate::pdf::MAX_PDF_EXPORT_BYTES });
     }
     Ok(out)
+}
+
+fn try_decompose_dxf_insert_transform(t: Affine2) -> Option<(f64, f64, f64, f64, f64)> {
+    let sx = t.a.get().hypot(t.b.get());
+    if sx <= 1e-6 {
+        return None;
+    }
+    let theta = t.b.get().atan2(t.a.get());
+    let (sin_t, cos_t) = theta.sin_cos();
+    let shear = t.c.get() * cos_t + t.d.get() * sin_t;
+    if shear.abs() > 1e-4 {
+        return None;
+    }
+    let sy = t.d.get() * cos_t - t.c.get() * sin_t;
+    if sy.abs() <= 1e-6 {
+        return None;
+    }
+    let screen_deg = theta.to_degrees();
+    let dxf_rot_deg = (-screen_deg).rem_euclid(360.0);
+    Some((sx, sy, dxf_rot_deg, t.tx.get(), t.ty.get()))
+}
+
+fn collect_dxf_blocks_recursive(
+    blocks_out: &mut String,
+    node: &ObjectNode,
+    layer_name: &str,
+    page_h: f64,
+    ltypes: &[Vec<coralcraft_geom::F64>],
+) -> Result<(), RenderError> {
+    if !node.visible || node.opacity.get() <= 0.0 {
+        return Ok(());
+    }
+    if node.effects.is_empty()
+        && let ObjectKind::Group { children } = &node.kind
+        && !children.is_empty()
+        && try_decompose_dxf_insert_transform(node.transform).is_some()
+    {
+        for ch in children {
+            collect_dxf_blocks_recursive(blocks_out, ch, layer_name, page_h, ltypes)?;
+        }
+        let bname = format!("GRP_{}", node.id.0);
+        let _ = writeln!(blocks_out, "0\nBLOCK\n8\n{layer_name}\n2\n{bname}\n70\n0\n10\n0\n20\n{}", crate::svg::fmt_num_exact(page_h));
+        for ch in children {
+            emit_dxf_node(blocks_out, ch, Affine2::IDENTITY, layer_name, page_h, ltypes)?;
+        }
+        let _ = writeln!(blocks_out, "0\nENDBLK\n8\n{layer_name}");
+    }
+    Ok(())
+}
+
+fn try_extract_cubic_spline_pts(path: &Path) -> Option<(Vec<Point>, bool)> {
+    let Some(PathElement::MoveTo(start)) = path.elements.first().copied() else {
+        return None;
+    };
+    let mut ctrl_pts = vec![start];
+    let mut cur = start;
+    let mut closed = false;
+    let mut saw_curve = false;
+    for (idx, el) in path.elements.iter().enumerate().skip(1) {
+        if closed {
+            return None;
+        }
+        match *el {
+            PathElement::MoveTo(_) => return None,
+            PathElement::LineTo(end) => {
+                let c1 = Point::new(cur.x.get() + (end.x.get() - cur.x.get()) / 3.0, cur.y.get() + (end.y.get() - cur.y.get()) / 3.0).ok()?;
+                let c2 =
+                    Point::new(cur.x.get() + 2.0 * (end.x.get() - cur.x.get()) / 3.0, cur.y.get() + 2.0 * (end.y.get() - cur.y.get()) / 3.0).ok()?;
+                ctrl_pts.push(c1);
+                ctrl_pts.push(c2);
+                ctrl_pts.push(end);
+                cur = end;
+            }
+            PathElement::QuadTo { ctrl, end } => {
+                saw_curve = true;
+                let c1 = Point::new(cur.x.get() + 2.0 * (ctrl.x.get() - cur.x.get()) / 3.0, cur.y.get() + 2.0 * (ctrl.y.get() - cur.y.get()) / 3.0)
+                    .ok()?;
+                let c2 = Point::new(end.x.get() + 2.0 * (ctrl.x.get() - end.x.get()) / 3.0, end.y.get() + 2.0 * (ctrl.y.get() - end.y.get()) / 3.0)
+                    .ok()?;
+                ctrl_pts.push(c1);
+                ctrl_pts.push(c2);
+                ctrl_pts.push(end);
+                cur = end;
+            }
+            PathElement::CubicTo { c1, c2, end } => {
+                saw_curve = true;
+                ctrl_pts.push(c1);
+                ctrl_pts.push(c2);
+                ctrl_pts.push(end);
+                cur = end;
+            }
+            PathElement::Close => {
+                if idx.saturating_add(1) != path.elements.len() {
+                    return None;
+                }
+                closed = true;
+            }
+        }
+    }
+    if saw_curve && ctrl_pts.len() >= 4 { Some((ctrl_pts, closed)) } else { None }
 }
 
 fn collect_dxf_ltypes_recursive(node: &ObjectNode, ltypes: &mut Vec<Vec<coralcraft_geom::F64>>) {
@@ -559,6 +675,30 @@ fn emit_dxf_node(
     ltypes: &[Vec<coralcraft_geom::F64>],
 ) -> Result<(), RenderError> {
     if !node.visible || node.opacity.get() <= 0.0 {
+        return Ok(());
+    }
+    if parent_tf == Affine2::IDENTITY
+        && node.effects.is_empty()
+        && let ObjectKind::Group { children } = &node.kind
+        && !children.is_empty()
+        && let Some((sx, sy, dxf_rot_deg, tx, ty)) = try_decompose_dxf_insert_transform(node.transform)
+    {
+        let bname = format!("GRP_{}", node.id.0);
+        let _ = writeln!(
+            out,
+            "0\nINSERT\n8\n{layer_name}\n2\n{bname}\n10\n{}\n20\n{}\n41\n{}\n42\n{}\n50\n{}",
+            crate::svg::fmt_num_exact(tx),
+            crate::svg::fmt_num_exact(page_h - ty),
+            crate::svg::fmt_num_exact(sx),
+            crate::svg::fmt_num_exact(sy),
+            crate::svg::fmt_num_exact(dxf_rot_deg)
+        );
+        if let Some(name) = &node.name {
+            let clean_name = sanitize_dxf_text(name);
+            if !clean_name.is_empty() {
+                let _ = writeln!(out, "1\n{clean_name}");
+            }
+        }
         return Ok(());
     }
     let world_tf = node.transform.then(parent_tf)?;
@@ -706,22 +846,37 @@ fn emit_dxf_node(
                 return Ok(());
             }
             ObjectKind::ParagraphText(pt) => {
-                let layout = coralcraft_doc::layout_paragraph_text(pt);
-                let h_pt = (pt.font_size_pt.get() * transform_scale(world_tf)).max(0.1);
-                for line in &layout.lines {
-                    let clean = sanitize_dxf_text(&line.text);
-                    if !clean.is_empty()
-                        && let Ok(local_pt) = Point::new(line.origin_x, line.origin_y)
-                        && let Ok(world_pt) = world_tf.apply_point(local_pt)
-                    {
-                        let _ = writeln!(
-                            out,
-                            "0\nTEXT\n8\n{layer_name}\n{text_col_attr}10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
-                            fmt_num(world_pt.x.get()),
-                            fmt_num(page_h - world_pt.y.get()),
-                            fmt_num(h_pt)
-                        );
+                let raw_with_breaks = pt.text.replace('\r', "").replace('\n', "\\P");
+                let clean = sanitize_dxf_text(&raw_with_breaks);
+                if !clean.is_empty()
+                    && let Ok(world_pt) = world_tf.apply_point(pt.position)
+                {
+                    let scale = transform_scale(world_tf);
+                    let h_pt = (pt.font_size_pt.get() * scale).max(0.1);
+                    let fw_pt = (pt.frame_width_pt.get() * scale).max(1.0);
+                    let fh_pt = (pt.frame_height_pt.get() * scale).max(1.0);
+                    let attach_code = match pt.alignment {
+                        coralcraft_doc::TextAlignment::Left => 1,
+                        coralcraft_doc::TextAlignment::Center => 2,
+                        coralcraft_doc::TextAlignment::Right => 3,
+                        coralcraft_doc::TextAlignment::Justify => 4,
+                    };
+                    let _ = writeln!(
+                        out,
+                        "0\nMTEXT\n8\n{layer_name}\n{text_col_attr}10\n{}\n20\n{}\n40\n{}\n41\n{}\n43\n{}\n71\n{attach_code}\n44\n{}\n75\n{}\n48\n{}",
+                        crate::svg::fmt_num_exact(world_pt.x.get()),
+                        crate::svg::fmt_num_exact(page_h - world_pt.y.get()),
+                        crate::svg::fmt_num_exact(h_pt),
+                        crate::svg::fmt_num_exact(fw_pt),
+                        crate::svg::fmt_num_exact(fh_pt),
+                        crate::svg::fmt_num_exact(pt.line_spacing_multiplier.get()),
+                        pt.columns,
+                        crate::svg::fmt_num_exact(pt.gutter_pt.get())
+                    );
+                    if !pt.font_family.is_empty() && pt.font_family != "Sans" {
+                        let _ = writeln!(out, "7\n{}", sanitize_dxf_text(&pt.font_family));
                     }
+                    let _ = writeln!(out, "1\n{clean}");
                 }
                 return Ok(());
             }
@@ -733,6 +888,40 @@ fn emit_dxf_node(
     };
     apply_deforming_effects(node, &mut local_path, &mut local_bbox);
     let world_path = local_path.transform(world_tf)?;
+
+    let has_arrows = node
+        .outline
+        .as_ref()
+        .is_some_and(|o| o.start_arrow != coralcraft_doc::ArrowheadKind::None || o.end_arrow != coralcraft_doc::ArrowheadKind::None);
+    if node.effects.is_empty()
+        && !has_arrows
+        && matches!(&node.kind, ObjectKind::Path(_))
+        && let Some((ctrl_pts, closed)) = try_extract_cubic_spline_pts(&world_path)
+    {
+        let span_count = ctrl_pts.len().saturating_sub(1) / 3;
+        let knot_count = ctrl_pts.len().saturating_add(4);
+        let flag = if closed { 9 } else { 8 };
+        let _ = writeln!(out, "0\nSPLINE\n8\n{layer_name}\n{poly_style_attrs}70\n{flag}\n71\n3\n72\n{knot_count}\n73\n{}", ctrl_pts.len());
+        for _ in 0..4 {
+            out.push_str("40\n0\n");
+        }
+        for s in 1..span_count {
+            for _ in 0..3 {
+                let _ = writeln!(out, "40\n{s}");
+            }
+        }
+        for _ in 0..4 {
+            let _ = writeln!(out, "40\n{span_count}");
+        }
+        for pt in &ctrl_pts {
+            let _ = writeln!(out, "10\n{}\n20\n{}", crate::svg::fmt_num_exact(pt.x.get()), crate::svg::fmt_num_exact(page_h - pt.y.get()));
+        }
+        for pc in &node.powerclip_children {
+            emit_dxf_node(out, pc, world_tf, layer_name, page_h, ltypes)?;
+        }
+        return Ok(());
+    }
+
     let polys = flatten_path(&world_path, &FlattenOpts::default())?;
 
     for poly in &polys {
@@ -911,11 +1100,14 @@ mod tests {
         let dxf = export_dxf(&doc, 0).expect("export_dxf");
         assert!(dxf.contains("0\nTEXT\n8\nLayer_1\n"), "DXF should emit TEXT entities: {dxf}");
         assert!(dxf.contains("\n40\n18\n1\nHello (EPS)\n"), "DXF should include 18pt ArtisticText: {dxf}");
-        assert!(dxf.contains("\n1\nFirst line\n") && dxf.contains("\n1\nSecond line\n"), "DXF should include ParagraphText lines: {dxf}");
+        assert!(
+            dxf.contains("0\nMTEXT\n") && dxf.contains("\n1\nFirst line\\PSecond line\n"),
+            "DXF should include ParagraphText as native MTEXT with \\P line break: {dxf}"
+        );
 
         let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf");
         let re_objs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
-        assert_eq!(re_objs.len(), 3, "import_dxf should reconstruct 3 ArtisticText objects from DXF TEXT entities");
+        assert_eq!(re_objs.len(), 2, "import_dxf should reconstruct ArtisticText and ParagraphText objects from DXF TEXT/MTEXT entities");
     }
 
     #[test]
@@ -1827,5 +2019,251 @@ mod tests {
                 rgba_pixels: [255, 0, 0, 255].repeat(8),
             }
         );
+    }
+
+    #[test]
+    fn export_svg_and_import_svg_roundtrip_doc_layer_meta_lens_and_cmyk_spot_colors_m86() {
+        use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+        use coralcraft_doc::{
+            Document, FillStyle, FountainGeometry, Layer, LayerId, LayerRole, LensKind, ObjectId, ObjectKind, ObjectNode, OutlineStyle, PatternKind,
+            TransparencyStyle,
+        };
+        use coralcraft_geom::{F64, Rect, RectSpec, Size, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "Prepress & Spot Spec".to_owned();
+        doc.units = Unit::Inch;
+        let bg_cmyk = Color::cmyk(0.05, 0.02, 0.0, 0.0).unwrap();
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.name = "Cover <Sheet>".to_owned();
+            page.size = Size::new(500.0, 400.0).unwrap();
+            page.bleed = F64::new(9.5).unwrap();
+            page.background = Some(FillStyle::uniform(bg_cmyk.clone()));
+            let layer1 = page.layers.first_mut().unwrap();
+            layer1.name = "Plate & Spot Layer".to_owned();
+            layer1.locked = true;
+            layer1.opacity = F64::new(0.9).unwrap();
+        }
+
+        // Object 1: Spot fill + Registration outline + separate node.opacity (0.8) & TransparencyStyle::Uniform (0.5)
+        let spot_col = Color::spot("PANTONE 186 C, Special", 0.75, [0.0, 1.0, 0.81, 0.04]).unwrap();
+        let mut obj1 = ObjectNode::new(
+            ObjectId(1),
+            Some("SpotCard".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 30.0, 140.0, 110.0).unwrap())),
+            Some(FillStyle::uniform(spot_col.clone())),
+            Some(OutlineStyle::with_width(Color::Registration, F64::new(2.0).unwrap())),
+        );
+        obj1.opacity = F64::new(0.8).unwrap();
+        obj1.transparency = Some(TransparencyStyle::Uniform { opacity: F64::new(0.5).unwrap() });
+
+        // Object 2: Fountain fill with CMYK & HSB stops + Tinted Lens transparency
+        let cmyk_stop = Color::cmyk(0.8, 0.1, 0.0, 0.05).unwrap();
+        let hsb_stop = Color::hsb(210.0, 0.75, 0.9).unwrap();
+        let ftn_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Linear { angle_deg: F64::new(30.0).unwrap(), edge_pad: F64::ZERO },
+            blend_mode: FountainBlendMode::Direct,
+            stops: vec![FountainStop::new(0.0, cmyk_stop.clone()).unwrap(), FountainStop::new(1.0, hsb_stop.clone()).unwrap()],
+        };
+        let lens_tint_col = Color::cmyk(0.0, 0.85, 0.7, 0.0).unwrap();
+        let mut obj2 = ObjectNode::new(
+            ObjectId(2),
+            Some("CmykHsbFountain".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(160.0, 30.0, 280.0, 110.0).unwrap())),
+            Some(ftn_fill.clone()),
+            None,
+        );
+        obj2.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color: lens_tint_col.clone(), rate: F64::new(0.6).unwrap() } });
+
+        // Object 3: TwoColorPattern with Gray fg and LabD50 bg + Magnify Lens
+        let gray_fg = Color::gray(0.25).unwrap();
+        let lab_bg = Color::lab_d50(85.0, -5.0, 12.0).unwrap();
+        let pat_fill =
+            FillStyle::TwoColorPattern { kind: PatternKind::PolkaDot, fg_color: gray_fg, bg_color: lab_bg, tile_size_pt: F64::new(16.0).unwrap() };
+        let mut obj3 = ObjectNode::new(
+            ObjectId(3),
+            Some("PatternLens".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(300.0, 30.0, 420.0, 110.0).unwrap())),
+            Some(pat_fill.clone()),
+            None,
+        );
+        obj3.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(2.25).unwrap() } });
+
+        {
+            let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+            objs.push(obj1);
+            objs.push(obj2);
+            objs.push(obj3);
+        }
+
+        // Foreground Master Layer in doc.master_layers
+        let mut master_fg = Layer::new_normal(LayerId(10), "Watermark Master");
+        master_fg.role = LayerRole::MasterAllPages;
+        master_fg.master_in_front = true;
+        master_fg.locked = true;
+        let mut watermark = ObjectNode::new(
+            ObjectId(4),
+            Some("InvertLensWatermark".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(50.0, 200.0, 250.0, 300.0).unwrap())),
+            None,
+            Some(OutlineStyle::hairline(Color::cmyk(0.0, 0.0, 0.0, 1.0).unwrap())),
+        );
+        watermark.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Invert });
+        master_fg.objects.push(watermark);
+        doc.master_layers.push(master_fg);
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg M86");
+        assert!(svg.contains("data-title=\"Prepress &amp; Spot Spec\""), "SVG must emit data-title: {svg}");
+        assert!(svg.contains("data-units=\"inch\""), "SVG must emit data-units: {svg}");
+        assert!(svg.contains("data-page-bleed=\"9.5\""), "SVG must emit data-page-bleed: {svg}");
+        assert!(svg.contains("data-lens="), "SVG must emit data-lens metadata: {svg}");
+        assert!(svg.contains("data-fill-color="), "SVG must emit data-fill-color metadata: {svg}");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg M86");
+        assert_eq!(reimported.title, "Prepress & Spot Spec");
+        assert_eq!(reimported.units, Unit::Inch);
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.name, "Cover <Sheet>");
+        assert_eq!(rpage.bleed, F64::new(9.5).unwrap());
+        assert_eq!(rpage.background, Some(FillStyle::uniform(bg_cmyk)));
+
+        assert_eq!(rpage.layers.len(), 1);
+        let rl1 = rpage.layers.first().unwrap();
+        assert_eq!(rl1.name, "Plate & Spot Layer");
+        assert!(rl1.locked);
+        assert_eq!(rl1.opacity, F64::new(0.9).unwrap());
+        assert_eq!(rl1.objects.len(), 3);
+
+        let r1 = rl1.objects.first().unwrap();
+        assert_eq!(r1.fill, Some(FillStyle::uniform(spot_col)));
+        assert_eq!(r1.outline.as_ref().unwrap().color, Color::Registration);
+        assert_eq!(r1.opacity, F64::new(0.8).unwrap());
+        assert_eq!(r1.transparency, Some(TransparencyStyle::Uniform { opacity: F64::new(0.5).unwrap() }));
+
+        let r2 = rl1.objects.get(1).unwrap();
+        assert_eq!(r2.fill, Some(ftn_fill));
+        assert_eq!(r2.transparency, Some(TransparencyStyle::Lens { kind: LensKind::Tinted { color: lens_tint_col, rate: F64::new(0.6).unwrap() } }));
+
+        let r3 = rl1.objects.get(2).unwrap();
+        assert_eq!(r3.fill, Some(pat_fill));
+        assert_eq!(r3.transparency, Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(2.25).unwrap() } }));
+
+        let rmaster = reimported.master_layers.iter().find(|l| l.name == "Watermark Master").expect("Watermark Master layer in doc.master_layers");
+        assert_eq!(rmaster.role, LayerRole::MasterAllPages);
+        assert!(rmaster.master_in_front);
+        assert!(rmaster.locked);
+        assert_eq!(rmaster.objects.len(), 1);
+        assert_eq!(rmaster.objects.first().unwrap().transparency, Some(TransparencyStyle::Lens { kind: LensKind::Invert }));
+    }
+
+    #[test]
+    fn export_dxf_and_import_dxf_roundtrip_group_block_insert_cubic_spline_and_mtext_m86() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle, ParagraphTextSpec, TextAlignment};
+        use coralcraft_geom::{Affine2, F64, Path, PathElement, Point, Rect, Size};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages.first_mut().unwrap().size = Size::new(600.0, 400.0).unwrap();
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+
+        // 1. Group with scale(1.5, 1.5) + rotation(30 deg) + translation(120, 80) containing a Circle and a Line
+        let grp_circle = ObjectNode::new(
+            ObjectId(1),
+            Some("PinCircle".to_owned()),
+            ObjectKind::Ellipse(coralcraft_geom::EllipseSpec::full(Rect::new(10.0, 10.0, 50.0, 50.0).unwrap())),
+            None,
+            Some(OutlineStyle::with_width(Color::rgb8(0x20, 0x60, 0xC0), F64::new(1.5).unwrap())),
+        );
+        let mut grp = ObjectNode::new(ObjectId(2), Some("SensorAssembly".to_owned()), ObjectKind::Group { children: vec![grp_circle] }, None, None);
+        let scale_tf = Affine2::scaling(1.5, 1.5).unwrap();
+        let rot_tf = Affine2::rotation_deg(30.0).unwrap();
+        let tr_tf = Affine2::translation(120.0, 80.0).unwrap();
+        grp.transform = scale_tf.then(rot_tf).unwrap().then(tr_tf).unwrap();
+        objs.push(grp);
+
+        // 2. Curved Cubic Bezier Path emitted as native DXF SPLINE
+        let mut curve_path = Path::new();
+        curve_path.move_to(Point::new(40.0, 220.0).unwrap()).unwrap();
+        curve_path.cubic_to(Point::new(80.0, 160.0).unwrap(), Point::new(140.0, 280.0).unwrap(), Point::new(180.0, 220.0).unwrap()).unwrap();
+        curve_path.cubic_to(Point::new(210.0, 180.0).unwrap(), Point::new(250.0, 200.0).unwrap(), Point::new(280.0, 240.0).unwrap()).unwrap();
+        objs.push(ObjectNode::new(
+            ObjectId(3),
+            Some("WaveSpline".to_owned()),
+            ObjectKind::Path(curve_path.clone()),
+            None,
+            Some(OutlineStyle::with_width(Color::rgb8(0xCC, 0x20, 0x50), F64::new(2.0).unwrap())),
+        ));
+
+        // 3. ParagraphText frame emitted as native DXF MTEXT
+        let ptxt_spec = ParagraphTextSpec::new(
+            Point::new(320.0, 180.0).unwrap(),
+            200.0,
+            90.0,
+            "First CAD paragraph line\nSecond CAD paragraph line".to_owned(),
+            "Courier",
+            14.0,
+            1.3,
+            TextAlignment::Center,
+            2,
+            12.0,
+        )
+        .unwrap();
+        objs.push(ObjectNode::new(
+            ObjectId(4),
+            Some("SpecNotes".to_owned()),
+            ObjectKind::ParagraphText(Box::new(ptxt_spec.clone())),
+            Some(FillStyle::uniform(Color::rgb8(0x10, 0x70, 0x30))),
+            None,
+        ));
+
+        let dxf = crate::export_dxf(&doc, 0).expect("export_dxf M86");
+        assert!(dxf.contains("0\nSECTION\n2\nBLOCKS\n"), "export_dxf must emit BLOCKS section for ObjectKind::Group: {dxf}");
+        assert!(dxf.contains("0\nINSERT\n"), "export_dxf must emit INSERT entity for ObjectKind::Group: {dxf}");
+        assert!(dxf.contains("0\nSPLINE\n"), "export_dxf must emit native SPLINE entity for cubic Bezier Path: {dxf}");
+        assert!(dxf.contains("0\nMTEXT\n"), "export_dxf must emit native MTEXT entity for ParagraphText: {dxf}");
+
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf M86");
+        let robjs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 3);
+
+        // 1. Group round-trip
+        let r0 = robjs.first().unwrap();
+        assert_eq!(r0.name.as_deref(), Some("SensorAssembly"));
+        let ObjectKind::Group { children: r_children } = &r0.kind else {
+            panic!("expected ObjectKind::Group from DXF INSERT, got {:?}", r0.kind);
+        };
+        assert_eq!(r_children.len(), 1);
+        let orig_pt = grp_transform_probe(scale_tf, rot_tf, tr_tf, Point::new(30.0, 30.0).unwrap());
+        let reimp_pt = r0.transform.apply_point(Point::new(30.0, 30.0).unwrap()).unwrap();
+        assert!((orig_pt.x.get() - reimp_pt.x.get()).abs() < 1e-2 && (orig_pt.y.get() - reimp_pt.y.get()).abs() < 1e-2);
+
+        // 2. Cubic Bezier SPLINE round-trip
+        let r1 = robjs.get(1).unwrap();
+        let ObjectKind::Path(r_path) = &r1.kind else {
+            panic!("expected ObjectKind::Path from DXF SPLINE, got {:?}", r1.kind);
+        };
+        assert_eq!(r_path.elements.len(), 3);
+        assert!(matches!(r_path.elements.get(1), Some(PathElement::CubicTo { .. })));
+        assert_eq!(r_path, &curve_path);
+
+        // 3. ParagraphText MTEXT round-trip
+        let r2 = robjs.get(2).unwrap();
+        let ObjectKind::ParagraphText(r_ptxt) = &r2.kind else {
+            panic!("expected ObjectKind::ParagraphText from DXF MTEXT, got {:?}", r2.kind);
+        };
+        assert_eq!(r_ptxt.text, "First CAD paragraph line\nSecond CAD paragraph line");
+        assert_eq!(r_ptxt.font_family, "Courier");
+        assert!((r_ptxt.font_size_pt.get() - 14.0).abs() < 1e-4);
+        assert!((r_ptxt.frame_width_pt.get() - 200.0).abs() < 1e-3);
+        assert!((r_ptxt.frame_height_pt.get() - 90.0).abs() < 1e-3);
+        assert_eq!(r_ptxt.alignment, TextAlignment::Center);
+        assert_eq!(r_ptxt.columns, 2);
+        assert!((r_ptxt.gutter_pt.get() - 12.0).abs() < 1e-3);
+        assert!((r_ptxt.line_spacing_multiplier.get() - 1.3).abs() < 1e-3);
+    }
+
+    fn grp_transform_probe(s: Affine2, r: Affine2, t: Affine2, pt: coralcraft_geom::Point) -> coralcraft_geom::Point {
+        s.then(r).unwrap().then(t).unwrap().apply_point(pt).unwrap()
     }
 }

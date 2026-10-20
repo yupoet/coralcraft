@@ -4,9 +4,10 @@ use std::fmt::Write as _;
 
 use coralcraft_color::Color;
 use coralcraft_doc::{
-    Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, PatternKind, TransparencyStyle,
+    Document, FillStyle, FountainGeometry, LayerRole, LensKind, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, PatternKind,
+    TransparencyStyle,
 };
-use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Rect, RectSpec};
+use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Rect, RectSpec, Unit};
 
 use crate::surface::RenderError;
 
@@ -19,7 +20,7 @@ pub(crate) fn fmt_num(v: f64) -> String {
 }
 
 /// Formats an exact shortest-roundtrip IEEE-754 decimal for lossless `data-*` metadata attributes.
-fn fmt_num_exact(v: f64) -> String {
+pub(crate) fn fmt_num_exact(v: f64) -> String {
     if !v.is_finite() || v == 0.0 { "0".to_owned() } else { v.to_string() }
 }
 
@@ -44,6 +45,69 @@ fn escape_xml(s: &str) -> String {
 fn svg_hex_color(color: &Color) -> String {
     let [r, g, b] = color.to_srgb8();
     format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Encodes non-sRGB [`Color`] models (`Cmyk`, `Hsb`, `Gray`, `LabD50`, `LabD65`, `Spot`, `Registration`)
+/// for lossless `data-*-color` SVG round-trip. Returns `None` for standard `Color::Rgb`.
+fn encode_svg_color_meta(color: &Color) -> Option<String> {
+    match color {
+        Color::Rgb { .. } => None,
+        Color::Cmyk { c, m, y, k } => {
+            Some(format!("cmyk,{},{},{},{}", fmt_num_exact(c.get()), fmt_num_exact(m.get()), fmt_num_exact(y.get()), fmt_num_exact(k.get())))
+        }
+        Color::Hsb { h, s, b } => Some(format!("hsb,{},{},{}", fmt_num_exact(h.get()), fmt_num_exact(s.get()), fmt_num_exact(b.get()))),
+        Color::Gray { k } => Some(format!("gray,{}", fmt_num_exact(k.get()))),
+        Color::LabD50 { l, a, b } => Some(format!("lab_d50,{},{},{}", fmt_num_exact(l.get()), fmt_num_exact(a.get()), fmt_num_exact(b.get()))),
+        Color::LabD65 { l, a, b } => Some(format!("lab_d65,{},{},{}", fmt_num_exact(l.get()), fmt_num_exact(a.get()), fmt_num_exact(b.get()))),
+        Color::Spot { name, tint, fallback_cmyk } => Some(format!(
+            "spot,{},{},{},{},{},{}",
+            fmt_num_exact(tint.get()),
+            fmt_num_exact(fallback_cmyk[0].get()),
+            fmt_num_exact(fallback_cmyk[1].get()),
+            fmt_num_exact(fallback_cmyk[2].get()),
+            fmt_num_exact(fallback_cmyk[3].get()),
+            escape_xml(name)
+        )),
+        Color::Registration => Some("registration".to_owned()),
+    }
+}
+
+fn format_fill_color_meta_attr(fill: Option<&FillStyle>) -> String {
+    if let Some(FillStyle::Uniform { color }) = fill
+        && let Some(meta) = encode_svg_color_meta(color)
+    {
+        format!(" data-fill-color=\"{meta}\"")
+    } else {
+        String::new()
+    }
+}
+
+fn format_transparency_meta_attrs(node: &ObjectNode) -> String {
+    let mut out = String::new();
+    if (node.opacity.get() - 1.0).abs() > 1e-6 && node.transparency.is_some() {
+        let _ = write!(out, " data-node-opacity=\"{}\"", fmt_num_exact(node.opacity.get()));
+    }
+    match &node.transparency {
+        Some(TransparencyStyle::Uniform { opacity }) => {
+            let _ = write!(out, " data-transparency-uniform=\"{}\"", fmt_num_exact(opacity.get()));
+        }
+        Some(TransparencyStyle::Lens { kind }) => match kind {
+            LensKind::Invert => out.push_str(" data-lens=\"invert\""),
+            LensKind::Brighten { rate } => {
+                let _ = write!(out, " data-lens=\"brighten,{}\"", fmt_num_exact(rate.get()));
+            }
+            LensKind::Magnify { factor } => {
+                let _ = write!(out, " data-lens=\"magnify,{}\"", fmt_num_exact(factor.get()));
+            }
+            LensKind::Tinted { color, rate } => {
+                let col_str = encode_svg_color_meta(color).unwrap_or_else(|| svg_hex_color(color));
+                let _ = write!(out, " data-lens=\"tinted,{},{col_str}\"", fmt_num_exact(rate.get()));
+            }
+            LensKind::Unknown => out.push_str(" data-lens=\"unknown\""),
+        },
+        _ => {}
+    }
+    out
 }
 
 /// Serializes a [`Path`] into an SVG `d="..."` path data string.
@@ -119,7 +183,27 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
             continue;
         }
         let opacity_attr = if (layer_opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(layer_opacity)) } else { String::new() };
-        let _ = writeln!(body, "  <g id=\"layer-{}\" data-name=\"{}\"{opacity_attr}>", layer.id.0, escape_xml(&layer.name));
+        let is_master = doc.master_layers.iter().any(|ml| std::ptr::eq(ml, layer));
+        let master_layer_attr = if is_master { " data-master-layer=\"1\"" } else { "" };
+        let role_attr = match layer.role {
+            LayerRole::Normal => "",
+            LayerRole::MasterAllPages => " data-role=\"master_all_pages\"",
+            LayerRole::MasterEvenPages => " data-role=\"master_even_pages\"",
+            LayerRole::MasterOddPages => " data-role=\"master_odd_pages\"",
+            LayerRole::Desktop => " data-role=\"desktop\"",
+            LayerRole::Guides => " data-role=\"guides\"",
+            LayerRole::Grid => " data-role=\"grid\"",
+            LayerRole::Unknown => " data-role=\"unknown\"",
+        };
+        let printable_attr = if !layer.printable { " data-printable=\"0\"" } else { "" };
+        let locked_attr = if layer.locked { " data-locked=\"1\"" } else { "" };
+        let mif_attr = if layer.master_in_front { " data-master-in-front=\"1\"" } else { "" };
+        let escaped_lname = escape_xml(&layer.name).replace('\n', "&#10;").replace('\r', "&#13;");
+        let _ = writeln!(
+            body,
+            "  <g id=\"layer-{}\" data-name=\"{escaped_lname}\"{master_layer_attr}{role_attr}{printable_attr}{locked_attr}{mif_attr}{opacity_attr}>",
+            layer.id.0
+        );
         for node in &layer.objects {
             emit_svg_node(&mut defs, &mut body, node, 2)?;
         }
@@ -174,8 +258,31 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
         svg.push_str(&defs);
         svg.push_str("  </defs>\n");
     }
-    let _ =
-        writeln!(svg, "  <rect id=\"page-background\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"/>", fmt_num(w), fmt_num(h));
+    let title_attr = if doc.title != "Untitled-1" {
+        format!(" data-title=\"{}\"", escape_xml(&doc.title).replace('\n', "&#10;").replace('\r', "&#13;"))
+    } else {
+        String::new()
+    };
+    let units_attr = match doc.units {
+        Unit::Mm => "",
+        Unit::Pt => " data-units=\"pt\"",
+        Unit::Inch => " data-units=\"inch\"",
+        Unit::Px => " data-units=\"px\"",
+        Unit::CdrTick => " data-units=\"cdr_tick\"",
+    };
+    let page_name_attr = if page.name != "Page 1" {
+        format!(" data-page-name=\"{}\"", escape_xml(&page.name).replace('\n', "&#10;").replace('\r', "&#13;"))
+    } else {
+        String::new()
+    };
+    let bleed_attr = if page.bleed.get() > 0.0 { format!(" data-page-bleed=\"{}\"", fmt_num_exact(page.bleed.get())) } else { String::new() };
+    let bg_color_meta = format_fill_color_meta_attr(page.background.as_ref());
+    let _ = writeln!(
+        svg,
+        "  <rect id=\"page-background\"{title_attr}{units_attr}{page_name_attr}{bleed_attr} x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"{bg_color_meta}/>",
+        fmt_num(w),
+        fmt_num(h)
+    );
     svg.push_str(&body);
     svg.push_str("</svg>\n");
 
@@ -193,8 +300,14 @@ fn emit_pattern_def(defs: &mut String, id_suffix: &str, fill: &FillStyle) {
     let half = ts * 0.5;
     let fg = svg_hex_color(fg_color);
     let bg = svg_hex_color(bg_color);
-    let _ =
-        writeln!(defs, "    <pattern id=\"pat-{id_suffix}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\">", fmt_num(ts), fmt_num(ts));
+    let fg_meta = encode_svg_color_meta(fg_color).map(|m| format!(" data-fg-color=\"{m}\"")).unwrap_or_default();
+    let bg_meta = encode_svg_color_meta(bg_color).map(|m| format!(" data-bg-color=\"{m}\"")).unwrap_or_default();
+    let _ = writeln!(
+        defs,
+        "    <pattern id=\"pat-{id_suffix}\"{fg_meta}{bg_meta} patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\">",
+        fmt_num(ts),
+        fmt_num(ts)
+    );
     let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{bg}\"/>", fmt_num(ts), fmt_num(ts));
     match kind {
         PatternKind::Checkerboard | PatternKind::Unknown => {
@@ -253,7 +366,13 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
             } else {
                 String::new()
             };
-            let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"{mid_attr}/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+            let stop_col_meta = encode_svg_color_meta(&stop.color).map(|m| format!(" data-stop-color=\"{m}\"")).unwrap_or_default();
+            let _ = writeln!(
+                defs,
+                "      <stop offset=\"{}\" stop-color=\"{}\"{stop_col_meta}{mid_attr}/>",
+                fmt_num(stop.offset.get()),
+                svg_hex_color(&stop.color)
+            );
         }
     };
 
@@ -406,8 +525,9 @@ fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String
     };
     let start_arrow_attr = format_arrow_kind(outline.start_arrow).map(|s| format!(" data-start-arrow=\"{s}\"")).unwrap_or_default();
     let end_arrow_attr = format_arrow_kind(outline.end_arrow).map(|s| format!(" data-end-arrow=\"{s}\"")).unwrap_or_default();
+    let stroke_col_meta = encode_svg_color_meta(&outline.color).map(|m| format!(" data-stroke-color=\"{m}\"")).unwrap_or_default();
     format!(
-        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}{behind_attr}{scale_attr}{start_arrow_attr}{end_arrow_attr}",
+        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}{behind_attr}{scale_attr}{start_arrow_attr}{end_arrow_attr}{stroke_col_meta}",
         svg_hex_color(&outline.color),
         fmt_num(w),
         fmt_num(outline.miter_limit.get())
@@ -425,12 +545,13 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
     let indent = "  ".repeat(indent_level);
     let transform_attr = format_transform_attr(node.transform);
     let opacity_attr = if (opacity - 1.0).abs() > 1e-4 { format!(" opacity=\"{}\"", fmt_num(opacity)) } else { String::new() };
+    let trsp_meta = format_transparency_meta_attrs(node);
 
     match &node.kind {
         ObjectKind::Group { children } => {
             let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
             let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
-            let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{name_attr}{locked_attr}{transform_attr}{opacity_attr}>", node.id.0);
+            let _ = writeln!(body, "{indent}<g id=\"obj-{}\"{name_attr}{locked_attr}{trsp_meta}{transform_attr}{opacity_attr}>", node.id.0);
             for ch in children {
                 emit_svg_node(defs, body, ch, indent_level.saturating_add(1))?;
             }
@@ -458,11 +579,13 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                 }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
+            let fill_color_meta = format_fill_color_meta_attr(node.fill.as_ref());
             let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+            let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
             let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
             let _ = writeln!(
                 body,
-                "{indent}<text id=\"obj-{}\"{name_attr} x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">{}</text>",
+                "{indent}<text id=\"obj-{}\"{name_attr}{locked_attr}{trsp_meta} x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{fill_color_meta}{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">{}</text>",
                 node.id.0,
                 fmt_num(position.x.get()),
                 fmt_num(position.y.get()),
@@ -494,6 +617,7 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                 }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
+            let fill_color_meta = format_fill_color_meta_attr(node.fill.as_ref());
             let align_str = match pt.alignment {
                 coralcraft_doc::TextAlignment::Left => "left",
                 coralcraft_doc::TextAlignment::Center => "center",
@@ -501,11 +625,12 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                 coralcraft_doc::TextAlignment::Justify => "justify",
             };
             let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+            let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
             let escaped_raw_text = escape_xml(&pt.text).replace('\n', "&#10;").replace('\r', "&#13;");
             let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
             let _ = writeln!(
                 body,
-                "{indent}<text id=\"obj-{}\"{name_attr} x=\"{}\" y=\"{}\" data-frame-x=\"{}\" data-frame-y=\"{}\" data-frame-width=\"{}\" data-frame-height=\"{}\" data-line-spacing=\"{}\" data-align=\"{align_str}\" data-columns=\"{}\" data-gutter=\"{}\" data-raw-text=\"{escaped_raw_text}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">",
+                "{indent}<text id=\"obj-{}\"{name_attr}{locked_attr}{trsp_meta} x=\"{}\" y=\"{}\" data-frame-x=\"{}\" data-frame-y=\"{}\" data-frame-width=\"{}\" data-frame-height=\"{}\" data-line-spacing=\"{}\" data-align=\"{align_str}\" data-columns=\"{}\" data-gutter=\"{}\" data-raw-text=\"{escaped_raw_text}\" font-family=\"{}\" font-size=\"{}\" fill=\"{fill_str}\"{fill_color_meta}{stroke_str}{transform_attr}{opacity_attr} xml:space=\"preserve\">",
                 node.id.0,
                 fmt_num(px),
                 fmt_num(py),
@@ -542,7 +667,7 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
             let _ = writeln!(
                 body,
-                "{indent}<image id=\"obj-{}\"{name_attr}{locked_attr} data-dpi-x=\"{}\" data-dpi-y=\"{}\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"{transform_attr}{opacity_attr}/>",
+                "{indent}<image id=\"obj-{}\"{name_attr}{locked_attr}{trsp_meta} data-dpi-x=\"{}\" data-dpi-y=\"{}\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"{transform_attr}{opacity_attr}/>",
                 node.id.0,
                 fmt_num_exact(dpi_x.get()),
                 fmt_num_exact(dpi_y.get()),
@@ -659,6 +784,8 @@ fn emit_path_node(
     let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
     let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
     let shape_meta_attr = format_shape_meta_attr(node);
+    let trsp_meta = format_transparency_meta_attrs(node);
+    let fill_color_meta = format_fill_color_meta_attr(node.fill.as_ref());
     let fill_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };
     let fill_attr = match &node.fill {
         Some(FillStyle::Uniform { color }) => svg_hex_color(color),
@@ -713,11 +840,17 @@ fn emit_path_node(
         .outline
         .as_ref()
         .is_some_and(|o| o.start_arrow != coralcraft_doc::ArrowheadKind::None || o.end_arrow != coralcraft_doc::ArrowheadKind::None);
-    let needs_wrapper = has_powerclip || behind_fill || has_arrows || !transform_attr.is_empty() || !opacity_attr.is_empty() || !mask_attr.is_empty();
+    let needs_wrapper = has_powerclip
+        || behind_fill
+        || has_arrows
+        || !transform_attr.is_empty()
+        || !opacity_attr.is_empty()
+        || !mask_attr.is_empty()
+        || !trsp_meta.is_empty();
     if needs_wrapper {
         let _ = writeln!(
             body,
-            "{indent}<g id=\"obj-{}\" data-object-wrapper=\"1\"{name_attr}{locked_attr}{transform_attr}{opacity_attr}{mask_attr}>",
+            "{indent}<g id=\"obj-{}\" data-object-wrapper=\"1\"{name_attr}{locked_attr}{trsp_meta}{transform_attr}{opacity_attr}{mask_attr}>",
             node.id.0
         );
         let child_indent = "  ".repeat(indent_level.saturating_add(1));
@@ -736,10 +869,13 @@ fn emit_path_node(
                 && let Some(outline) = &node.outline
             {
                 let stroke_attrs = format_stroke_attrs(outline, node.transform);
-                let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr} {stroke_attrs}/>");
+                let _ = writeln!(
+                    body,
+                    "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_color_meta}{fill_rule_attr} {stroke_attrs}/>"
+                );
                 emit_svg_arrowheads(body, local_path, outline, node.transform, &child_indent);
             } else {
-                let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}/>");
+                let _ = writeln!(body, "{child_indent}<path{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_color_meta}{fill_rule_attr}/>");
             }
         }
 
@@ -767,7 +903,7 @@ fn emit_path_node(
         let stroke_part = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
         let _ = writeln!(
             body,
-            "{indent}<path id=\"obj-{}\"{name_attr}{locked_attr}{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_rule_attr}{stroke_part}/>",
+            "{indent}<path id=\"obj-{}\"{name_attr}{locked_attr}{trsp_meta}{shape_meta_attr} d=\"{d}\" fill=\"{fill_attr}\"{fill_color_meta}{fill_rule_attr}{stroke_part}/>",
             node.id.0
         );
     }

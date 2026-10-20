@@ -4,13 +4,45 @@
 use std::collections::BTreeMap;
 
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
-use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
+use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size, Unit};
 
-use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle};
+use crate::model::{
+    DocError, Document, Layer, LayerId, LayerRole, LensKind, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle,
+};
 use crate::style::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
-fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
-    if let Some(page) = doc.pages.first_mut()
+fn apply_svg_doc_page_meta(doc: &mut Document, tag_slice: &str) {
+    if let Some(title) = extract_attr_str(tag_slice, "data-title") {
+        doc.title = unescape_svg_xml(title);
+    }
+    if let Some(units_str) = extract_attr_str(tag_slice, "data-units") {
+        doc.units = match units_str.trim() {
+            "mm" => Unit::Mm,
+            "pt" => Unit::Pt,
+            "inch" | "in" => Unit::Inch,
+            "px" => Unit::Px,
+            "cdr_tick" => Unit::CdrTick,
+            _ => doc.units,
+        };
+    }
+    if let Some(page) = doc.pages.first_mut() {
+        if let Some(pname) = extract_attr_str(tag_slice, "data-page-name") {
+            page.name = unescape_svg_xml(pname);
+        }
+        if let Some(bleed_val) = parse_attr_f64(tag_slice, "data-page-bleed").filter(|&v| v >= 0.0)
+            && let Ok(b) = F64::new(bleed_val)
+        {
+            page.bleed = b;
+        }
+    }
+}
+
+fn push_to_active_layer(doc: &mut Document, active_master_idx: Option<usize>, node: ObjectNode) {
+    if let Some(m_idx) = active_master_idx {
+        if let Some(mlayer) = doc.master_layers.get_mut(m_idx) {
+            mlayer.objects.push(node);
+        }
+    } else if let Some(page) = doc.pages.first_mut()
         && let Some(layer) = page.layers.last_mut()
     {
         layer.objects.push(node);
@@ -19,17 +51,23 @@ fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
 
 type SvgGroupFrame = (Option<String>, bool, bool, F64, Affine2, Option<String>, Option<TransparencyStyle>, Vec<ObjectNode>);
 
-fn push_svg_node(doc: &mut Document, group_stack: &mut [SvgGroupFrame], node: ObjectNode) {
+fn push_svg_node(doc: &mut Document, active_master_idx: Option<usize>, group_stack: &mut [SvgGroupFrame], node: ObjectNode) {
     if let Some((_, _, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.push(node);
     } else {
-        push_to_active_layer(doc, node);
+        push_to_active_layer(doc, active_master_idx, node);
     }
 }
 
-fn last_svg_sibling_mut<'a>(doc: &'a mut Document, group_stack: &'a mut [SvgGroupFrame]) -> Option<&'a mut ObjectNode> {
+fn last_svg_sibling_mut<'a>(
+    doc: &'a mut Document,
+    active_master_idx: Option<usize>,
+    group_stack: &'a mut [SvgGroupFrame],
+) -> Option<&'a mut ObjectNode> {
     if let Some((_, _, _, _, _, _, _, children)) = group_stack.last_mut() {
         children.last_mut()
+    } else if let Some(m_idx) = active_master_idx {
+        doc.master_layers.get_mut(m_idx)?.objects.last_mut()
     } else {
         doc.pages.first_mut()?.layers.last_mut()?.objects.last_mut()
     }
@@ -54,6 +92,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         {
             page.size = sz;
         }
+        apply_svg_doc_page_meta(&mut doc, svg_open);
     }
 
     let mut pos = 0usize;
@@ -65,6 +104,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     let mut passthrough_g_stack: Vec<bool> = Vec::new();
     let mut group_stack: Vec<SvgGroupFrame> = Vec::new();
     let mut saw_layer_group = false;
+    let mut active_master_idx: Option<usize> = None;
 
     while let Some(rem) = svg_str.get(pos..) {
         let Some(lt_rel) = rem.find('<') else {
@@ -139,7 +179,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 off_t.parse::<f64>().unwrap_or(0.0)
             }
             .clamp(0.0, 1.0);
-            let col = extract_style_or_attr_str(tag_slice, "stop-color").and_then(|s| parse_svg_color(s.trim())).unwrap_or(Color::BLACK);
+            let col = extract_attr_str(tag_slice, "data-stop-color")
+                .and_then(decode_svg_color_meta)
+                .or_else(|| extract_style_or_attr_str(tag_slice, "stop-color").and_then(|s| parse_svg_color(s.trim())))
+                .unwrap_or(Color::BLACK);
             let mid_val = parse_attr_f64(tag_slice, "data-midpoint").unwrap_or(0.5).clamp(0.01, 0.99);
             if let Ok(st) = FountainStop::with_midpoint(off_val, mid_val, col) {
                 stops.push(st);
@@ -212,22 +255,68 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
             if id_str.starts_with("layer-") {
                 passthrough_g_stack.push(true);
-                let layer_name = extract_attr_str(tag_slice, "data-name").unwrap_or(id_str).to_owned();
+                let layer_name = extract_attr_str(tag_slice, "data-name").map(unescape_svg_xml).unwrap_or_else(|| id_str.to_owned());
                 let layer_opacity = parse_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()).unwrap_or(F64::ONE);
-                if let Some(page) = doc.pages.first_mut() {
-                    if !saw_layer_group
-                        && let Some(first_layer) = page.layers.first_mut()
-                        && first_layer.objects.is_empty()
+                let is_master_layer = extract_attr_str(tag_slice, "data-master-layer") == Some("1");
+                let role = match extract_attr_str(tag_slice, "data-role").map(str::trim) {
+                    Some("master_all_pages") => LayerRole::MasterAllPages,
+                    Some("master_even_pages") => LayerRole::MasterEvenPages,
+                    Some("master_odd_pages") => LayerRole::MasterOddPages,
+                    Some("desktop") => LayerRole::Desktop,
+                    Some("guides") => LayerRole::Guides,
+                    Some("grid") => LayerRole::Grid,
+                    Some("unknown") => LayerRole::Unknown,
+                    _ => LayerRole::Normal,
+                };
+                let printable = extract_attr_str(tag_slice, "data-printable") != Some("0");
+                let locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
+                let master_in_front = extract_attr_str(tag_slice, "data-master-in-front") == Some("1");
+                if is_master_layer {
+                    if let Some(pos_m) = doc.master_layers.iter().position(|ml| ml.name == layer_name && ml.objects.is_empty())
+                        && let Some(ml) = doc.master_layers.get_mut(pos_m)
                     {
-                        first_layer.name = layer_name;
-                        first_layer.opacity = layer_opacity;
+                        ml.opacity = layer_opacity;
+                        ml.role = role;
+                        ml.printable = printable;
+                        ml.locked = locked;
+                        ml.master_in_front = master_in_front;
+                        active_master_idx = Some(pos_m);
                     } else {
-                        let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
+                        let next_lid = LayerId(doc.master_layers.len().saturating_add(100) as u64);
                         let mut new_layer = Layer::new_normal(next_lid, layer_name);
                         new_layer.opacity = layer_opacity;
-                        page.layers.push(new_layer);
+                        new_layer.role = role;
+                        new_layer.printable = printable;
+                        new_layer.locked = locked;
+                        new_layer.master_in_front = master_in_front;
+                        doc.master_layers.push(new_layer);
+                        active_master_idx = Some(doc.master_layers.len().saturating_sub(1));
                     }
-                    saw_layer_group = true;
+                } else {
+                    active_master_idx = None;
+                    if let Some(page) = doc.pages.first_mut() {
+                        if !saw_layer_group
+                            && let Some(first_layer) = page.layers.first_mut()
+                            && first_layer.objects.is_empty()
+                        {
+                            first_layer.name = layer_name;
+                            first_layer.opacity = layer_opacity;
+                            first_layer.role = role;
+                            first_layer.printable = printable;
+                            first_layer.locked = locked;
+                            first_layer.master_in_front = master_in_front;
+                        } else {
+                            let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
+                            let mut new_layer = Layer::new_normal(next_lid, layer_name);
+                            new_layer.opacity = layer_opacity;
+                            new_layer.role = role;
+                            new_layer.printable = printable;
+                            new_layer.locked = locked;
+                            new_layer.master_in_front = master_in_front;
+                            page.layers.push(new_layer);
+                        }
+                        saw_layer_group = true;
+                    }
                 }
             } else if id_str == "prepress-marks" {
                 passthrough_g_stack.push(true);
@@ -238,7 +327,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     .map(unescape_svg_xml)
                     .or_else(|| if id_str.is_empty() || is_obj_wrapper { None } else { Some(id_str.to_owned()) });
                 let locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
-                let opacity = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()).unwrap_or(F64::ONE);
+                let opacity = parse_svg_node_opacity(tag_slice);
                 let tf = parse_svg_transform(tag_slice);
                 let clip_id = extract_url_ref_id(tag_slice, "clip-path");
                 let tr = parse_svg_transparency(tag_slice, &svg_masks);
@@ -250,7 +339,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 && let Some((name, is_obj_wrapper, locked, opacity, tf, clip_id_opt, tr, mut children)) = group_stack.pop()
             {
                 if let Some(clip_id) = clip_id_opt {
-                    if let Some(prev) = last_svg_sibling_mut(&mut doc, &mut group_stack)
+                    if let Some(prev) = last_svg_sibling_mut(&mut doc, active_master_idx, &mut group_stack)
                         && prev.powerclip_children.is_empty()
                     {
                         prev.powerclip_children = children;
@@ -260,7 +349,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                         container.transform = tf;
                         container.transparency = tr;
                         container.powerclip_children = children;
-                        push_svg_node(&mut doc, &mut group_stack, container);
+                        push_svg_node(&mut doc, active_master_idx, &mut group_stack, container);
                     }
                 } else if is_obj_wrapper && !children.is_empty() {
                     let mut merged = children.remove(0);
@@ -287,7 +376,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     if tr.is_some() {
                         merged.transparency = tr;
                     }
-                    push_svg_node(&mut doc, &mut group_stack, merged);
+                    push_svg_node(&mut doc, active_master_idx, &mut group_stack, merged);
                 } else {
                     let grp_name = name.or_else(|| Some("SVG Group".to_owned()));
                     let obj_id = doc.allocate_object_id();
@@ -296,7 +385,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     grp.opacity = opacity;
                     grp.transform = tf;
                     grp.transparency = tr;
-                    push_svg_node(&mut doc, &mut group_stack, grp);
+                    push_svg_node(&mut doc, active_master_idx, &mut group_stack, grp);
                 }
             }
             continue;
@@ -305,8 +394,17 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         if tag_slice.starts_with("<rect ") || tag_slice.starts_with("<rect\t") {
             let id_str = extract_attr_str(tag_slice, "id").unwrap_or_default();
             if id_str == "page-background" {
+                apply_svg_doc_page_meta(&mut doc, tag_slice);
+                let rw = parse_attr_f64(tag_slice, "width").unwrap_or(0.0);
+                let rh = parse_attr_f64(tag_slice, "height").unwrap_or(0.0);
                 let (fill, _) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 if let Some(page) = doc.pages.first_mut() {
+                    if rw > 1.0
+                        && rh > 1.0
+                        && let Ok(sz) = Size::new(rw, rh)
+                    {
+                        page.size = sz;
+                    }
                     page.background = fill;
                 }
                 continue;
@@ -335,7 +433,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(rspec), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                push_svg_node(&mut doc, &mut group_stack, node);
+                push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<ellipse ") || tag_slice.starts_with("<circle ") {
             let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
@@ -355,7 +453,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let mut node = ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                push_svg_node(&mut doc, &mut group_stack, node);
+                push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<line ") || tag_slice.starts_with("<line\t") {
             let x1 = parse_attr_f64(tag_slice, "x1").unwrap_or(0.0);
@@ -370,7 +468,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     let mut node = ObjectNode::new(obj_id, Some("SVG Line".to_owned()), ObjectKind::Path(path), fill, outline);
                     node.transform = parse_svg_transform(tag_slice);
                     node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                    push_svg_node(&mut doc, &mut group_stack, node);
+                    push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
                 }
             }
         } else if tag_slice.starts_with("<polyline ")
@@ -395,7 +493,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let mut node = ObjectNode::new(obj_id, Some(label.to_owned()), ObjectKind::Path(path), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                push_svg_node(&mut doc, &mut group_stack, node);
+                push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<path ") {
             let class_str = extract_attr_str(tag_slice, "class").unwrap_or_default();
@@ -415,12 +513,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, name, kind, fill, outline);
                 node.locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
-                if let Some(op) = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()) {
-                    node.opacity = op;
-                }
+                node.opacity = parse_svg_node_opacity(tag_slice);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                push_svg_node(&mut doc, &mut group_stack, node);
+                push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         } else if (tag_slice.starts_with("<image ") || tag_slice.starts_with("<image\t"))
             && let Some((node_kind, img_tf)) = parse_svg_image_tag(tag_slice)
@@ -429,12 +525,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             let name = extract_attr_str(tag_slice, "data-name").map(unescape_svg_xml).or_else(|| Some("SVG Image".to_owned()));
             let mut node = ObjectNode::new(obj_id, name, node_kind, None, None);
             node.locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
-            if let Some(op) = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()) {
-                node.opacity = op;
-            }
+            node.opacity = parse_svg_node_opacity(tag_slice);
             node.transform = img_tf;
             node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-            push_svg_node(&mut doc, &mut group_stack, node);
+            push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
         } else if (tag_slice.starts_with("<text ") || tag_slice.starts_with("<text\t") || tag_slice == "<text>")
             && let Some(after_open) = svg_str.get(pos..)
             && let Some(close_rel) = after_open.find("</text>")
@@ -474,9 +568,11 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice, &svg_gradients);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some(node_name), kind, fill, outline);
+                node.locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
+                node.opacity = parse_svg_node_opacity(tag_slice);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
-                push_svg_node(&mut doc, &mut group_stack, node);
+                push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         }
     }
@@ -489,7 +585,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         grp.opacity = opacity;
         grp.transform = tf;
         grp.transparency = tr;
-        push_svg_node(&mut doc, &mut group_stack, grp);
+        push_svg_node(&mut doc, active_master_idx, &mut group_stack, grp);
     }
 
     Ok(doc)
@@ -918,8 +1014,8 @@ fn parse_svg_pattern(open_tag: &str, pat_body: &str) -> Option<(String, FillStyl
         }
     }
 
-    let bg_color = rects.first().map(|r| r.2.clone()).unwrap_or(Color::WHITE);
-    let (kind, fg_color) = if let Some(fg) = circle_color {
+    let mut bg_color = rects.first().map(|r| r.2.clone()).unwrap_or(Color::WHITE);
+    let (kind, mut fg_color) = if let Some(fg) = circle_color {
         (PatternKind::PolkaDot, fg)
     } else if let Some(fg) = path_stroke_color {
         (PatternKind::DiagonalCrosshatch, fg)
@@ -938,8 +1034,64 @@ fn parse_svg_pattern(open_tag: &str, pat_body: &str) -> Option<(String, FillStyl
     } else {
         return None;
     };
+    if let Some(fg_meta) = extract_attr_str(open_tag, "data-fg-color").and_then(decode_svg_color_meta) {
+        fg_color = fg_meta;
+    }
+    if let Some(bg_meta) = extract_attr_str(open_tag, "data-bg-color").and_then(decode_svg_color_meta) {
+        bg_color = bg_meta;
+    }
 
     Some((id, FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt }))
+}
+
+fn decode_svg_color_meta(raw: &str) -> Option<Color> {
+    let trimmed = raw.trim();
+    if trimmed == "registration" {
+        return Some(Color::Registration);
+    }
+    if let Some(rest) = trimmed.strip_prefix("cmyk,") {
+        let nums: Vec<f64> = rest.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [c, m, y, k] = nums.as_slice() {
+            return Color::cmyk(*c, *m, *y, *k).ok();
+        }
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("hsb,") {
+        let nums: Vec<f64> = rest.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [h, s, b] = nums.as_slice() {
+            return Color::hsb(*h, *s, *b).ok();
+        }
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("gray,") {
+        let v = rest.trim().parse::<f64>().ok()?;
+        return Color::gray(v).ok();
+    }
+    if let Some(rest) = trimmed.strip_prefix("lab_d50,") {
+        let nums: Vec<f64> = rest.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [l, a, b] = nums.as_slice() {
+            return Color::lab_d50(*l, *a, *b).ok();
+        }
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("lab_d65,") {
+        let nums: Vec<f64> = rest.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [l, a, b] = nums.as_slice() {
+            return Color::lab_d65(*l, *a, *b).ok();
+        }
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix("spot,") {
+        let mut parts = rest.splitn(6, ',');
+        let tint = parts.next()?.trim().parse::<f64>().ok()?;
+        let c = parts.next()?.trim().parse::<f64>().ok()?;
+        let m = parts.next()?.trim().parse::<f64>().ok()?;
+        let y = parts.next()?.trim().parse::<f64>().ok()?;
+        let k = parts.next()?.trim().parse::<f64>().ok()?;
+        let spot_name = unescape_svg_xml(parts.next()?);
+        return Color::spot(spot_name, tint, [c, m, y, k]).ok();
+    }
+    parse_svg_color(trimmed)
 }
 
 fn unescape_svg_xml(s: &str) -> String {
@@ -996,7 +1148,7 @@ fn parse_svg_coord_or_pct(tag_slice: &str, attr_name: &str) -> Option<f64> {
 }
 
 fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillStyle>) -> (Option<FillStyle>, Option<OutlineStyle>) {
-    let fill = match extract_style_or_attr_str(tag_slice, "fill").map(str::trim) {
+    let mut fill = match extract_style_or_attr_str(tag_slice, "fill").map(str::trim) {
         Some("none") | Some("transparent") | None => None,
         Some(raw) => {
             if let Some(rest) = raw.strip_prefix("url(")
@@ -1009,6 +1161,9 @@ fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillS
             }
         }
     };
+    if let Some(fill_meta_col) = extract_attr_str(tag_slice, "data-fill-color").and_then(decode_svg_color_meta) {
+        fill = Some(FillStyle::uniform(fill_meta_col));
+    }
     let outline = match extract_style_or_attr_str(tag_slice, "stroke") {
         Some("none") | Some("transparent") | None => None,
         Some(raw) => parse_svg_color(raw.trim()).map(OutlineStyle::hairline),
@@ -1017,6 +1172,9 @@ fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillS
     let mut outline =
         if fill.is_none() && outline.is_none() && !has_explicit_stroke_none { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
     if let Some(st) = &mut outline {
+        if let Some(stroke_meta_col) = extract_attr_str(tag_slice, "data-stroke-color").and_then(decode_svg_color_meta) {
+            st.color = stroke_meta_col;
+        }
         if let Some(w) = parse_attr_f64(tag_slice, "data-stroke-width-pt").or_else(|| parse_style_or_attr_f64(tag_slice, "stroke-width"))
             && w > 0.0
             && let Ok(w_f64) = F64::new(w)
@@ -1394,7 +1552,54 @@ fn parse_svg_image_tag(tag_slice: &str) -> Option<(ObjectKind, Affine2)> {
     Some((ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels }, tf))
 }
 
+fn parse_svg_lens_kind(raw: &str) -> Option<LensKind> {
+    let trimmed = raw.trim();
+    if trimmed == "invert" {
+        return Some(LensKind::Invert);
+    }
+    if trimmed == "unknown" {
+        return Some(LensKind::Unknown);
+    }
+    if let Some(rest) = trimmed.strip_prefix("magnify,") {
+        let factor = rest.trim().parse::<f64>().ok()?;
+        return Some(LensKind::Magnify { factor: F64::new(factor).ok()? });
+    }
+    if let Some(rest) = trimmed.strip_prefix("brighten,") {
+        let rate = rest.trim().parse::<f64>().ok()?;
+        return Some(LensKind::Brighten { rate: F64::new(rate).ok()? });
+    }
+    if let Some(rest) = trimmed.strip_prefix("tinted,") {
+        let (rate_str, col_str) = rest.split_once(',')?;
+        let rate = rate_str.trim().parse::<f64>().ok()?;
+        let color = decode_svg_color_meta(col_str)?;
+        return Some(LensKind::Tinted { color, rate: F64::new(rate).ok()? });
+    }
+    None
+}
+
+fn parse_svg_node_opacity(tag_slice: &str) -> F64 {
+    if let Some(explicit_op) = parse_attr_f64(tag_slice, "data-node-opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()) {
+        return explicit_op;
+    }
+    let raw_op = parse_style_or_attr_f64(tag_slice, "opacity").map(|v| v.clamp(0.0, 1.0)).unwrap_or(1.0);
+    if let Some(u_tr) = parse_attr_f64(tag_slice, "data-transparency-uniform").filter(|&v| v > 1e-6) {
+        F64::new((raw_op / u_tr).clamp(0.0, 1.0)).unwrap_or(F64::ONE)
+    } else {
+        F64::new(raw_op).unwrap_or(F64::ONE)
+    }
+}
+
 fn parse_svg_transparency(tag_slice: &str, svg_masks: &BTreeMap<String, TransparencyStyle>) -> Option<TransparencyStyle> {
+    if let Some(lens_str) = extract_attr_str(tag_slice, "data-lens")
+        && let Some(kind) = parse_svg_lens_kind(lens_str)
+    {
+        return Some(TransparencyStyle::Lens { kind });
+    }
+    if let Some(u_tr) = parse_attr_f64(tag_slice, "data-transparency-uniform")
+        && let Ok(op) = F64::new(u_tr.clamp(0.0, 1.0))
+    {
+        return Some(TransparencyStyle::Uniform { opacity: op });
+    }
     if let Some(mask_id) = extract_url_ref_id(tag_slice, "mask")
         && let Some(tr) = svg_masks.get(&mask_id)
     {
@@ -1764,6 +1969,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             p = p.saturating_add(1);
             let mut layer_name: Option<&str> = None;
             let mut bname = "";
+            let mut custom_name: Option<&str> = None;
             let mut ix = 0.0;
             let mut iy = 0.0;
             let mut sx = 1.0_f64;
@@ -1776,6 +1982,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 match c {
                     8 => layer_name = Some(v),
                     2 => bname = v,
+                    1 => custom_name = Some(v),
                     10 => ix = v.parse::<f64>().unwrap_or(0.0),
                     20 => iy = v.parse::<f64>().unwrap_or(0.0),
                     41 => sx = v.parse::<f64>().unwrap_or(1.0),
@@ -1794,7 +2001,9 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     children.push(ch);
                 }
                 let grp_id = doc.allocate_object_id();
-                let mut grp = ObjectNode::new(grp_id, Some(format!("DXF Insert {bname}")), ObjectKind::Group { children }, None, None);
+                let grp_label =
+                    custom_name.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| format!("DXF Insert {bname}"));
+                let mut grp = ObjectNode::new(grp_id, Some(grp_label), ObjectKind::Group { children }, None, None);
                 let sy_val = sy.unwrap_or(sx);
                 let scale_tf = Affine2::scaling(sx, sy_val).unwrap_or(Affine2::IDENTITY);
                 let rot_tf = Affine2::rotation_deg(-rot_deg).unwrap_or(Affine2::IDENTITY);
@@ -2352,6 +2561,12 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             let mut tx = 0.0;
             let mut ty = 0.0;
             let mut height = 12.0;
+            let mut frame_w: Option<f64> = None;
+            let mut frame_h: Option<f64> = None;
+            let mut attach_code: Option<i32> = None;
+            let mut line_spacing: Option<f64> = None;
+            let mut columns: Option<u32> = None;
+            let mut gutter: Option<f64> = None;
             let mut rot_deg = 0.0_f64;
             let mut text_val = String::new();
             while let Some(&(c, v)) = pairs.get(p) {
@@ -2366,13 +2581,22 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     10 => tx = v.parse::<f64>().unwrap_or(0.0),
                     20 => ty = v.parse::<f64>().unwrap_or(0.0),
                     40 => height = v.parse::<f64>().unwrap_or(12.0),
+                    41 => frame_w = v.parse::<f64>().ok(),
+                    43 => frame_h = v.parse::<f64>().ok(),
+                    71 => attach_code = v.parse::<i32>().ok(),
+                    44 => line_spacing = v.parse::<f64>().ok(),
+                    75 => columns = v.parse::<u32>().ok(),
+                    48 => gutter = v.parse::<f64>().ok(),
                     50 => rot_deg = v.parse::<f64>().unwrap_or(0.0),
                     1 | 3 => text_val.push_str(v),
                     _ => {}
                 }
                 p = p.saturating_add(1);
             }
-            if is_mtext {
+            let has_frame = is_mtext && frame_w.is_some_and(|w| w > 0.0);
+            if has_frame {
+                text_val = text_val.replace("\\P", "\n").replace("\\p", "\n");
+            } else if is_mtext {
                 text_val = text_val.replace("\\P", " ").replace("\\p", " ");
             }
             if !text_val.is_empty()
@@ -2384,13 +2608,27 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 let fill_col = dxf_aci_to_color(aci, truecolor);
                 let font_family =
                     style_font.map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("STANDARD")).unwrap_or("Sans").to_owned();
-                let mut node = ObjectNode::new(
-                    id,
-                    Some(label.to_owned()),
-                    ObjectKind::ArtisticText { text: text_val, font_family, size_pt, position: pos },
-                    Some(FillStyle::uniform(fill_col)),
-                    None,
-                );
+                let kind = if has_frame {
+                    let fw = frame_w.unwrap_or(160.0).max(1.0);
+                    let fh = frame_h.unwrap_or(80.0).max(1.0);
+                    let ls = line_spacing.unwrap_or(1.2).clamp(0.1, 10.0);
+                    let align = match attach_code.unwrap_or(1) {
+                        2 | 5 | 8 => TextAlignment::Center,
+                        3 | 6 | 9 => TextAlignment::Right,
+                        4 => TextAlignment::Justify,
+                        _ => TextAlignment::Left,
+                    };
+                    let cols = columns.unwrap_or(1).clamp(1, 64);
+                    let gut = gutter.unwrap_or(12.0).max(0.0);
+                    if let Ok(spec) = ParagraphTextSpec::new(pos, fw, fh, text_val.clone(), &font_family, height.max(1.0), ls, align, cols, gut) {
+                        ObjectKind::ParagraphText(Box::new(spec))
+                    } else {
+                        ObjectKind::ArtisticText { text: text_val, font_family, size_pt, position: pos }
+                    }
+                } else {
+                    ObjectKind::ArtisticText { text: text_val, font_family, size_pt, position: pos }
+                };
+                let mut node = ObjectNode::new(id, Some(label.to_owned()), kind, Some(FillStyle::uniform(fill_col)), None);
                 if !is_mtext && rot_deg.abs() > 1e-6 {
                     let screen_deg = (-rot_deg).rem_euclid(360.0);
                     if let (Ok(t0), Ok(rot), Ok(t1)) = (
