@@ -262,6 +262,23 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Endpoint arrowhead style in CorelDRAW's Outline Pen dialog (`F12`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowheadKind {
+    /// No arrowhead marker.
+    #[default]
+    None,
+    /// Solid closed triangular arrowhead.
+    Triangle,
+    /// Open V-shaped chevron arrowhead.
+    OpenArrow,
+    /// Solid circular marker at the endpoint.
+    Circle,
+    /// Solid diamond marker at the endpoint.
+    Diamond,
+}
+
 /// CorelDRAW Outline Pen style (`F12`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutlineStyle {
@@ -282,6 +299,12 @@ pub struct OutlineStyle {
     /// Optional alternating dash-and-gap lengths in typographic points (`F12` Outline Pen Style). Empty means solid line.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dash_pattern: Vec<F64>,
+    /// Start endpoint arrowhead style (`F12` Arrowheads).
+    #[serde(default)]
+    pub start_arrow: ArrowheadKind,
+    /// End endpoint arrowhead style (`F12` Arrowheads).
+    #[serde(default)]
+    pub end_arrow: ArrowheadKind,
 }
 
 impl OutlineStyle {
@@ -297,6 +320,8 @@ impl OutlineStyle {
             behind_fill: false,
             scale_with_object: false,
             dash_pattern: Vec::new(),
+            start_arrow: ArrowheadKind::None,
+            end_arrow: ArrowheadKind::None,
         }
     }
 
@@ -312,6 +337,8 @@ impl OutlineStyle {
             behind_fill: false,
             scale_with_object: false,
             dash_pattern: Vec::new(),
+            start_arrow: ArrowheadKind::None,
+            end_arrow: ArrowheadKind::None,
         }
     }
 

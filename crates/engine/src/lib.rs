@@ -145,6 +145,10 @@ pub enum EngineCommand {
     RotateSelection { angle_deg: F64, origin_index: u8, copy: bool },
     /// Scales selected objects by `(scale_x, scale_y)` around the 9-point Object Origin (`origin_index` in `0..=8`), optionally duplicating (`Alt+F9`).
     ScaleSelection { scale_x: F64, scale_y: F64, origin_index: u8, copy: bool },
+    /// Skews selected objects by `(skew_x_deg, skew_y_deg)` around the 9-point Object Origin (`origin_index` in `0..=8`), optionally duplicating (`Alt+F11`).
+    SkewSelection { skew_x_deg: F64, skew_y_deg: F64, origin_index: u8, copy: bool },
+    /// Duplicates selected objects with offset `(offset_x_pt, offset_y_pt)` and selects the duplicates (`Edit -> Duplicate` / `Ctrl+D`).
+    DuplicateSelection { offset_x_pt: F64, offset_y_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -634,6 +638,33 @@ impl EditorEngine {
             }
             EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, .. } => {
                 if *origin_index > 8 || scale_x.get().abs() <= 1e-6 || scale_y.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, .. } => {
+                let sx = skew_x_deg.get();
+                let sy = skew_y_deg.get();
+                if *origin_index > 8
+                    || sx.abs() >= 85.0
+                    || sy.abs() >= 85.0
+                    || (sx.abs() <= 1e-9 && sy.abs() <= 1e-9)
+                    || Affine2::skew_deg(sx, sy).is_err_and(|_| true)
+                {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
+                if Affine2::translation(offset_x_pt.get(), offset_y_pt.get()).is_err() {
                     return false;
                 }
                 let sel = &self.selection;
@@ -1732,6 +1763,35 @@ impl EditorEngine {
                 };
                 self.apply_selection_transform(scale_tf, copy);
             }
+            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_skew) = Affine2::skew_deg(skew_x_deg.get(), skew_y_deg.get()) else {
+                    return false;
+                };
+                if t_skew.determinant().abs() <= 1e-6 {
+                    return false;
+                }
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(skew_tf) = t_to_origin.then(t_skew).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(skew_tf, copy);
+            }
+            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
+                let Ok(tf) = Affine2::translation(offset_x_pt.get(), offset_y_pt.get()) else {
+                    return false;
+                };
+                self.apply_selection_transform(tf, true);
+            }
         }
         true
     }
@@ -1764,6 +1824,11 @@ impl EditorEngine {
     /// Replaces the current selection list.
     pub fn set_selection(&mut self, selection: Vec<ObjectId>) {
         self.selection = selection;
+    }
+
+    /// Selects all unlocked, visible objects on the active target layer (`Edit -> Select All -> Objects` / `Ctrl+A`).
+    pub fn select_all(&mut self) {
+        self.selection = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).map(|o| o.id).collect();
     }
 
     /// Returns `true` if at least one command can be undone.
@@ -2282,5 +2347,14 @@ mod tests {
             origin_index: 0,
             copy: true,
         }));
+        assert!(engine.execute(EngineCommand::SkewSelection {
+            skew_x_deg: F64::new(15.0).unwrap(),
+            skew_y_deg: F64::ZERO,
+            origin_index: 4,
+            copy: false,
+        }));
+        assert!(engine.execute(EngineCommand::DuplicateSelection { offset_x_pt: F64::new(18.0).unwrap(), offset_y_pt: F64::new(18.0).unwrap() }));
+        engine.select_all();
+        assert!(engine.selection.len() >= 3);
     }
 }

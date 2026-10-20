@@ -13,7 +13,9 @@ pub use model::{
     CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, ParagraphTextSpec, SchemaVersion,
     TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
 };
-pub use style::{ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex};
+pub use style::{
+    ArrowheadKind, ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex,
+};
 pub use text_layout::{ParagraphLayout, PositionedTextLine, advance_pt, layout_paragraph_text};
 
 #[cfg(test)]

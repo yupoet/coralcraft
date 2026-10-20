@@ -3,7 +3,7 @@
 use std::f64::consts::PI;
 
 use coralcraft_color::{Color, interpolate_stops};
-use coralcraft_doc::{FillStyle, FountainGeometry, LineCap, LineJoin};
+use coralcraft_doc::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin};
 use coralcraft_geom::{Affine2, EPS, FillRule, GeomError, Point, Polyline, Rect};
 
 use crate::surface::{RenderError, RenderWarning, Surface};
@@ -375,6 +375,85 @@ fn to_closed_polyline(pts: &[(f64, f64)]) -> Result<Polyline, GeomError> {
         points.push(Point::new(x, y)?);
     }
     Ok(Polyline { points, closed: true })
+}
+
+/// Builds closed arrowhead marker polylines at the start and/or end of open polylines.
+pub fn build_arrowhead_polylines(
+    polys: &[Polyline],
+    half_w: f64,
+    start_arrow: ArrowheadKind,
+    end_arrow: ArrowheadKind,
+) -> Result<Vec<Polyline>, GeomError> {
+    if start_arrow == ArrowheadKind::None && end_arrow == ArrowheadKind::None {
+        return Ok(Vec::new());
+    }
+    let scale = (half_w * 2.0).max(2.0);
+    let mut out = Vec::new();
+    for poly in polys {
+        if poly.closed || poly.points.len() < 2 {
+            continue;
+        }
+        if start_arrow != ArrowheadKind::None {
+            let p_tip = poly.points[0];
+            let p_from = poly.points[1];
+            if let Some(marker) = single_arrowhead(p_from, p_tip, scale, start_arrow)? {
+                out.push(marker);
+            }
+        }
+        if end_arrow != ArrowheadKind::None {
+            let n = poly.points.len();
+            let p_tip = poly.points[n - 1];
+            let p_from = poly.points[n - 2];
+            if let Some(marker) = single_arrowhead(p_from, p_tip, scale, end_arrow)? {
+                out.push(marker);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn single_arrowhead(from: Point, tip: Point, stroke_w: f64, kind: ArrowheadKind) -> Result<Option<Polyline>, GeomError> {
+    let dx = tip.x.get() - from.x.get();
+    let dy = tip.y.get() - from.y.get();
+    let len = dx.hypot(dy);
+    if len <= EPS {
+        return Ok(None);
+    }
+    let ux = dx / len;
+    let uy = dy / len;
+    let nx = -uy;
+    let ny = ux;
+    let aw = stroke_w * 3.0;
+    let ah = stroke_w * 1.5;
+    let tx = tip.x.get();
+    let ty = tip.y.get();
+
+    match kind {
+        ArrowheadKind::None => Ok(None),
+        ArrowheadKind::Triangle | ArrowheadKind::OpenArrow => {
+            let pts = [(tx, ty), (tx - aw * ux + ah * nx, ty - aw * uy + ah * ny), (tx - aw * ux - ah * nx, ty - aw * uy - ah * ny)];
+            Ok(Some(to_closed_polyline(&pts)?))
+        }
+        ArrowheadKind::Diamond => {
+            let half_l = aw * 0.6;
+            let pts = [
+                (tx, ty),
+                (tx - half_l * ux + ah * nx, ty - half_l * uy + ah * ny),
+                (tx - 2.0 * half_l * ux, ty - 2.0 * half_l * uy),
+                (tx - half_l * ux - ah * nx, ty - half_l * uy - ah * ny),
+            ];
+            Ok(Some(to_closed_polyline(&pts)?))
+        }
+        ArrowheadKind::Circle => {
+            let r = ah;
+            let mut pts = Vec::with_capacity(12);
+            for k in 0..12 {
+                let ang = (f64::from(k) / 12.0) * std::f64::consts::TAU;
+                pts.push((tx + r * ang.cos(), ty + r * ang.sin()));
+            }
+            Ok(Some(to_closed_polyline(&pts)?))
+        }
+    }
 }
 
 /// Shades a 16-level coverage buffer onto `surface` using `fill` (Uniform or Linear/Radial Fountain Fill).

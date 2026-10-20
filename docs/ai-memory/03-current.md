@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M19 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M20 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -17,9 +17,10 @@
   9. **M16: Orthogonal Connectors (`build_connector_path`), Callout Boxes (`build_callout_path`), Combine/Break Apart (`Ctrl+L`/`Ctrl+K`), Bitmap Adjustments (`AdjustBitmap`), and 50 MCP Tools (`commit fecf0a1`)**.
   10. **M17: Interactive Distortion Effects (`PushPull`/`Zipper`/`Twister`), PowerTrace Bitmap-to-Vector Outline Tracer (`trace_bitmap_to_path`), Mirror & Symmetry Duplication (`MirrorSelection`), and 53 MCP Tools (`commit 95a59d9`)**.
   11. **M18: Engineering Angular Dimensions (`build_angular_dimension_path`), Create Boundary Silhouette (`CreateBoundary`), Convert Outline to Object (`Ctrl+Shift+Q`), and 56 MCP Tools (`commit fc3ee96`)**.
-  12. **M19: Dashed/Dotted Outline Strokes (`OutlineStyle::dash_pattern`), Conical & Square Fountain Gradients (`FountainGeometry::{Conical, Square}`), 9-Point Object Origin Transformations (`RotateSelection` & `ScaleSelection`), and 60 MCP Tools**:
-      - `coralcraft-doc`, `coralcraft-cdr`, `coralcraft-render`: Added `OutlineStyle::dash_pattern`, `dash_polylines`, and `FountainGeometry::{Conical, Square}`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `RotateSelection`, `ScaleSelection`, and expanded MCP server to **60 tools**.
+  12. **M19: Dashed/Dotted Outline Strokes (`OutlineStyle::dash_pattern`), Conical & Square Fountain Gradients (`FountainGeometry::{Conical, Square}`), 9-Point Object Origin Transformations (`RotateSelection` & `ScaleSelection`), and 60 MCP Tools (`commit 0399522`)**.
+  13. **M20: Outline Start/End Arrowhead Markers (`ArrowheadKind`), 9-Point Skew/Shear Transformation (`SkewSelection` / `Alt+F11`), Duplicate (`Ctrl+D`) & Select All (`Ctrl+A`), and 64 MCP Tools**:
+      - `coralcraft-doc` & `coralcraft-render`: Added `ArrowheadKind` and `build_arrowhead_polylines`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SkewSelection`, `DuplicateSelection`, `select_all`, and expanded MCP server to **64 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

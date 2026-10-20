@@ -5,8 +5,8 @@
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
-    Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf,
-    import_svg,
+    ArrowheadKind, Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment, TransparencyStyle,
+    import_dxf, import_svg,
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
@@ -397,6 +397,26 @@ impl McpServer {
                         {
                             "name": "scale_selection",
                             "description": "Scales selected objects by (scale_x, scale_y) around any 9-point Object Origin (origin_index 0..=8), optionally duplicating (Alt+F9).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_outline_arrows",
+                            "description": "Sets start_arrow and end_arrow markers (none, triangle, open_arrow, circle, diamond) on selected objects (F12 Outline Pen).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "skew_selection",
+                            "description": "Skews selected objects by (skew_x_deg, skew_y_deg) around any 9-point Object Origin (origin_index 0..=8), optionally duplicating (Alt+F11).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "duplicate_selection",
+                            "description": "Duplicates selected objects by (offset_x_pt, offset_y_pt) and selects the copies (Ctrl+D).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "select_all",
+                            "description": "Selects all unlocked visible objects on the active layer (Ctrl+A).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1083,6 +1103,47 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "scaled": ok, "selected_ids": ids }))
             }
+            "set_outline_arrows" => {
+                self.apply_optional_selection(args);
+                let parse_arrow = |s: &str| match s {
+                    "triangle" => ArrowheadKind::Triangle,
+                    "open_arrow" => ArrowheadKind::OpenArrow,
+                    "circle" => ArrowheadKind::Circle,
+                    "diamond" => ArrowheadKind::Diamond,
+                    _ => ArrowheadKind::None,
+                };
+                let start_arrow = parse_arrow(args.get("start_arrow").and_then(Value::as_str).unwrap_or("none"));
+                let end_arrow = parse_arrow(args.get("end_arrow").and_then(Value::as_str).unwrap_or("triangle"));
+                let width_pt = F64::new(args.get("width_pt").and_then(Value::as_f64).unwrap_or(2.0)).map_err(|e| e.to_string())?;
+                let mut outline = OutlineStyle::with_width(Color::BLACK, width_pt);
+                outline.start_arrow = start_arrow;
+                outline.end_arrow = end_arrow;
+                let ok = self.engine.execute(EngineCommand::SetOutline { outline: Some(outline) });
+                Ok(json!({ "outline_arrows_set": ok }))
+            }
+            "skew_selection" => {
+                self.apply_optional_selection(args);
+                let skew_x_deg = F64::new(args.get("skew_x_deg").and_then(Value::as_f64).unwrap_or(15.0)).map_err(|e| e.to_string())?;
+                let skew_y_deg = F64::new(args.get("skew_y_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let origin_index = args.get("origin_index").and_then(Value::as_u64).unwrap_or(4).min(8) as u8;
+                let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, copy });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "skewed": ok, "selected_ids": ids }))
+            }
+            "duplicate_selection" => {
+                self.apply_optional_selection(args);
+                let offset_x_pt = F64::new(args.get("offset_x_pt").and_then(Value::as_f64).unwrap_or(18.0)).map_err(|e| e.to_string())?;
+                let offset_y_pt = F64::new(args.get("offset_y_pt").and_then(Value::as_f64).unwrap_or(18.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "duplicated": ok, "selected_ids": ids }))
+            }
+            "select_all" => {
+                self.engine.select_all();
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "selected_ids": ids, "count": ids.len() }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1112,7 +1173,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 60);
+        assert_eq!(tools, 64);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
