@@ -10,8 +10,8 @@ pub mod text_layout;
 pub use container::{BLOB_THRESHOLD, crc32, list_zip_blobs, load_bytes, save_json, save_zip, sha256_hex};
 pub use interchange::{import_dxf, import_svg};
 pub use model::{
-    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, ParagraphTextSpec, SchemaVersion,
-    TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
+    CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, LensKind, ObjectId, ObjectKind, ObjectNode, Page, PageId, ParagraphTextSpec,
+    SchemaVersion, TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
 };
 pub use style::{
     ArrowheadKind, ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex,

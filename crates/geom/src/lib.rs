@@ -22,8 +22,8 @@ pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, distort_path, expand_artistic_brush_stroke,
-    fillet_path_corners, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
+    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths, distort_path,
+    expand_artistic_brush_stroke, fillet_path_corners, reverse_path_direction, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{
     CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
@@ -314,5 +314,14 @@ mod tests {
         }
         let traced = trace_bitmap_to_path(4, 4, 72.0, 72.0, &bmp, 128).unwrap();
         assert_eq!(traced.elements.len(), 2 * 5); // 2 scanline runs
+
+        let mut open_p = Path::new();
+        open_p.move_to(Point::new(10.0, 20.0).unwrap()).unwrap();
+        open_p.line_to(Point::new(50.0, 20.0).unwrap()).unwrap();
+        open_p.line_to(Point::new(50.0, 60.0).unwrap()).unwrap();
+        let rev_p = reverse_path_direction(&open_p).unwrap();
+        assert_eq!(rev_p.elements[0], PathElement::MoveTo(Point::new(50.0, 60.0).unwrap()));
+        let closed_p = close_open_subpaths(&open_p).unwrap();
+        assert_eq!(closed_p.elements.last(), Some(&PathElement::Close));
     }
 }

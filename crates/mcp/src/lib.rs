@@ -5,8 +5,8 @@
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
-    ArrowheadKind, Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment, TransparencyStyle,
-    import_dxf, import_svg,
+    ArrowheadKind, Document, FillStyle, FountainGeometry, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment,
+    TransparencyStyle, import_dxf, import_svg,
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
@@ -417,6 +417,26 @@ impl McpServer {
                         {
                             "name": "select_all",
                             "description": "Selects all unlocked visible objects on the active layer (Ctrl+A).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "apply_lens",
+                            "description": "Applies a CorelDRAW Lens effect (invert, brighten, tinted, magnify) to selected objects (Alt+F3).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "reverse_path_direction",
+                            "description": "Reverses the winding direction of all subpaths in an object (Shape Tool -> Reverse Subpaths).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "close_path_subpaths",
+                            "description": "Closes all open subpaths in an object (Object -> Join Curves -> Auto-Close Curve).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_object_locked",
+                            "description": "Locks or unlocks an object (Object -> Lock -> Lock / Unlock).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1144,6 +1164,45 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "selected_ids": ids, "count": ids.len() }))
             }
+            "apply_lens" => {
+                self.apply_optional_selection(args);
+                let kind = match args.get("kind").and_then(Value::as_str).unwrap_or("invert") {
+                    "brighten" => {
+                        let rate = F64::new(args.get("rate").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                        LensKind::Brighten { rate }
+                    }
+                    "tinted" => {
+                        let rate = F64::new(args.get("rate").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                        let r = args.get("r").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                        let g = args.get("g").and_then(Value::as_u64).unwrap_or(200).min(255) as u8;
+                        let b = args.get("b").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                        LensKind::Tinted { color: Color::rgb8(r, g, b), rate }
+                    }
+                    "magnify" => {
+                        let factor = F64::new(args.get("factor").and_then(Value::as_f64).unwrap_or(2.0)).map_err(|e| e.to_string())?;
+                        LensKind::Magnify { factor }
+                    }
+                    _ => LensKind::Invert,
+                };
+                let ok = self.engine.execute(EngineCommand::SetTransparency { transparency: Some(TransparencyStyle::Lens { kind }) });
+                Ok(json!({ "lens_applied": ok }))
+            }
+            "reverse_path_direction" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::ReversePathDirection { object_id: target });
+                Ok(json!({ "reversed": ok, "object_id": target.0 }))
+            }
+            "close_path_subpaths" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::CloseOpenSubpaths { object_id: target });
+                Ok(json!({ "closed": ok, "object_id": target.0 }))
+            }
+            "set_object_locked" => {
+                let target = self.resolve_target_id(args)?;
+                let locked = args.get("locked").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::SetObjectLocked { object_id: target, locked });
+                Ok(json!({ "lock_updated": ok, "object_id": target.0, "locked": locked }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1173,7 +1232,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 64);
+        assert_eq!(tools, 68);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

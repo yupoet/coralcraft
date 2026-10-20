@@ -9,7 +9,7 @@ pub mod surface;
 pub mod svg;
 
 use coralcraft_color::{Color, interpolate_stops};
-use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle, VectorEffect};
+use coralcraft_doc::{Document, FillStyle, LensKind, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle, VectorEffect};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use eps::{export_dxf, export_eps};
@@ -314,8 +314,9 @@ fn paint_geometry_and_powerclip(
     // Determine effective FillRule after potential orientation-flipping mirror transform
     let fill_rule = dev_path.fill_rule;
 
-    // Precompute container coverage if needed for fill or PowerClip
-    let need_container_cov = node.fill.is_some() || !node.powerclip_children.is_empty();
+    // Precompute container coverage if needed for fill, Lens, or PowerClip
+    let need_container_cov =
+        node.fill.is_some() || !node.powerclip_children.is_empty() || matches!(node.transparency, Some(TransparencyStyle::Lens { .. }));
     let container_cov = if need_container_cov { Some(rasterize_coverage(&dev_polys, fill_rule, surface.width, surface.height)) } else { None };
 
     let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
@@ -384,8 +385,10 @@ fn paint_geometry_and_powerclip(
         paint_outline(surface, &dev_polys, outline, node.transform, page_scale, eff_opacity)?;
     }
 
-    // 2. Draw object Fill or Bitmap
-    if let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &node.kind {
+    // 2. Draw object Fill, Lens, or Bitmap
+    if let (Some(TransparencyStyle::Lens { kind }), Some(cov)) = (&node.transparency, &container_cov) {
+        apply_lens_coverage(surface, cov, kind, local_bbox, local_to_dev, eff_opacity)?;
+    } else if let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &node.kind {
         paint_bitmap(surface, *pixel_width, *pixel_height, rgba_pixels, local_bbox, local_to_dev, eff_opacity, container_cov.as_deref());
     } else if let (Some(fill), Some(cov)) = (&node.fill, &container_cov) {
         shade_coverage(surface, cov, fill, local_bbox, local_to_dev, eff_opacity, warnings, node.id.0)?;
@@ -440,6 +443,71 @@ fn paint_geometry_and_powerclip(
         }
     }
 
+    Ok(())
+}
+
+fn apply_lens_coverage(
+    surface: &mut Surface,
+    cov: &[u8],
+    kind: &LensKind,
+    local_bbox: Rect,
+    local_to_dev: Affine2,
+    eff_opacity: f64,
+) -> Result<(), RenderError> {
+    let w = surface.width as usize;
+    let h = surface.height as usize;
+    if w == 0 || h == 0 {
+        return Ok(());
+    }
+    let snapshot = surface.clone();
+    let dev_center = local_to_dev.apply_point(local_bbox.center().unwrap_or(Point::ZERO))?;
+    let cx = dev_center.x.get();
+    let cy = dev_center.y.get();
+
+    for py in 0..h {
+        for px in 0..w {
+            let c = cov[py * w + px];
+            if c == 0 {
+                continue;
+            }
+            let alpha = eff_opacity * (f64::from(c) / 16.0);
+            let rgb = match kind {
+                LensKind::Invert => {
+                    let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
+                    [255 - sr, 255 - sg, 255 - sb]
+                }
+                LensKind::Brighten { rate } => {
+                    let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
+                    let r_adj = rate.get().clamp(-1.0, 1.0);
+                    let map_ch = |ch: u8| -> u8 {
+                        let v = f64::from(ch) / 255.0;
+                        let out = if r_adj >= 0.0 { v + (1.0 - v) * r_adj } else { v * (1.0 + r_adj) };
+                        (out.clamp(0.0, 1.0) * 255.0).round() as u8
+                    };
+                    [map_ch(sr), map_ch(sg), map_ch(sb)]
+                }
+                LensKind::Tinted { color, rate } => {
+                    let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
+                    let lum = (0.2126 * f64::from(sr) + 0.7152 * f64::from(sg) + 0.0722 * f64::from(sb)) / 255.0;
+                    let [tr, tg, tb] = color.to_srgb8();
+                    let t = rate.get().clamp(0.0, 1.0);
+                    let mix = |orig: u8, tint: u8| -> u8 {
+                        let tinted = lum * f64::from(tint);
+                        ((1.0 - t) * f64::from(orig) + t * tinted).round().clamp(0.0, 255.0) as u8
+                    };
+                    [mix(sr, tr), mix(sg, tg), mix(sb, tb)]
+                }
+                LensKind::Magnify { factor } => {
+                    let f = factor.get().max(1.0);
+                    let sx = (cx + ((px as f64) - cx) / f).round().clamp(0.0, (w - 1) as f64) as u32;
+                    let sy = (cy + ((py as f64) - cy) / f).round().clamp(0.0, (h - 1) as f64) as u32;
+                    let [sr, sg, sb, _] = snapshot.get_straight_rgba(sx, sy);
+                    [sr, sg, sb]
+                }
+            };
+            surface.blend_straight(px as u32, py as u32, rgb, alpha);
+        }
+    }
     Ok(())
 }
 
@@ -1186,5 +1254,19 @@ mod tests {
         assert!(eps_dashed.contains("[6 4] 0 setdash"));
         let pdf_dashed = String::from_utf8_lossy(&export_pdf(&doc).unwrap()).into_owned();
         assert!(pdf_dashed.contains("[6 4] 0 d"));
+
+        // Lens (Alt+F3) Invert & Magnify over warped red rectangle at (110, 30)
+        let mut lens_obj = ObjectNode::new(
+            ObjectId(304),
+            Some("Invert Lens".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(100.0, 20.0, 120.0, 40.0).unwrap())),
+            None,
+            None,
+        );
+        lens_obj.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Invert });
+        doc.pages[0].layers[0].objects.push(lens_obj);
+        let out_lens = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        let inv_px = out_lens.surface.get_straight_rgba(110, 30);
+        assert!(inv_px[1] > 180 && inv_px[2] > 180, "Invert lens over red should produce cyan: {inv_px:?}");
     }
 }

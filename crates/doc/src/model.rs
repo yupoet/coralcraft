@@ -286,7 +286,21 @@ pub enum VectorEffect {
     },
 }
 
-/// Object-level transparency and lens compositing (`Uniform` or `Fountain`).
+/// CorelDRAW Lens effect (`Effects -> Lens` / `Alt+F3`) applied to the canvas pixels underneath the object's interior coverage.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "lens_type", rename_all = "snake_case")]
+pub enum LensKind {
+    /// Inverts underlying RGB channels (`255 - c`).
+    Invert,
+    /// Brightens (`rate > 0`) or darkens (`rate < 0`) underlying canvas pixels (`rate in -1.0..=1.0`).
+    Brighten { rate: F64 },
+    /// Tints underlying grayscale/color luminance toward `color` by `rate in 0.0..=1.0`.
+    Tinted { color: Color, rate: F64 },
+    /// Magnifies underlying canvas pixels radially around the lens object's bounding-box center by `factor >= 1.0`.
+    Magnify { factor: F64 },
+}
+
+/// Object-level transparency and lens compositing (`Uniform`, `Fountain`, or `Lens`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransparencyStyle {
@@ -301,6 +315,8 @@ pub enum TransparencyStyle {
         /// Ordered gradient stops controlling opacity.
         stops: Vec<FountainStop>,
     },
+    /// CorelDRAW Lens effect (`Alt+F3`) transforming underlying canvas pixels within the object's coverage.
+    Lens { kind: LensKind },
 }
 
 impl TransparencyStyle {

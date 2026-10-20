@@ -690,3 +690,109 @@ pub fn trace_bitmap_to_path(
     }
     Ok(path)
 }
+
+/// Reverses the winding direction of every subpath in `path` (`Shape Tool -> Reverse Direction`),
+/// swapping cubic control points `(c1, c2)` so that reversing twice is bit-exact.
+pub fn reverse_path_direction(path: &Path) -> Result<Path, GeomError> {
+    #[derive(Clone, Copy)]
+    enum Seg {
+        Line(Point),
+        Quad(Point, Point),
+        Cubic(Point, Point, Point),
+    }
+
+    let mut subpaths: Vec<(Point, Vec<Seg>, bool)> = Vec::new();
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => {
+                subpaths.push((p, Vec::new(), false));
+            }
+            PathElement::LineTo(p) => {
+                if let Some(last) = subpaths.last_mut() {
+                    last.1.push(Seg::Line(p));
+                }
+            }
+            PathElement::QuadTo { ctrl, end } => {
+                if let Some(last) = subpaths.last_mut() {
+                    last.1.push(Seg::Quad(ctrl, end));
+                }
+            }
+            PathElement::CubicTo { c1, c2, end } => {
+                if let Some(last) = subpaths.last_mut() {
+                    last.1.push(Seg::Cubic(c1, c2, end));
+                }
+            }
+            PathElement::Close => {
+                if let Some(last) = subpaths.last_mut() {
+                    last.2 = true;
+                }
+            }
+        }
+    }
+
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for (start_pt, segs, closed) in subpaths {
+        if segs.is_empty() {
+            out.move_to(start_pt)?;
+            if closed {
+                out.close()?;
+            }
+            continue;
+        }
+        let end_pt = match *segs.last().unwrap_or(&Seg::Line(start_pt)) {
+            Seg::Line(p) | Seg::Quad(_, p) | Seg::Cubic(_, _, p) => p,
+        };
+        out.move_to(end_pt)?;
+        for idx in (0..segs.len()).rev() {
+            let prev_pt = if idx == 0 {
+                start_pt
+            } else {
+                match segs[idx - 1] {
+                    Seg::Line(p) | Seg::Quad(_, p) | Seg::Cubic(_, _, p) => p,
+                }
+            };
+            match segs[idx] {
+                Seg::Line(_) => out.line_to(prev_pt)?,
+                Seg::Quad(ctrl, _) => out.quad_to(ctrl, prev_pt)?,
+                Seg::Cubic(c1, c2, _) => out.cubic_to(c2, c1, prev_pt)?,
+            }
+        }
+        if closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
+/// Closes all open subpaths in `path` that contain at least one segment (`Object -> Join Curves` / `Auto-Close Curve`).
+pub fn close_open_subpaths(path: &Path) -> Result<Path, GeomError> {
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len() + 4), fill_rule: path.fill_rule };
+    let mut has_seg_in_subpath = false;
+    let mut is_closed = false;
+
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => {
+                if has_seg_in_subpath && !is_closed {
+                    out.close()?;
+                }
+                out.move_to(p)?;
+                has_seg_in_subpath = false;
+                is_closed = false;
+            }
+            PathElement::LineTo(_) | PathElement::QuadTo { .. } | PathElement::CubicTo { .. } => {
+                out.push(el)?;
+                has_seg_in_subpath = true;
+                is_closed = false;
+            }
+            PathElement::Close => {
+                out.close()?;
+                is_closed = true;
+            }
+        }
+    }
+    if has_seg_in_subpath && !is_closed {
+        out.close()?;
+    }
+    Ok(out)
+}

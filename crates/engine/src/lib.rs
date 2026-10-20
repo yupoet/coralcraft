@@ -8,7 +8,7 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, reference_point, trace_bitmap_to_path,
+    boolean_paths, close_open_subpaths, reference_point, reverse_path_direction, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -149,6 +149,14 @@ pub enum EngineCommand {
     SkewSelection { skew_x_deg: F64, skew_y_deg: F64, origin_index: u8, copy: bool },
     /// Duplicates selected objects with offset `(offset_x_pt, offset_y_pt)` and selects the duplicates (`Edit -> Duplicate` / `Ctrl+D`).
     DuplicateSelection { offset_x_pt: F64, offset_y_pt: F64 },
+    /// Reverses the winding direction of all subpaths in `object_id` (`Shape Tool -> Reverse Subpaths`).
+    ReversePathDirection { object_id: ObjectId },
+    /// Closes all open subpaths in `object_id` (`Object -> Join Curves -> Auto-Close Curve`).
+    CloseOpenSubpaths { object_id: ObjectId },
+    /// Locks or unlocks `object_id` (`Object -> Lock -> Lock / Unlock`).
+    SetObjectLocked { object_id: ObjectId, locked: bool },
+    /// Unlocks all locked objects across all layers (`Object -> Lock -> Unlock All Objects`).
+    UnlockAllObjects,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -670,6 +678,35 @@ impl EditorEngine {
                 let sel = &self.selection;
                 let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
                 if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ReversePathDirection { object_id } | EngineCommand::CloseOpenSubpaths { object_id } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetObjectLocked { object_id, .. } => {
+                if self.selected_or_all_node(*object_id).is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::UnlockAllObjects => {
+                let mut any_locked = false;
+                for page in &self.document.pages {
+                    for layer in &page.layers {
+                        if layer.objects.iter().any(|o| o.locked) {
+                            any_locked = true;
+                        }
+                    }
+                }
+                for layer in &self.document.master_layers {
+                    if layer.objects.iter().any(|o| o.locked) {
+                        any_locked = true;
+                    }
+                }
+                if !any_locked {
                     return false;
                 }
             }
@@ -1792,6 +1829,40 @@ impl EditorEngine {
                 };
                 self.apply_selection_transform(tf, true);
             }
+            EngineCommand::ReversePathDirection { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(rev) = reverse_path_direction(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(rev);
+                    }
+                });
+            }
+            EngineCommand::CloseOpenSubpaths { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(closed) = close_open_subpaths(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(closed);
+                    }
+                });
+            }
+            EngineCommand::SetObjectLocked { object_id, locked } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.locked = locked;
+                    }
+                });
+            }
+            EngineCommand::UnlockAllObjects => {
+                self.for_each_node_mut(|obj| {
+                    obj.locked = false;
+                });
+            }
         }
         true
     }
@@ -2356,5 +2427,13 @@ mod tests {
         assert!(engine.execute(EngineCommand::DuplicateSelection { offset_x_pt: F64::new(18.0).unwrap(), offset_y_pt: F64::new(18.0).unwrap() }));
         engine.select_all();
         assert!(engine.selection.len() >= 3);
+
+        // 15. ReversePathDirection, CloseOpenSubpaths, SetObjectLocked, and UnlockAllObjects
+        assert!(engine.execute(EngineCommand::ReversePathDirection { object_id: boundary_id }));
+        assert!(engine.execute(EngineCommand::CloseOpenSubpaths { object_id: boundary_id }));
+        assert!(engine.execute(EngineCommand::SetObjectLocked { object_id: boundary_id, locked: true }));
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().locked);
+        assert!(engine.execute(EngineCommand::UnlockAllObjects));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().locked);
     }
 }
