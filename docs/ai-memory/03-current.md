@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M26 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M27 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -24,9 +24,10 @@
   16. **M23: Ramer-Douglas-Peucker Curve Simplification (`simplify_path_nodes`), 9-Point Exact Selection Position & Size (`SetSelectionBounds`), Layer Creation & Property Controls (`AddLayer` & `SetLayerProperties`), and 76 MCP Tools (`commit e34e5c6`)**.
   17. **M24: Smooth Catmull-Rom / B-Spline Curves (`build_bspline_path`), Clear Transformations (`ClearTransformations`), Artistic <-> Paragraph Text Conversion (`ToggleTextKind` / `Ctrl+F8`), Find and Replace Text (`FindAndReplaceText`), and 80 MCP Tools (`commit 5f18008`)**.
   18. **M25: 3-Point Curve (`build_three_point_curve_path`), Text Case Conversion (`TextCaseKind` & `ChangeTextCase` / `Shift+F3`), Shape Tool Node Insertion & Deletion (`insert_curve_node_at` & `delete_curve_node_at`), and 84 MCP Tools (`commit 66672ee`)**.
-  19. **M26: Shape Tool Segment Conversion (`convert_segment_to_line` & `convert_segment_to_curve`), Page Background & Bleed Configuration (`SetPageBackground` & `SetPageBleed`), and 88 MCP Tools**:
-      - `coralcraft-geom`: Added `convert_segment_to_line` and `convert_segment_to_curve`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `ConvertSegmentToLine`, `ConvertSegmentToCurve`, `SetPageBackground`, `SetPageBleed`, and expanded MCP server to **88 tools**.
+  19. **M26: Shape Tool Segment Conversion (`convert_segment_to_line` & `convert_segment_to_curve`), Page Background & Bleed Configuration (`SetPageBackground` & `SetPageBleed`), and 88 MCP Tools (`commit 162392c`)**.
+  20. **M27: Pointillizer Vector Halftone Mosaic (`build_pointillizer_path`), Object Manager Per-Object Controls (`SetObjectOpacity`, `SetObjectVisible`, `RenameObject`), and 92 MCP Tools**:
+      - `coralcraft-geom`: Added `build_pointillizer_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SetObjectOpacity`, `SetObjectVisible`, `RenameObject`, and expanded MCP server to **92 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

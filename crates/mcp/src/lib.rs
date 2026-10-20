@@ -11,7 +11,7 @@ use coralcraft_doc::{
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
-    build_callout_path, build_connector_path, build_graph_paper_path, build_spiral_path, build_three_point_curve_path,
+    build_callout_path, build_connector_path, build_graph_paper_path, build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -537,6 +537,26 @@ impl McpServer {
                         {
                             "name": "set_page_bleed",
                             "description": "Sets the print bleed margin in points on page_index (Layout -> Page Setup -> Bleed).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_pointillizer",
+                            "description": "Adds a compound vector halftone dot mosaic inside a bounding box (Effects -> Pointillizer).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_object_opacity",
+                            "description": "Updates the opacity (0.0..=1.0) of an object (Properties Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_object_visible",
+                            "description": "Toggles visibility (Object -> Hide / Show Object) of an object.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "rename_object",
+                            "description": "Updates the user-assigned label of an object in the Objects Docker.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1485,6 +1505,37 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetPageBleed { page_index, bleed_pt });
                 Ok(json!({ "page_bleed_set": ok, "page_index": page_index }))
             }
+            "add_pointillizer" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let columns = args.get("columns").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(4) as u32;
+                let dot_scale = args.get("dot_scale").and_then(Value::as_f64).unwrap_or(0.75);
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_pointillizer_path(rect, columns, rows, dot_scale).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Pointillizer".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "pointillizer", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "set_object_opacity" => {
+                let target = self.resolve_target_id(args)?;
+                let opacity = F64::new(args.get("opacity").and_then(Value::as_f64).unwrap_or(1.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SetObjectOpacity { object_id: target, opacity });
+                Ok(json!({ "opacity_set": ok, "object_id": target.0 }))
+            }
+            "set_object_visible" => {
+                let target = self.resolve_target_id(args)?;
+                let visible = args.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::SetObjectVisible { object_id: target, visible });
+                Ok(json!({ "visibility_set": ok, "object_id": target.0 }))
+            }
+            "rename_object" => {
+                let target = self.resolve_target_id(args)?;
+                let name = args.get("name").and_then(Value::as_str).map(str::to_owned);
+                let ok = self.engine.execute(EngineCommand::RenameObject { object_id: target, name });
+                Ok(json!({ "object_renamed": ok, "object_id": target.0 }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1514,7 +1565,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 88);
+        assert_eq!(tools, 92);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

@@ -192,6 +192,12 @@ pub enum EngineCommand {
     SetPageBackground { page_index: usize, background: Option<FillStyle> },
     /// Sets the print bleed margin (in points) on `page_index` (`Layout -> Page Setup -> Bleed`).
     SetPageBleed { page_index: usize, bleed_pt: F64 },
+    /// Updates the opacity (`0.0..=1.0`) of `object_id` (`Properties` Docker).
+    SetObjectOpacity { object_id: ObjectId, opacity: F64 },
+    /// Toggles visibility (`Object -> Hide / Show Object`) of `object_id`.
+    SetObjectVisible { object_id: ObjectId, visible: bool },
+    /// Updates the user-assigned label of `object_id` in the `Objects` Docker.
+    RenameObject { object_id: ObjectId, name: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,7 +852,10 @@ impl EditorEngine {
                     return false;
                 }
             }
-            EngineCommand::SetObjectLocked { object_id, .. } => {
+            EngineCommand::SetObjectLocked { object_id, .. }
+            | EngineCommand::SetObjectOpacity { object_id, .. }
+            | EngineCommand::SetObjectVisible { object_id, .. }
+            | EngineCommand::RenameObject { object_id, .. } => {
                 if self.selected_or_all_node(*object_id).is_none() {
                     return false;
                 }
@@ -2275,6 +2284,30 @@ impl EditorEngine {
                     page.bleed = clamped;
                 }
             }
+            EngineCommand::SetObjectOpacity { object_id, opacity } => {
+                if let Ok(clamped) = F64::new(opacity.get().clamp(0.0, 1.0)) {
+                    self.for_each_node_mut(|obj| {
+                        if obj.id == object_id && !obj.locked {
+                            obj.opacity = clamped;
+                        }
+                    });
+                }
+            }
+            EngineCommand::SetObjectVisible { object_id, visible } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.visible = visible;
+                    }
+                });
+            }
+            EngineCommand::RenameObject { object_id, name } => {
+                let normalized = name.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.name = normalized.clone();
+                    }
+                });
+            }
         }
         true
     }
@@ -2941,5 +2974,14 @@ mod tests {
         assert!(engine.execute(EngineCommand::SetPageBackground { page_index: 0, background: Some(FillStyle::uniform(Color::rgb8(245, 245, 240))) }));
         assert!(engine.execute(EngineCommand::SetPageBleed { page_index: 0, bleed_pt: F64::new(9.0).unwrap() }));
         assert_eq!(engine.document.pages[0].bleed, F64::new(9.0).unwrap());
+
+        // 21. SetObjectOpacity, SetObjectVisible, and RenameObject
+        assert!(engine.execute(EngineCommand::SetObjectOpacity { object_id: boundary_id, opacity: F64::new(0.75).unwrap() }));
+        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().opacity, F64::new(0.75).unwrap());
+        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: false }));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().visible);
+        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: true }));
+        assert!(engine.execute(EngineCommand::RenameObject { object_id: boundary_id, name: Some("Custom Silhouette".to_owned()) }));
+        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().name.as_deref(), Some("Custom Silhouette"));
     }
 }

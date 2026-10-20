@@ -582,3 +582,45 @@ pub fn build_three_point_curve_path(start: Point, end: Point, through: Point) ->
     path.cubic_to(c1, c2, end)?;
     Ok(path)
 }
+
+/// Builds a compound vector halftone dot grid [`Path`] inside `bounds` (`Effects -> Pointillizer`).
+pub fn build_pointillizer_path(bounds: Rect, columns: u32, rows: u32, dot_scale: f64) -> Result<Path, GeomError> {
+    let _ = F64::new(dot_scale)?;
+    let cols = columns.clamp(1, 64);
+    let rws = rows.clamp(1, 64);
+    let scale = dot_scale.clamp(0.05, 1.0);
+    let cell_w = bounds.width() / f64::from(cols);
+    let cell_h = bounds.height() / f64::from(rws);
+    let r = (0.5 * cell_w.min(cell_h) * scale).max(0.25);
+    let k = r * KAPPA;
+    let mut path = Path::new();
+
+    for row in 0..rws {
+        let cy = bounds.y0.get() + (f64::from(row) + 0.5) * cell_h;
+        for col in 0..cols {
+            let cx = bounds.x0.get() + (f64::from(col) + 0.5) * cell_w;
+            path.move_to(Point::new(cx + r, cy)?)?;
+            path.cubic_to(Point::new(cx + r, cy + k)?, Point::new(cx + k, cy + r)?, Point::new(cx, cy + r)?)?;
+            path.cubic_to(Point::new(cx - k, cy + r)?, Point::new(cx - r, cy + k)?, Point::new(cx - r, cy)?)?;
+            path.cubic_to(Point::new(cx - r, cy - k)?, Point::new(cx - k, cy - r)?, Point::new(cx, cy - r)?)?;
+            path.cubic_to(Point::new(cx + k, cy - r)?, Point::new(cx + r, cy - k)?, Point::new(cx + r, cy)?)?;
+            path.close()?;
+        }
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod m27_tests {
+    use super::*;
+    use crate::path::PathElement;
+
+    #[test]
+    fn build_pointillizer_path_generates_closed_dot_subpaths() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 80.0).unwrap();
+        let path = build_pointillizer_path(rect, 4, 3, 0.75).unwrap();
+        let closes = path.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(closes, 12);
+    }
+}
