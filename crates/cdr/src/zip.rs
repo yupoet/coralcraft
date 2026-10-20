@@ -338,6 +338,122 @@ pub fn extract_zip_primary_riff(bytes: &[u8], max_decompressed_bytes: usize) -> 
     Ok((role, decompressed))
 }
 
+/// Extracts and decompresses auxiliary streams referenced in `content/dataFileList.dat`
+/// inside an X6+ (`ZipCdrRole::RootDat`) ZIP container, enforcing `max_total_bytes` across all extracted streams.
+pub fn extract_zip_data_file_streams(bytes: &[u8], max_total_bytes: usize) -> Result<Vec<(String, Vec<u8>)>, ProbeError> {
+    let eocd_pos = find_eocd_offset(bytes).ok_or(ProbeError::Truncated { offset: bytes.len() as u64, needed: 22, available: 0 })?;
+    let total_entries = usize::from(read_u16_le(bytes, eocd_pos.saturating_add(10)).unwrap_or(0));
+    if total_entries > MAX_ZIP_ENTRIES {
+        return Err(ProbeError::LimitExceeded { limit: "max_zip_entries".to_string(), max: MAX_ZIP_ENTRIES });
+    }
+    let cd_size = read_u32_le(bytes, eocd_pos.saturating_add(12)).unwrap_or(0) as usize;
+    let cd_offset = read_u32_le(bytes, eocd_pos.saturating_add(16)).unwrap_or(0) as usize;
+    let cd_end = cd_offset.saturating_add(cd_size).min(eocd_pos);
+
+    let mut cursor = cd_offset;
+    let mut entries = Vec::with_capacity(total_entries.min(256));
+    for _ in 0..total_entries {
+        if cursor.saturating_add(46) > cd_end || bytes.get(cursor..cursor.saturating_add(4)) != Some(b"PK\x01\x02") {
+            break;
+        }
+        let flags = read_u16_le(bytes, cursor.saturating_add(8)).unwrap_or(0);
+        let method = read_u16_le(bytes, cursor.saturating_add(10)).unwrap_or(0);
+        let crc32 = read_u32_le(bytes, cursor.saturating_add(16)).unwrap_or(0);
+        let compressed_size = read_u32_le(bytes, cursor.saturating_add(20)).unwrap_or(0);
+        let uncompressed_size = read_u32_le(bytes, cursor.saturating_add(24)).unwrap_or(0);
+        let name_len = usize::from(read_u16_le(bytes, cursor.saturating_add(28)).unwrap_or(0));
+        let extra_len = usize::from(read_u16_le(bytes, cursor.saturating_add(30)).unwrap_or(0));
+        let comment_len = usize::from(read_u16_le(bytes, cursor.saturating_add(32)).unwrap_or(0));
+        let local_header_offset = read_u32_le(bytes, cursor.saturating_add(42)).unwrap_or(0);
+
+        let name_start = cursor.saturating_add(46);
+        let Some(name_end) = name_start.checked_add(name_len) else { break };
+        let Some(next_cursor) = name_end.checked_add(extra_len).and_then(|v| v.checked_add(comment_len)) else { break };
+        if next_cursor > cd_end {
+            break;
+        }
+        let name = String::from_utf8_lossy(bytes.get(name_start..name_end).unwrap_or(&[])).into_owned();
+        entries.push(CdEntry { name, flags, method, crc32, compressed_size, uncompressed_size, local_header_offset });
+        cursor = next_cursor;
+    }
+
+    let extract_one = |entry: &CdEntry, budget: usize| -> Result<Vec<u8>, ProbeError> {
+        if (entry.flags & 1) != 0 {
+            return Err(ProbeError::Invalid {
+                offset: u64::from(entry.local_header_offset),
+                reason: format!("ZIP entry {} is encrypted", entry.name),
+            });
+        }
+        if (entry.uncompressed_size as usize) > budget {
+            return Err(ProbeError::LimitExceeded { limit: "max_decompressed_bytes".to_string(), max: budget });
+        }
+        let lfh_offset = entry.local_header_offset as usize;
+        if lfh_offset.checked_add(30).is_none_or(|end| end > bytes.len())
+            || bytes.get(lfh_offset..lfh_offset.saturating_add(4)) != Some(b"PK\x03\x04")
+        {
+            return Err(ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "invalid Local File Header".to_string() });
+        }
+        let lfh_name_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(26)).unwrap_or(0));
+        let lfh_extra_len = usize::from(read_u16_le(bytes, lfh_offset.saturating_add(28)).unwrap_or(0));
+        let data_start =
+            lfh_offset.checked_add(30).and_then(|v| v.checked_add(lfh_name_len)).and_then(|v| v.checked_add(lfh_extra_len)).ok_or(
+                ProbeError::Invalid { offset: u64::from(entry.local_header_offset), reason: "Local File Header offset overflow".to_string() },
+            )?;
+        let data_end = data_start
+            .checked_add(entry.compressed_size as usize)
+            .ok_or(ProbeError::Invalid { offset: data_start as u64, reason: "compressed data length overflow".to_string() })?;
+        let raw_slice = bytes.get(data_start..data_end).ok_or(ProbeError::Truncated {
+            offset: data_start as u64,
+            needed: u64::from(entry.compressed_size),
+            available: bytes.len().saturating_sub(data_start) as u64,
+        })?;
+        let decompressed = match entry.method {
+            0 => raw_slice.to_vec(),
+            8 => crate::inflate::inflate_raw(raw_slice, budget)?,
+            other => {
+                return Err(ProbeError::Invalid {
+                    offset: data_start as u64,
+                    reason: format!("unsupported ZIP compression method {other} for {}", entry.name),
+                });
+            }
+        };
+        if crc32_ieee(&decompressed) != entry.crc32 {
+            return Err(ProbeError::Invalid { offset: data_start as u64, reason: format!("ZIP entry {} CRC-32 mismatch", entry.name) });
+        }
+        Ok(decompressed)
+    };
+
+    let Some(list_entry) = entries.iter().find(|e| e.name.eq_ignore_ascii_case("content/dataFileList.dat")) else {
+        return Ok(Vec::new());
+    };
+    let mut remaining = max_total_bytes;
+    let list_bytes = extract_one(list_entry, remaining)?;
+    remaining = remaining.saturating_sub(list_bytes.len());
+
+    let list_text = String::from_utf8_lossy(&list_bytes);
+    let mut out = Vec::new();
+    for raw_line in list_text.lines() {
+        let item = raw_line.trim().trim_matches('\0');
+        if item.is_empty() {
+            continue;
+        }
+        let candidate_a = format!("content/{item}");
+        let candidate_b = format!("content/data/{item}");
+        if let Some(target_entry) = entries
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(item) || e.name.eq_ignore_ascii_case(&candidate_a) || e.name.eq_ignore_ascii_case(&candidate_b))
+            && !target_entry.name.eq_ignore_ascii_case("content/root.dat")
+            && !target_entry.name.eq_ignore_ascii_case("content/riffData.cdr")
+            && !target_entry.name.eq_ignore_ascii_case("content/dataFileList.dat")
+            && let Ok(stream_bytes) = extract_one(target_entry, remaining)
+        {
+            remaining = remaining.saturating_sub(stream_bytes.len());
+            out.push((target_entry.name.clone(), stream_bytes));
+        }
+    }
+    Ok(out)
+}
+
 /// Computes the standard IEEE 802.3 CRC-32 checksum used by PKWARE ZIP headers.
 pub fn crc32_ieee(bytes: &[u8]) -> u32 {
     coralcraft_doc::crc32(bytes)

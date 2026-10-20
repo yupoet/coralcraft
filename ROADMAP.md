@@ -9,15 +9,15 @@
 
 | Dimension | Current (re-estimated) | Main gaps |
 | --- | ---: | --- |
-| Workspace & engineering gates | 90% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across `color`, `cdr`, `doc`, `render`, and `geom`. |
+| Workspace & engineering gates | 92% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across `color`, `cdr`, `doc`, `render`, `geom`, and `tools`. |
 | CDR format: `probe` | 85% | Hardened walker + CRC-32/Adler-32 validation + `libcdr` `cdr2raw` local differential oracle. |
-| CDR format: `parse` | 70% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `REV-0001`..`REV-0010` reverse log entries; X6+ multi-stream `dataFileList` remains open. |
-| CDR/CMX format: `write` | 65% | Kaitai-aligned CDR7 `loda` offset-table and CMX1 tag-1/tag-2 writers with strict payload bounds checking and `libcdr` `cdr2raw` differential tests. |
-| Document model & `.coralcraft` | 85% | `Document::validate()` enforced on load/engine init; deterministic mutation tests (`import_svg`, `import_dxf`, `load_bytes`); checked 32-bit offsets. |
-| Rendering & vector export | 80% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`; EPS/DXF group transform composition, `eofill`, and name sanitization. |
+| CDR format: `parse` | 85% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `LIST grp ` hierarchical group preservation + X6+ `content/dataFileList.dat` multi-stream extraction (`extract_zip_data_file_streams`). |
+| CDR/CMX format: `write` | 75% | Kaitai-aligned CDR7 `loda` offset-table, `LIST grp ` hierarchical groups, and CMX1 tag-1/tag-2 writers with strict payload bounds checking and `libcdr` `cdr2raw` differential tests. |
+| Document model & `.coralcraft` | 90% | `Document::validate()` enforced on load/engine init; forward-compatible `#[serde(other)]` enum variants; deterministic mutation tests (`import_svg`, `import_dxf`, `load_bytes`); checked 32-bit offsets. |
+| Rendering & vector export | 85% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`; EPS/DXF group transform composition, `eofill`, and name sanitization. |
 | Geometry (booleans, offsets, warps) | 80% | Clean-room planar subdivision polygon boolean clipper with canonical `VertexPool`, hole/island support, area-identity and 2D grid-oracle property tests. |
 | Tools, panels & interactive UI | 80% | Native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), `rfd` dialogs, `arboard` clipboard, and WASM web canvas entry point. |
-| Print & prepress | 75% | Deduplicated `emit_crop_and_registration_marks`, N-Up PDF sheet imposition, and native PDF shading/pattern/opacity dictionaries. |
+| Print & prepress | 85% | Deduplicated `emit_crop_and_registration_marks`, ISO 15930 PDF/X-1a `/OutputIntents` (`/S /GTS_PDFX`), N-Up PDF sheet imposition, and native PDF shading/pattern/opacity dictionaries. |
 | MCP / agent automation | 90% | JSON-RPC 2.0 compliant (`ping`, silent notifications, protocol negotiation, `-32600`/`-32602`, 64 MiB stdio cap), generated `inputSchema.properties` for all 244 tools, `isError` on rejection, and table-driven smoke tests over all 244 tools. |
 | Packaging & release | 80% | Universal macOS `.app.zip`, Linux `nfpm` `.deb`/`.rpm` + AppImage + Flatpak manifest, Windows GUI subsystem + Inno Setup `.iss`, FreeBSD native CI, and real `wasm32-unknown-unknown` `trunk` web bundle. |
 
@@ -232,9 +232,14 @@
 64. **M64 Heighway Dragon Fractal Curve (`build_dragon_curve_path`), Bounding-Box Shear Warp (`shear_warp_path_along_axis` & `ShearWarpObjectPath`), Progressive Selection Rotation (`RotateSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Import (`import_coralcraft_zip_base64`), and 240 MCP Tools**:
     - `coralcraft-geom`: `build_dragon_curve_path` (recursive paper-folding Heighway Dragon fractal curve of $2^{\text{iterations}}$ segments) and `shear_warp_path_along_axis` (bounding-box-normalized oblique shear warp).
     - `coralcraft-engine` & `coralcraft-mcp`: `ShearWarpObjectPath`, `RotateSelectionProgressively`, `add_dragon_curve`, `shear_warp_object_path`, `rotate_selection_progressively`, `import_coralcraft_zip_base64`, and **240 MCP tools**.
+65. **M65 Hierarchical CDR Group (`LIST grp `) Parse & Round-Trip, X6+ `content/dataFileList.dat` Multi-Stream Extraction, Forward-Compatible `.coralcraft` Schema Variants, PDF/X-1a `/OutputIntents`, and `coralcraft-tools` Strict Lints**:
+    - `coralcraft-cdr`: Preserved nested `LIST grp ` containers as `ObjectKind::Group { children }` in `parse_document` and `write_cdr7`, and added `extract_zip_data_file_streams` for X6+ multi-stream archives (`content/dataFileList.dat`).
+    - `coralcraft-doc`: Added forward-compatible `#[serde(other)] Unknown` variants to `LayerRole`, `VectorEffect`, `TransparencyStyle`, `LensKind`, `PatternKind`, and `ArrowheadKind`.
+    - `coralcraft-render` & `coralcraft-tools`: Added ISO 15930 PDF/X-1a `/OutputIntents` (`/S /GTS_PDFX`) to `PrepressOptions` / `export_pdf_with_prepress`, and enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` in `coralcraft-tools`.
 
 ## Changelog
 
+- 2026-10-21: M65 delivered (`LIST grp ` hierarchical group parse/write round-trip, `extract_zip_data_file_streams` X6+ multi-stream loader, forward-compatible `#[serde(other)]` enum variants in `coralcraft-doc`, PDF/X-1a `/OutputIntents` in `export_pdf_with_prepress`, and strict clippy lints in `coralcraft-tools`).
 - 2026-10-20: M64 delivered (`build_dragon_curve_path` & `add_dragon_curve`, `shear_warp_path_along_axis` & `ShearWarpObjectPath`, `RotateSelectionProgressively`, `import_coralcraft_zip_base64`, 240 MCP tools).
 - 2026-10-20: M63 delivered (`build_koch_snowflake_path` & `add_koch_snowflake`, `flatten_path_to_polylines` & `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `export_coralcraft_zip_base64`, 236 MCP tools).
 - 2026-10-20: M62 delivered (`build_sierpinski_triangle_path` & `add_sierpinski_triangle`, `pinch_punch_warp_path` & `PinchPunchObjectPath`, `StackSelection`, `get_document_summary`, 232 MCP tools).

@@ -2467,7 +2467,7 @@ impl McpServer {
                 let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
                 let registration_marks = args.get("registration_marks").and_then(Value::as_bool).unwrap_or(true);
                 let bleed_pt = F64::new(args.get("bleed_pt").and_then(Value::as_f64).unwrap_or(9.0)).map_err(|e| e.to_string())?;
-                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt };
+                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt, ..PrepressOptions::default() };
                 let pdf = export_pdf_with_prepress(&self.engine.document, &opts).map_err(|e| e.to_string())?;
                 let b64 = base64_encode(&pdf);
                 Ok(json!({
@@ -2506,7 +2506,7 @@ impl McpServer {
                 let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
                 let registration_marks = args.get("registration_marks").and_then(Value::as_bool).unwrap_or(true);
                 let bleed_pt = F64::new(args.get("bleed_pt").and_then(Value::as_f64).unwrap_or(9.0)).map_err(|e| e.to_string())?;
-                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt };
+                let opts = PrepressOptions { crop_marks, registration_marks, bleed_pt, ..PrepressOptions::default() };
                 let svg = export_svg_with_prepress(&self.engine.document, page_index, &opts).map_err(|e| e.to_string())?;
                 Ok(json!({
                     "page_index": page_index,

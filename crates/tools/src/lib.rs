@@ -426,15 +426,13 @@ pub fn build_property_bar_schema(selection: &[&ObjectNode], page: &Page, units: 
         return schema_for_armed_tool(tool, tool_state);
     }
 
-    if selection.is_empty() {
+    let Some(&first) = selection.first() else {
         let orientation = if page.size.width.get() >= page.size.height.get() { PageOrientation::Landscape } else { PageOrientation::Portrait };
         return PropertyBarSchema {
             context: PropertyContext::PageSetup,
             controls: vec![PropertyControl::PageDimensions { width_pt: page.size.width, height_pt: page.size.height, units, orientation }],
         };
-    }
-
-    let first = selection[0];
+    };
     let bbox = combined_selection_bounds(selection);
     let ref_pt = coralcraft_geom::reference_point(bbox, usize::from(tool_state.origin_point.as_index())).unwrap_or(Point { x: bbox.x0, y: bbox.y0 });
     let origin_ctrl = PropertyControl::OriginSelector { active: tool_state.origin_point };
@@ -735,7 +733,7 @@ pub fn hit_test_path_node(path: &coralcraft_geom::Path, transform: coralcraft_ge
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use coralcraft_doc::{Document, ObjectId};

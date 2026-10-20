@@ -214,6 +214,9 @@ pub enum PatternKind {
     VerticalStripe,
     /// Diagonal 45° and 135° crosshatch grid lines.
     DiagonalCrosshatch,
+    /// Forward-compatible fallback for pattern kinds introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Object or page fill style.
@@ -303,6 +306,9 @@ pub enum ArrowheadKind {
     Circle,
     /// Solid diamond marker at the endpoint.
     Diamond,
+    /// Forward-compatible fallback for arrowhead kinds introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 /// CorelDRAW Outline Pen style (`F12`).

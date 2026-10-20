@@ -366,4 +366,41 @@ mod tests {
         let doc_dxf = import_dxf(dxf_sample).unwrap();
         assert_eq!(doc_dxf.pages[0].layers[0].objects.len(), 3);
     }
+
+    #[test]
+    fn forward_compatible_enum_variants_deserialize_unknown_tags_m65() {
+        let mut doc = Document::new_a4_portrait();
+        let rect = Rect::new(10.0, 10.0, 100.0, 80.0).unwrap();
+        let node = ObjectNode::new(
+            ObjectId(42),
+            Some("ForwardCompat".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(rect)),
+            Some(FillStyle::TwoColorPattern {
+                kind: PatternKind::Checkerboard,
+                fg_color: Color::BLACK,
+                bg_color: Color::WHITE,
+                tile_size_pt: F64::new(12.0).unwrap(),
+            }),
+            Some(OutlineStyle::hairline(Color::BLACK)),
+        );
+        doc.pages[0].layers[0].objects.push(node);
+
+        let mut json = String::from_utf8(save_json(&doc).unwrap()).unwrap();
+        json = json.replace(r#""role":"normal""#, r#""role":"future_ai_guide_layer""#);
+        json = json.replace(r#""kind":"checkerboard""#, r#""kind":"future_hex_pattern""#);
+        json = json.replace(r#""start_arrow":"none""#, r#""start_arrow":"future_feathered_arrow""#);
+
+        let loaded = load_bytes(json.as_bytes()).expect("unknown enum tags from newer minor schema must deserialize gracefully");
+        assert_eq!(loaded.pages[0].layers[0].role, LayerRole::Unknown);
+        let obj = &loaded.pages[0].layers[0].objects[0];
+        assert!(matches!(obj.fill, Some(FillStyle::TwoColorPattern { kind: PatternKind::Unknown, .. })));
+        assert_eq!(obj.outline.as_ref().unwrap().start_arrow, ArrowheadKind::Unknown);
+
+        let effect_unknown: VectorEffect = serde_json::from_str(r#"{"type":"future_bevel_3d","depth":12.0}"#).unwrap();
+        assert_eq!(effect_unknown, VectorEffect::Unknown);
+        let trans_unknown: TransparencyStyle = serde_json::from_str(r#"{"type":"future_mesh_opacity"}"#).unwrap();
+        assert_eq!(trans_unknown, TransparencyStyle::Unknown);
+        let lens_unknown: LensKind = serde_json::from_str(r#"{"lens_type":"future_chromatic_aberration"}"#).unwrap();
+        assert_eq!(lens_unknown, LensKind::Unknown);
+    }
 }

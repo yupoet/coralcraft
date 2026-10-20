@@ -455,7 +455,7 @@ fn single_arrowhead(from: Point, tip: Point, stroke_w: f64, kind: ArrowheadKind)
     let ty = tip.y.get();
 
     match kind {
-        ArrowheadKind::None => Ok(None),
+        ArrowheadKind::None | ArrowheadKind::Unknown => Ok(None),
         ArrowheadKind::Triangle | ArrowheadKind::OpenArrow => {
             let pts = [(tx, ty), (tx - aw * ux + ah * nx, ty - aw * uy + ah * ny), (tx - aw * ux - ah * nx, ty - aw * uy - ah * ny)];
             Ok(Some(to_closed_polyline(&pts)?))
@@ -555,7 +555,7 @@ pub fn shade_coverage(
                     let u = (loc_pt.x.get() / ts).rem_euclid(1.0);
                     let v = (loc_pt.y.get() / ts).rem_euclid(1.0);
                     let is_fg = match kind {
-                        PatternKind::Checkerboard => (u < 0.5) ^ (v < 0.5),
+                        PatternKind::Checkerboard | PatternKind::Unknown => (u < 0.5) ^ (v < 0.5),
                         PatternKind::PolkaDot => (u - 0.5).hypot(v - 0.5) <= 0.35,
                         PatternKind::HorizontalStripe => v < 0.5,
                         PatternKind::VerticalStripe => u < 0.5,

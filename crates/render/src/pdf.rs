@@ -24,6 +24,9 @@ pub struct PrepressOptions {
     pub registration_marks: bool,
     /// Optional bleed override in typographic points (`0.0` = use `page.bleed`).
     pub bleed_pt: F64,
+    /// Emit ISO 15930 PDF/X-1a `/OutputIntents` (`/S /GTS_PDFX`, `CGATS TR 001`) in the PDF `/Catalog`.
+    #[serde(default)]
+    pub pdfx_output_intent: bool,
 }
 
 /// N-Up sheet imposition specification (`File -> Print Preview -> Imposition Layout Tool`).
@@ -196,8 +199,15 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
         let _ = write!(kids_refs, "{} 0 R", 4usize.saturating_add(2usize.saturating_mul(i)));
     }
 
-    // 1: Catalog
-    objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
+    // 1: Catalog (with optional ISO 15930 PDF/X `/OutputIntents` dictionary for prepress workflows)
+    if prepress.pdfx_output_intent || prepress.crop_marks || prepress.registration_marks {
+        objects.push(
+            b"<< /Type /Catalog /Pages 2 0 R /OutputIntents [ << /Type /OutputIntent /S /GTS_PDFX /OutputConditionIdentifier (CGATS TR 001) /RegistryName (http://www.color.org) /Info (SWOP CMYK Coated) >> ] >>"
+                .to_vec(),
+        );
+    } else {
+        objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
+    }
     // 2: Pages
     objects.push(format!("<< /Type /Pages /Kids [{kids_refs}] /Count {page_count} >>").into_bytes());
     // 3: Font /F1 (Helvetica)

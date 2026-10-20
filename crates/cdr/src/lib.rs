@@ -795,4 +795,59 @@ mod tests {
             panic!("expected Envelope effect");
         }
     }
+
+    #[test]
+    fn write_cdr7_roundtrip_hierarchical_group_and_x6_data_file_list_m65() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::{EllipseSpec, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let child_a = ObjectNode::new(
+            ObjectId(31),
+            Some("ChildRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 80.0, 60.0).unwrap())),
+            None,
+            None,
+        );
+        let child_b = ObjectNode::new(
+            ObjectId(32),
+            Some("ChildEllipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(100.0, 30.0, 160.0, 90.0).unwrap())),
+            None,
+            None,
+        );
+        let grp = ObjectNode::new(ObjectId(33), Some("Group".to_owned()), ObjectKind::Group { children: vec![child_a, child_b] }, None, None);
+        doc.pages[0].layers[0].objects.push(grp);
+
+        let cdr_bytes = write_cdr7(&doc).expect("write_cdr7 with Group");
+        let parsed = parse_document(&cdr_bytes).expect("parse cdr7 with Group");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 1);
+        match &objs[0].kind {
+            ObjectKind::Group { children } => {
+                assert_eq!(children.len(), 2);
+                assert!(matches!(children[0].kind, ObjectKind::Rect(_)));
+                assert!(matches!(children[1].kind, ObjectKind::Ellipse(_)));
+            }
+            other => panic!("expected hierarchical ObjectKind::Group, got {other:?}"),
+        }
+
+        // Also verify X6+ `content/root.dat` + `content/dataFileList.dat` + `content/data/page2.dat` extraction
+        let mut doc2 = Document::new_a4_portrait();
+        doc2.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(41),
+            Some("AuxPageRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 40.0, 140.0, 110.0).unwrap())),
+            None,
+            None,
+        ));
+        let aux_riff = write_cdr7(&doc2).unwrap();
+        let x6_zip = crate::zip::build_stored_zip(&[
+            ("content/root.dat", &cdr_bytes),
+            ("content/dataFileList.dat", b"data/page2.dat\n"),
+            ("content/data/page2.dat", &aux_riff),
+        ]);
+        let parsed_x6 = parse_document(&x6_zip).expect("parse X6 multi-stream ZIP");
+        assert_eq!(parsed_x6.document.pages.len(), 2, "both root.dat and data/page2.dat pages must be parsed");
+    }
 }

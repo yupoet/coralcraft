@@ -110,6 +110,9 @@ pub enum LayerRole {
     Guides,
     /// Document grid layer (non-printing).
     Grid,
+    /// Forward-compatible fallback for layer roles introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 /// First-class passthrough node for unimplemented or opaque CDR object records.
@@ -287,6 +290,9 @@ pub enum VectorEffect {
         /// Spatial frequency / lobe count (`>= 1.0`).
         frequency: F64,
     },
+    /// Forward-compatible fallback for vector effects introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 /// CorelDRAW Lens effect (`Effects -> Lens` / `Alt+F3`) applied to the canvas pixels underneath the object's interior coverage.
@@ -301,6 +307,9 @@ pub enum LensKind {
     Tinted { color: Color, rate: F64 },
     /// Magnifies underlying canvas pixels radially around the lens object's bounding-box center by `factor >= 1.0`.
     Magnify { factor: F64 },
+    /// Forward-compatible fallback for lens kinds introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Object-level transparency and lens compositing (`Uniform`, `Fountain`, or `Lens`).
@@ -320,6 +329,9 @@ pub enum TransparencyStyle {
     },
     /// CorelDRAW Lens effect (`Alt+F3`) transforming underlying canvas pixels within the object's coverage.
     Lens { kind: LensKind },
+    /// Forward-compatible fallback for transparency modes introduced in newer `.coralcraft` schemas.
+    #[serde(other)]
+    Unknown,
 }
 
 impl TransparencyStyle {

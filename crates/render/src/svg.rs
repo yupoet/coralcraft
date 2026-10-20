@@ -188,7 +188,7 @@ fn emit_pattern_def(defs: &mut String, id_suffix: &str, fill: &FillStyle) {
         writeln!(defs, "    <pattern id=\"pat-{id_suffix}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\">", fmt_num(ts), fmt_num(ts));
     let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{bg}\"/>", fmt_num(ts), fmt_num(ts));
     match kind {
-        PatternKind::Checkerboard => {
+        PatternKind::Checkerboard | PatternKind::Unknown => {
             let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{fg}\"/>", fmt_num(half), fmt_num(half));
             let _ = writeln!(
                 defs,

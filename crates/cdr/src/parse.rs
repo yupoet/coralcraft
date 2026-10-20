@@ -194,7 +194,7 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
             let v = version.effective_version.unwrap_or(1300);
             parse_riff_stream(bytes, *endian, v, &mut doc, &mut parse_warnings);
         }
-        CdrContainer::Zip { primary_entry, inner_version, .. } => {
+        CdrContainer::Zip { primary_entry, inner_version, has_data_file_list, .. } => {
             doc.title = format!("CDR ZIP ({primary_entry})");
             match crate::zip::extract_zip_primary_riff(bytes, MAX_DECOMPRESSED_BYTES) {
                 Ok((_role, inner_bytes)) => {
@@ -202,6 +202,14 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
                     let form_v = inner_bytes.get(11).and_then(|&b| crate::decode_cdr_version_char(b));
                     let v = inner_version.and_then(|iv| iv.effective_version).or(form_v).unwrap_or(1400);
                     parse_riff_stream(&inner_bytes, endian, v, &mut doc, &mut parse_warnings);
+                    if *has_data_file_list && let Ok(aux_streams) = crate::zip::extract_zip_data_file_streams(bytes, MAX_DECOMPRESSED_BYTES) {
+                        for (_name, stream_bytes) in aux_streams {
+                            if stream_bytes.get(0..4) == Some(b"RIFF") || stream_bytes.get(0..4) == Some(b"RIFX") {
+                                let aux_endian = if stream_bytes.get(0..4) == Some(b"RIFX") { Endian::Big } else { Endian::Little };
+                                parse_riff_stream(&stream_bytes, aux_endian, v, &mut doc, &mut parse_warnings);
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     parse_warnings.push(format!("W-ZIP-EXTRACT: could not decompress inner RIFF stream ({e}); creating fallback page"));
@@ -597,6 +605,13 @@ fn collect_loose_objects_recursive(
         if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"obj ") {
             if let Some(obj) = parse_object_chunk(ch, ctx, page_size, warnings) {
                 out.push(obj);
+            }
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"grp ") {
+            let mut group_children = Vec::new();
+            collect_loose_objects_recursive(&ch.children, ctx, page_size, &mut group_children, warnings);
+            if !group_children.is_empty() {
+                let grp_id = ObjectId(ctx.alloc_id());
+                out.push(ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children: group_children }, None, None));
             }
         } else if !ch.children.is_empty() {
             collect_loose_objects_recursive(&ch.children, ctx, page_size, out, warnings);
@@ -2032,9 +2047,11 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
 
 fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
+        let mut grp_children = Vec::new();
         for child in children {
-            encode_object_into_layer(child, page_size, next_style_id, layer_children)?;
+            encode_object_into_layer(child, page_size, next_style_id, &mut grp_children)?;
         }
+        append_riff_list(layer_children, *b"grp ", &grp_children);
         return Ok(());
     }
 

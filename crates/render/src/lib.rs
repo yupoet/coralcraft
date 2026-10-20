@@ -431,7 +431,7 @@ fn apply_lens_coverage(
             }
             let alpha = eff_opacity * (f64::from(c) / 16.0);
             let rgb = match kind {
-                LensKind::Invert => {
+                LensKind::Invert | LensKind::Unknown => {
                     let [sr, sg, sb, _] = snapshot.get_straight_rgba(px as u32, py as u32);
                     [255_u8.saturating_sub(sr), 255_u8.saturating_sub(sg), 255_u8.saturating_sub(sb)]
                 }
@@ -1107,7 +1107,7 @@ mod tests {
         assert!(mid_px[3] > 200, "intermediate blend step along spine at (100, 20) should be painted: {mid_px:?}");
 
         // Prepress marks export
-        let prepress = PrepressOptions { crop_marks: true, registration_marks: true, bleed_pt: F64::new(9.0).unwrap() };
+        let prepress = PrepressOptions { crop_marks: true, registration_marks: true, bleed_pt: F64::new(9.0).unwrap(), ..PrepressOptions::default() };
         let svg_prepress = export_svg_with_prepress(&doc, 0, &prepress).unwrap();
         assert!(svg_prepress.contains("<g id=\"prepress-marks\""));
         assert!(svg_prepress.contains("class=\"crop-marks\""));
@@ -1306,5 +1306,16 @@ mod tests {
 
         let pdf = String::from_utf8_lossy(&export_pdf(&doc).unwrap()).into_owned();
         assert!(pdf.contains("130 10 m"), "PDF must apply deforming Envelope effect: {pdf}");
+
+        let prepress_pdf = String::from_utf8_lossy(
+            &export_pdf_with_prepress(
+                &doc,
+                &PrepressOptions { crop_marks: true, registration_marks: true, bleed_pt: F64::new(9.0).unwrap(), pdfx_output_intent: true },
+            )
+            .unwrap(),
+        )
+        .into_owned();
+        assert!(prepress_pdf.contains("/OutputIntents"), "Prepress PDF must include /OutputIntents: {prepress_pdf}");
+        assert!(prepress_pdf.contains("/S /GTS_PDFX"), "Prepress PDF must include /S /GTS_PDFX: {prepress_pdf}");
     }
 }
