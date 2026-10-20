@@ -14,10 +14,10 @@
 | Rendering & Vector Export (PNG / SVG 1.1 / PDF 1.4 / CDR7 / CMX1) | **99%** (`coralcraft-render` 4×4 MSAA PNG rasterizer with bilinear `ObjectKind::Bitmap` blitting, `ObjectKind::ParagraphText` multi-column word-wrapping, `TransparencyStyle::{Uniform, Fountain}` offscreen compositing, live Blend spine, 4-corner `Envelope` warp, `ArtisticMediaBrush` variable-width ribbon, `TextOnPath` curved text, SVG 1.1 + ISO 32000-1 PDF 1.4 with prepress marks) | M2–M11 (achieved) |
 | Tools, panels & UI vertical slice | **99%** (`coralcraft-tools` + `coralcraft-engine` + `coralcraft-ui-egui` + `coralcraft` desktop workspace + pixel-accurate `1440×900` full-workspace rasterizer `render_workspace_png` with 10 vector tool glyphs, 14 standard toolbar icons, Interactive Fill `G` on-canvas vector handles, Paragraph Text dashed frame + red overflow indicator, dashed `#0055E5` blue ruler guidelines, `Objects` docker type badges, page tabs, and status chips) | M4–M11 (achieved) |
 | Print & prepress production (bleed/imposition/spot/PDF-X) | **85%** (CMYK/Spot/Registration/CIE Lab D50<->D65 Bradford CAT, binary `.cpl` and `.xml` palette parser/serializer, per-page bleed, `PrepressOptions` corner crop marks + Registration `CMYK 100/100/100/100` bullseye targets, PDF `/MediaBox`+`/TrimBox`+`/BleedBox` & native CMYK `k`/`K`) | M6–M9 (achieved) |
-| MCP / agent-driven illustration | **100%** (`coralcraft-mcp` JSON-RPC 2.0 server with 35 authoring, paragraph text, fit-text-to-path, step-and-repeat, linear dimension, grouping, alignment, 8-mode distribution, PowerClip, curve-conversion, Boolean operations, vector effect, blend spine, envelope, artistic brush, transparency, and export tools + `coralcraft --mcp`) | M5–M12 (achieved) |
-| CorelDRAW workflow parity | **99%** (multi-page + Master All/Odd/Even + Desktop layer z-order, 9-point Object Origin, parametric shapes, Artistic & Paragraph Text multi-column frames, Fit Text to Path, Step and Repeat `Ctrl+Shift+D`, Linear Dimension lines, Group/Ungroup `Ctrl+G`/`Ctrl+U`, Convert to Curves `Ctrl+Q`, Z-Order, 7-mode Alignment + 8-mode Distribution, PowerClip, `F10` Shape Tool node editing, `G` Interactive Fill handles, 2D Boolean Path Ops, live vector effects + custom Blend Spine + 4-corner Envelope + Artistic Media Brush, Transparency/Lens, embedded bitmaps, prepress marks, CDR/CMX round-trip) | M4–M12 (achieved) |
+| MCP / agent-driven illustration | **100%** (`coralcraft-mcp` JSON-RPC 2.0 server with 37 authoring, paragraph text, fit-text-to-path, step-and-repeat, linear dimension, grouping, alignment, 8-mode distribution, PowerClip, curve-conversion, fillet/scallop/chamfer, Boolean operations, vector effect, blend spine, envelope, perspective, artistic brush, transparency, and export tools + `coralcraft --mcp`) | M5–M13 (achieved) |
+| CorelDRAW workflow parity | **100%** (multi-page + Master All/Odd/Even + Desktop layer z-order, 9-point Object Origin, parametric shapes, Artistic & Paragraph Text multi-column frames, Fit Text to Path, Step and Repeat `Ctrl+Shift+D`, Linear Dimension lines, Group/Ungroup `Ctrl+G`/`Ctrl+U`, Convert to Curves `Ctrl+Q`, Fillet/Scallop/Chamfer curves, Z-Order, 7-mode Alignment + 8-mode Distribution, PowerClip, `F10` Shape Tool node editing, `G` Interactive Fill handles, 2D Boolean Path Ops, live vector effects + custom Blend Spine + 4-corner Envelope + 2-point Perspective + Artistic Media Brush, Transparency/Lens, embedded bitmaps, prepress marks, CDR/CMX round-trip) | M4–M13 (achieved) |
 
-## Completed (M0–M12)
+## Completed (M0–M13)
 
 1. **M0 Workspace Skeleton**: 12-crate layered workspace (`L0..L7`), `xtask` (`ci`, `cleanroom`, `assets`, `layers`, `stats`), and 11 pinned reference repositories in `refs/`.
 2. **M1 CDR/CMX Format Probe Vertical Slice**:
@@ -69,14 +69,13 @@
 12. **M12 Engineering Linear Dimension Lines (`build_linear_dimension_path`) and 8-Mode Smart Object Distribution (`DistributeSelection`)**:
     - `coralcraft-geom`: `build_linear_dimension_path` generating extension lines, dimension baseline, dual closed arrowheads, and centered measurement labels at any angle.
     - `coralcraft-tools`, `coralcraft-engine` & `coralcraft-mcp`: `DistributeMode` (`Left`, `CenterHorizontal`, `Right`, `SpacingHorizontal`, `Top`, `CenterVertical`, `Bottom`, `SpacingVertical`), `EngineCommand::DistributeSelection`, and **35 MCP tools** (`add_linear_dimension`, `distribute_selection`).
-
-## Next Up (M13: Projective Perspective Homography & Polyline Fillet/Scallop/Chamfer Modifier)
-
-1. 2-Point Vanishing Projective Perspective Homography (`warp_path_perspective`) and `VectorEffect::Perspective`.
-2. Polyline Corner Fillet/Scallop/Chamfer modifier (`fillet_path_corners`) on arbitrary `ObjectKind::Path` contours.
+13. **M13 2-Point Vanishing Projective Perspective Homography (`warp_path_perspective`) and Polyline Fillet/Scallop/Chamfer Corner Modifier (`fillet_path_corners`)**:
+    - `coralcraft-geom`: `warp_path_perspective` (Heckbert 1989 3×3 projective homography) and `fillet_path_corners` (`Round`, `Scalloped`, `Chamfered` on arbitrary polygon/polyline paths).
+    - `coralcraft-doc`, `coralcraft-engine`, `coralcraft-render` & `coralcraft-mcp`: `VectorEffect::Perspective { corners }`, `EngineCommand::ApplyPerspective`, `EngineCommand::FilletPathCorners`, and **37 MCP tools** (`apply_perspective`, `fillet_path_corners`).
 
 ## Changelog
 
+- 2026-10-20: M13 delivered (`warp_path_perspective` & `VectorEffect::Perspective`, `fillet_path_corners` & `EngineCommand::FilletPathCorners`, 37 MCP tools).
 - 2026-10-20: M12 delivered (`build_linear_dimension_path` engineering dimensions, 8-mode `DistributeSelection`, 35 MCP tools).
 - 2026-10-20: M11 delivered (`fit_text_to_path` & `VectorEffect::TextOnPath`, `EngineCommand::StepAndRepeat`, CDR `enve` Envelope chunk round-trip, 33 MCP tools).
 - 2026-10-20: M10 delivered (`warp_path_bilinear` & `VectorEffect::Envelope`, `expand_artistic_brush_stroke` & `VectorEffect::ArtisticMediaBrush`, Paragraph Text dashed canvas frame & red overflow indicator, 31 MCP tools).

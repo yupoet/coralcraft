@@ -229,6 +229,14 @@ fn render_object_node(
                     local_bbox = bb;
                 }
             }
+            VectorEffect::Perspective { corners } => {
+                if let Ok(persp) = coralcraft_geom::warp_path_perspective(&local_path, local_bbox, *corners)
+                    && let Some(bb) = persp.bounds()
+                {
+                    local_path = persp;
+                    local_bbox = bb;
+                }
+            }
             _ => {}
         }
     }

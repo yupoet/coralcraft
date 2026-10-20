@@ -264,6 +264,11 @@ pub enum VectorEffect {
         /// Signed perpendicular baseline offset in typographic points.
         offset_pt: F64,
     },
+    /// Projective 2-point vanishing Perspective homography (`Effects -> Add Perspective`, `corners = [TL, TR, BR, BL]`).
+    Perspective {
+        /// Four target corner positions `[top_left, top_right, bottom_right, bottom_left]` in local coordinates.
+        corners: [Point; 4],
+    },
 }
 
 /// Object-level transparency and lens compositing (`Uniform` or `Fountain`).

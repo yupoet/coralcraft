@@ -106,6 +106,10 @@ pub enum EngineCommand {
     AttachBlendSpine { blend_object_id: ObjectId, spine_object_id: ObjectId },
     /// Applies a non-destructive 4-corner bilinear Envelope warp (`corners = [TL, TR, BR, BL]`) to `object_id`.
     ApplyEnvelope { object_id: ObjectId, corners: [Point; 4] },
+    /// Applies a non-destructive 2-point vanishing projective Perspective homography (`Effects -> Add Perspective`) to `object_id`.
+    ApplyPerspective { object_id: ObjectId, corners: [Point; 4] },
+    /// Applies Fillet (`Round`), Scallop (`Scalloped`), or Chamfer (`Chamfered`) corner modification to `object_id`.
+    FilletPathCorners { object_id: ObjectId, radius_pt: F64, corner_kind: CornerKind },
     /// Applies a non-destructive Artistic Media variable-width calligraphic brush stroke to `object_id`.
     ApplyArtisticBrush { object_id: ObjectId, start_width_pt: F64, end_width_pt: F64 },
     /// Flows an Artistic Text object (`text_object_id`) along a spine path object (`spine_object_id`) (`Text -> Fit Text to Path`).
@@ -492,6 +496,8 @@ impl EditorEngine {
             | EngineCommand::AddDropShadow { object_id, .. }
             | EngineCommand::AddExtrude { object_id, .. }
             | EngineCommand::ApplyEnvelope { object_id, .. }
+            | EngineCommand::ApplyPerspective { object_id, .. }
+            | EngineCommand::FilletPathCorners { object_id, .. }
             | EngineCommand::ApplyArtisticBrush { object_id, .. }
             | EngineCommand::ExpandEffects { object_id } => {
                 if self.selected_or_all_node(*object_id).is_none_or(|o| o.locked) {
@@ -1213,6 +1219,25 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ApplyPerspective { object_id, corners } => {
+                let effect = VectorEffect::Perspective { corners };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::FilletPathCorners { object_id, radius_pt, corner_kind } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(modified) = coralcraft_geom::fillet_path_corners(&base_path, radius_pt.get(), corner_kind)
+                    {
+                        obj.kind = ObjectKind::Path(modified);
+                    }
+                });
+            }
             EngineCommand::ApplyArtisticBrush { object_id, start_width_pt, end_width_pt } => {
                 let effect = VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt };
                 self.for_each_node_mut(|obj| {
@@ -1276,6 +1301,13 @@ impl EditorEngine {
                                     VectorEffect::Envelope { corners } => {
                                         if let Some(bbox) = base_path.bounds()
                                             && let Ok(p) = coralcraft_geom::warp_path_bilinear(&base_path, bbox, *corners)
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::Perspective { corners } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::warp_path_perspective(&base_path, bbox, *corners)
                                         {
                                             base_path = p;
                                         }

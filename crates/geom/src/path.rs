@@ -324,6 +324,173 @@ pub fn warp_path_bilinear(path: &Path, src_bbox: Rect, corners: [Point; 4]) -> R
     Ok(out)
 }
 
+/// Applies a 4-corner 2-point vanishing projective Perspective homography (`corners = [TL, TR, BR, BL]`,
+/// Heckbert 1989 §3.2) to a [`Path`] relative to `src_bbox`.
+pub fn warp_path_perspective(path: &Path, src_bbox: Rect, corners: [Point; 4]) -> Result<Path, GeomError> {
+    let w = src_bbox.width().max(1e-9);
+    let h = src_bbox.height().max(1e-9);
+    let min_x = src_bbox.x0.get();
+    let min_y = src_bbox.y0.get();
+    let [p00, p10, p11, p01] = corners;
+
+    let x00 = p00.x.get();
+    let y00 = p00.y.get();
+    let x10 = p10.x.get();
+    let y10 = p10.y.get();
+    let x11 = p11.x.get();
+    let y11 = p11.y.get();
+    let x01 = p01.x.get();
+    let y01 = p01.y.get();
+
+    let dx1 = x10 - x11;
+    let dx2 = x01 - x11;
+    let dy1 = y10 - y11;
+    let dy2 = y01 - y11;
+    let det = dx1 * dy2 - dx2 * dy1;
+    if det.abs() <= 1e-12 {
+        return Err(GeomError::SingularTransform);
+    }
+
+    let sx = x00 - x10 + x11 - x01;
+    let sy = y00 - y10 + y11 - y01;
+    let g = (sx * dy2 - sy * dx2) / det;
+    let h_proj = (dx1 * sy - dy1 * sx) / det;
+    let a = x10 - x00 + g * x10;
+    let b = x01 - x00 + h_proj * x01;
+    let c = x00;
+    let d = y10 - y00 + g * y10;
+    let e = y01 - y00 + h_proj * y01;
+    let f = y00;
+
+    let warp_pt = |pt: Point| -> Result<Point, GeomError> {
+        let u = (pt.x.get() - min_x) / w;
+        let v = (pt.y.get() - min_y) / h;
+        let denom = g * u + h_proj * v + 1.0;
+        if denom.abs() <= 1e-9 {
+            return Err(GeomError::SingularTransform);
+        }
+        let x = (a * u + b * v + c) / denom;
+        let y = (d * u + e * v + f) / denom;
+        Point::new(x, y)
+    };
+
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for &el in &path.elements {
+        let mapped = match el {
+            PathElement::MoveTo(p) => PathElement::MoveTo(warp_pt(p)?),
+            PathElement::LineTo(p) => PathElement::LineTo(warp_pt(p)?),
+            PathElement::QuadTo { ctrl, end } => PathElement::QuadTo { ctrl: warp_pt(ctrl)?, end: warp_pt(end)? },
+            PathElement::CubicTo { c1, c2, end } => PathElement::CubicTo { c1: warp_pt(c1)?, c2: warp_pt(c2)?, end: warp_pt(end)? },
+            PathElement::Close => PathElement::Close,
+        };
+        out.elements.push(mapped);
+    }
+    Ok(out)
+}
+
+/// Applies CorelDRAW Fillet (`Round`), Scallop (`Scalloped`), or Chamfer (`Chamfered`) corner modification
+/// with `radius_pt` to all sharp polygon/polyline vertices of a [`Path`].
+pub fn fillet_path_corners(path: &Path, radius_pt: f64, kind: crate::shapes::CornerKind) -> Result<Path, GeomError> {
+    if !radius_pt.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if radius_pt <= 1e-6 {
+        return Ok(path.clone());
+    }
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+
+    for poly in &polys {
+        let mut pts = poly.points.clone();
+        if poly.closed
+            && pts.len() >= 2
+            && let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+            && first.distance(last) < 1e-6
+        {
+            pts.pop();
+        }
+        let m = pts.len();
+        if m < 3 {
+            if let Some(&first) = pts.first() {
+                out.move_to(first)?;
+                for &p in &pts[1..] {
+                    out.line_to(p)?;
+                }
+                if poly.closed {
+                    out.close()?;
+                }
+            }
+            continue;
+        }
+
+        let mut started = false;
+        for i in 0..m {
+            if !poly.closed && (i == 0 || i == m - 1) {
+                if !started {
+                    out.move_to(pts[i])?;
+                    started = true;
+                } else {
+                    out.line_to(pts[i])?;
+                }
+                continue;
+            }
+            let prev = pts[(i + m - 1) % m];
+            let curr = pts[i];
+            let next = pts[(i + 1) % m];
+            let dx_in = prev.x.get() - curr.x.get();
+            let dy_in = prev.y.get() - curr.y.get();
+            let len_in = dx_in.hypot(dy_in);
+            let dx_out = next.x.get() - curr.x.get();
+            let dy_out = next.y.get() - curr.y.get();
+            let len_out = dx_out.hypot(dy_out);
+            if len_in <= 1e-6 || len_out <= 1e-6 {
+                continue;
+            }
+            let ux_in = dx_in / len_in;
+            let uy_in = dy_in / len_in;
+            let ux_out = dx_out / len_out;
+            let uy_out = dy_out / len_out;
+            let cos_theta = (ux_in * ux_out + uy_in * uy_out).clamp(-1.0, 1.0);
+            let theta = cos_theta.acos();
+            let half_tan = (0.5 * theta).tan();
+            if half_tan.abs() <= 1e-6 {
+                if !started {
+                    out.move_to(curr)?;
+                    started = true;
+                } else {
+                    out.line_to(curr)?;
+                }
+                continue;
+            }
+            let t = (radius_pt / half_tan.abs()).min(0.45 * len_in).min(0.45 * len_out);
+            let t_in = Point::new(curr.x.get() + t * ux_in, curr.y.get() + t * uy_in)?;
+            let t_out = Point::new(curr.x.get() + t * ux_out, curr.y.get() + t * uy_out)?;
+            if !started {
+                out.move_to(t_in)?;
+                started = true;
+            } else {
+                out.line_to(t_in)?;
+            }
+            match kind {
+                crate::shapes::CornerKind::Chamfered => {
+                    out.line_to(t_out)?;
+                }
+                crate::shapes::CornerKind::Round => {
+                    out.quad_to(curr, t_out)?;
+                }
+                crate::shapes::CornerKind::Scalloped => {
+                    let ctrl = Point::new(t_in.x.get() + t_out.x.get() - curr.x.get(), t_in.y.get() + t_out.y.get() - curr.y.get())?;
+                    out.quad_to(ctrl, t_out)?;
+                }
+            }
+        }
+        if poly.closed && started {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
 /// Expands a spine [`Path`] into a closed variable-width Artistic Media calligraphic brush ribbon
 /// tapering linearly from `start_width_pt` to `end_width_pt`.
 pub fn expand_artistic_brush_stroke(spine: &Path, start_width_pt: f64, end_width_pt: f64) -> Result<Path, GeomError> {

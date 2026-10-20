@@ -4,15 +4,16 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M12 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M13 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
   3. **M10: Envelope 4-Corner Cage Warp (`VectorEffect::Envelope`), Artistic Media Calligraphic Brush Strokes (`VectorEffect::ArtisticMediaBrush`), Canvas Paragraph Text Dashed Frame & Red Overflow Indicator, and 31 MCP Tools (`commit a062dc5`)**.
   4. **M11: Fit Text to Path (`fit_text_to_path` & `VectorEffect::TextOnPath`), Step and Repeat Array Duplication (`EngineCommand::StepAndRepeat`), CDR `enve` 4-Corner Envelope Chunk Round-Trip, and 33 MCP Tools (`commit 4b1c044`)**.
-  5. **M12: Engineering Linear Dimension Lines (`build_linear_dimension_path`), 8-Mode Smart Object Distribution (`DistributeSelection`), and 35 MCP Tools**:
-     - `coralcraft-geom`: Added `build_linear_dimension_path` generating extension lines, dimension baseline, dual closed arrowheads, and centered measurement labels at any angle.
-     - `coralcraft-tools`, `coralcraft-engine`, `coralcraft-mcp`: Added `DistributeMode` (`Left`, `CenterHorizontal`, `Right`, `SpacingHorizontal`, `Top`, `CenterVertical`, `Bottom`, `SpacingVertical`), `EngineCommand::DistributeSelection`, and expanded MCP server to **35 tools** (`add_linear_dimension`, `distribute_selection`).
+  5. **M12: Engineering Linear Dimension Lines (`build_linear_dimension_path`), 8-Mode Smart Object Distribution (`DistributeSelection`), and 35 MCP Tools (`commit dea7dad`)**.
+  6. **M13: 2-Point Vanishing Projective Perspective Homography (`warp_path_perspective`), Polyline Fillet/Scallop/Chamfer Corner Modifier (`fillet_path_corners`), and 37 MCP Tools**:
+     - `coralcraft-geom`: Added `warp_path_perspective` (Heckbert 1989 3×3 projective homography) and `fillet_path_corners` (`Round`, `Scalloped`, `Chamfered` on arbitrary polygon/polyline paths).
+     - `coralcraft-doc`, `coralcraft-engine`, `coralcraft-render`, `coralcraft-mcp`: Added `VectorEffect::Perspective { corners }`, `EngineCommand::ApplyPerspective`, `EngineCommand::FilletPathCorners`, and expanded MCP server to **37 tools** (`apply_perspective`, `fillet_path_corners`).
 
 ## 2. Multi-Model Cross-Validation Consensus (M12 -> M13)
 

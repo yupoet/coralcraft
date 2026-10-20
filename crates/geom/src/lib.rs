@@ -22,7 +22,8 @@ pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, warp_path_bilinear,
+    ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, fillet_path_corners,
+    warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec};
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
@@ -266,5 +267,15 @@ mod tests {
         assert!((bb.x1.get() - 100.0).abs() < 1e-6);
         assert!((bb.y0.get() - 40.0).abs() < 1e-6);
         assert!((bb.y1.get() - 60.0).abs() < 1e-6);
+
+        let persp = warp_path_perspective(&rect_path, bbox, corners).unwrap();
+        let pb = persp.bounds().unwrap();
+        assert!((pb.x0.get() - 0.0).abs() < 1e-6);
+        assert!((pb.x1.get() - 120.0).abs() < 1e-6);
+        assert!((pb.y0.get() - 5.0).abs() < 1e-6);
+        assert!((pb.y1.get() - 75.0).abs() < 1e-6);
+
+        let filleted = fillet_path_corners(&rect_path, 8.0, CornerKind::Round).unwrap();
+        assert!(filleted.elements.len() > rect_path.elements.len());
     }
 }

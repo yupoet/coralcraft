@@ -258,6 +258,16 @@ impl McpServer {
                             "inputSchema": { "type": "object" }
                         },
                         {
+                            "name": "apply_perspective",
+                            "description": "Applies a non-destructive 4-corner 2-point vanishing projective Perspective homography (tl_x, tl_y, tr_x, tr_y, br_x, br_y, bl_x, bl_y) to object_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "fillet_path_corners",
+                            "description": "Applies Fillet (round), Scallop (scalloped), or Chamfer (chamfered) corner modification with radius_pt to object_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
                             "name": "expand_effects",
                             "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
                             "inputSchema": { "type": "object" }
@@ -655,6 +665,36 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::DistributeSelection { mode });
                 Ok(json!({ "distributed": ok, "mode": mode_str }))
             }
+            "apply_perspective" => {
+                let target = self.resolve_target_id(args)?;
+                let tl_x = args.get("tl_x").and_then(Value::as_f64).unwrap_or(0.0);
+                let tl_y = args.get("tl_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let tr_x = args.get("tr_x").and_then(Value::as_f64).unwrap_or(100.0);
+                let tr_y = args.get("tr_y").and_then(Value::as_f64).unwrap_or(0.0);
+                let br_x = args.get("br_x").and_then(Value::as_f64).unwrap_or(100.0);
+                let br_y = args.get("br_y").and_then(Value::as_f64).unwrap_or(100.0);
+                let bl_x = args.get("bl_x").and_then(Value::as_f64).unwrap_or(0.0);
+                let bl_y = args.get("bl_y").and_then(Value::as_f64).unwrap_or(100.0);
+                let corners = [
+                    Point::new(tl_x, tl_y).map_err(|e| e.to_string())?,
+                    Point::new(tr_x, tr_y).map_err(|e| e.to_string())?,
+                    Point::new(br_x, br_y).map_err(|e| e.to_string())?,
+                    Point::new(bl_x, bl_y).map_err(|e| e.to_string())?,
+                ];
+                let ok = self.engine.execute(EngineCommand::ApplyPerspective { object_id: target, corners });
+                Ok(json!({ "perspective_applied": ok, "object_id": target.0 }))
+            }
+            "fillet_path_corners" => {
+                let target = self.resolve_target_id(args)?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(6.0)).map_err(|e| e.to_string())?;
+                let corner_kind = match args.get("corner_kind").and_then(Value::as_str).unwrap_or("round") {
+                    "scalloped" => CornerKind::Scalloped,
+                    "chamfered" => CornerKind::Chamfered,
+                    _ => CornerKind::Round,
+                };
+                let ok = self.engine.execute(EngineCommand::FilletPathCorners { object_id: target, radius_pt, corner_kind });
+                Ok(json!({ "filleted": ok, "object_id": target.0 }))
+            }
             "expand_effects" => {
                 let target = self.resolve_target_id(args)?;
                 let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
@@ -707,7 +747,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 35);
+        assert_eq!(tools, 37);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
