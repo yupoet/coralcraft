@@ -11,7 +11,7 @@ use coralcraft_doc::{Document, FillStyle, FountainGeometry, LineCap, LineJoin, O
 use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpec};
 
 use crate::surface::RenderError;
-use crate::svg::{extract_shape_path_and_bbox, fmt_num};
+use crate::svg::fmt_num;
 use coralcraft_geom::F64;
 use serde::{Deserialize, Serialize};
 
@@ -489,12 +489,15 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
             let bh = bbox.height().max(1e-6);
 
             match *geometry {
-                FountainGeometry::Linear { angle_deg, .. } => {
+                FountainGeometry::Linear { angle_deg, edge_pad } => {
                     let cx = x0 + 0.5 * bw;
                     let cy = y0 + 0.5 * bh;
                     let diag = bw.hypot(bh).max(1e-6);
                     let rad = angle_deg.get().to_radians();
                     let (sin_a, cos_a) = rad.sin_cos();
+                    let pad = edge_pad.get().clamp(0.0, 0.49);
+                    let half_span = ((0.5 * bw * cos_a.abs() + 0.5 * bh * sin_a.abs()) * (1.0 - 2.0 * pad)).max(1e-6);
+                    let span = 2.0 * half_span;
 
                     s.push_str("q\n");
                     let _ = writeln!(
@@ -507,14 +510,14 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
                         fmt_num(cx),
                         fmt_num(cy)
                     );
-                    let half = 0.5 * diag;
-                    let step = diag / (bands as f64);
+                    let half_diag = 0.5 * diag;
+                    let step = span / (bands as f64);
                     for i in 0..bands {
                         let t = ((i as f64) + 0.5) / (bands as f64);
                         let rgb = interpolate_stops(stops, *blend_mode, t)?;
                         emit_pdf_color(s, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] }, false);
-                        let bx = -half + (i as f64) * step;
-                        let _ = writeln!(s, "{} {} {} {} re f", fmt_num(bx), fmt_num(-half), fmt_num(step + 0.05), fmt_num(diag));
+                        let bx = -half_span + (i as f64) * step;
+                        let _ = writeln!(s, "{} {} {} {} re f", fmt_num(bx), fmt_num(-half_diag), fmt_num(step + 0.05), fmt_num(diag));
                     }
                     s.push_str("Q\n");
                 }
@@ -655,7 +658,7 @@ fn emit_pdf_node(s: &mut String, node: &ObjectNode) -> Result<(), RenderError> {
             s.push_str("Q\n");
             return Ok(());
         }
-        ObjectKind::ArtisticText { text, size_pt, position, .. } => {
+        ObjectKind::ArtisticText { text, size_pt, position, .. } if node.effects.is_empty() => {
             if !text.is_empty() {
                 if let Some(FillStyle::Uniform { color }) = &node.fill {
                     emit_pdf_color(s, color, false);
@@ -741,7 +744,8 @@ fn emit_pdf_node(s: &mut String, node: &ObjectNode) -> Result<(), RenderError> {
         _ => {}
     }
 
-    if let Some((local_path, local_bbox)) = extract_shape_path_and_bbox(&node.kind)? {
+    if let Some((mut local_path, mut local_bbox)) = crate::extract_local_path_and_bbox(&node.kind)? {
+        crate::eps::apply_deforming_effects(node, &mut local_path, &mut local_bbox);
         emit_pdf_geometry_and_powerclip(s, node, &local_path, local_bbox)?;
     }
 

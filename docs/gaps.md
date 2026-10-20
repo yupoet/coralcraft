@@ -48,9 +48,9 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [x] R4.2 Give every tool a typed arguments struct, with a generated `inputSchema`. Return `isError` on engine rejection. Add `delete_selection` and `translate_selection`. Add a table-driven test over all tools.
 
 **Phase 5: geometry and render correctness**
-- [ ] R5.1 Rewrite the boolean engine. Evaluate VectorCraft's `linesweeper` against a clean-room Martinez–Rueda implementation. Add area and point-membership property tests.
-- [ ] R5.2 EPS/DXF: compose group transforms, support even-odd fill, escape names (injection). PDF: image XObject, `/Pattern`, real shadings, opacity.
-- [ ] R5.3 Give raster, SVG and PDF the same gradient semantics and one shared effect-expansion stage. Rasterizer: active-edge table and bbox-limited buffers.
+- [x] R5.1 Rewrite the boolean engine. Evaluate VectorCraft's `linesweeper` against a clean-room Martinez–Rueda implementation. Add area and point-membership property tests.
+- [x] R5.2 EPS/DXF: compose group transforms, support even-odd fill, escape names (injection). PDF: image XObject, `/Pattern`, real shadings, opacity.
+- [x] R5.3 Give raster, SVG and PDF the same gradient semantics and one shared effect-expansion stage. Rasterizer: active-edge table and bbox-limited buffers.
 - [x] R5.4 Fix the XML palette unit round-trip (1% currently reads back as 100%).
 
 **Phase 6: packaging that installs**

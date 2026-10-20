@@ -51,9 +51,18 @@ pub fn rasterize_coverage(polys: &[Polyline], fill_rule: FillRule, width: u32, h
         return cov;
     }
 
+    let mut global_y_min = f64::INFINITY;
+    let mut global_y_max = f64::NEG_INFINITY;
+    for e in &edges {
+        global_y_min = global_y_min.min(e.y_min);
+        global_y_max = global_y_max.max(e.y_max);
+    }
+    let py_start = (global_y_min.floor().max(0.0) as usize).min(h);
+    let py_end = (global_y_max.ceil().max(0.0) as usize).min(h);
+
     let mut crossings: Vec<(f64, i32)> = Vec::with_capacity(32);
 
-    for py in 0..h {
+    for py in py_start..py_end {
         let row_y_min = py as f64;
 
         for sy in 0..SS {

@@ -18,7 +18,7 @@ pub mod units;
 pub use affine::Affine2;
 pub use boolean::{
     BooleanOp, artistic_text_to_path, boolean_paths, build_angular_dimension_path, build_linear_dimension_path, erase_path_within_circle,
-    fit_text_to_path, knife_cut_path_by_line,
+    fit_text_to_path, knife_cut_path_by_line, path_contains_point,
 };
 pub use f64_canon::{BBox, EPS, F64, GeomError, Point, Rect, Size, constrain_angle, constrain_angle_from, normalize_deg, reference_point, union_opt};
 pub use flatten::{

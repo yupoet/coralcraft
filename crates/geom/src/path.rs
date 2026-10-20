@@ -1770,8 +1770,7 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
         for w in poly.points.windows(2) {
             edges.push((w[0], w[1]));
         }
-        if poly.closed
-            && let (Some(&first), Some(&last)) = (poly.points.first(), poly.points.last())
+        if let (Some(&first), Some(&last)) = (poly.points.first(), poly.points.last())
             && first != last
         {
             edges.push((last, first));
@@ -1800,25 +1799,41 @@ pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hat
         }
         let mut v = v_min + 0.5 * step;
         let mut line_count = 0usize;
-        while v < v_max && line_count < 512 {
-            line_count += 1;
+        let prev_len = out.elements.len();
+        let emit_scanline = |v_scan: f64, out: &mut Path| -> Result<(), GeomError> {
             let mut hits = Vec::new();
             for &(u0, v0, u1, v1) in &rot_edges {
-                if (v0 <= v && v1 > v) || (v1 <= v && v0 > v) {
-                    let t = (v - v0) / (v1 - v0);
+                if (v0 <= v_scan && v1 > v_scan) || (v1 <= v_scan && v0 > v_scan) {
+                    let t = (v_scan - v0) / (v1 - v0);
                     hits.push(u0 + t * (u1 - u0));
                 }
             }
             hits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             for &[ua, ub] in hits.as_chunks::<2>().0 {
                 if (ub - ua).abs() > 1e-6 {
-                    let pa = Point::new(ua * c - v * s, ua * s + v * c)?;
-                    let pb = Point::new(ub * c - v * s, ub * s + v * c)?;
+                    let pa = Point::new(ua * c - v_scan * s, ua * s + v_scan * c)?;
+                    let pb = Point::new(ub * c - v_scan * s, ub * s + v_scan * c)?;
                     out.move_to(pa)?;
                     out.line_to(pb)?;
                 }
             }
+            Ok(())
+        };
+        while v < v_max && line_count < 512 {
+            line_count += 1;
+            emit_scanline(v, &mut out)?;
             v += step;
+        }
+        if out.elements.len() == prev_len {
+            for &(u0, v0, u1, v1) in &rot_edges {
+                let _ = (u0, u1);
+                if (v1 - v0).abs() > 1e-6 {
+                    emit_scanline(0.5 * (v0 + v1), &mut out)?;
+                    if out.elements.len() > prev_len {
+                        break;
+                    }
+                }
+            }
         }
     }
     if out.elements.is_empty() {

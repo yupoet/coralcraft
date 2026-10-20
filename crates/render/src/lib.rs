@@ -204,52 +204,7 @@ fn render_object_node(
         return Ok(());
     };
 
-    for effect in &node.effects {
-        match effect {
-            VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
-                if let Ok(brush_path) = coralcraft_geom::expand_artistic_brush_stroke(&local_path, start_width_pt.get(), end_width_pt.get())
-                    && let Some(bb) = brush_path.bounds()
-                {
-                    local_path = brush_path;
-                    local_bbox = bb;
-                }
-            }
-            VectorEffect::Envelope { corners } => {
-                if let Ok(warped) = coralcraft_geom::warp_path_bilinear(&local_path, local_bbox, *corners)
-                    && let Some(bb) = warped.bounds()
-                {
-                    local_path = warped;
-                    local_bbox = bb;
-                }
-            }
-            VectorEffect::TextOnPath { spine, offset_pt } => {
-                if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &node.kind
-                    && let Ok(curved) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
-                    && let Some(bb) = curved.bounds()
-                {
-                    local_path = curved;
-                    local_bbox = bb;
-                }
-            }
-            VectorEffect::Perspective { corners } => {
-                if let Ok(persp) = coralcraft_geom::warp_path_perspective(&local_path, local_bbox, *corners)
-                    && let Some(bb) = persp.bounds()
-                {
-                    local_path = persp;
-                    local_bbox = bb;
-                }
-            }
-            VectorEffect::Distortion { kind, amplitude, frequency } => {
-                if let Ok(dist) = coralcraft_geom::distort_path(&local_path, local_bbox, *kind, amplitude.get(), frequency.get())
-                    && let Some(bb) = dist.bounds()
-                {
-                    local_path = dist;
-                    local_bbox = bb;
-                }
-            }
-            _ => {}
-        }
-    }
+    crate::eps::apply_deforming_effects(node, &mut local_path, &mut local_bbox);
 
     if let Some(TransparencyStyle::Fountain { geometry, blend_mode, stops }) = &node.transparency {
         let mut offscreen = Surface::new(surface.width, surface.height, [0, 0, 0, 0])?;
@@ -1290,5 +1245,61 @@ mod tests {
         let svg_pat = export_svg(&doc, 0).unwrap();
         assert!(svg_pat.contains("<pattern id=\"pat-obj-305\""));
         assert!(svg_pat.contains("fill=\"url(#pat-obj-305)\""));
+    }
+
+    #[test]
+    fn exporters_group_transforms_eofill_sanitization_and_effects_parity_r5_2_r5_3() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(200.0, 200.0).unwrap();
+        doc.pages[0].name = "Page (1)\ninjected_ps_op".to_owned();
+        doc.pages[0].layers[0].name = "Layer1\n0\nFAKE_DXF".to_owned();
+
+        // 1. Group with translation (100, 40) containing a child Path with FillRule::EvenOdd at (0,0..20,20)
+        let mut even_odd_path = RectSpec::sharp(Rect::new(0.0, 0.0, 20.0, 20.0).unwrap()).to_path().unwrap();
+        even_odd_path.fill_rule = FillRule::EvenOdd;
+        let child = ObjectNode::new(
+            ObjectId(401),
+            Some("Child".to_owned()),
+            ObjectKind::Path(even_odd_path),
+            Some(FillStyle::uniform(Color::rgb8(220, 40, 40))),
+            None,
+        );
+        let mut group = ObjectNode::new(ObjectId(402), Some("Group".to_owned()), ObjectKind::Group { children: vec![child] }, None, None);
+        group.transform = Affine2::translation(100.0, 40.0).unwrap();
+        doc.pages[0].layers[0].objects.push(group);
+
+        // 2. Envelope-warped rectangle moved from (10,10..30,30) to (130,10..170,50)
+        let mut warped = ObjectNode::new(
+            ObjectId(403),
+            Some("Warped".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 10.0, 30.0, 30.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(40, 80, 220))),
+            None,
+        );
+        warped.effects.push(VectorEffect::Envelope {
+            corners: [
+                Point::new(130.0, 10.0).unwrap(),
+                Point::new(170.0, 10.0).unwrap(),
+                Point::new(170.0, 50.0).unwrap(),
+                Point::new(130.0, 50.0).unwrap(),
+            ],
+        });
+        doc.pages[0].layers[0].objects.push(warped);
+
+        let eps = export_eps(&doc, 0).unwrap();
+        assert!(!eps.contains("\ninjected_ps_op"), "EPS title must sanitize newlines");
+        assert!(!eps.contains("\n0\nFAKE_DXF"), "EPS layer comment must sanitize newlines");
+        assert!(eps.contains("100 160 moveto"), "EPS must compose parent Group transform (100, 200-40=160): {eps}");
+        assert!(eps.contains("eofill\n"), "EPS must emit eofill for FillRule::EvenOdd");
+
+        let dxf = export_dxf(&doc, 0).unwrap();
+        assert!(!dxf.contains("\nFAKE_DXF"), "DXF layer name must sanitize newlines");
+        assert!(dxf.contains("10\n100\n20\n160\n"), "DXF must compose parent Group transform: {dxf}");
+
+        let svg = export_svg(&doc, 0).unwrap();
+        assert!(svg.contains("M 130 10"), "SVG must apply deforming Envelope effect: {svg}");
+
+        let pdf = String::from_utf8_lossy(&export_pdf(&doc).unwrap()).into_owned();
+        assert!(pdf.contains("130 10 m"), "PDF must apply deforming Envelope effect: {pdf}");
     }
 }

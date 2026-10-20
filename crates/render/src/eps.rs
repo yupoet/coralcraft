@@ -5,11 +5,38 @@ use std::fmt::Write as _;
 
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, VectorEffect};
-use coralcraft_geom::{FlattenOpts, Path, PathElement, Point, Rect, RectSpec, flatten_path};
+use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, PathElement, Point, Rect, RectSpec, flatten_path};
 
 use crate::extract_local_path_and_bbox;
 use crate::surface::RenderError;
 use crate::svg::fmt_num;
+
+fn sanitize_ps_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            '\\' => out.push_str("\\\\"),
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_ascii_graphic() || c == ' ' => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
+fn sanitize_dxf_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') {
+            out.push(ch);
+        } else if !matches!(ch, '\n' | '\r') {
+            out.push('_');
+        }
+    }
+    if out.is_empty() { "0".to_owned() } else { out }
+}
 
 /// Exports `page_index` (0-based) of `doc` as a clean-room Encapsulated PostScript (`%!PS-Adobe-3.0 EPSF-3.0`) document.
 pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderError> {
@@ -20,7 +47,7 @@ pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderErr
 
     let mut out = String::new();
     out.push_str("%!PS-Adobe-3.0 EPSF-3.0\n");
-    let _ = writeln!(out, "%%Title: ({})", page.name);
+    let _ = writeln!(out, "%%Title: ({})", sanitize_ps_text(&page.name));
     out.push_str("%%Creator: (CoralCraft Clean-Room EPS Exporter)\n");
     let _ = writeln!(out, "%%BoundingBox: 0 0 {} {}", w.ceil() as i64, h.ceil() as i64);
     let _ = writeln!(out, "%%HiResBoundingBox: 0 0 {} {}", fmt_num(w), fmt_num(h));
@@ -32,9 +59,9 @@ pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderErr
         if !layer.visible || layer.opacity.get() <= 0.0 {
             continue;
         }
-        let _ = writeln!(out, "% Layer: {}", layer.name);
+        let _ = writeln!(out, "% Layer: {}", sanitize_ps_text(&layer.name));
         for node in &layer.objects {
-            emit_eps_node(&mut out, node, h)?;
+            emit_eps_node(&mut out, node, Affine2::IDENTITY, h)?;
         }
     }
 
@@ -44,13 +71,14 @@ pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderErr
     Ok(out)
 }
 
-fn emit_eps_node(out: &mut String, node: &ObjectNode, page_h: f64) -> Result<(), RenderError> {
+fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h: f64) -> Result<(), RenderError> {
     if !node.visible || node.opacity.get() <= 0.0 {
         return Ok(());
     }
+    let world_tf = node.transform.then(parent_tf)?;
     if let ObjectKind::Group { children } = &node.kind {
         for ch in children {
-            emit_eps_node(out, ch, page_h)?;
+            emit_eps_node(out, ch, world_tf, page_h)?;
         }
         return Ok(());
     }
@@ -58,7 +86,7 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, page_h: f64) -> Result<(),
         return Ok(());
     };
     apply_deforming_effects(node, &mut local_path, &mut local_bbox);
-    let world_path = local_path.transform(node.transform)?;
+    let world_path = local_path.transform(world_tf)?;
 
     let emit_ps_path = |buf: &mut String| {
         buf.push_str("newpath\n");
@@ -120,8 +148,16 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, page_h: f64) -> Result<(),
         if let Some(col) = color {
             emit_ps_color(out, col);
             emit_ps_path(out);
-            out.push_str("fill\n");
+            if world_path.fill_rule == FillRule::EvenOdd {
+                out.push_str("eofill\n");
+            } else {
+                out.push_str("fill\n");
+            }
         }
+    }
+
+    for pc in &node.powerclip_children {
+        emit_eps_node(out, pc, world_tf, page_h)?;
     }
 
     if let Some(outline) = &node.outline {
@@ -171,8 +207,9 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         if !layer.visible || layer.opacity.get() <= 0.0 {
             continue;
         }
+        let safe_layer_name = sanitize_dxf_name(&layer.name);
         for node in &layer.objects {
-            emit_dxf_node(&mut out, node, &layer.name, page_h)?;
+            emit_dxf_node(&mut out, node, Affine2::IDENTITY, &safe_layer_name, page_h)?;
         }
     }
 
@@ -180,13 +217,14 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
     Ok(out)
 }
 
-fn emit_dxf_node(out: &mut String, node: &ObjectNode, layer_name: &str, page_h: f64) -> Result<(), RenderError> {
+fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_name: &str, page_h: f64) -> Result<(), RenderError> {
     if !node.visible || node.opacity.get() <= 0.0 {
         return Ok(());
     }
+    let world_tf = node.transform.then(parent_tf)?;
     if let ObjectKind::Group { children } = &node.kind {
         for ch in children {
-            emit_dxf_node(out, ch, layer_name, page_h)?;
+            emit_dxf_node(out, ch, world_tf, layer_name, page_h)?;
         }
         return Ok(());
     }
@@ -194,7 +232,7 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, layer_name: &str, page_h: 
         return Ok(());
     };
     apply_deforming_effects(node, &mut local_path, &mut local_bbox);
-    let world_path = local_path.transform(node.transform)?;
+    let world_path = local_path.transform(world_tf)?;
     let polys = flatten_path(&world_path, &FlattenOpts::default())?;
 
     for poly in &polys {
@@ -209,10 +247,14 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, layer_name: &str, page_h: 
         let _ = writeln!(out, "0\nSEQEND\n8\n{layer_name}");
     }
 
+    for pc in &node.powerclip_children {
+        emit_dxf_node(out, pc, world_tf, layer_name, page_h)?;
+    }
+
     Ok(())
 }
 
-fn apply_deforming_effects(node: &ObjectNode, local_path: &mut Path, local_bbox: &mut Rect) {
+pub(crate) fn apply_deforming_effects(node: &ObjectNode, local_path: &mut Path, local_bbox: &mut Rect) {
     for effect in &node.effects {
         match effect {
             VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {

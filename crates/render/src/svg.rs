@@ -6,7 +6,7 @@ use coralcraft_color::Color;
 use coralcraft_doc::{
     Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, PatternKind, TransparencyStyle,
 };
-use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpec};
+use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Rect, RectSpec};
 
 use crate::surface::RenderError;
 
@@ -255,10 +255,11 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
     let hh = 0.5 * bh;
 
     match *geometry {
-        FountainGeometry::Linear { angle_deg, .. } => {
+        FountainGeometry::Linear { angle_deg, edge_pad } => {
             let rad = angle_deg.get().to_radians();
             let (sin_a, cos_a) = rad.sin_cos();
-            let half_span = (hw * cos_a.abs() + hh * sin_a.abs()).max(1e-6);
+            let pad = edge_pad.get().clamp(0.0, 0.49);
+            let half_span = ((hw * cos_a.abs() + hh * sin_a.abs()) * (1.0 - 2.0 * pad)).max(1e-6);
             let x1 = cx - cos_a * half_span;
             let y1 = cy - sin_a * half_span;
             let x2 = cx + cos_a * half_span;
@@ -402,7 +403,7 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             let _ = writeln!(body, "{indent}</g>");
             return Ok(());
         }
-        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+        ObjectKind::ArtisticText { text, font_family, size_pt, position } if node.effects.is_empty() => {
             if text.is_empty() {
                 return Ok(());
             }
@@ -508,9 +509,10 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
         _ => {}
     }
 
-    let Some((local_path, local_bbox)) = extract_shape_path_and_bbox(&node.kind)? else {
+    let Some((mut local_path, mut local_bbox)) = crate::extract_local_path_and_bbox(&node.kind)? else {
         return Ok(());
     };
+    crate::eps::apply_deforming_effects(node, &mut local_path, &mut local_bbox);
     emit_path_node(defs, body, node, &local_path, local_bbox, indent_level)
 }
 
@@ -628,53 +630,3 @@ fn emit_path_node(
 
     Ok(())
 }
-
-pub(crate) fn extract_shape_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>, RenderError> {
-    match kind {
-        ObjectKind::Rect(r) => Ok(Some((r.to_path()?, r.rect))),
-        ObjectKind::Ellipse(e) => Ok(Some((e.to_path()?, e.rect))),
-        ObjectKind::Polygon(poly) => {
-            let p = poly.to_path()?;
-            let bbox = p.bounds().unwrap_or_else(|| Rect::new(0.0, 0.0, 1.0, 1.0).unwrap_or_default());
-            Ok(Some((p, bbox)))
-        }
-        ObjectKind::Path(p) => {
-            let Some(bbox) = p.bounds() else {
-                return Ok(None);
-            };
-            Ok(Some((p.clone(), bbox)))
-        }
-        ObjectKind::ArtisticText { text, size_pt, position, .. } => {
-            if text.is_empty() {
-                return Ok(None);
-            }
-            let h = size_pt.get().max(4.0);
-            let w = (text.chars().count() as f64) * h * 0.6;
-            let x0 = position.x.get();
-            let y0 = position.y.get() - h;
-            let bbox = Rect::new(x0, y0, x0 + w, position.y.get())?;
-            let path = RectSpec::sharp(bbox).to_path()?;
-            Ok(Some((path, bbox)))
-        }
-        ObjectKind::ParagraphText(pt) => {
-            let x0 = pt.position.x.get();
-            let y0 = pt.position.y.get();
-            let w = pt.frame_width_pt.get().max(1.0);
-            let h = pt.frame_height_pt.get().max(1.0);
-            let bbox = Rect::new(x0, y0, x0 + w, y0 + h)?;
-            let path = RectSpec::sharp(bbox).to_path()?;
-            Ok(Some((path, bbox)))
-        }
-        ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, .. } => {
-            let w = (*pixel_width as f64 * 72.0 / dpi_x.get().max(1.0)).max(1.0);
-            let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
-            let bbox = Rect::new(0.0, 0.0, w, h)?;
-            let path = RectSpec::sharp(bbox).to_path()?;
-            Ok(Some((path, bbox)))
-        }
-        ObjectKind::Group { .. } | ObjectKind::Unsupported(_) => Ok(None),
-    }
-}
-
-#[allow(dead_code)]
-fn _keep_point(_p: Point) {}

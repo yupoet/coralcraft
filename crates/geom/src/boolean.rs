@@ -52,7 +52,7 @@ pub fn boolean_paths(subj: &Path, clip: &Path, op: BooleanOp) -> Result<Path, Ge
         };
     }
 
-    let opts = FlattenOpts { tolerance: 0.25, max_depth: 10 };
+    let opts = FlattenOpts::default();
     let subj_polys = flatten_path(subj, &opts)?;
     let clip_polys = flatten_path(clip, &opts)?;
 
@@ -64,49 +64,70 @@ pub fn boolean_paths(subj: &Path, clip: &Path, op: BooleanOp) -> Result<Path, Ge
     match op {
         BooleanOp::Weld => {
             if !overlaps {
-                let mut out = subj.clone();
-                for el in &clip.elements {
-                    out.elements.push(*el);
-                }
-                return Ok(out);
+                let mut rings = extract_normalized_rings(&subj_polys);
+                rings.extend(extract_normalized_rings(&clip_polys));
+                return rings_to_path(&rings, subj.fill_rule);
             }
-            // Clip/merge closed loops using planar polygon union
-            merge_polylines(&subj_polys, &clip_polys, BooleanOp::Weld)
+            clip_polylines(&subj_polys, &clip_polys, BooleanOp::Weld, subj.fill_rule)
         }
         BooleanOp::Trim | BooleanOp::FrontMinusBack => {
             if !overlaps {
                 return Ok(subj.clone());
             }
-            merge_polylines(&subj_polys, &clip_polys, BooleanOp::Trim)
+            clip_polylines(&subj_polys, &clip_polys, BooleanOp::Trim, subj.fill_rule)
         }
         BooleanOp::Intersect => {
             if !overlaps {
                 return Ok(Path::new());
             }
-            merge_polylines(&subj_polys, &clip_polys, BooleanOp::Intersect)
+            clip_polylines(&subj_polys, &clip_polys, BooleanOp::Intersect, subj.fill_rule)
         }
         BooleanOp::BackMinusFront => {
             if !overlaps {
                 return Ok(clip.clone());
             }
-            merge_polylines(&clip_polys, &subj_polys, BooleanOp::Trim)
+            clip_polylines(&subj_polys, &clip_polys, BooleanOp::BackMinusFront, clip.fill_rule)
         }
         BooleanOp::Exclude => {
             if !overlaps {
-                let mut out = subj.clone();
-                out.fill_rule = crate::FillRule::EvenOdd;
-                for el in &clip.elements {
-                    out.elements.push(*el);
-                }
-                return Ok(out);
+                let mut rings = extract_normalized_rings(&subj_polys);
+                rings.extend(extract_normalized_rings(&clip_polys));
+                return rings_to_path(&rings, crate::FillRule::EvenOdd);
             }
-            let a_minus_b = merge_polylines(&subj_polys, &clip_polys, BooleanOp::Trim)?;
-            let b_minus_a = merge_polylines(&clip_polys, &subj_polys, BooleanOp::Trim)?;
+            let a_minus_b = clip_polylines(&subj_polys, &clip_polys, BooleanOp::Trim, crate::FillRule::EvenOdd)?;
+            let b_minus_a = clip_polylines(&subj_polys, &clip_polys, BooleanOp::BackMinusFront, crate::FillRule::EvenOdd)?;
             let mut out =
                 Path { elements: Vec::with_capacity(a_minus_b.elements.len() + b_minus_a.elements.len()), fill_rule: crate::FillRule::EvenOdd };
             out.elements.extend(a_minus_b.elements);
             out.elements.extend(b_minus_a.elements);
             Ok(out)
+        }
+    }
+}
+
+/// Tests whether `pt` lies inside `path` according to `path.fill_rule` (`EvenOdd` or `NonZero`).
+pub fn path_contains_point(path: &Path, pt: Point) -> bool {
+    let Ok(polys) = flatten_path(path, &FlattenOpts::default()) else {
+        return false;
+    };
+    match path.fill_rule {
+        crate::FillRule::EvenOdd => {
+            let mut inside = false;
+            for poly in &polys {
+                if poly.points.len() >= 3 && point_in_polygon(pt, &poly.points) {
+                    inside = !inside;
+                }
+            }
+            inside
+        }
+        crate::FillRule::NonZero => {
+            let mut winding = 0i32;
+            for poly in &polys {
+                if poly.points.len() >= 3 {
+                    winding += polygon_winding_number(pt, &poly.points);
+                }
+            }
+            winding != 0
         }
     }
 }
@@ -134,7 +155,96 @@ fn point_in_polygon(pt: Point, poly: &[Point]) -> bool {
     inside
 }
 
-fn segment_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Option<(f64, f64, Point)> {
+fn polygon_winding_number(pt: Point, poly: &[Point]) -> i32 {
+    if poly.len() < 3 {
+        return 0;
+    }
+    let px = pt.x.get();
+    let py = pt.y.get();
+    let mut winding = 0i32;
+    let n = poly.len();
+    for i in 0..n {
+        let p0 = poly[i];
+        let p1 = poly[(i + 1) % n];
+        let x0 = p0.x.get();
+        let y0 = p0.y.get();
+        let x1 = p1.x.get();
+        let y1 = p1.y.get();
+        if y0 <= py {
+            if y1 > py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) > 0.0 {
+                winding += 1;
+            }
+        } else if y1 <= py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0.0 {
+            winding -= 1;
+        }
+    }
+    winding
+}
+
+fn polygon_signed_area2(poly: &[Point]) -> f64 {
+    let n = poly.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut area2 = 0.0;
+    for i in 0..n {
+        let p0 = poly[i];
+        let p1 = poly[(i + 1) % n];
+        area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+    }
+    area2
+}
+
+fn extract_normalized_rings(polys: &[Polyline]) -> Vec<Vec<Point>> {
+    let mut raw_rings: Vec<Vec<Point>> = Vec::new();
+    for poly in polys {
+        let mut pts: Vec<Point> = Vec::with_capacity(poly.points.len());
+        for &p in &poly.points {
+            if pts.last().is_none_or(|last| last.distance(p) > 1e-6) {
+                pts.push(p);
+            }
+        }
+        while pts.len() >= 2 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.distance(*b) <= 1e-6) {
+            pts.pop();
+        }
+        if pts.len() >= 3 && polygon_signed_area2(&pts).abs() > 1e-5 {
+            raw_rings.push(pts);
+        }
+    }
+
+    // Orient outer rings with positive signed area (> 0) and hole rings with negative signed area (< 0)
+    let count = raw_rings.len();
+    let mut normalized = Vec::with_capacity(count);
+    for i in 0..count {
+        let test_pt = raw_rings[i][0];
+        let mut depth = 0usize;
+        for (j, other) in raw_rings.iter().enumerate() {
+            if i != j && point_in_polygon(test_pt, other) {
+                depth += 1;
+            }
+        }
+        let mut ring = raw_rings[i].clone();
+        let area2 = polygon_signed_area2(&ring);
+        let is_hole = depth % 2 == 1;
+        if (!is_hole && area2 < 0.0) || (is_hole && area2 > 0.0) {
+            ring.reverse();
+        }
+        normalized.push(ring);
+    }
+    normalized
+}
+
+fn point_in_rings(pt: Point, rings: &[Vec<Point>]) -> bool {
+    let mut inside = false;
+    for ring in rings {
+        if point_in_polygon(pt, ring) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+fn segment_proper_or_touch_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Option<Point> {
     let d1x = p2.x.get() - p1.x.get();
     let d1y = p2.y.get() - p1.y.get();
     let d2x = p4.x.get() - p3.x.get();
@@ -148,131 +258,334 @@ fn segment_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Option<(f
     let t = ((p3.x.get() - p1.x.get()) * d2y - (p3.y.get() - p1.y.get()) * d2x) / denom;
     let u = ((p3.x.get() - p1.x.get()) * d1y - (p3.y.get() - p1.y.get()) * d1x) / denom;
 
-    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-        let ix = p1.x.get() + t * d1x;
-        let iy = p1.y.get() + t * d1y;
-        Point::new(ix, iy).ok().map(|pt| (t, u, pt))
+    if (-1e-7..=1.0 + 1e-7).contains(&t) && (-1e-7..=1.0 + 1e-7).contains(&u) {
+        let tc = t.clamp(0.0, 1.0);
+        let ix = p1.x.get() + tc * d1x;
+        let iy = p1.y.get() + tc * d1y;
+        Point::new(ix, iy).ok()
     } else {
         None
     }
 }
 
-fn merge_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp) -> Result<Path, GeomError> {
-    let mut out_path = Path::new();
+struct VertexPool {
+    pts: Vec<Point>,
+}
 
-    // Clean-room polygon intersection/subtraction based on sampled ray casting
-    for subj in subj_list {
-        if subj.points.len() < 3 {
-            continue;
+impl VertexPool {
+    fn new() -> Self {
+        Self { pts: Vec::new() }
+    }
+
+    fn intern(&mut self, pt: Point) -> usize {
+        const SNAP_EPS: f64 = 1e-5;
+        for (idx, &existing) in self.pts.iter().enumerate() {
+            if existing.distance(pt) <= SNAP_EPS {
+                return idx;
+            }
         }
-        for clip in clip_list {
-            if clip.points.len() < 3 {
+        let idx = self.pts.len();
+        self.pts.push(pt);
+        idx
+    }
+}
+
+fn split_ring_edges_against_pool(rings: &[Vec<Point>], pool: &VertexPool) -> Vec<(usize, usize)> {
+    const ON_SEG_EPS: f64 = 1e-5;
+    let mut directed_edges = Vec::new();
+    for ring in rings {
+        let n = ring.len();
+        for i in 0..n {
+            let a = ring[i];
+            let b = ring[(i + 1) % n];
+            let dx = b.x.get() - a.x.get();
+            let dy = b.y.get() - a.y.get();
+            let len_sq = dx * dx + dy * dy;
+            if len_sq <= 1e-12 {
                 continue;
             }
-
-            match op {
-                BooleanOp::Weld => {
-                    // For weld: keep subj vertices not inside clip, and clip vertices not inside subj
-                    let mut loop_pts = Vec::new();
-                    for &p in &subj.points {
-                        if !point_in_polygon(p, &clip.points) {
-                            loop_pts.push(p);
-                        }
-                    }
-                    for &p in &clip.points {
-                        if !point_in_polygon(p, &subj.points) {
-                            loop_pts.push(p);
-                        }
-                    }
-                    if loop_pts.len() >= 3 {
-                        // Re-order points convexly or around center
-                        let cx = loop_pts.iter().map(|p| p.x.get()).sum::<f64>() / loop_pts.len() as f64;
-                        let cy = loop_pts.iter().map(|p| p.y.get()).sum::<f64>() / loop_pts.len() as f64;
-                        loop_pts.sort_by(|a, b| {
-                            let ang_a = (a.y.get() - cy).atan2(a.x.get() - cx);
-                            let ang_b = (b.y.get() - cy).atan2(b.x.get() - cx);
-                            ang_a.partial_cmp(&ang_b).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        add_polyline_to_path(&loop_pts, true, &mut out_path)?;
+            let mut splits: Vec<(f64, usize)> = Vec::new();
+            for (vid, &vpt) in pool.pts.iter().enumerate() {
+                let vx = vpt.x.get() - a.x.get();
+                let vy = vpt.y.get() - a.y.get();
+                let t = (vx * dx + vy * dy) / len_sq;
+                if (-1e-6..=1.0 + 1e-6).contains(&t) {
+                    let tc = t.clamp(0.0, 1.0);
+                    let proj_x = a.x.get() + tc * dx;
+                    let proj_y = a.y.get() + tc * dy;
+                    let dist = (vpt.x.get() - proj_x).hypot(vpt.y.get() - proj_y);
+                    if dist <= ON_SEG_EPS {
+                        splits.push((tc, vid));
                     }
                 }
-                BooleanOp::Trim => {
-                    // Subj minus Clip: collect subj points outside clip + intersection points
-                    let mut loop_pts = Vec::new();
-                    for &p in &subj.points {
-                        if !point_in_polygon(p, &clip.points) {
-                            loop_pts.push(p);
-                        }
+            }
+            splits.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut chain: Vec<usize> = Vec::with_capacity(splits.len());
+            for (_, vid) in splits {
+                if chain.last().copied() != Some(vid) {
+                    chain.push(vid);
+                }
+            }
+            for pair in chain.windows(2) {
+                if pair[0] != pair[1] {
+                    directed_edges.push((pair[0], pair[1]));
+                }
+            }
+        }
+    }
+    directed_edges
+}
+
+fn clip_polylines(subj_list: &[Polyline], clip_list: &[Polyline], op: BooleanOp, fill_rule: crate::FillRule) -> Result<Path, GeomError> {
+    let rings_a = extract_normalized_rings(subj_list);
+    let rings_b = extract_normalized_rings(clip_list);
+    if rings_a.is_empty() || rings_b.is_empty() {
+        return match op {
+            BooleanOp::Weld | BooleanOp::Exclude => {
+                let mut all = rings_a;
+                all.extend(rings_b);
+                rings_to_path(&all, fill_rule)
+            }
+            BooleanOp::Trim | BooleanOp::FrontMinusBack => rings_to_path(&rings_a, fill_rule),
+            BooleanOp::BackMinusFront => rings_to_path(&rings_b, fill_rule),
+            BooleanOp::Intersect => Ok(Path::new()),
+        };
+    }
+
+    // 1. Populate canonical VertexPool with all ring vertices and all pairwise intersection points
+    let mut pool = VertexPool::new();
+    for ring in rings_a.iter().chain(rings_b.iter()) {
+        for &pt in ring {
+            pool.intern(pt);
+        }
+    }
+    for ra in &rings_a {
+        let na = ra.len();
+        for i in 0..na {
+            let a0 = ra[i];
+            let a1 = ra[(i + 1) % na];
+            for rb in &rings_b {
+                let nb = rb.len();
+                for j in 0..nb {
+                    let b0 = rb[j];
+                    let b1 = rb[(j + 1) % nb];
+                    if let Some(ipt) = segment_proper_or_touch_intersection(a0, a1, b0, b1) {
+                        pool.intern(ipt);
                     }
-                    // Insert intersection entry/exit points
-                    for i in 0..subj.points.len() {
-                        let p1 = subj.points[i];
-                        let p2 = subj.points[(i + 1) % subj.points.len()];
-                        for j in 0..clip.points.len() {
-                            let p3 = clip.points[j];
-                            let p4 = clip.points[(j + 1) % clip.points.len()];
-                            if let Some((_, _, ipt)) = segment_intersection(p1, p2, p3, p4) {
-                                loop_pts.push(ipt);
-                            }
-                        }
+                }
+            }
+        }
+    }
+
+    // 2. Split every ring edge against the canonical VertexPool
+    let edges_a = split_ring_edges_against_pool(&rings_a, &pool);
+    let edges_b = split_ring_edges_against_pool(&rings_b, &pool);
+
+    // 3. Classify elementary edges
+    let mut selected: Vec<(usize, usize)> = Vec::new();
+    let mut used_b = vec![false; edges_b.len()];
+
+    for &(ua, va) in &edges_a {
+        // Check if this undirected elementary edge is shared with Clip
+        let mut shared_b_idx: Option<usize> = None;
+        for (bi, &(ub, vb)) in edges_b.iter().enumerate() {
+            if !used_b[bi] && ((ua == ub && va == vb) || (ua == vb && va == ub)) {
+                shared_b_idx = Some(bi);
+                break;
+            }
+        }
+
+        if let Some(bi) = shared_b_idx {
+            used_b[bi] = true;
+            let (ub, vb) = edges_b[bi];
+            let same_dir = ua == ub && va == vb;
+            match op {
+                BooleanOp::Weld | BooleanOp::Intersect => {
+                    if same_dir {
+                        selected.push((ua, va));
                     }
-                    if loop_pts.len() >= 3 {
-                        let cx = loop_pts.iter().map(|p| p.x.get()).sum::<f64>() / loop_pts.len() as f64;
-                        let cy = loop_pts.iter().map(|p| p.y.get()).sum::<f64>() / loop_pts.len() as f64;
-                        loop_pts.sort_by(|a, b| {
-                            let ang_a = (a.y.get() - cy).atan2(a.x.get() - cx);
-                            let ang_b = (b.y.get() - cy).atan2(b.x.get() - cx);
-                            ang_a.partial_cmp(&ang_b).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        add_polyline_to_path(&loop_pts, true, &mut out_path)?;
+                }
+                BooleanOp::Trim | BooleanOp::FrontMinusBack => {
+                    if !same_dir {
+                        selected.push((ua, va));
+                    }
+                }
+                BooleanOp::BackMinusFront => {
+                    if !same_dir {
+                        selected.push((ub, vb));
+                    }
+                }
+                BooleanOp::Exclude => {}
+            }
+        } else {
+            let pa = pool.pts[ua];
+            let pb = pool.pts[va];
+            let mid = Point::new(0.5 * (pa.x.get() + pb.x.get()), 0.5 * (pa.y.get() + pb.y.get()))?;
+            let in_b = point_in_rings(mid, &rings_b);
+            match op {
+                BooleanOp::Weld | BooleanOp::Trim | BooleanOp::FrontMinusBack => {
+                    if !in_b {
+                        selected.push((ua, va));
                     }
                 }
                 BooleanOp::Intersect => {
-                    // Intersection: points of subj inside clip + points of clip inside subj + intersection points
-                    let mut loop_pts = Vec::new();
-                    for &p in &subj.points {
-                        if point_in_polygon(p, &clip.points) {
-                            loop_pts.push(p);
-                        }
-                    }
-                    for &p in &clip.points {
-                        if point_in_polygon(p, &subj.points) {
-                            loop_pts.push(p);
-                        }
-                    }
-                    for i in 0..subj.points.len() {
-                        let p1 = subj.points[i];
-                        let p2 = subj.points[(i + 1) % subj.points.len()];
-                        for j in 0..clip.points.len() {
-                            let p3 = clip.points[j];
-                            let p4 = clip.points[(j + 1) % clip.points.len()];
-                            if let Some((_, _, ipt)) = segment_intersection(p1, p2, p3, p4) {
-                                loop_pts.push(ipt);
-                            }
-                        }
-                    }
-                    if loop_pts.len() >= 3 {
-                        let cx = loop_pts.iter().map(|p| p.x.get()).sum::<f64>() / loop_pts.len() as f64;
-                        let cy = loop_pts.iter().map(|p| p.y.get()).sum::<f64>() / loop_pts.len() as f64;
-                        loop_pts.sort_by(|a, b| {
-                            let ang_a = (a.y.get() - cy).atan2(a.x.get() - cx);
-                            let ang_b = (b.y.get() - cy).atan2(b.x.get() - cx);
-                            ang_a.partial_cmp(&ang_b).unwrap_or(std::cmp::Ordering::Equal)
-                        });
-                        add_polyline_to_path(&loop_pts, true, &mut out_path)?;
+                    if in_b {
+                        selected.push((ua, va));
                     }
                 }
-                BooleanOp::FrontMinusBack | BooleanOp::BackMinusFront | BooleanOp::Exclude => {}
+                BooleanOp::BackMinusFront => {
+                    if in_b {
+                        selected.push((va, ua));
+                    }
+                }
+                BooleanOp::Exclude => {}
             }
         }
     }
 
-    if out_path.elements.is_empty() {
-        // Fallback for non-overlapping or subtle intersection: return subject
-        Ok(subj_list.first().map(|p| polyline_to_path(&p.points, p.closed)).unwrap_or_default())
-    } else {
-        Ok(out_path)
+    for (bi, &(ub, vb)) in edges_b.iter().enumerate() {
+        if used_b[bi] {
+            continue;
+        }
+        let pa = pool.pts[ub];
+        let pb = pool.pts[vb];
+        let mid = Point::new(0.5 * (pa.x.get() + pb.x.get()), 0.5 * (pa.y.get() + pb.y.get()))?;
+        let in_a = point_in_rings(mid, &rings_a);
+        match op {
+            BooleanOp::Weld | BooleanOp::BackMinusFront => {
+                if !in_a {
+                    selected.push((ub, vb));
+                }
+            }
+            BooleanOp::Intersect => {
+                if in_a {
+                    selected.push((ub, vb));
+                }
+            }
+            BooleanOp::Trim | BooleanOp::FrontMinusBack => {
+                if in_a {
+                    selected.push((vb, ub));
+                }
+            }
+            BooleanOp::Exclude => {}
+        }
     }
+
+    // 4. Stitch directed elementary edges into closed polygon loops
+    let loops = stitch_directed_edges(&selected, &pool.pts);
+    rings_to_path(&loops, fill_rule)
+}
+
+fn stitch_directed_edges(edges: &[(usize, usize)], pts: &[Point]) -> Vec<Vec<Point>> {
+    let mut used = vec![false; edges.len()];
+    let mut loops: Vec<Vec<Point>> = Vec::new();
+
+    for start_idx in 0..edges.len() {
+        if used[start_idx] {
+            continue;
+        }
+        used[start_idx] = true;
+        let (u0, v0) = edges[start_idx];
+        let mut chain: Vec<usize> = vec![u0, v0];
+
+        loop {
+            let curr = *chain.last().unwrap_or(&u0);
+            if curr == u0 && chain.len() > 2 {
+                chain.pop();
+                if let Some(clean) = simplify_loop_indices(&chain, pts) {
+                    loops.push(clean);
+                }
+                break;
+            }
+
+            // If `curr` already appeared earlier in `chain` (at index k > 0), extract the simple sub-cycle
+            if let Some(pos) = chain[..chain.len() - 1].iter().position(|&v| v == curr)
+                && pos > 0
+            {
+                let sub_cycle = chain[pos..chain.len() - 1].to_vec();
+                chain.truncate(pos + 1);
+                if let Some(clean) = simplify_loop_indices(&sub_cycle, pts) {
+                    loops.push(clean);
+                }
+            }
+
+            let prev = if chain.len() >= 2 { chain[chain.len() - 2] } else { u0 };
+            let p_prev = pts[prev];
+            let p_curr = pts[curr];
+            let in_angle = (p_prev.y.get() - p_curr.y.get()).atan2(p_prev.x.get() - p_curr.x.get());
+
+            let mut best_edge: Option<(usize, f64)> = None;
+            for (ei, &(u, v)) in edges.iter().enumerate() {
+                if !used[ei] && u == curr {
+                    let p_next = pts[v];
+                    let out_angle = (p_next.y.get() - p_curr.y.get()).atan2(p_next.x.get() - p_curr.x.get());
+                    let mut turn = (out_angle - in_angle).rem_euclid(std::f64::consts::TAU);
+                    if turn < 1e-9 {
+                        turn = std::f64::consts::TAU;
+                    }
+                    if best_edge.is_none_or(|(_, best_turn)| turn < best_turn) {
+                        best_edge = Some((ei, turn));
+                    }
+                }
+            }
+
+            if let Some((next_ei, _)) = best_edge {
+                used[next_ei] = true;
+                chain.push(edges[next_ei].1);
+            } else {
+                break;
+            }
+        }
+    }
+
+    loops
+}
+
+fn simplify_loop_indices(indices: &[usize], pts: &[Point]) -> Option<Vec<Point>> {
+    if indices.len() < 3 {
+        return None;
+    }
+    let mut ring: Vec<Point> = indices.iter().map(|&idx| pts[idx]).collect();
+    // Remove collinear intermediate vertices along straight split segments
+    let mut changed = true;
+    while changed && ring.len() >= 3 {
+        changed = false;
+        let n = ring.len();
+        for i in 0..n {
+            let p_prev = ring[(i + n - 1) % n];
+            let p_curr = ring[i];
+            let p_next = ring[(i + 1) % n];
+            let ax = p_curr.x.get() - p_prev.x.get();
+            let ay = p_curr.y.get() - p_prev.y.get();
+            let bx = p_next.x.get() - p_curr.x.get();
+            let by = p_next.y.get() - p_curr.y.get();
+            let la = ax.hypot(ay);
+            let lb = bx.hypot(by);
+            if la <= 1e-6 || lb <= 1e-6 {
+                ring.remove(i);
+                changed = true;
+                break;
+            }
+            let dot = ax * bx + ay * by;
+            let cross = (ax * by - ay * bx).abs();
+            if dot > 0.0 && cross <= 1e-6 * la * lb {
+                ring.remove(i);
+                changed = true;
+                break;
+            }
+        }
+    }
+    if ring.len() >= 3 && polygon_signed_area2(&ring).abs() > 1e-4 { Some(ring) } else { None }
+}
+
+fn rings_to_path(rings: &[Vec<Point>], fill_rule: crate::FillRule) -> Result<Path, GeomError> {
+    let mut out = Path { elements: Vec::new(), fill_rule };
+    for ring in rings {
+        if ring.len() >= 3 {
+            add_polyline_to_path(ring, true, &mut out)?;
+        }
+    }
+    Ok(out)
 }
 
 fn add_polyline_to_path(points: &[Point], closed: bool, path: &mut Path) -> Result<(), GeomError> {
@@ -287,12 +600,6 @@ fn add_polyline_to_path(points: &[Point], closed: bool, path: &mut Path) -> Resu
         path.close()?;
     }
     Ok(())
-}
-
-fn polyline_to_path(points: &[Point], closed: bool) -> Path {
-    let mut p = Path::new();
-    let _ = add_polyline_to_path(points, closed, &mut p);
-    p
 }
 
 /// Generates clean-room vector Bézier/line contours for a given artistic text string.
@@ -924,5 +1231,108 @@ mod tests {
         let ab = ang_dim.bounds().unwrap();
         assert!(ab.width() >= 40.0);
         assert!(ab.height() >= 40.0);
+    }
+
+    #[test]
+    fn boolean_planar_clipper_area_identities_holes_splits_and_grid_oracle_r5_1() {
+        use crate::path::{PathElement, measure_path_length_and_area};
+        use crate::shapes::{EllipseSpec, PolygonSpec};
+
+        // 1. Overlapping rectangles with shared top/bottom collinear edges:
+        // r1 = [0,0,50,50] (area 2500), r2 = [25,0,75,50] (area 2500)
+        // weld = 3750, inter = 1250, trim = 1250, back_minus_front = 1250, exclude = 2500
+        let r1 = RectSpec::sharp(Rect::new(0.0, 0.0, 50.0, 50.0).unwrap()).to_path().unwrap();
+        let r2 = RectSpec::sharp(Rect::new(25.0, 0.0, 75.0, 50.0).unwrap()).to_path().unwrap();
+        let (_, area_weld) = measure_path_length_and_area(&boolean_paths(&r1, &r2, BooleanOp::Weld).unwrap()).unwrap();
+        let (_, area_inter) = measure_path_length_and_area(&boolean_paths(&r1, &r2, BooleanOp::Intersect).unwrap()).unwrap();
+        let (_, area_trim) = measure_path_length_and_area(&boolean_paths(&r1, &r2, BooleanOp::Trim).unwrap()).unwrap();
+        let (_, area_bmf) = measure_path_length_and_area(&boolean_paths(&r1, &r2, BooleanOp::BackMinusFront).unwrap()).unwrap();
+        let (_, area_excl) = measure_path_length_and_area(&boolean_paths(&r1, &r2, BooleanOp::Exclude).unwrap()).unwrap();
+        assert!((area_weld - 3750.0).abs() < 1.0, "expected weld area 3750, got {area_weld}");
+        assert!((area_inter - 1250.0).abs() < 1.0, "expected inter area 1250, got {area_inter}");
+        assert!((area_trim - 1250.0).abs() < 1.0, "expected trim area 1250, got {area_trim}");
+        assert!((area_bmf - 1250.0).abs() < 1.0, "expected bmf area 1250, got {area_bmf}");
+        assert!((area_excl - 2500.0).abs() < 1.0, "expected exclude area 2500, got {area_excl}");
+
+        // 2. Crossed bars: horizontal [0, 15, 60, 45] (area 1800) and vertical [15, 0, 45, 60] (area 1800)
+        // Overlap is [15, 15, 45, 45] (area 900).
+        // Trim (horiz \ vert) must split horizontal bar into 2 disjoint rectangles of total area 900.
+        let horiz = RectSpec::sharp(Rect::new(0.0, 15.0, 60.0, 45.0).unwrap()).to_path().unwrap();
+        let vert = RectSpec::sharp(Rect::new(15.0, 0.0, 45.0, 60.0).unwrap()).to_path().unwrap();
+        let cross_weld = boolean_paths(&horiz, &vert, BooleanOp::Weld).unwrap();
+        let cross_trim = boolean_paths(&horiz, &vert, BooleanOp::Trim).unwrap();
+        let cross_inter = boolean_paths(&horiz, &vert, BooleanOp::Intersect).unwrap();
+        let (_, cw_area) = measure_path_length_and_area(&cross_weld).unwrap();
+        let (_, ct_area) = measure_path_length_and_area(&cross_trim).unwrap();
+        let (_, ci_area) = measure_path_length_and_area(&cross_inter).unwrap();
+        assert!((cw_area - 2700.0).abs() < 1.0, "cross weld area {cw_area} != 2700");
+        assert!((ct_area - 900.0).abs() < 1.0, "cross trim area {ct_area} != 900");
+        assert!((ci_area - 900.0).abs() < 1.0, "cross inter area {ci_area} != 900");
+        let ct_closes = cross_trim.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(ct_closes, 2, "cross trim should produce 2 disjoint closed loops");
+
+        // 3. Interior hole punch: outer [0,0,60,60] (area 3600) minus inner [15,15,45,45] (area 900) -> net area 2700, 2 loops
+        let outer = RectSpec::sharp(Rect::new(0.0, 0.0, 60.0, 60.0).unwrap()).to_path().unwrap();
+        let inner = RectSpec::sharp(Rect::new(15.0, 15.0, 45.0, 45.0).unwrap()).to_path().unwrap();
+        let punched = boolean_paths(&outer, &inner, BooleanOp::Trim).unwrap();
+        let (_, punched_area) = measure_path_length_and_area(&punched).unwrap();
+        let punched_closes = punched.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(punched_closes, 2, "hole punch must have outer + inner contour");
+        assert!((punched_area - 2700.0).abs() < 1.0, "hole punch net area {punched_area} != 2700");
+
+        // Reverse: inner minus outer must be completely empty!
+        let swallowed = boolean_paths(&inner, &outer, BooleanOp::Trim).unwrap();
+        assert!(swallowed.elements.is_empty(), "inner minus outer must be empty");
+
+        // 4. Disjoint circles with overlapping bounding boxes: Intersect must be empty!
+        let c1 = EllipseSpec::full(Rect::new(0.0, 0.0, 40.0, 40.0).unwrap()).to_path().unwrap();
+        let c2 = EllipseSpec::full(Rect::new(35.0, 35.0, 75.0, 75.0).unwrap()).to_path().unwrap();
+        let c_inter = boolean_paths(&c1, &c2, BooleanOp::Intersect).unwrap();
+        assert!(c_inter.elements.is_empty(), "disjoint circles with overlapping bboxes must have empty intersection");
+
+        // 5. Star and circle area identity + grid point-membership oracle
+        let star = PolygonSpec::star(Point::new(30.0, 30.0).unwrap(), 28.0, 12.0, 5, 0.0).unwrap().to_path().unwrap();
+        let disc = EllipseSpec::full(Rect::new(15.0, 10.0, 65.0, 55.0).unwrap()).to_path().unwrap();
+        let (_, a_star) = measure_path_length_and_area(&star).unwrap();
+        let (_, a_disc) = measure_path_length_and_area(&disc).unwrap();
+        let u_sd = boolean_paths(&star, &disc, BooleanOp::Weld).unwrap();
+        let i_sd = boolean_paths(&star, &disc, BooleanOp::Intersect).unwrap();
+        let t_sd = boolean_paths(&star, &disc, BooleanOp::Trim).unwrap();
+        let b_sd = boolean_paths(&star, &disc, BooleanOp::BackMinusFront).unwrap();
+        let x_sd = boolean_paths(&star, &disc, BooleanOp::Exclude).unwrap();
+        let (_, a_u) = measure_path_length_and_area(&u_sd).unwrap();
+        let (_, a_i) = measure_path_length_and_area(&i_sd).unwrap();
+        let (_, a_t) = measure_path_length_and_area(&t_sd).unwrap();
+        let (_, a_b) = measure_path_length_and_area(&b_sd).unwrap();
+        let (_, a_x) = measure_path_length_and_area(&x_sd).unwrap();
+        assert!(
+            ((a_u + a_i) - (a_star + a_disc)).abs() < 2.0,
+            "area(A u B) + area(A n B) != area(A) + area(B): {a_u} + {a_i} vs {a_star} + {a_disc}"
+        );
+        assert!(((a_t + a_i) - a_star).abs() < 2.0, "area(A \\ B) + area(A n B) != area(A): {a_t} + {a_i} vs {a_star}");
+        assert!(((a_b + a_i) - a_disc).abs() < 2.0, "area(B \\ A) + area(A n B) != area(B): {a_b} + {a_i} vs {a_disc}");
+        assert!((a_x - (a_t + a_b)).abs() < 2.0, "area(A ^ B) != area(A \\ B) + area(B \\ A): {a_x} vs {a_t} + {a_b}");
+
+        // Grid membership oracle on cross_weld, cross_trim, cross_inter, and exclude
+        let cross_excl = boolean_paths(&horiz, &vert, BooleanOp::Exclude).unwrap();
+        let cross_bmf = boolean_paths(&horiz, &vert, BooleanOp::BackMinusFront).unwrap();
+        for gx in 0..20 {
+            for gy in 0..20 {
+                let x = 1.5 + f64::from(gx) * 3.0;
+                let y = 1.5 + f64::from(gy) * 3.0;
+                // Skip points close to the rectangle boundaries x/y in {0, 15, 45, 60}
+                if [0.0, 15.0, 45.0, 60.0].iter().any(|&b| (x - b).abs() < 0.8 || (y - b).abs() < 0.8) {
+                    continue;
+                }
+                let pt = Point::new(x, y).unwrap();
+                let in_a = path_contains_point(&horiz, pt);
+                let in_b = path_contains_point(&vert, pt);
+                assert_eq!(path_contains_point(&cross_weld, pt), in_a || in_b, "weld mismatch at ({x}, {y})");
+                assert_eq!(path_contains_point(&cross_inter, pt), in_a && in_b, "inter mismatch at ({x}, {y})");
+                assert_eq!(path_contains_point(&cross_trim, pt), in_a && !in_b, "trim mismatch at ({x}, {y})");
+                assert_eq!(path_contains_point(&cross_bmf, pt), in_b && !in_a, "bmf mismatch at ({x}, {y})");
+                assert_eq!(path_contains_point(&cross_excl, pt), in_a ^ in_b, "excl mismatch at ({x}, {y})");
+            }
+        }
     }
 }
