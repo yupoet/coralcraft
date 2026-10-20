@@ -619,6 +619,26 @@ impl McpServer {
                             "name": "set_page_size",
                             "description": "Updates active page dimensions (width_pt, height_pt) and measurement units (mm, pt, inch, px) (Layout -> Page Setup).",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "attract_repel_path",
+                            "description": "Radially attracts (strength > 0) or repels (strength < 0) vertices within radius_pt of (cx, cy) on an object (Attract and Repel Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "duplicate_page",
+                            "description": "Duplicates the specified 0-based page (including its layers and objects) and activates the copy (Layout -> Duplicate Page).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "rename_page",
+                            "description": "Renames the specified 0-based page tab (Layout -> Rename Page).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "delete_page",
+                            "description": "Deletes the specified 0-based page when document.pages.len() > 1 (Layout -> Delete Page).",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -1688,6 +1708,32 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetPageSetup { width_pt, height_pt, units });
                 Ok(json!({ "page_size_set": ok }))
             }
+            "attract_repel_path" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(100.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(100.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0)).map_err(|e| e.to_string())?;
+                let strength = F64::new(args.get("strength").and_then(Value::as_f64).unwrap_or(0.4)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::AttractRepelObjectPath { object_id: target, center, radius_pt, strength });
+                Ok(json!({ "attracted_repelled": ok, "object_id": target.0 }))
+            }
+            "duplicate_page" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |v| v as usize);
+                let ok = self.engine.execute(EngineCommand::DuplicatePage { page_index });
+                Ok(json!({ "page_duplicated": ok, "pages": self.engine.document.pages.len(), "active_page_index": self.engine.current_page_index() }))
+            }
+            "rename_page" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |v| v as usize);
+                let name = args.get("name").and_then(Value::as_str).unwrap_or("Page").to_owned();
+                let ok = self.engine.execute(EngineCommand::RenamePage { page_index, name });
+                Ok(json!({ "page_renamed": ok, "page_index": page_index }))
+            }
+            "delete_page" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |v| v as usize);
+                let ok = self.engine.execute(EngineCommand::DeletePage { page_index });
+                Ok(json!({ "page_deleted": ok, "pages": self.engine.document.pages.len(), "active_page_index": self.engine.current_page_index() }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1717,7 +1763,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 104);
+        assert_eq!(tools, 108);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

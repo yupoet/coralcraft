@@ -1148,6 +1148,40 @@ pub fn twirl_path_around_point(path: &Path, center: Point, radius_pt: f64, angle
     Ok(out)
 }
 
+/// Radially attracts (`strength > 0`) or repels (`strength < 0`) vertices within `radius_pt` of `center`
+/// (`Attract and Repel Tool`).
+pub fn radial_push_path_around_point(path: &Path, center: Point, radius_pt: f64, strength: f64) -> Result<Path, GeomError> {
+    let r = crate::F64::new(radius_pt)?.get();
+    let s = crate::F64::new(strength)?.get().clamp(-0.95, 0.95);
+    if r <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("radius_pt must be positive"));
+    }
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let dx = p.x.get() - center.x.get();
+        let dy = p.y.get() - center.y.get();
+        let dist = dx.hypot(dy);
+        if dist <= 1e-9 || dist >= r {
+            return Ok(p);
+        }
+        let t = dist / r;
+        let u = 1.0 - t;
+        let new_t = (t * (1.0 - s * u * u)).clamp(0.0, 1.0);
+        let scale = new_t / t;
+        Point::new(center.x.get() + dx * scale, center.y.get() + dy * scale)
+    };
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => out.move_to(warp_pt(p)?)?,
+            PathElement::LineTo(p) => out.line_to(warp_pt(p)?)?,
+            PathElement::QuadTo { ctrl, end } => out.quad_to(warp_pt(ctrl)?, warp_pt(end)?)?,
+            PathElement::CubicTo { c1, c2, end } => out.cubic_to(warp_pt(c1)?, warp_pt(c2)?, warp_pt(end)?)?,
+            PathElement::Close => out.close()?,
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1172,5 +1206,7 @@ mod m26_tests {
 
         let twirled = twirl_path_around_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 90.0).unwrap();
         assert_eq!(twirled.elements.len(), 2);
+        let attracted = radial_push_path_around_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 0.5).unwrap();
+        assert_eq!(attracted.elements.len(), 2);
     }
 }

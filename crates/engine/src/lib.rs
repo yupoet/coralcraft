@@ -9,7 +9,8 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
     boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
-    join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path, twirl_path_around_point,
+    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
+    twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -216,6 +217,8 @@ pub enum EngineCommand {
     ClearEffects { object_id: ObjectId },
     /// Copies the non-destructive vector effect stack from `source_id` to all selected unlocked objects (`Effects -> Clone Effect`).
     CloneEffectsFrom { source_id: ObjectId },
+    /// Radially attracts (`strength > 0`) or repels (`strength < 0`) vertices within `radius_pt` of `center` on `object_id` (`Attract and Repel Tool`).
+    AttractRepelObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -899,6 +902,15 @@ impl EditorEngine {
             EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
                 let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
                     !o.locked && object_to_path(o).is_some_and(|p| twirl_path_around_point(&p, *center, radius_pt.get(), angle_deg.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| radial_push_path_around_point(&p, *center, radius_pt.get(), strength.get()).is_ok())
                 });
                 if !valid {
                     return false;
@@ -2479,6 +2491,19 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
+                let r = radius_pt.get();
+                let s = strength.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = radial_push_path_around_point(&base_path, center, r, s)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
         }
         true
     }
@@ -3192,5 +3217,13 @@ mod tests {
         assert!(!engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
         assert!(engine.execute(EngineCommand::ClearEffects { object_id: boundary_id }));
         assert!(engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
+
+        // 25. AttractRepelObjectPath
+        assert!(engine.execute(EngineCommand::AttractRepelObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            strength: F64::new(0.4).unwrap(),
+        }));
     }
 }
