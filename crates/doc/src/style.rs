@@ -201,6 +201,23 @@ pub enum FountainGeometry {
     },
 }
 
+/// Preset two-color geometric pattern kind in CorelDRAW's Pattern Fill dialog.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatternKind {
+    /// 2×2 alternating foreground/background checkerboard tile.
+    #[default]
+    Checkerboard,
+    /// Foreground circular polka dot centered in the background tile.
+    PolkaDot,
+    /// Alternating horizontal foreground/background bands.
+    HorizontalStripe,
+    /// Alternating vertical foreground/background bands.
+    VerticalStripe,
+    /// Diagonal 45° and 135° crosshatch grid lines.
+    DiagonalCrosshatch,
+}
+
 /// Object or page fill style.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "fill_type", rename_all = "snake_case")]
@@ -218,6 +235,17 @@ pub enum FillStyle {
         blend_mode: FountainBlendMode,
         /// Ordered gradient stops.
         stops: Vec<FountainStop>,
+    },
+    /// CorelDRAW Two-Color Pattern Fill.
+    TwoColorPattern {
+        /// Geometric tile pattern kind.
+        kind: PatternKind,
+        /// Foreground pattern ink color.
+        fg_color: Color,
+        /// Background pattern tile color.
+        bg_color: Color,
+        /// Repeating square tile size in typographic points (`> 0.0`).
+        tile_size_pt: F64,
     },
     /// Unimplemented CDR fill chunk preserved verbatim.
     Unknown {

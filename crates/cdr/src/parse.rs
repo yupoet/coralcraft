@@ -1341,6 +1341,14 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
             p.extend_from_slice(&encode_cdr_color_bytes(c1));
             p.extend_from_slice(&encode_cdr_color_bytes(c2));
         }
+        FillStyle::TwoColorPattern { fg_color, bg_color, tile_size_pt, .. } => {
+            p.extend_from_slice(&7u16.to_le_bytes());
+            let ts = (tile_size_pt.get().round().clamp(1.0, 1000.0) as u16).to_le_bytes();
+            p.extend_from_slice(&ts);
+            p.extend_from_slice(&0u16.to_le_bytes());
+            p.extend_from_slice(&encode_cdr_color_bytes(fg_color));
+            p.extend_from_slice(&encode_cdr_color_bytes(bg_color));
+        }
         FillStyle::Unknown { .. } => {
             p.extend_from_slice(&99u16.to_le_bytes());
         }

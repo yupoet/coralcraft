@@ -1268,5 +1268,27 @@ mod tests {
         let out_lens = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
         let inv_px = out_lens.surface.get_straight_rgba(110, 30);
         assert!(inv_px[1] > 180 && inv_px[2] > 180, "Invert lens over red should produce cyan: {inv_px:?}");
+
+        // Two-Color Pattern Fill (Checkerboard) raster & SVG <pattern> export
+        let pat_obj = ObjectNode::new(
+            ObjectId(305),
+            Some("Pattern Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(0.0, 0.0, 32.0, 32.0).unwrap())),
+            Some(FillStyle::TwoColorPattern {
+                kind: coralcraft_doc::PatternKind::Checkerboard,
+                fg_color: Color::rgb8(10, 20, 200),
+                bg_color: Color::rgb8(240, 240, 240),
+                tile_size_pt: F64::new(16.0).unwrap(),
+            }),
+            None,
+        );
+        doc.pages[0].layers[0].objects.push(pat_obj);
+        let out_pat = render_page(&doc, 0, &RenderOpts { scale: 1.0, transparent_background: true, export_mode: true }).unwrap();
+        // (4, 4) is u=0.25, v=0.25 -> bg; (12, 4) is u=0.75, v=0.25 -> fg
+        assert_eq!(out_pat.surface.get_straight_rgba(4, 4)[0], 240);
+        assert_eq!(out_pat.surface.get_straight_rgba(12, 4)[2], 200);
+        let svg_pat = export_svg(&doc, 0).unwrap();
+        assert!(svg_pat.contains("<pattern id=\"pat-obj-305\""));
+        assert!(svg_pat.contains("fill=\"url(#pat-obj-305)\""));
     }
 }

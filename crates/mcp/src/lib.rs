@@ -5,8 +5,8 @@
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
-    ArrowheadKind, Document, FillStyle, FountainGeometry, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment,
-    TransparencyStyle, import_dxf, import_svg,
+    ArrowheadKind, Document, FillStyle, FountainGeometry, LensKind, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, PatternKind,
+    TextAlignment, TransparencyStyle, import_dxf, import_svg,
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
@@ -437,6 +437,26 @@ impl McpServer {
                         {
                             "name": "set_object_locked",
                             "description": "Locks or unlocks an object (Object -> Lock -> Lock / Unlock).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_pattern_fill",
+                            "description": "Applies a Two-Color Pattern Fill (checkerboard, polka_dot, horizontal_stripe, vertical_stripe, diagonal_crosshatch) to selected objects.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "join_open_curves",
+                            "description": "Joins open subpaths in an object whose endpoints lie within tolerance_pt (Object -> Join Curves / Ctrl+Shift+J).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "ungroup_all_selection",
+                            "description": "Recursively ungroups all selected groups and nested subgroups down to leaf objects (Object -> Group -> Ungroup All).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "move_page",
+                            "description": "Moves the 0-based page at from_index to to_index.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1203,6 +1223,49 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetObjectLocked { object_id: target, locked });
                 Ok(json!({ "lock_updated": ok, "object_id": target.0, "locked": locked }))
             }
+            "set_pattern_fill" => {
+                self.apply_optional_selection(args);
+                let kind = match args.get("pattern").and_then(Value::as_str).unwrap_or("checkerboard") {
+                    "polka_dot" => PatternKind::PolkaDot,
+                    "horizontal_stripe" => PatternKind::HorizontalStripe,
+                    "vertical_stripe" => PatternKind::VerticalStripe,
+                    "diagonal_crosshatch" => PatternKind::DiagonalCrosshatch,
+                    _ => PatternKind::Checkerboard,
+                };
+                let fg_r = args.get("fg_r").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let fg_g = args.get("fg_g").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let fg_b = args.get("fg_b").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let bg_r = args.get("bg_r").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                let bg_g = args.get("bg_g").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                let bg_b = args.get("bg_b").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                let tile_size_pt = F64::new(args.get("tile_size_pt").and_then(Value::as_f64).unwrap_or(16.0)).map_err(|e| e.to_string())?;
+                let fill = FillStyle::TwoColorPattern {
+                    kind,
+                    fg_color: Color::rgb8(fg_r, fg_g, fg_b),
+                    bg_color: Color::rgb8(bg_r, bg_g, bg_b),
+                    tile_size_pt,
+                };
+                let ok = self.engine.execute(EngineCommand::SetFill { fill: Some(fill) });
+                Ok(json!({ "pattern_fill_set": ok }))
+            }
+            "join_open_curves" => {
+                let target = self.resolve_target_id(args)?;
+                let tolerance_pt = F64::new(args.get("tolerance_pt").and_then(Value::as_f64).unwrap_or(5.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::JoinOpenSubpaths { object_id: target, tolerance_pt });
+                Ok(json!({ "joined": ok, "object_id": target.0 }))
+            }
+            "ungroup_all_selection" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::UngroupAllSelection);
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "ungrouped_all": ok, "selected_ids": ids }))
+            }
+            "move_page" => {
+                let from_index = args.get("from_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let to_index = args.get("to_index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let ok = self.engine.execute(EngineCommand::MovePage { from_index, to_index });
+                Ok(json!({ "page_moved": ok, "pages": self.engine.document.pages.len(), "active_page_index": self.engine.current_page_index() }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1232,7 +1295,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 68);
+        assert_eq!(tools, 72);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

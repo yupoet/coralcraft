@@ -8,7 +8,7 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, close_open_subpaths, reference_point, reverse_path_direction, trace_bitmap_to_path,
+    boolean_paths, close_open_subpaths, join_open_subpaths, reference_point, reverse_path_direction, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -157,6 +157,12 @@ pub enum EngineCommand {
     SetObjectLocked { object_id: ObjectId, locked: bool },
     /// Unlocks all locked objects across all layers (`Object -> Lock -> Unlock All Objects`).
     UnlockAllObjects,
+    /// Joins open subpaths in `object_id` whose endpoints lie within `tolerance_pt` (`Object -> Join Curves` / `Ctrl+Shift+J`).
+    JoinOpenSubpaths { object_id: ObjectId, tolerance_pt: F64 },
+    /// Recursively ungroups all selected groups and nested subgroups down to leaf objects (`Object -> Group -> Ungroup All`).
+    UngroupAllSelection,
+    /// Moves the 0-based page at `from_index` to `to_index` and activates `to_index`.
+    MovePage { from_index: usize, to_index: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +320,7 @@ impl EditorEngine {
         let fill_chip = match fill_source {
             Some(FillStyle::Uniform { color }) => Some(color.clone()),
             Some(FillStyle::Fountain { stops, .. }) => stops.first().map(|s| s.color.clone()),
+            Some(FillStyle::TwoColorPattern { fg_color, .. }) => Some(fg_color.clone()),
             Some(FillStyle::Unknown { .. }) | None => None,
         };
         let outline_chip = outline_source.map(|o| o.color.clone());
@@ -684,6 +691,29 @@ impl EditorEngine {
             EngineCommand::ReversePathDirection { object_id } | EngineCommand::CloseOpenSubpaths { object_id } => {
                 let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
                 if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
+                if tolerance_pt.get() < 0.0 {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::UngroupAllSelection => {
+                let sel = &self.selection;
+                let has_group =
+                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
+                if !has_group {
+                    return false;
+                }
+            }
+            EngineCommand::MovePage { from_index, to_index } => {
+                let len = self.document.pages.len();
+                if *from_index >= len || *to_index >= len || *from_index == *to_index {
                     return false;
                 }
             }
@@ -1863,6 +1893,44 @@ impl EditorEngine {
                     obj.locked = false;
                 });
             }
+            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(joined) = join_open_subpaths(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(joined);
+                    }
+                });
+            }
+            EngineCommand::UngroupAllSelection => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut new_selection = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) && matches!(obj.kind, ObjectKind::Group { .. }) {
+                        let mut leaves = Vec::new();
+                        flatten_group_recursive(obj, &mut leaves);
+                        for leaf in leaves {
+                            new_selection.push(leaf.id);
+                            new_objects.push(leaf);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = new_selection;
+            }
+            EngineCommand::MovePage { from_index, to_index } => {
+                let page = self.document.pages.remove(from_index);
+                self.document.pages.insert(to_index, page);
+                self.active_target = ActivePageTarget::Page(to_index);
+                self.selection.clear();
+            }
         }
         true
     }
@@ -1901,7 +1969,23 @@ impl EditorEngine {
     pub fn select_all(&mut self) {
         self.selection = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).map(|o| o.id).collect();
     }
+}
 
+fn flatten_group_recursive(obj: ObjectNode, out: &mut Vec<ObjectNode>) {
+    if let ObjectKind::Group { children } = obj.kind {
+        let group_tf = obj.transform;
+        for mut child in children {
+            if let Ok(composed) = child.transform.then(group_tf) {
+                child.transform = composed;
+            }
+            flatten_group_recursive(child, out);
+        }
+    } else {
+        out.push(obj);
+    }
+}
+
+impl EditorEngine {
     /// Returns `true` if at least one command can be undone.
     #[must_use]
     pub fn can_undo(&self) -> bool {
@@ -2435,5 +2519,16 @@ mod tests {
         assert!(engine.selected_or_all_node(boundary_id).unwrap().locked);
         assert!(engine.execute(EngineCommand::UnlockAllObjects));
         assert!(!engine.selected_or_all_node(boundary_id).unwrap().locked);
+
+        // 16. JoinOpenSubpaths, UngroupAllSelection, and MovePage
+        assert!(engine.execute(EngineCommand::JoinOpenSubpaths { object_id: boundary_id, tolerance_pt: F64::new(5.0).unwrap() }));
+        engine.select_all();
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        assert!(engine.execute(EngineCommand::UngroupAllSelection));
+        assert!(engine.selection.len() >= 2);
+        assert!(engine.execute(EngineCommand::AddPageAfterActive));
+        assert_eq!(engine.document.pages.len(), 2);
+        assert!(engine.execute(EngineCommand::MovePage { from_index: 1, to_index: 0 }));
+        assert_eq!(engine.current_page_index(), 0);
     }
 }

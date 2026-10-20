@@ -23,7 +23,8 @@ pub use flatten::{
 };
 pub use path::{
     ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths, distort_path,
-    expand_artistic_brush_stroke, fillet_path_corners, reverse_path_direction, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
+    expand_artistic_brush_stroke, fillet_path_corners, join_open_subpaths, reverse_path_direction, trace_bitmap_to_path, warp_path_bilinear,
+    warp_path_perspective,
 };
 pub use shapes::{
     CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,

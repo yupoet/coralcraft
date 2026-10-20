@@ -14,7 +14,8 @@ pub use model::{
     SchemaVersion, TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
 };
 pub use style::{
-    ArrowheadKind, ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, RawChunk, RawPayload, Residual, decode_hex, encode_hex,
+    ArrowheadKind, ChunkTag, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind, RawChunk, RawPayload, Residual, decode_hex,
+    encode_hex,
 };
 pub use text_layout::{ParagraphLayout, PositionedTextLine, advance_pt, layout_paragraph_text};
 

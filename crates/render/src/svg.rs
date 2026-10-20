@@ -3,7 +3,9 @@
 use std::fmt::Write as _;
 
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle};
+use coralcraft_doc::{
+    Document, FillStyle, FountainGeometry, LineCap, LineJoin, ObjectKind, ObjectNode, OutlineStyle, PatternKind, TransparencyStyle,
+};
 use coralcraft_geom::{Affine2, FillRule, Path, PathElement, Point, Rect, RectSpec};
 
 use crate::surface::RenderError;
@@ -99,6 +101,10 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
             emit_fountain_def(&mut defs, "page-bg", fill, page_bbox);
             "url(#grad-page-bg)".to_owned()
         }
+        Some(fill @ FillStyle::TwoColorPattern { .. }) => {
+            emit_pattern_def(&mut defs, "page-bg", fill);
+            "url(#pat-page-bg)".to_owned()
+        }
         Some(FillStyle::Unknown { .. }) | None => "#ffffff".to_owned(),
     };
 
@@ -191,6 +197,50 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
     svg.push_str("</svg>\n");
 
     Ok(svg)
+}
+
+fn emit_pattern_def(defs: &mut String, id_suffix: &str, fill: &FillStyle) {
+    let FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } = fill else {
+        return;
+    };
+    let ts = tile_size_pt.get().max(1.0);
+    let half = ts * 0.5;
+    let fg = svg_hex_color(fg_color);
+    let bg = svg_hex_color(bg_color);
+    let _ =
+        writeln!(defs, "    <pattern id=\"pat-{id_suffix}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\">", fmt_num(ts), fmt_num(ts));
+    let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{bg}\"/>", fmt_num(ts), fmt_num(ts));
+    match kind {
+        PatternKind::Checkerboard => {
+            let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{fg}\"/>", fmt_num(half), fmt_num(half));
+            let _ = writeln!(
+                defs,
+                "      <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{fg}\"/>",
+                fmt_num(half),
+                fmt_num(half),
+                fmt_num(half),
+                fmt_num(half)
+            );
+        }
+        PatternKind::PolkaDot => {
+            let _ = writeln!(defs, "      <circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"{fg}\"/>", fmt_num(half), fmt_num(half), fmt_num(ts * 0.35));
+        }
+        PatternKind::HorizontalStripe => {
+            let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{fg}\"/>", fmt_num(ts), fmt_num(half));
+        }
+        PatternKind::VerticalStripe => {
+            let _ = writeln!(defs, "      <rect width=\"{}\" height=\"{}\" fill=\"{fg}\"/>", fmt_num(half), fmt_num(ts));
+        }
+        PatternKind::DiagonalCrosshatch => {
+            let _ = writeln!(
+                defs,
+                "      <path d=\"M 0 0 L {0} {0} M 0 {0} L {0} 0\" stroke=\"{fg}\" stroke-width=\"{1}\"/>",
+                fmt_num(ts),
+                fmt_num(ts * 0.15)
+            );
+        }
+    }
+    defs.push_str("    </pattern>\n");
 }
 
 fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox: Rect) {
@@ -366,6 +416,11 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                     emit_fountain_def(defs, &grad_id, fill, bbox);
                     format!("url(#grad-{grad_id})")
                 }
+                Some(fill @ FillStyle::TwoColorPattern { .. }) => {
+                    let pat_id = format!("obj-{}", node.id.0);
+                    emit_pattern_def(defs, &pat_id, fill);
+                    format!("url(#pat-{pat_id})")
+                }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
             let stroke_str = node.outline.as_ref().map(|o| format!(" {}", format_stroke_attrs(o, node.transform))).unwrap_or_default();
@@ -395,6 +450,11 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
                     let grad_id = format!("obj-{}", node.id.0);
                     emit_fountain_def(defs, &grad_id, fill, bbox);
                     format!("url(#grad-{grad_id})")
+                }
+                Some(fill @ FillStyle::TwoColorPattern { .. }) => {
+                    let pat_id = format!("obj-{}", node.id.0);
+                    emit_pattern_def(defs, &pat_id, fill);
+                    format!("url(#pat-{pat_id})")
                 }
                 Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
             };
@@ -475,6 +535,11 @@ fn emit_path_node(
             let grad_id = format!("obj-{}", node.id.0);
             emit_fountain_def(defs, &grad_id, fill, local_bbox);
             format!("url(#grad-{grad_id})")
+        }
+        Some(fill @ FillStyle::TwoColorPattern { .. }) => {
+            let pat_id = format!("obj-{}", node.id.0);
+            emit_pattern_def(defs, &pat_id, fill);
+            format!("url(#pat-{pat_id})")
         }
         Some(FillStyle::Unknown { .. }) | None => "none".to_owned(),
     };

@@ -559,6 +559,26 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
             }
             s.push_str("Q\n");
         }
+        FillStyle::TwoColorPattern { bg_color, fg_color, tile_size_pt, .. } => {
+            s.push_str("q\n");
+            emit_pdf_path_ops(s, path);
+            let _ = writeln!(s, "{clip_op} n");
+            emit_pdf_color(s, bg_color, false);
+            let _ = writeln!(s, "{} {} {} {} re f", fmt_num(bbox.x0.get()), fmt_num(bbox.y0.get()), fmt_num(bbox.width()), fmt_num(bbox.height()));
+            emit_pdf_color(s, fg_color, false);
+            let ts = tile_size_pt.get().max(2.0);
+            let half = ts * 0.5;
+            let mut ty = bbox.y0.get();
+            while ty < bbox.y1.get() {
+                let mut tx = bbox.x0.get();
+                while tx < bbox.x1.get() {
+                    let _ = writeln!(s, "{} {} {} {} re f", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(half));
+                    tx += ts;
+                }
+                ty += ts;
+            }
+            s.push_str("Q\n");
+        }
         FillStyle::Unknown { .. } => {}
     }
     Ok(())

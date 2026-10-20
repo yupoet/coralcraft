@@ -796,3 +796,100 @@ pub fn close_open_subpaths(path: &Path) -> Result<Path, GeomError> {
     }
     Ok(out)
 }
+
+/// Joins open subpaths in `path` whose endpoints lie within `tolerance_pt` of each other,
+/// and closes any resulting subpath whose start and end lie within `tolerance_pt` (`Object -> Join Curves` / `Ctrl+Shift+J`).
+pub fn join_open_subpaths(path: &Path, tolerance_pt: f64) -> Result<Path, GeomError> {
+    if !tolerance_pt.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if tolerance_pt < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("tolerance_pt must be >= 0"));
+    }
+    let mut subpaths: Vec<Vec<PathElement>> = Vec::new();
+    for &el in &path.elements {
+        if matches!(el, PathElement::MoveTo(_)) || subpaths.is_empty() {
+            subpaths.push(vec![el]);
+        } else if let Some(last) = subpaths.last_mut() {
+            last.push(el);
+        }
+    }
+
+    let endpoint_of = |sub: &[PathElement]| -> Option<(Point, Point, bool)> {
+        let Some(&PathElement::MoveTo(start)) = sub.first() else {
+            return None;
+        };
+        let mut end = start;
+        let mut closed = false;
+        for &el in &sub[1..] {
+            match el {
+                PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => end = p,
+                PathElement::Close => closed = true,
+                PathElement::MoveTo(p) => end = p,
+            }
+        }
+        Some((start, end, closed))
+    };
+
+    let dist = |a: Point, b: Point| -> f64 { (a.x.get() - b.x.get()).hypot(a.y.get() - b.y.get()) };
+
+    let mut merged: Vec<Vec<PathElement>> = Vec::new();
+    for sub in subpaths {
+        let Some((s2, e2, c2)) = endpoint_of(&sub) else {
+            continue;
+        };
+        if c2 {
+            merged.push(sub);
+            continue;
+        }
+        let mut attached = false;
+        for prev in &mut merged {
+            if let Some((s1, e1, c1)) = endpoint_of(prev)
+                && !c1
+            {
+                if dist(e1, s2) <= tolerance_pt {
+                    if dist(e1, s2) > 1e-6 {
+                        prev.push(PathElement::LineTo(s2));
+                    }
+                    prev.extend_from_slice(&sub[1..]);
+                    let (_, new_end, _) = endpoint_of(prev).unwrap_or((s1, e2, false));
+                    if dist(s1, new_end) <= tolerance_pt {
+                        prev.push(PathElement::Close);
+                    }
+                    attached = true;
+                    break;
+                } else if dist(e1, e2) <= tolerance_pt {
+                    let mut tmp = Path { elements: sub.clone(), fill_rule: path.fill_rule };
+                    if let Ok(rev) = reverse_path_direction(&tmp) {
+                        tmp = rev;
+                        if dist(e1, e2) > 1e-6 {
+                            prev.push(PathElement::LineTo(e2));
+                        }
+                        prev.extend_from_slice(&tmp.elements[1..]);
+                        let (_, new_end, _) = endpoint_of(prev).unwrap_or((s1, s2, false));
+                        if dist(s1, new_end) <= tolerance_pt {
+                            prev.push(PathElement::Close);
+                        }
+                        attached = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !attached {
+            let mut sub_owned = sub;
+            if sub_owned.len() >= 3 && dist(s2, e2) <= tolerance_pt {
+                sub_owned.push(PathElement::Close);
+            }
+            merged.push(sub_owned);
+        }
+    }
+
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+    for sub in merged {
+        for el in sub {
+            out.push(el)?;
+        }
+    }
+    Ok(out)
+}

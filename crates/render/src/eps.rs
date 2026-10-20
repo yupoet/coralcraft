@@ -114,6 +114,7 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, page_h: f64) -> Result<(),
         let color = match fill {
             FillStyle::Uniform { color } => Some(color),
             FillStyle::Fountain { stops, .. } => stops.first().map(|s| &s.color),
+            FillStyle::TwoColorPattern { fg_color, .. } => Some(fg_color),
             FillStyle::Unknown { .. } => None,
         };
         if let Some(col) = color {

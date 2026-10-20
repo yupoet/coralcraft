@@ -3,7 +3,7 @@
 use std::f64::consts::PI;
 
 use coralcraft_color::{Color, interpolate_stops};
-use coralcraft_doc::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin};
+use coralcraft_doc::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin, PatternKind};
 use coralcraft_geom::{Affine2, EPS, FillRule, GeomError, Point, Polyline, Rect};
 
 use crate::surface::{RenderError, RenderWarning, Surface};
@@ -508,6 +508,34 @@ pub fn shade_coverage(
 
                     let t = evaluate_fountain_t(*geometry, u, v);
                     let rgb = interpolate_stops(stops, *blend_mode, t)?;
+                    let a = opacity * (f64::from(cov) / 16.0);
+                    surface.blend_straight(px as u32, py as u32, rgb, a);
+                }
+            }
+        }
+        FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } => {
+            let dev_to_local = local_to_dev.invert().unwrap_or(Affine2::IDENTITY);
+            let ts = tile_size_pt.get().max(1.0);
+            let fg_rgb = fg_color.to_srgb8();
+            let bg_rgb = bg_color.to_srgb8();
+            for py in 0..h {
+                for px in 0..w {
+                    let cov = coverage_16[py * w + px];
+                    if cov == 0 {
+                        continue;
+                    }
+                    let dev_pt = Point::new((px as f64) + 0.5, (py as f64) + 0.5)?;
+                    let loc_pt = dev_to_local.apply_point(dev_pt)?;
+                    let u = (loc_pt.x.get() / ts).rem_euclid(1.0);
+                    let v = (loc_pt.y.get() / ts).rem_euclid(1.0);
+                    let is_fg = match kind {
+                        PatternKind::Checkerboard => (u < 0.5) ^ (v < 0.5),
+                        PatternKind::PolkaDot => (u - 0.5).hypot(v - 0.5) <= 0.35,
+                        PatternKind::HorizontalStripe => v < 0.5,
+                        PatternKind::VerticalStripe => u < 0.5,
+                        PatternKind::DiagonalCrosshatch => (u - v).abs() < 0.15 || (u + v - 1.0).abs() < 0.15,
+                    };
+                    let rgb = if is_fg { fg_rgb } else { bg_rgb };
                     let a = opacity * (f64::from(cov) / 16.0);
                     surface.blend_straight(px as u32, py as u32, rgb, a);
                 }

@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M21 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M22 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -19,10 +19,10 @@
   11. **M18: Engineering Angular Dimensions (`build_angular_dimension_path`), Create Boundary Silhouette (`CreateBoundary`), Convert Outline to Object (`Ctrl+Shift+Q`), and 56 MCP Tools (`commit fc3ee96`)**.
   12. **M19: Dashed/Dotted Outline Strokes (`OutlineStyle::dash_pattern`), Conical & Square Fountain Gradients (`FountainGeometry::{Conical, Square}`), 9-Point Object Origin Transformations (`RotateSelection` & `ScaleSelection`), and 60 MCP Tools (`commit 0399522`)**.
   13. **M20: Outline Start/End Arrowhead Markers (`ArrowheadKind`), 9-Point Skew/Shear Transformation (`SkewSelection` / `Alt+F11`), Duplicate (`Ctrl+D`) & Select All (`Ctrl+A`), and 64 MCP Tools (`commit cf24649`)**.
-  14. **M21: CorelDRAW Lens Effects (`Alt+F3`: `Invert`, `Brighten`, `Tinted`, `Magnify`), Subpath Winding Reversal (`reverse_path_direction`), Auto-Close Subpaths (`close_open_subpaths`), Object Lock/Unlock (`SetObjectLocked` / `UnlockAllObjects`), and 68 MCP Tools**:
-      - `coralcraft-geom`: Added `reverse_path_direction` and `close_open_subpaths`.
-      - `coralcraft-doc` & `coralcraft-render`: Added `LensKind`, `TransparencyStyle::Lens`, and `apply_lens_coverage`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `ReversePathDirection`, `CloseOpenSubpaths`, `SetObjectLocked`, `UnlockAllObjects`, and expanded MCP server to **68 tools**.
+  14. **M21: CorelDRAW Lens Effects (`Alt+F3`: `Invert`, `Brighten`, `Tinted`, `Magnify`), Subpath Winding Reversal (`reverse_path_direction`), Auto-Close Subpaths (`close_open_subpaths`), Object Lock/Unlock (`SetObjectLocked` / `UnlockAllObjects`), and 68 MCP Tools (`commit 58e5144`)**.
+  15. **M22: Two-Color Pattern Fills (`PatternKind` & `FillStyle::TwoColorPattern`), Join Open Curves (`join_open_subpaths` / `Ctrl+Shift+J`), Recursive Ungroup All (`UngroupAllSelection`), Page Reordering (`MovePage`), and 72 MCP Tools**:
+      - `coralcraft-doc` & `coralcraft-render`: Added `PatternKind` and `FillStyle::TwoColorPattern` across raster, SVG `<pattern>`, PDF, EPS, and CDR `fild`.
+      - `coralcraft-geom`, `coralcraft-engine` & `coralcraft-mcp`: Added `join_open_subpaths`, `JoinOpenSubpaths`, `UngroupAllSelection`, `MovePage`, and expanded MCP server to **72 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 
