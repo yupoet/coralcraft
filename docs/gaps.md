@@ -37,7 +37,7 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
   Order: color → cdr → doc → render → geom. Untrusted-input crates come first after the small one. `overflow-checks` is not enabled in release: a wrap-to-panic switch would turn silent misbehaviour into a crash instead of an error. The real fix is checked arithmetic.
 
 **Phase 2: native egui desktop shell (D1)**
-- [ ] R2.1 Build an `eframe`/`egui` 0.36 app shell in `coralcraft-ui-egui`, following VectorCraft's `ui-egui`: canvas, toolbox, property bar, palette, objects docker, and page tabs, driven by `EditorEngine`. Use `rfd` for file dialogs and `arboard` for the clipboard. Remove `gui_server`.
+- [x] R2.1 Build an `eframe`/`egui` 0.36 app shell in `coralcraft-ui-egui`, following VectorCraft's `ui-egui`: canvas, toolbox, property bar, palette, objects docker, and page tabs, driven by `EditorEngine`. Use `rfd` for file dialogs and `arboard` for the clipboard. Remove `gui_server`.
 
 **Phase 3: engine integrity**
 - [x] R3.1 Make `execute()` transactional, returning `Result`. Failed commands must not touch history. Cap history size, and keep the ID counter outside undo snapshots.

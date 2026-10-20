@@ -8,13 +8,19 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+coralcraft-cdr = { path = "../cdr" }
 coralcraft-color = { path = "../color" }
 coralcraft-doc = { path = "../doc" }
 coralcraft-engine = { path = "../engine" }
 coralcraft-geom = { path = "../geom" }
 coralcraft-render = { path = "../render" }
 coralcraft-tools = { path = "../tools" }
+egui.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
 
 [lints]
 workspace = true

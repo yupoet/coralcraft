@@ -17,7 +17,13 @@ coralcraft-mcp = { path = "../../crates/mcp" }
 coralcraft-render = { path = "../../crates/render" }
 coralcraft-tools = { path = "../../crates/tools" }
 coralcraft-ui-egui = { path = "../../crates/ui-egui" }
+eframe.workspace = true
+egui.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rfd.workspace = true
+arboard = { workspace = true, features = ["wayland-data-control"] }
 
 [lints]
 workspace = true

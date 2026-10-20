@@ -16,9 +16,11 @@
 //! +--------------------------------------------------------------------------+
 //! ```
 
+pub mod egui_app;
 pub mod gui_session;
 pub mod workspace_render;
 
+pub use egui_app::{CoralCraftApp, Services};
 pub use gui_session::{InteractiveGuiSession, MouseButton};
 
 use coralcraft_color::Color;
