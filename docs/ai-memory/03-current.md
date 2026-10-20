@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M50 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M51 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -48,9 +48,10 @@
   40. **M47: Vector Barcode Generator (`build_barcode_path`), Boolean Divide (`divide_overlapping_paths`), Distribute Selection Along Path (`DistributeSelectionAlongPath`), Global Recolor Artwork (`RecolorArtwork`), and 172 MCP Tools (`commit 0bf0101`)**.
   41. **M48: 2-Point Perspective Grid (`build_perspective_grid_path`), Vector Hatch / Engraving Fill (`hatch_path_region`), Intermediate Morphed Blend Steps (`CreateIntermediateBlendPaths`), SVG Base64 Export (`export_svg_base64`), and 176 MCP Tools (`commit 6b7115c`)**.
   42. **M49: Parametric Gielis Superformula Shapes (`build_superformula_path`), $30^\circ$ Axonometric / Isometric Projection (`project_path_axonometric`), Pack Selection in Grid (`PackSelectionInGrid`), EPS Base64 Export (`export_eps_base64`), and 180 MCP Tools (`commit d784804`)**.
-  43. **M50: CorelDRAW Basic Shapes (`BasicShapeKind` & `build_basic_shape_path`), L-System Fractal & Organic Coral/Plant Path Generator (`build_lsystem_path`), Boolean Exclude / XOR (`BooleanOp::Exclude` & `ExcludeSelection`), Force-Directed Overlap Resolution (`ResolveSelectionOverlaps`), and 184 MCP Tools**:
-      - `coralcraft-geom`: Added `BasicShapeKind` (`Heart`, `Cross`, `Lightning`, `CrescentMoon`, `Teardrop`, `Diamond`), `build_basic_shape_path`, `build_lsystem_path`, and `BooleanOp::Exclude`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `ExcludeSelection`, `ResolveSelectionOverlaps`, `add_basic_shape`, `add_lsystem_path`, `exclude_selection`, `resolve_selection_overlaps`, and expanded MCP server to **184 tools**.
+  43. **M50: CorelDRAW Basic Shapes (`BasicShapeKind` & `build_basic_shape_path`), L-System Fractal & Organic Coral/Plant Path Generator (`build_lsystem_path`), Boolean Exclude / XOR (`BooleanOp::Exclude` & `ExcludeSelection`), Force-Directed Overlap Resolution (`ResolveSelectionOverlaps`), and 184 MCP Tools (`commit c0c92d3`)**.
+  44. **M51: Voronoi Stained-Glass / Mosaic Generator (`build_voronoi_mosaic_path`), Multi-Stop Variable-Width Stroke Profile (`expand_tapered_stroke_profile`), Chaikin Corner-Cutting Curve Smoother (`chaikin_smooth_path`), DXF Base64 Export (`export_dxf_base64`), and 188 MCP Tools**:
+      - `coralcraft-geom`: Added `build_voronoi_mosaic_path`, `expand_tapered_stroke_profile`, and `chaikin_smooth_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ApplyVariableWidthStroke`, `ChaikinSmoothObjectPath`, `add_voronoi_mosaic`, `apply_variable_width_stroke`, `chaikin_smooth_path`, `export_dxf_base64`, and expanded MCP server to **188 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

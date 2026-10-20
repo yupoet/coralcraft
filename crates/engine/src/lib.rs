@@ -8,12 +8,12 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
-    RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve,
-    convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, hatch_path_region,
-    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
-    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
-    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
-    twirl_path_around_point,
+    RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, chaikin_smooth_path, close_open_subpaths,
+    convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths,
+    erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
+    measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
+    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
+    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -312,6 +312,10 @@ pub enum EngineCommand {
     ExcludeSelection,
     /// Iteratively separates overlapping selected objects by repulsion so adjacent bounding boxes maintain at least `min_gap_pt` clearance (`Object -> Align and Distribute -> Resolve Overlaps`).
     ResolveSelectionOverlaps { min_gap_pt: F64, iterations: u32 },
+    /// Expands the spine of `object_id` using a piecewise-linear variable-width profile `widths_pt` (`>= 2` stops) into a closed filled ribbon path (`Artistic Media / Variable Width Tool`).
+    ApplyVariableWidthStroke { object_id: ObjectId, widths_pt: Vec<F64> },
+    /// Smooths the polygonal/curve vertices of `object_id` via Chaikin corner-cutting (`1/4` and `3/4` subdivision) for `iterations` (`1..=6`) (`Object -> Shaping -> Smooth / Corner-Cut Curve`).
+    ChaikinSmoothObjectPath { object_id: ObjectId, iterations: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4023,6 +4027,46 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ApplyVariableWidthStroke { object_id, widths_pt } => {
+                if widths_pt.len() < 2 {
+                    return false;
+                }
+                let raw_widths: Vec<f64> = widths_pt.iter().map(|w| w.get()).collect();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(ribbon) = expand_tapered_stroke_profile(&base_path, &raw_widths)
+                    {
+                        if obj.fill.is_none() {
+                            let color = obj.outline.as_ref().map_or_else(|| Color::rgb8(31, 41, 55), |o| o.color.clone());
+                            obj.fill = Some(FillStyle::Uniform { color });
+                        }
+                        obj.kind = ObjectKind::Path(ribbon);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ChaikinSmoothObjectPath { object_id, iterations } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(smoothed) = chaikin_smooth_path(&base_path, iterations)
+                    {
+                        obj.kind = ObjectKind::Path(smoothed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
         }
         true
     }
@@ -4911,5 +4955,11 @@ mod tests {
         }));
         assert!(engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt: F64::new(16.0).unwrap(), iterations: 10 }));
         assert!(engine.execute(EngineCommand::ExcludeSelection));
+        let xor_id = engine.selection[0];
+        assert!(engine.execute(EngineCommand::ChaikinSmoothObjectPath { object_id: xor_id, iterations: 2 }));
+        assert!(engine.execute(EngineCommand::ApplyVariableWidthStroke {
+            object_id: xor_id,
+            widths_pt: vec![F64::new(2.0).unwrap(), F64::new(10.0).unwrap(), F64::new(4.0).unwrap()],
+        }));
     }
 }

@@ -1866,6 +1866,139 @@ pub fn project_path_axonometric(path: &Path, plane: AxonometricPlane) -> Result<
     path.transform(tf)
 }
 
+/// Expands `spine` into a closed filled ribbon [`Path`] using a multi-stop width profile `widths_pt`
+/// (`>= 2` non-negative width stops interpolated along normalized arc length $u \in [0, 1]$).
+pub fn expand_tapered_stroke_profile(spine: &Path, widths_pt: &[f64]) -> Result<Path, GeomError> {
+    if widths_pt.len() < 2 {
+        return Err(GeomError::InvalidShapeParameter("tapered stroke profile requires at least 2 width stops"));
+    }
+    let mut any_positive = false;
+    for &w in widths_pt {
+        if !w.is_finite() {
+            return Err(GeomError::NonFiniteCoordinate);
+        }
+        if w < 0.0 {
+            return Err(GeomError::InvalidShapeParameter("tapered stroke width stops must be non-negative"));
+        }
+        if w > 1e-6 {
+            any_positive = true;
+        }
+    }
+    if !any_positive {
+        return Err(GeomError::InvalidShapeParameter("tapered stroke profile requires at least one positive width stop"));
+    }
+    let lut = ArcLengthTable::from_path(spine)?;
+    if lut.total_length() <= 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("cannot expand zero-length spine"));
+    }
+
+    let steps = 32usize;
+    let max_idx = (widths_pt.len() - 1) as f64;
+    let eval_width = |u: f64| -> f64 {
+        let pos = (u.clamp(0.0, 1.0) * max_idx).clamp(0.0, max_idx);
+        let idx = (pos.floor() as usize).min(widths_pt.len() - 2);
+        let frac = pos - (idx as f64);
+        (1.0 - frac) * widths_pt[idx] + frac * widths_pt[idx + 1]
+    };
+
+    let mut left_pts = Vec::with_capacity(steps + 1);
+    let mut right_pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let u = (i as f64) / (steps as f64);
+        if let Some(sample) = lut.sample_normalized(u) {
+            let half_w = 0.5 * eval_width(u);
+            let nx = -sample.tangent.1;
+            let ny = sample.tangent.0;
+            let px = sample.point.x.get();
+            let py = sample.point.y.get();
+            left_pts.push(Point::new(px + half_w * nx, py + half_w * ny)?);
+            right_pts.push(Point::new(px - half_w * nx, py - half_w * ny)?);
+        }
+    }
+    if left_pts.len() < 2 {
+        return Err(GeomError::InvalidShapeParameter("insufficient spine samples"));
+    }
+    let mut out = Path::new();
+    out.move_to(left_pts[0])?;
+    for &p in &left_pts[1..] {
+        out.line_to(p)?;
+    }
+    for &p in right_pts.iter().rev() {
+        out.line_to(p)?;
+    }
+    out.close()?;
+    Ok(out)
+}
+
+/// Refines `path` using `iterations` (`1..=5`) of Chaikin's $(3/4, 1/4)$ corner-cutting
+/// subdivision algorithm (`Shape Tool -> Smooth Curve Subdivision`).
+pub fn chaikin_smooth_path(path: &Path, iterations: u32) -> Result<Path, GeomError> {
+    if path.elements.is_empty() || iterations == 0 {
+        return Err(GeomError::InvalidShapeParameter("invalid Chaikin smoothing parameters"));
+    }
+    let iters = iterations.clamp(1, 5);
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for poly in polys {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        let mut pts = poly.points;
+        // Strip duplicate closing vertex if present so closed wrap-around doesn't double-count
+        if poly.closed && pts.len() >= 3 && pts.first() == pts.last() {
+            pts.pop();
+        }
+        for _ in 0..iters {
+            let n = pts.len();
+            if n < 2 {
+                break;
+            }
+            if poly.closed {
+                if !(3..=2048).contains(&n) {
+                    break;
+                }
+                let mut next = Vec::with_capacity(n * 2);
+                for i in 0..n {
+                    let p0 = pts[i];
+                    let p1 = pts[(i + 1) % n];
+                    next.push(Point::new(0.75 * p0.x.get() + 0.25 * p1.x.get(), 0.75 * p0.y.get() + 0.25 * p1.y.get())?);
+                    next.push(Point::new(0.25 * p0.x.get() + 0.75 * p1.x.get(), 0.25 * p0.y.get() + 0.75 * p1.y.get())?);
+                }
+                pts = next;
+            } else {
+                if n > 2048 {
+                    break;
+                }
+                let mut next = Vec::with_capacity(n * 2);
+                next.push(pts[0]);
+                for w in pts.windows(2) {
+                    let p0 = w[0];
+                    let p1 = w[1];
+                    next.push(Point::new(0.75 * p0.x.get() + 0.25 * p1.x.get(), 0.75 * p0.y.get() + 0.25 * p1.y.get())?);
+                    next.push(Point::new(0.25 * p0.x.get() + 0.75 * p1.x.get(), 0.25 * p0.y.get() + 0.75 * p1.y.get())?);
+                }
+                next.push(pts[n - 1]);
+                pts = next;
+            }
+        }
+        if pts.len() >= 2 {
+            out.move_to(pts[0])?;
+            for &p in &pts[1..] {
+                out.line_to(p)?;
+            }
+            if poly.closed {
+                out.close()?;
+            }
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("Chaikin subdivision produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1942,5 +2075,11 @@ mod m26_tests {
             let proj = project_path_axonometric(&rect_path, plane).unwrap();
             assert_eq!(proj.elements.len(), rect_path.elements.len());
         }
+
+        let tapered = expand_tapered_stroke_profile(&poly, &[2.0, 12.0, 4.0]).unwrap();
+        assert!(tapered.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let chaikin = chaikin_smooth_path(&rect_path, 2).unwrap();
+        assert!(chaikin.elements.len() > rect_path.elements.len());
     }
 }

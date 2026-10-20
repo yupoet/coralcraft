@@ -15,6 +15,7 @@ use coralcraft_geom::{
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
     build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path,
     build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_superformula_path, build_three_point_curve_path,
+    build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1020,6 +1021,26 @@ impl McpServer {
                         {
                             "name": "resolve_selection_overlaps",
                             "description": "Iteratively separates overlapping selected objects by force-directed AABB repulsion to maintain min_gap_pt clearance.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_voronoi_mosaic",
+                            "description": "Adds a bounded Voronoi stained-glass/mosaic compound path inside a rectangle with optional mortar cell_gap_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "apply_variable_width_stroke",
+                            "description": "Expands an object's spine using a piecewise-linear variable-width profile (widths_pt array) into a closed filled ribbon path.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "chaikin_smooth_path",
+                            "description": "Smooths polygonal or curve vertices of an object via Chaikin corner-cutting (1/4 and 3/4 subdivision) for iterations (1..=6).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_dxf_base64",
+                            "description": "Exports a page to AutoCAD DXF (AC1009) and returns its byte length and base64-encoded payload.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2997,6 +3018,72 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations });
                 Ok(json!({ "overlaps_resolved": ok, "min_gap_pt": min_gap_pt.get(), "iterations": iterations }))
             }
+            "add_voronoi_mosaic" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(40.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(40.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let cell_gap_pt = args.get("cell_gap_pt").and_then(Value::as_f64).unwrap_or(2.0);
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let mut seeds = Vec::new();
+                if let Some(arr) = args.get("seeds").and_then(Value::as_array) {
+                    for item in arr {
+                        if let Some(pair) = item.as_array()
+                            && pair.len() >= 2
+                            && let (Some(sx), Some(sy)) = (pair[0].as_f64(), pair[1].as_f64())
+                        {
+                            seeds.push(Point::new(sx, sy).map_err(|e| e.to_string())?);
+                        }
+                    }
+                }
+                if seeds.is_empty() {
+                    seeds = vec![
+                        Point::new(x + 0.25 * w, y + 0.3 * h).map_err(|e| e.to_string())?,
+                        Point::new(x + 0.75 * w, y + 0.3 * h).map_err(|e| e.to_string())?,
+                        Point::new(x + 0.5 * w, y + 0.7 * h).map_err(|e| e.to_string())?,
+                        Point::new(x + 0.2 * w, y + 0.8 * h).map_err(|e| e.to_string())?,
+                        Point::new(x + 0.8 * w, y + 0.8 * h).map_err(|e| e.to_string())?,
+                    ];
+                }
+                let path = build_voronoi_mosaic_path(rect, &seeds, cell_gap_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Voronoi Mosaic".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "voronoi_mosaic", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "apply_variable_width_stroke" => {
+                let target = self.resolve_target_id(args)?;
+                let mut widths_pt = Vec::new();
+                if let Some(arr) = args.get("widths_pt").and_then(Value::as_array) {
+                    for v in arr {
+                        if let Some(w) = v.as_f64() {
+                            widths_pt.push(F64::new(w).map_err(|e| e.to_string())?);
+                        }
+                    }
+                }
+                if widths_pt.len() < 2 {
+                    widths_pt = vec![
+                        F64::new(2.0).map_err(|e| e.to_string())?,
+                        F64::new(10.0).map_err(|e| e.to_string())?,
+                        F64::new(3.0).map_err(|e| e.to_string())?,
+                    ];
+                }
+                let ok = self.engine.execute(EngineCommand::ApplyVariableWidthStroke { object_id: target, widths_pt });
+                Ok(json!({ "variable_width_stroke_applied": ok, "object_id": target.0 }))
+            }
+            "chaikin_smooth_path" => {
+                let target = self.resolve_target_id(args)?;
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let ok = self.engine.execute(EngineCommand::ChaikinSmoothObjectPath { object_id: target, iterations });
+                Ok(json!({ "chaikin_smoothed": ok, "object_id": target.0, "iterations": iterations }))
+            }
+            "export_dxf_base64" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let dxf = export_dxf(&self.engine.document, page_index).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(dxf.as_bytes());
+                Ok(json!({
+                    "dxf_bytes": dxf.len(),
+                    "dxf_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3026,7 +3113,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 184);
+        assert_eq!(tools, 188);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3115,5 +3202,31 @@ mod tests {
         )))
         .unwrap();
         assert!(excl_resp.result.unwrap()["structuredContent"]["excluded"].as_bool().unwrap());
+
+        let vor_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"add_voronoi_mosaic","arguments":{"x":30.0,"y":30.0,"width":120.0,"height":90.0,"cell_gap_pt":2.0}}}"#,
+            ),
+        )
+        .unwrap();
+        let vor_id = vor_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let chk_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{{"name":"chaikin_smooth_path","arguments":{{"object_id":{vor_id},"iterations":2}}}}}}"#
+        )))
+        .unwrap();
+        assert!(chk_resp.result.unwrap()["structuredContent"]["chaikin_smoothed"].as_bool().unwrap());
+
+        let vws_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{{"name":"apply_variable_width_stroke","arguments":{{"object_id":{vor_id},"widths_pt":[2.0,8.0,3.0]}}}}}}"#
+        )))
+        .unwrap();
+        assert!(vws_resp.result.unwrap()["structuredContent"]["variable_width_stroke_applied"].as_bool().unwrap());
+
+        let dxf_b64_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(
+            r#"{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"export_dxf_base64","arguments":{"page_index":0}}}"#,
+        ))
+        .unwrap();
+        assert!(dxf_b64_resp.result.unwrap()["structuredContent"]["dxf_bytes"].as_u64().unwrap() > 20);
     }
 }

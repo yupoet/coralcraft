@@ -1289,6 +1289,92 @@ pub fn build_lsystem_path(
     Ok(path)
 }
 
+/// Builds a compound Voronoi cellular mosaic [`Path`] inside `bounds` from `seeds` (`>= 2`)
+/// with inset cell separation `cell_gap_pt >= 0.0` (`Effects -> Creative -> Voronoi Mosaic`).
+pub fn build_voronoi_mosaic_path(bounds: Rect, seeds: &[Point], cell_gap_pt: f64) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    let gap = F64::new(cell_gap_pt)?.get();
+    if w <= 0.0 || h <= 0.0 || seeds.len() < 2 || gap < 0.0 {
+        return Err(GeomError::InvalidShapeParameter("invalid Voronoi mosaic parameters"));
+    }
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let base_cell = vec![Point::new(x0, y0)?, Point::new(x1, y0)?, Point::new(x1, y1)?, Point::new(x0, y1)?];
+
+    let clip_half_plane = |poly: &[Point], sx: f64, sy: f64, nx: f64, ny: f64, max_proj: f64| -> Result<Vec<Point>, GeomError> {
+        if poly.len() < 3 {
+            return Ok(Vec::new());
+        }
+        let eval = |p: Point| -> f64 { (p.x.get() - sx) * nx + (p.y.get() - sy) * ny - max_proj };
+        let mut out = Vec::with_capacity(poly.len() + 2);
+        let mut prev = poly[poly.len() - 1];
+        let mut d_prev = eval(prev);
+        for &curr in poly {
+            let d_curr = eval(curr);
+            let prev_in = d_prev <= 1e-9;
+            let curr_in = d_curr <= 1e-9;
+            if prev_in != curr_in {
+                let denom = d_prev - d_curr;
+                if denom.abs() > 1e-12 {
+                    let t = (d_prev / denom).clamp(0.0, 1.0);
+                    let ix = prev.x.get() + t * (curr.x.get() - prev.x.get());
+                    let iy = prev.y.get() + t * (curr.y.get() - prev.y.get());
+                    out.push(Point::new(ix, iy)?);
+                }
+            }
+            if curr_in {
+                out.push(curr);
+            }
+            prev = curr;
+            d_prev = d_curr;
+        }
+        Ok(out)
+    };
+
+    let mut path = Path::new();
+    for (i, &si) in seeds.iter().enumerate() {
+        let mut cell = base_cell.clone();
+        let six = si.x.get();
+        let siy = si.y.get();
+        for (j, &sj) in seeds.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            let dx = sj.x.get() - six;
+            let dy = sj.y.get() - siy;
+            let dist = dx.hypot(dy);
+            if dist <= 1e-6 {
+                continue;
+            }
+            let nx = dx / dist;
+            let ny = dy / dist;
+            let max_proj = 0.5 * dist - 0.5 * gap;
+            if max_proj <= 1e-6 {
+                cell.clear();
+                break;
+            }
+            cell = clip_half_plane(&cell, six, siy, nx, ny, max_proj)?;
+            if cell.len() < 3 {
+                break;
+            }
+        }
+        if cell.len() >= 3 {
+            path.move_to(cell[0])?;
+            for &pt in &cell[1..] {
+                path.line_to(pt)?;
+            }
+            path.close()?;
+        }
+    }
+    if path.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("Voronoi mosaic produced no non-empty cells"));
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1362,5 +1448,14 @@ mod m27_tests {
 
         let lsys = build_lsystem_path(Point::new(50.0, 50.0).unwrap(), "F", &[("F", "F+F-F-F+F")], 90.0, 10.0, 2).unwrap();
         assert!(lsys.elements.len() >= 10);
+
+        let voronoi = build_voronoi_mosaic_path(
+            Rect::new(0.0, 0.0, 120.0, 100.0).unwrap(),
+            &[Point::new(30.0, 30.0).unwrap(), Point::new(90.0, 30.0).unwrap(), Point::new(60.0, 75.0).unwrap()],
+            2.0,
+        )
+        .unwrap();
+        let vor_closes = voronoi.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(vor_closes, 3);
     }
 }

@@ -184,9 +184,13 @@
 50. **M50 CorelDRAW Basic Shapes (`BasicShapeKind` & `build_basic_shape_path`), L-System Fractal & Organic Coral/Plant Path Generator (`build_lsystem_path`), Boolean Exclude / XOR (`BooleanOp::Exclude` & `ExcludeSelection`), Force-Directed Overlap Resolution (`ResolveSelectionOverlaps`), and 184 MCP Tools**:
     - `coralcraft-geom`: `BasicShapeKind` (`Heart`, `Cross`, `Lightning`, `CrescentMoon`, `Teardrop`, `Diamond`), `build_basic_shape_path`, `build_lsystem_path`, and `BooleanOp::Exclude`.
     - `coralcraft-engine` & `coralcraft-mcp`: `ExcludeSelection`, `ResolveSelectionOverlaps`, `add_basic_shape`, `add_lsystem_path`, `exclude_selection`, `resolve_selection_overlaps`, and **184 MCP tools**.
+51. **M51 Voronoi Stained-Glass / Mosaic Generator (`build_voronoi_mosaic_path`), Multi-Stop Variable-Width Stroke Profile (`expand_tapered_stroke_profile`), Chaikin Corner-Cutting Curve Smoother (`chaikin_smooth_path`), DXF Base64 Export (`export_dxf_base64`), and 188 MCP Tools**:
+    - `coralcraft-geom`: `build_voronoi_mosaic_path` (Sutherland-Hodgman half-plane bisector clipping with optional mortar gap inset), `expand_tapered_stroke_profile` (piecewise-linear multi-stop variable-width stroke ribbon), and `chaikin_smooth_path` ($1/4$ and $3/4$ Chaikin corner-cutting subdivision).
+    - `coralcraft-engine` & `coralcraft-mcp`: `ApplyVariableWidthStroke`, `ChaikinSmoothObjectPath`, `add_voronoi_mosaic`, `apply_variable_width_stroke`, `chaikin_smooth_path`, `export_dxf_base64`, and **188 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M51 delivered (`build_voronoi_mosaic_path` & `add_voronoi_mosaic`, `expand_tapered_stroke_profile` & `ApplyVariableWidthStroke`, `chaikin_smooth_path` & `ChaikinSmoothObjectPath`, `export_dxf_base64`, 188 MCP tools).
 - 2026-10-20: M50 delivered (`BasicShapeKind` & `build_basic_shape_path`, `build_lsystem_path` & `add_lsystem_path`, `BooleanOp::Exclude` & `ExcludeSelection`, `ResolveSelectionOverlaps`, 184 MCP tools).
 - 2026-10-20: M49 delivered (`build_superformula_path` & `add_superformula_shape`, `project_path_axonometric` & `ProjectSelectionAxonometric`, `PackSelectionInGrid`, `export_eps_base64`, 180 MCP tools).
 - 2026-10-20: M48 delivered (`build_perspective_grid_path` & `add_perspective_grid`, `hatch_path_region` & `HatchObjectPath`, `CreateIntermediateBlendPaths`, `export_svg_base64`, 176 MCP tools).
