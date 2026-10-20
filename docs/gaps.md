@@ -48,5 +48,6 @@
 - [x] 43. **[M27] Pointillizer Vector Halftone Mosaic (`build_pointillizer_path`), Object Manager Per-Object Controls (`SetObjectOpacity`, `SetObjectVisible`, `RenameObject`), and 92 MCP Tools**: `build_pointillizer_path`, `SetObjectOpacity`, `SetObjectVisible`, `RenameObject`, and 92 MCP tools in `coralcraft-mcp`.
 - [x] 44. **[M28] Impact Tool Radial Burst Rays (`build_impact_rays_path`), Layer Deletion & Reordering (`DeleteLayer` & `MoveLayer`), Invert Selection (`InvertSelection`), and 96 MCP Tools**: `build_impact_rays_path`, `DeleteLayer`, `MoveLayer`, `InvertSelection`, and 96 MCP tools in `coralcraft-mcp`.
 - [x] 45. **[M29] Complex Star `{n/k}` Schläfli Star Polygons (`build_complex_star_path`), Outline Pen Properties (`SetOutlineProperties`), Select By Kind (`SelectByKind`), Document Title (`SetDocumentTitle`), and 100 MCP Tools**: `build_complex_star_path`, `SetOutlineProperties`, `SelectByKind`, `SetDocumentTitle`, and 100 MCP tools in `coralcraft-mcp`.
+- [x] 46. **[M30] Twirl Tool Localized Path Deformer (`twirl_path_around_point`), Clear & Clone Vector Effects (`ClearEffects` & `CloneEffectsFrom`), Page Size & Units (`set_page_size`), and 104 MCP Tools**: `twirl_path_around_point`, `TwirlObjectPath`, `ClearEffects`, `CloneEffectsFrom`, `set_page_size`, and 104 MCP tools in `coralcraft-mcp`.
 
 

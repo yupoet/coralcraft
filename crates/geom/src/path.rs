@@ -1116,6 +1116,38 @@ pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Pat
     Path::from_elements(elements, path.fill_rule)
 }
 
+/// Applies a localized rotational swirl around `center` within `radius_pt` (`Twirl Tool`).
+pub fn twirl_path_around_point(path: &Path, center: Point, radius_pt: f64, angle_deg: f64) -> Result<Path, GeomError> {
+    let r = crate::F64::new(radius_pt)?.get();
+    let max_rad = crate::F64::new(angle_deg)?.get().to_radians();
+    if r <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("radius_pt must be positive"));
+    }
+    let warp_pt = |p: Point| -> Result<Point, GeomError> {
+        let dx = p.x.get() - center.x.get();
+        let dy = p.y.get() - center.y.get();
+        let dist = dx.hypot(dy);
+        if dist >= r {
+            return Ok(p);
+        }
+        let u = 1.0 - dist / r;
+        let theta = max_rad * u * u;
+        let (s, c) = theta.sin_cos();
+        Point::new(center.x.get() + dx * c - dy * s, center.y.get() + dx * s + dy * c)
+    };
+    let mut out = Path { elements: Vec::with_capacity(path.elements.len()), fill_rule: path.fill_rule };
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => out.move_to(warp_pt(p)?)?,
+            PathElement::LineTo(p) => out.line_to(warp_pt(p)?)?,
+            PathElement::QuadTo { ctrl, end } => out.quad_to(warp_pt(ctrl)?, warp_pt(end)?)?,
+            PathElement::CubicTo { c1, c2, end } => out.cubic_to(warp_pt(c1)?, warp_pt(c2)?, warp_pt(end)?)?,
+            PathElement::Close => out.close()?,
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1137,5 +1169,8 @@ mod m26_tests {
         }
         let linear = convert_segment_to_line(&curved, 1).unwrap();
         assert_eq!(linear.elements[1], PathElement::LineTo(p1));
+
+        let twirled = twirl_path_around_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 90.0).unwrap();
+        assert_eq!(twirled.elements.len(), 2);
     }
 }

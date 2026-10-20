@@ -10,9 +10,9 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
-    build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path,
-    build_spiral_path, build_three_point_curve_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path,
+    build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_graph_paper_path, build_impact_rays_path,
+    build_pointillizer_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -598,6 +598,26 @@ impl McpServer {
                         {
                             "name": "set_document_title",
                             "description": "Updates the document title metadata (File -> Document Properties).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "twirl_path",
+                            "description": "Applies a localized rotational swirl around (cx, cy) within radius_pt on an object (Twirl Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "clear_effects",
+                            "description": "Removes all non-destructive vector effects from an object (Object -> Clear Effect).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "clone_effects_from",
+                            "description": "Copies the non-destructive vector effect stack from source_id to selected objects (Effects -> Clone Effect).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_page_size",
+                            "description": "Updates active page dimensions (width_pt, height_pt) and measurement units (mm, pt, inch, px) (Layout -> Page Setup).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1635,6 +1655,39 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetDocumentTitle { title });
                 Ok(json!({ "title_set": ok, "title": self.engine.document.title }))
             }
+            "twirl_path" => {
+                let target = self.resolve_target_id(args)?;
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(100.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(100.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let radius_pt = F64::new(args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0)).map_err(|e| e.to_string())?;
+                let angle_deg = F64::new(args.get("angle_deg").and_then(Value::as_f64).unwrap_or(45.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::TwirlObjectPath { object_id: target, center, radius_pt, angle_deg });
+                Ok(json!({ "twirled": ok, "object_id": target.0 }))
+            }
+            "clear_effects" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::ClearEffects { object_id: target });
+                Ok(json!({ "effects_cleared": ok, "object_id": target.0 }))
+            }
+            "clone_effects_from" => {
+                self.apply_optional_selection(args);
+                let src_raw = args.get("source_id").and_then(Value::as_u64).ok_or_else(|| "Missing source_id".to_owned())?;
+                let ok = self.engine.execute(EngineCommand::CloneEffectsFrom { source_id: ObjectId(src_raw) });
+                Ok(json!({ "effects_cloned": ok, "source_id": src_raw }))
+            }
+            "set_page_size" => {
+                let width_pt = F64::new(args.get("width_pt").and_then(Value::as_f64).unwrap_or(595.276)).map_err(|e| e.to_string())?;
+                let height_pt = F64::new(args.get("height_pt").and_then(Value::as_f64).unwrap_or(841.89)).map_err(|e| e.to_string())?;
+                let units = match args.get("units").and_then(Value::as_str).unwrap_or("mm") {
+                    "pt" => Unit::Pt,
+                    "inch" => Unit::Inch,
+                    "px" => Unit::Px,
+                    _ => Unit::Mm,
+                };
+                let ok = self.engine.execute(EngineCommand::SetPageSetup { width_pt, height_pt, units });
+                Ok(json!({ "page_size_set": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1664,7 +1717,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 100);
+        assert_eq!(tools, 104);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

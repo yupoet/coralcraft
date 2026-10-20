@@ -9,7 +9,7 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
     boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
-    join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
+    join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -210,6 +210,12 @@ pub enum EngineCommand {
     SelectByKind { kind: String },
     /// Updates the document title metadata (`File -> Document Properties`).
     SetDocumentTitle { title: String },
+    /// Applies a localized rotational swirl around `center` within `radius_pt` on `object_id` (`Twirl Tool`).
+    TwirlObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, angle_deg: F64 },
+    /// Removes all non-destructive vector effects from `object_id` (`Object -> Clear Effect`).
+    ClearEffects { object_id: ObjectId },
+    /// Copies the non-destructive vector effect stack from `source_id` to all selected unlocked objects (`Effects -> Clone Effect`).
+    CloneEffectsFrom { source_id: ObjectId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -887,6 +893,27 @@ impl EditorEngine {
             }
             EngineCommand::SetDocumentTitle { title } => {
                 if title.trim().is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| twirl_path_around_point(&p, *center, radius_pt.get(), angle_deg.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ClearEffects { object_id } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked);
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CloneEffectsFrom { source_id } => {
+                let has_src = self.selected_or_all_node(*source_id).is_some();
+                let has_target = self.selected_nodes().iter().any(|o| !o.locked && o.id != *source_id);
+                if !has_src || !has_target {
                     return false;
                 }
             }
@@ -2422,6 +2449,36 @@ impl EditorEngine {
             EngineCommand::SetDocumentTitle { title } => {
                 self.document.title = title.trim().to_owned();
             }
+            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
+                let r = radius_pt.get();
+                let deg = angle_deg.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = twirl_path_around_point(&base_path, center, r, deg)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ClearEffects { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.clear();
+                    }
+                });
+            }
+            EngineCommand::CloneEffectsFrom { source_id } => {
+                let Some(src_effects) = self.selected_or_all_node(source_id).map(|o| o.effects.clone()) else {
+                    return false;
+                };
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked && obj.id != source_id {
+                        obj.effects = src_effects.clone();
+                    }
+                });
+            }
         }
         true
     }
@@ -3121,5 +3178,19 @@ mod tests {
         assert!(engine.selection.contains(&boundary_id));
         assert!(engine.execute(EngineCommand::SetDocumentTitle { title: "CoralCraft Masterpiece".to_owned() }));
         assert_eq!(engine.document.title, "CoralCraft Masterpiece");
+
+        // 24. TwirlObjectPath, CloneEffectsFrom, and ClearEffects
+        assert!(engine.execute(EngineCommand::TwirlObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            angle_deg: F64::new(45.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ApplyContour { object_id: art_id, steps: 1, offset_pt: F64::new(2.0).unwrap(), inside: false }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::CloneEffectsFrom { source_id: art_id }));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
+        assert!(engine.execute(EngineCommand::ClearEffects { object_id: boundary_id }));
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
     }
 }
