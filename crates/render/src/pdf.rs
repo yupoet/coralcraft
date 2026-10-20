@@ -26,6 +26,153 @@ pub struct PrepressOptions {
     pub bleed_pt: F64,
 }
 
+/// N-Up sheet imposition specification (`File -> Print Preview -> Imposition Layout Tool`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImpositionSpec {
+    /// Press sheet width in typographic points.
+    pub sheet_width_pt: F64,
+    /// Press sheet height in typographic points.
+    pub sheet_height_pt: F64,
+    /// Number of rows on the sheet (`>= 1`).
+    pub rows: u32,
+    /// Number of columns on the sheet (`>= 1`).
+    pub cols: u32,
+    /// Outer sheet margin in typographic points.
+    pub margin_pt: F64,
+    /// Gutter spacing between adjacent cells in typographic points.
+    pub gutter_pt: F64,
+    /// Emit corner crop marks around each imposed cell.
+    pub crop_marks: bool,
+}
+
+/// Exports `doc` imposed onto an N-Up (`rows × cols`) press sheet in ISO 32000-1 PDF 1.4 format.
+/// If `doc.pages.len() == 1`, repeats Page 1 across all `rows * cols` cells (step-and-repeat imposition);
+/// otherwise places sequential document pages into cells across the sheet.
+pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u8>, RenderError> {
+    if doc.pages.is_empty() {
+        return Err(RenderError::Doc(coralcraft_doc::DocError::PageOutOfRange { index: 0, count: 0 }));
+    }
+    let rows = spec.rows.clamp(1, 32);
+    let cols = spec.cols.clamp(1, 32);
+    let sheet_w = spec.sheet_width_pt.get().max(72.0);
+    let sheet_h = spec.sheet_height_pt.get().max(72.0);
+    let margin = spec.margin_pt.get().max(0.0);
+    let gutter = spec.gutter_pt.get().max(0.0);
+
+    let usable_w = (sheet_w - 2.0 * margin - f64::from(cols - 1) * gutter).max(10.0);
+    let usable_h = (sheet_h - 2.0 * margin - f64::from(rows - 1) * gutter).max(10.0);
+    let cell_w = usable_w / f64::from(cols);
+    let cell_h = usable_h / f64::from(rows);
+
+    let mut s = String::new();
+    s.push_str("q\n");
+    let _ = writeln!(s, "1 0 0 -1 0 {} cm", fmt_num(sheet_h));
+
+    for r in 0..rows {
+        for c in 0..cols {
+            let cell_idx = (r * cols + c) as usize;
+            let page_idx = if doc.pages.len() == 1 { 0 } else { cell_idx % doc.pages.len() };
+            let page = &doc.pages[page_idx];
+            let pw = page.size.width.get().max(1.0);
+            let ph = page.size.height.get().max(1.0);
+            let scale = (cell_w / pw).min(cell_h / ph);
+            let cell_x = margin + f64::from(c) * (cell_w + gutter) + 0.5 * (cell_w - pw * scale);
+            let cell_y = margin + f64::from(r) * (cell_h + gutter) + 0.5 * (cell_h - ph * scale);
+
+            s.push_str("q\n");
+            let _ = writeln!(s, "{} 0 0 {} {} {} cm", fmt_num(scale), fmt_num(scale), fmt_num(cell_x), fmt_num(cell_y));
+            let layers = doc.effective_layers_for_page(page_idx, true)?;
+            for layer in layers {
+                if layer.opacity.get() <= 0.0 {
+                    continue;
+                }
+                for node in &layer.objects {
+                    emit_pdf_node(&mut s, node)?;
+                }
+            }
+            if spec.crop_marks {
+                let off = 2.0;
+                let len = 8.0;
+                s.push_str("q\n1 1 1 1 K\n0.25 w\n");
+                let _ = writeln!(s, "{} 0 m {} 0 l 0 {} m 0 {} l S", fmt_num(-len), fmt_num(-off), fmt_num(-len), fmt_num(-off));
+                let _ = writeln!(
+                    s,
+                    "{} 0 m {} 0 l {} {} m {} {} l S",
+                    fmt_num(pw + off),
+                    fmt_num(pw + len),
+                    fmt_num(pw),
+                    fmt_num(-len),
+                    fmt_num(pw),
+                    fmt_num(-off)
+                );
+                let _ = writeln!(
+                    s,
+                    "{} {} m {} {} l 0 {} m 0 {} l S",
+                    fmt_num(-len),
+                    fmt_num(ph),
+                    fmt_num(-off),
+                    fmt_num(ph),
+                    fmt_num(ph + off),
+                    fmt_num(ph + len)
+                );
+                let _ = writeln!(
+                    s,
+                    "{} {} m {} {} l {} {} m {} {} l S",
+                    fmt_num(pw + off),
+                    fmt_num(ph),
+                    fmt_num(pw + len),
+                    fmt_num(ph),
+                    fmt_num(pw),
+                    fmt_num(ph + off),
+                    fmt_num(pw),
+                    fmt_num(ph + len)
+                );
+                s.push_str("Q\n");
+            }
+            s.push_str("Q\n");
+        }
+    }
+    s.push_str("Q\n");
+
+    let mut objects: Vec<Vec<u8>> = Vec::with_capacity(5);
+    objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
+    objects.push(b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec());
+    objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec());
+    objects.push(
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>",
+            fmt_num(sheet_w),
+            fmt_num(sheet_h)
+        )
+        .into_bytes(),
+    );
+    let stream_bytes = s.as_bytes();
+    let mut content_obj = format!("<< /Length {} >>\nstream\n", stream_bytes.len()).into_bytes();
+    content_obj.extend_from_slice(stream_bytes);
+    content_obj.extend_from_slice(b"endstream");
+    objects.push(content_obj);
+
+    let mut out = Vec::with_capacity(4096);
+    out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    let mut offsets = Vec::with_capacity(objects.len() + 1);
+    offsets.push(0usize);
+    for (idx, obj_bytes) in objects.iter().enumerate() {
+        let obj_num = idx + 1;
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{obj_num} 0 obj\n").as_bytes());
+        out.extend_from_slice(obj_bytes);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_offset = out.len();
+    let size = offsets.len();
+    out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for &off in &offsets[1..] {
+        out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
+    Ok(out)
+}
+
 /// Exports all pages of `doc` into a self-contained ISO 32000-1 PDF 1.4 byte vector.
 pub fn export_pdf(doc: &Document) -> Result<Vec<u8>, RenderError> {
     export_pdf_with_prepress(doc, &PrepressOptions::default())

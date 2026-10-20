@@ -25,7 +25,7 @@ pub use path::{
     ArcLengthTable, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, expand_artistic_brush_stroke, fillet_path_corners,
     warp_path_bilinear, warp_path_perspective,
 };
-pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec};
+pub use shapes::{CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_graph_paper_path, build_spiral_path};
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 
 #[cfg(test)]
@@ -277,5 +277,13 @@ mod tests {
 
         let filleted = fillet_path_corners(&rect_path, 8.0, CornerKind::Round).unwrap();
         assert!(filleted.elements.len() > rect_path.elements.len());
+
+        let spiral_sym = build_spiral_path(Point::new(100.0, 100.0).unwrap(), 50.0, 3, 1.0).unwrap();
+        assert_eq!(spiral_sym.elements.len(), 1 + 12); // MoveTo + 4*3 CubicTo
+        let spiral_log = build_spiral_path(Point::new(100.0, 100.0).unwrap(), 50.0, 3, 25.0).unwrap();
+        assert_eq!(spiral_log.elements.len(), 1 + 12);
+
+        let grid = build_graph_paper_path(bbox, 4, 3).unwrap();
+        assert_eq!(grid.elements.len(), 4 * 3 * 5); // 12 cells * (MoveTo + 3 LineTo + Close)
     }
 }

@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M14 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M15 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -12,9 +12,10 @@
   4. **M11: Fit Text to Path (`fit_text_to_path` & `VectorEffect::TextOnPath`), Step and Repeat Array Duplication (`EngineCommand::StepAndRepeat`), CDR `enve` 4-Corner Envelope Chunk Round-Trip, and 33 MCP Tools (`commit 4b1c044`)**.
   5. **M12: Engineering Linear Dimension Lines (`build_linear_dimension_path`), 8-Mode Smart Object Distribution (`DistributeSelection`), and 35 MCP Tools (`commit dea7dad`)**.
   6. **M13: 2-Point Vanishing Projective Perspective Homography (`warp_path_perspective`), Polyline Fillet/Scallop/Chamfer Corner Modifier (`fillet_path_corners`), and 37 MCP Tools (`commit 111cbaf`)**.
-  7. **M14: Encapsulated PostScript (`EPSF-3.0`), AutoCAD `DXF` (`AC1009`) Export/Import, SVG 1.1 Vector Import (`import_svg`), and 41 MCP Tools**:
-     - `coralcraft-render`: Added `export_eps` (`%!PS-Adobe-3.0 EPSF-3.0`) and `export_dxf` (AutoCAD ASCII `AC1009` R12 `ENTITIES`).
-     - `coralcraft-doc`, `coralcraft-cli`, `coralcraft-mcp`: Added `import_svg` and `import_dxf`, wired `.eps`/`.dxf`/`.svg` into `coralcraft-cli`, and expanded MCP server to **41 tools**.
+  7. **M14: Encapsulated PostScript (`EPSF-3.0`), AutoCAD `DXF` (`AC1009`) Export/Import, SVG 1.1 Vector Import (`import_svg`), and 41 MCP Tools (`commit 4e50004`)**.
+  8. **M15: Symmetrical & Logarithmic Spirals (`build_spiral_path`), Graph Paper Grid (`build_graph_paper_path`), N-Up PDF Sheet Imposition (`export_pdf_imposed`), Attributes Eyedropper (`CopyPropertiesFrom`), and 45 MCP Tools**:
+     - `coralcraft-geom`: Added `build_spiral_path` and `build_graph_paper_path`.
+     - `coralcraft-render`, `coralcraft-engine`, `coralcraft-mcp`: Added `ImpositionSpec` & `export_pdf_imposed`, `EngineCommand::CopyPropertiesFrom`, and expanded MCP server to **45 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

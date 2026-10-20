@@ -120,6 +120,8 @@ pub enum EngineCommand {
     ExpandEffects { object_id: ObjectId },
     /// Sets or removes object-level transparency on selected objects.
     SetTransparency { transparency: Option<TransparencyStyle> },
+    /// Copies Fill, Outline, and/or Vector Effects from `source_id` to all selected objects (`Edit -> Copy Properties From...`).
+    CopyPropertiesFrom { source_id: ObjectId, copy_fill: bool, copy_outline: bool, copy_effects: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -532,6 +534,16 @@ impl EditorEngine {
                 let sel = &self.selection;
                 let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
                 if *count == 0 || !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
+                if (!*copy_fill && !*copy_outline && !*copy_effects) || self.selected_or_all_node(*source_id).is_none() {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_target = self.current_target_objects().iter().any(|o| !o.locked && o.id != *source_id && sel.contains(&o.id));
+                if !has_target {
                     return false;
                 }
             }
@@ -1333,6 +1345,24 @@ impl EditorEngine {
                     obj.transparency = transparency.clone();
                 });
             }
+            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
+                let Some(src) = self.selected_or_all_node(source_id).cloned() else {
+                    return false;
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.id != source_id {
+                        if copy_fill {
+                            obj.fill = src.fill.clone();
+                        }
+                        if copy_outline {
+                            obj.outline = src.outline.clone();
+                        }
+                        if copy_effects {
+                            obj.effects = src.effects.clone();
+                        }
+                    }
+                });
+            }
         }
         true
     }
@@ -1827,5 +1857,10 @@ mod tests {
         assert!(engine.undo());
         assert!(engine.undo());
         assert_eq!(engine.current_target_objects().len(), before_count);
+
+        // 11. CopyPropertiesFrom copies fill, outline, and effects from text_id to welded_id
+        engine.set_selection(vec![welded_id]);
+        assert!(engine.execute(EngineCommand::CopyPropertiesFrom { source_id: text_id, copy_fill: true, copy_outline: true, copy_effects: true }));
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 1);
     }
 }

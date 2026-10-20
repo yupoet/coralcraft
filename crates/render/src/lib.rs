@@ -13,7 +13,7 @@ use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, 
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use eps::{export_dxf, export_eps};
-pub use pdf::{PrepressOptions, export_pdf, export_pdf_with_prepress};
+pub use pdf::{ImpositionSpec, PrepressOptions, export_pdf, export_pdf_imposed, export_pdf_with_prepress};
 pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
@@ -1132,5 +1132,18 @@ mod tests {
         assert!(dxf.contains("POLYLINE"));
         assert!(dxf.contains("VERTEX"));
         assert!(dxf.contains("SEQEND"));
+
+        let imp_spec = ImpositionSpec {
+            sheet_width_pt: F64::new(612.0).unwrap(),
+            sheet_height_pt: F64::new(792.0).unwrap(),
+            rows: 2,
+            cols: 2,
+            margin_pt: F64::new(18.0).unwrap(),
+            gutter_pt: F64::new(12.0).unwrap(),
+            crop_marks: true,
+        };
+        let pdf_imp = export_pdf_imposed(&doc, &imp_spec).unwrap();
+        assert!(pdf_imp.starts_with(b"%PDF-1.4"));
+        assert!(pdf_imp.len() > 400);
     }
 }

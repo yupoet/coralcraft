@@ -336,3 +336,99 @@ impl PolygonSpec {
         Ok(path)
     }
 }
+
+/// Builds a CorelDRAW Symmetrical (`expansion == 1.0`) or Logarithmic (`expansion > 1.0`) Spiral path (`A` tool)
+/// using quarter-turn Hermite-to-cubic-Bézier segments (`4 * revolutions` segments).
+pub fn build_spiral_path(center: Point, outer_radius: f64, revolutions: u32, expansion: f64) -> Result<Path, GeomError> {
+    if !(1..=100).contains(&revolutions) {
+        return Err(GeomError::InvalidShapeParameter("spiral revolutions must be in 1..=100"));
+    }
+    if !outer_radius.is_finite() || outer_radius <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("spiral outer_radius must be positive"));
+    }
+    if !expansion.is_finite() || !(1.0..=100.0).contains(&expansion) {
+        return Err(GeomError::InvalidShapeParameter("spiral expansion must be in 1.0..=100.0"));
+    }
+
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let total_theta = TAU * f64::from(revolutions);
+    let segments = revolutions * 4;
+    let d_theta = total_theta / f64::from(segments);
+
+    let is_logarithmic = (expansion - 1.0).abs() > 1e-6;
+    let b_log = if is_logarithmic { (1.0 + (expansion - 1.0) * 0.1).ln() / TAU } else { 0.0 };
+    let exp_total = if is_logarithmic { (b_log * total_theta).exp() - 1.0 } else { 1.0 };
+
+    let eval_r_and_dr = |theta: f64| -> (f64, f64) {
+        if is_logarithmic && exp_total > EPS {
+            let e_bt = (b_log * theta).exp();
+            let r = outer_radius * (e_bt - 1.0) / exp_total;
+            let dr = outer_radius * b_log * e_bt / exp_total;
+            (r, dr)
+        } else {
+            let r = outer_radius * (theta / total_theta);
+            let dr = outer_radius / total_theta;
+            (r, dr)
+        }
+    };
+
+    let eval_pt_and_deriv = |theta: f64| -> Result<(Point, (f64, f64)), GeomError> {
+        let (r, dr) = eval_r_and_dr(theta);
+        let (sin_t, cos_t) = theta.sin_cos();
+        let pt = Point::new(cx + r * cos_t, cy + r * sin_t)?;
+        let dx = dr * cos_t - r * sin_t;
+        let dy = dr * sin_t + r * cos_t;
+        Ok((pt, (dx, dy)))
+    };
+
+    let mut path = Path::new();
+    let (p_start, _) = eval_pt_and_deriv(0.0)?;
+    path.move_to(p_start)?;
+
+    for i in 0..segments {
+        let t0 = f64::from(i) * d_theta;
+        let t1 = f64::from(i + 1) * d_theta;
+        let (p0, d0) = eval_pt_and_deriv(t0)?;
+        let (p1, d1) = eval_pt_and_deriv(t1)?;
+        let k = d_theta / 3.0;
+        let c1 = Point::new(p0.x.get() + k * d0.0, p0.y.get() + k * d0.1)?;
+        let c2 = Point::new(p1.x.get() - k * d1.0, p1.y.get() - k * d1.1)?;
+        path.cubic_to(c1, c2, p1)?;
+    }
+
+    Ok(path)
+}
+
+/// Builds a CorelDRAW Graph Paper grid (`D` tool) consisting of `columns * rows` closed rectangular cells
+/// inside `rect`.
+pub fn build_graph_paper_path(rect: Rect, columns: u32, rows: u32) -> Result<Path, GeomError> {
+    if !(1..=100).contains(&columns) || !(1..=100).contains(&rows) {
+        return Err(GeomError::InvalidShapeParameter("graph paper columns and rows must be in 1..=100"));
+    }
+    let w = rect.width();
+    let h = rect.height();
+    if w <= EPS || h <= EPS {
+        return Err(GeomError::InvalidShapeParameter("graph paper rect must have positive width and height"));
+    }
+    let cell_w = w / f64::from(columns);
+    let cell_h = h / f64::from(rows);
+    let x0 = rect.x0.get();
+    let y0 = rect.y0.get();
+
+    let mut path = Path::new();
+    for r in 0..rows {
+        for c in 0..columns {
+            let cx0 = x0 + f64::from(c) * cell_w;
+            let cy0 = y0 + f64::from(r) * cell_h;
+            let cx1 = cx0 + cell_w;
+            let cy1 = cy0 + cell_h;
+            path.move_to(Point::new(cx0, cy0)?)?;
+            path.line_to(Point::new(cx1, cy0)?)?;
+            path.line_to(Point::new(cx1, cy1)?)?;
+            path.line_to(Point::new(cx0, cy1)?)?;
+            path.close()?;
+        }
+    }
+    Ok(path)
+}

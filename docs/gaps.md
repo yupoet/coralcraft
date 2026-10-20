@@ -33,5 +33,6 @@
 - [x] 28. **[M13] Perspective / 2-Point Vanishing Projective Warp (`warp_path_perspective`)**: Projective homography (`3x3` matrix) warp of vector paths and live `VectorEffect::Perspective` in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
 - [x] 29. **[M13] Fillet / Scallop / Chamfer Polyline Corner Modifier (`fillet_path_corners`)**: Parametric corner rounding, scalloping, and chamfering on arbitrary polygonal `ObjectKind::Path` contours in `coralcraft-geom`, `coralcraft-engine`, and `coralcraft-mcp`.
 - [x] 30. **[M14] Encapsulated PostScript (`export_eps`) & AutoCAD Drawing Exchange (`export_dxf` / `import_dxf`) + SVG 1.1 Import (`import_svg`)**: Clean-room `EPSF-3.0` and `AC1009` DXF exporters in `coralcraft-render`, SVG 1.1 and DXF vector importers in `coralcraft-doc`, CLI integration in `coralcraft-cli`, and 41 MCP tools in `coralcraft-mcp`.
+- [x] 31. **[M15] Symmetrical & Logarithmic Spirals (`build_spiral_path`), Graph Paper Grid (`build_graph_paper_path`), N-Up PDF Sheet Imposition (`export_pdf_imposed`), and Attributes Eyedropper (`CopyPropertiesFrom`)**: Spiral (`A`) and Graph Paper (`D`) generators in `coralcraft-geom`, N-Up sheet imposition in `coralcraft-render`, `CopyPropertiesFrom` in `coralcraft-engine`, and 45 MCP tools in `coralcraft-mcp`.
 
 

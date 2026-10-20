@@ -5,8 +5,8 @@ use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
-use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
-use coralcraft_render::{export_dxf, export_eps, export_pdf, export_svg};
+use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_graph_paper_path, build_spiral_path};
+use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -295,6 +295,26 @@ impl McpServer {
                         {
                             "name": "import_dxf",
                             "description": "Replaces the active document by importing an AutoCAD ASCII DXF string.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_spiral",
+                            "description": "Adds a Symmetrical (expansion=1) or Logarithmic (expansion>1) Spiral path (A tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_graph_paper",
+                            "description": "Adds a Graph Paper grid of columns x rows closed cells (D tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "copy_properties_from",
+                            "description": "Copies fill, outline, and/or vector effects from source_id to selected objects (Edit -> Copy Properties From).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_pdf_imposed_byte_len",
+                            "description": "Exports an N-Up imposed press sheet (rows x cols with margins, gutters, and crop marks) to PDF 1.4.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -762,6 +782,54 @@ impl McpServer {
                 self.engine = EditorEngine::new(doc);
                 Ok(json!({ "status": "ok", "imported_objects": count }))
             }
+            "add_spiral" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius = args.get("outer_radius").and_then(Value::as_f64).unwrap_or(60.0);
+                let revolutions = args.get("revolutions").and_then(Value::as_u64).unwrap_or(4) as u32;
+                let expansion = args.get("expansion").and_then(Value::as_f64).unwrap_or(1.0);
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_spiral_path(center, radius, revolutions, expansion).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Spiral".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "spiral", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "add_graph_paper" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(50.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(50.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(160.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(120.0);
+                let cols = args.get("columns").and_then(Value::as_u64).unwrap_or(4) as u32;
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_graph_paper_path(rect, cols, rows).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Graph Paper".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "graph_paper", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "copy_properties_from" => {
+                if let Some(arr) = args.get("selection").and_then(Value::as_array) {
+                    let ids: Vec<ObjectId> = arr.iter().filter_map(Value::as_u64).map(ObjectId).collect();
+                    self.engine.set_selection(ids);
+                }
+                let src_raw = args.get("source_id").and_then(Value::as_u64).ok_or_else(|| "Missing source_id".to_owned())?;
+                let copy_fill = args.get("copy_fill").and_then(Value::as_bool).unwrap_or(true);
+                let copy_outline = args.get("copy_outline").and_then(Value::as_bool).unwrap_or(true);
+                let copy_effects = args.get("copy_effects").and_then(Value::as_bool).unwrap_or(true);
+                let ok =
+                    self.engine.execute(EngineCommand::CopyPropertiesFrom { source_id: ObjectId(src_raw), copy_fill, copy_outline, copy_effects });
+                Ok(json!({ "copied": ok, "source_id": src_raw }))
+            }
+            "export_pdf_imposed_byte_len" => {
+                let sw = F64::new(args.get("sheet_width_pt").and_then(Value::as_f64).unwrap_or(612.0)).map_err(|e| e.to_string())?;
+                let sh = F64::new(args.get("sheet_height_pt").and_then(Value::as_f64).unwrap_or(792.0)).map_err(|e| e.to_string())?;
+                let rows = args.get("rows").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let cols = args.get("cols").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let margin = F64::new(args.get("margin_pt").and_then(Value::as_f64).unwrap_or(18.0)).map_err(|e| e.to_string())?;
+                let gutter = F64::new(args.get("gutter_pt").and_then(Value::as_f64).unwrap_or(12.0)).map_err(|e| e.to_string())?;
+                let crop_marks = args.get("crop_marks").and_then(Value::as_bool).unwrap_or(true);
+                let spec = ImpositionSpec { sheet_width_pt: sw, sheet_height_pt: sh, rows, cols, margin_pt: margin, gutter_pt: gutter, crop_marks };
+                let pdf = export_pdf_imposed(&self.engine.document, &spec).map_err(|e| e.to_string())?;
+                Ok(json!({ "pdf_imposed_bytes": pdf.len() }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -791,7 +859,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 41);
+        assert_eq!(tools, 45);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
