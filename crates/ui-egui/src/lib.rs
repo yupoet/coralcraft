@@ -16,7 +16,10 @@
 //! +--------------------------------------------------------------------------+
 //! ```
 
+pub mod gui_session;
 pub mod workspace_render;
+
+pub use gui_session::{InteractiveGuiSession, MouseButton};
 
 use coralcraft_color::Color;
 use coralcraft_doc::{Document, LayerRole, ObjectId};

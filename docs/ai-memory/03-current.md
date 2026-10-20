@@ -62,9 +62,12 @@
   54. **M61: Smith Quarter-Circle Truchet Tile Maze (`build_truchet_tiles_path`), $C^1$ Catmull-Rom Cubic Spline Interpolation (`interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`), Orient Selection to Center (`OrientSelectionToCenter`), Binary `.cpl` Palette Base64 Import (`import_cpl_palette_base64`), and 228 MCP Tools (`commit 0e65dfb`)**.
   55. **M62: Sierpinski Gasket Fractal (`build_sierpinski_triangle_path`), Radial Pinch/Punch Warp (`pinch_punch_warp_path` & `PinchPunchObjectPath`), Edge-to-Edge Stack Selection (`StackSelection`), Document Summary Inspection (`get_document_summary`), and 232 MCP Tools (`commit 27a1dac`)**.
   56. **M63: Koch Snowflake Fractal (`build_koch_snowflake_path`), Curve-to-Polyline Polygonization (`flatten_path_to_polylines` & `FlattenObjectPathToPolylines`), Progressive Selection Scaling (`ScaleSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Export (`export_coralcraft_zip_base64`), and 236 MCP Tools (`commit 2e80a61`)**.
-  57. **M64: Heighway Dragon Fractal Curve (`build_dragon_curve_path`), Bounding-Box Shear Warp (`shear_warp_path_along_axis` & `ShearWarpObjectPath`), Progressive Selection Rotation (`RotateSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Import (`import_coralcraft_zip_base64`), and 240 MCP Tools**:
+  57. **M64: Heighway Dragon Fractal Curve (`build_dragon_curve_path`), Bounding-Box Shear Warp (`shear_warp_path_along_axis` & `ShearWarpObjectPath`), Progressive Selection Rotation (`RotateSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Import (`import_coralcraft_zip_base64`), and 240 MCP Tools (`commit 99ebd4f`)**:
       - `coralcraft-geom`: Added `build_dragon_curve_path` and `shear_warp_path_along_axis`.
       - `coralcraft-engine` & `coralcraft-mcp`: Added `ShearWarpObjectPath`, `RotateSelectionProgressively`, `add_dragon_curve`, `shear_warp_object_path`, `rotate_selection_progressively`, `import_coralcraft_zip_base64`, and expanded MCP server to **240 tools**.
+  58. **Interactive Desktop GUI Studio & Multi-Platform Release Packaging (`v0.0.1`)**:
+      - `coralcraft-ui-egui` (`InteractiveGuiSession`) & `coralcraft` (`gui_server`): Interactive 7-panel desktop GUI workspace with live mouse/keyboard/wheel canvas authoring, tool switching, boolean shaping, and export.
+      - `packaging/` & `cargo xtask package`: Cross-platform release packaging producing 21 artifacts in `dist/release/` across macOS (`universal`, `aarch64`, `x86_64` `.dmg`/`.pkg`/`.app.zip`), Windows (`x64` & `arm64` `-setup.exe` & `-portable.zip`), Linux (`AppImage`, `Flatpak`, `.deb`, `.rpm`, `.tar.gz`), FreeBSD (`x86_64` `.tar.gz`), and Web (`WebAssembly` `.zip`/`.tar.gz`).
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

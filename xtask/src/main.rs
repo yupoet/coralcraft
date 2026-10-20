@@ -21,6 +21,7 @@ commands:
   assets          check that every file in assets/ is attributed in ASSETS.md
   layers          enforce workspace crate dependency layering (L0..L7)
   stats           count Rust files, lines, and #[test] attributes per crate
+  package         build installable release packages for macOS (Intel & M), Windows (64-bit), and Linux (GUI)
 ";
 
 fn main() -> ExitCode {
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
         Some("assets") => assets(&repo_root()),
         Some("layers") => layers(&repo_root()),
         Some("stats") => stats(&repo_root()),
+        Some("package") => package(&repo_root()),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -65,6 +67,11 @@ fn ci() -> Result<(), String> {
     assets(&root)?;
     layers(&root)?;
     Ok(())
+}
+
+fn package(root: &Path) -> Result<(), String> {
+    let script = root.join("packaging/package-all.sh");
+    run("package-all", Command::new("bash").current_dir(root).arg(script))
 }
 
 /// Clean-room gate: scans for prohibited Corel copyright markers and binary `.cdr`/`.cmx` fixtures.
