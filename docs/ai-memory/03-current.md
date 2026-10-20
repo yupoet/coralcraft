@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M23 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M24 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -21,9 +21,10 @@
   13. **M20: Outline Start/End Arrowhead Markers (`ArrowheadKind`), 9-Point Skew/Shear Transformation (`SkewSelection` / `Alt+F11`), Duplicate (`Ctrl+D`) & Select All (`Ctrl+A`), and 64 MCP Tools (`commit f2fe109`)**.
   14. **M21: CorelDRAW Lens Effects (`Alt+F3`: `Invert`, `Brighten`, `Tinted`, `Magnify`), Subpath Winding Reversal (`reverse_path_direction`), Auto-Close Subpaths (`close_open_subpaths`), Object Lock/Unlock (`SetObjectLocked` / `UnlockAllObjects`), and 68 MCP Tools (`commit 3823cbe`)**.
   15. **M22: Two-Color Pattern Fills (`PatternKind` & `FillStyle::TwoColorPattern`), Join Open Curves (`join_open_subpaths` / `Ctrl+Shift+J`), Recursive Ungroup All (`UngroupAllSelection`), Page Reordering (`MovePage`), and 72 MCP Tools (`commit d3cee8e`)**.
-  16. **M23: Ramer-Douglas-Peucker Curve Simplification (`simplify_path_nodes`), 9-Point Exact Selection Position & Size (`SetSelectionBounds`), Layer Creation & Property Controls (`AddLayer` & `SetLayerProperties`), and 76 MCP Tools**:
-      - `coralcraft-geom`: Added `simplify_path_nodes`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `ReducePathNodes`, `SetSelectionBounds`, `AddLayer`, `SetLayerProperties`, and expanded MCP server to **76 tools**.
+  16. **M23: Ramer-Douglas-Peucker Curve Simplification (`simplify_path_nodes`), 9-Point Exact Selection Position & Size (`SetSelectionBounds`), Layer Creation & Property Controls (`AddLayer` & `SetLayerProperties`), and 76 MCP Tools (`commit e34e5c6`)**.
+  17. **M24: Smooth Catmull-Rom / B-Spline Curves (`build_bspline_path`), Clear Transformations (`ClearTransformations`), Artistic <-> Paragraph Text Conversion (`ToggleTextKind` / `Ctrl+F8`), Find and Replace Text (`FindAndReplaceText`), and 80 MCP Tools**:
+      - `coralcraft-geom`: Added `build_bspline_path`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `ClearTransformations`, `ToggleTextKind` (`Ctrl+F8`), `FindAndReplaceText`, and expanded MCP server to **80 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

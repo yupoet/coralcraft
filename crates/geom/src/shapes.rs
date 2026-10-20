@@ -523,3 +523,49 @@ pub fn build_callout_path(box_rect: Rect, target_pt: Point, tail_width: f64) -> 
     path.close()?;
     Ok(path)
 }
+
+/// Builds a smooth Catmull-Rom / B-Spline cubic Bézier [`Path`] passing through `control_points`
+/// (`B-Spline Tool`).
+pub fn build_bspline_path(control_points: &[Point], closed: bool) -> Result<Path, GeomError> {
+    if control_points.len() < 2 {
+        return Err(GeomError::InvalidShapeParameter("build_bspline_path requires at least 2 control points"));
+    }
+    let n = control_points.len();
+    let mut path = Path::new();
+    path.move_to(control_points[0])?;
+
+    if n == 2 {
+        path.line_to(control_points[1])?;
+        if closed {
+            path.close()?;
+        }
+        return Ok(path);
+    }
+
+    let get_pt = |idx: isize| -> Point {
+        if closed {
+            let rem = idx.rem_euclid(n as isize) as usize;
+            control_points[rem]
+        } else {
+            let clamped = idx.clamp(0, (n - 1) as isize) as usize;
+            control_points[clamped]
+        }
+    };
+
+    let seg_count = if closed { n } else { n - 1 };
+    for i in 0..seg_count {
+        let p_prev = get_pt((i as isize) - 1);
+        let p0 = get_pt(i as isize);
+        let p1 = get_pt((i + 1) as isize);
+        let p_next = get_pt((i + 2) as isize);
+
+        let c1 = Point::new(p0.x.get() + (p1.x.get() - p_prev.x.get()) / 6.0, p0.y.get() + (p1.y.get() - p_prev.y.get()) / 6.0)?;
+        let c2 = Point::new(p1.x.get() - (p_next.x.get() - p0.x.get()) / 6.0, p1.y.get() - (p_next.y.get() - p0.y.get()) / 6.0)?;
+        path.cubic_to(c1, c2, p1)?;
+    }
+
+    if closed {
+        path.close()?;
+    }
+    Ok(path)
+}

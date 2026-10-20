@@ -3,8 +3,8 @@
 
 use coralcraft_color::Color;
 use coralcraft_doc::{
-    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, Residual, TransparencyStyle,
-    VectorEffect,
+    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, ParagraphTextSpec, Residual,
+    TextAlignment, TransparencyStyle, VectorEffect,
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
@@ -171,6 +171,12 @@ pub enum EngineCommand {
     AddLayer { name: String },
     /// Updates `visible`, `locked`, `printable`, and/or `opacity` on `layer_id` (`Objects` Docker).
     SetLayerProperties { layer_id: LayerId, visible: Option<bool>, locked: Option<bool>, printable: Option<bool>, opacity: Option<F64> },
+    /// Resets the affine transformation matrix of all selected unlocked objects to `Affine2::IDENTITY` (`Object -> Transformations -> Clear Transformations`).
+    ClearTransformations,
+    /// Converts `object_id` between `ObjectKind::ArtisticText` and `ObjectKind::ParagraphText` (`Text -> Convert to Paragraph/Artistic Text` / `Ctrl+F8`).
+    ToggleTextKind { object_id: ObjectId },
+    /// Replaces all occurrences of `find` with `replace` across all unlocked text objects (`Edit -> Find and Replace -> Replace Text`).
+    FindAndReplaceText { find: String, replace: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -758,6 +764,25 @@ impl EditorEngine {
                 }
                 let exists = self.document.pages.iter().flat_map(|p| &p.layers).chain(&self.document.master_layers).any(|l| l.id == *layer_id);
                 if !exists {
+                    return false;
+                }
+            }
+            EngineCommand::ClearTransformations => {
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ToggleTextKind { object_id } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::FindAndReplaceText { find, .. } => {
+                if find.is_empty() {
                     return false;
                 }
             }
@@ -2061,6 +2086,63 @@ impl EditorEngine {
                     }
                 }
             }
+            EngineCommand::ClearTransformations => {
+                self.for_each_selected_mut(|obj| {
+                    obj.transform = Affine2::IDENTITY;
+                });
+            }
+            EngineCommand::ToggleTextKind { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &obj.kind {
+                        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+                            let w = (text.chars().count().max(4) as f64) * size_pt.get() * 0.65;
+                            let h = size_pt.get() * 3.0;
+                            if let Ok(spec) = ParagraphTextSpec::new(
+                                *position,
+                                w.max(72.0),
+                                h.max(36.0),
+                                text.clone(),
+                                font_family.clone(),
+                                size_pt.get(),
+                                1.2,
+                                TextAlignment::Left,
+                                1,
+                                12.0,
+                            ) {
+                                obj.kind = ObjectKind::ParagraphText(Box::new(spec));
+                            }
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            obj.kind = ObjectKind::ArtisticText {
+                                text: spec.text.clone(),
+                                font_family: spec.font_family.clone(),
+                                size_pt: spec.font_size_pt,
+                                position: spec.position,
+                            };
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::FindAndReplaceText { find, replace } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text, .. } if text.contains(&find) => {
+                            *text = text.replace(&find, &replace);
+                        }
+                        ObjectKind::ParagraphText(spec) if spec.text.contains(&find) => {
+                            spec.text = spec.text.replace(&find, &replace);
+                        }
+                        _ => {}
+                    }
+                });
+            }
         }
         true
     }
@@ -2685,5 +2767,30 @@ mod tests {
         }));
         let updated_layer = engine.document.pages[1].layers.last().unwrap();
         assert!(!updated_layer.visible && updated_layer.locked && !updated_layer.printable);
+        assert!(engine.undo());
+        assert!(engine.undo());
+
+        // 18. ClearTransformations, ToggleTextKind (Ctrl+F8), and FindAndReplaceText
+        assert!(engine.execute(EngineCommand::ClearTransformations));
+        let art_id = engine.document.allocate_object_id();
+        engine.target_layer_mut().objects.push(ObjectNode::new(
+            art_id,
+            Some("Headline".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Hello Corel".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(18.0).unwrap(),
+                position: Point::new(20.0, 40.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        ));
+        assert!(engine.execute(EngineCommand::FindAndReplaceText { find: "Corel".to_owned(), replace: "CoralCraft".to_owned() }));
+        assert!(engine.execute(EngineCommand::ToggleTextKind { object_id: art_id }));
+        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
+            assert_eq!(pt.text, "Hello CoralCraft");
+        } else {
+            panic!("expected ParagraphText after ToggleTextKind");
+        }
     }
 }

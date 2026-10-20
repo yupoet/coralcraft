@@ -27,8 +27,8 @@ pub use path::{
     warp_path_bilinear, warp_path_perspective,
 };
 pub use shapes::{
-    CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_callout_path, build_connector_path, build_graph_paper_path,
-    build_spiral_path,
+    CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_bspline_path, build_callout_path, build_connector_path,
+    build_graph_paper_path, build_spiral_path,
 };
 pub use units::{CDR_TICKS_PER_INCH, CDR_TICKS_PER_MM, CDR_TICKS_PER_PT_DEN, CDR_TICKS_PER_PT_NUM, CdrUnit, PTS_PER_INCH, Pt, Unit};
 

@@ -10,8 +10,8 @@ use coralcraft_doc::{
 };
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
-    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_callout_path,
-    build_connector_path, build_graph_paper_path, build_spiral_path,
+    BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_bspline_path,
+    build_callout_path, build_connector_path, build_graph_paper_path, build_spiral_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
@@ -477,6 +477,26 @@ impl McpServer {
                         {
                             "name": "set_layer_properties",
                             "description": "Updates visible, locked, printable, and/or opacity on a layer (Objects Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_bspline_curve",
+                            "description": "Adds a smooth Catmull-Rom / B-Spline curve object passing through control points (B-Spline Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "clear_transformations",
+                            "description": "Resets the affine transformation matrix of selected objects to identity (Object -> Transformations -> Clear Transformations).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "toggle_text_kind",
+                            "description": "Converts a text object between Artistic Text and Paragraph Text (Text -> Convert to Paragraph/Artistic Text / Ctrl+F8).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "find_and_replace_text",
+                            "description": "Replaces all occurrences of find with replace across all unlocked text objects (Edit -> Find and Replace -> Replace Text).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -1318,6 +1338,43 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetLayerProperties { layer_id: LayerId(layer_raw), visible, locked, printable, opacity });
                 Ok(json!({ "layer_updated": ok, "layer_id": layer_raw }))
             }
+            "add_bspline_curve" => {
+                let closed = args.get("closed").and_then(Value::as_bool).unwrap_or(false);
+                let mut pts = Vec::new();
+                if let Some(arr) = args.get("points").and_then(Value::as_array) {
+                    for item in arr {
+                        let x = item.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+                        let y = item.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+                        pts.push(Point::new(x, y).map_err(|e| e.to_string())?);
+                    }
+                }
+                if pts.len() < 2 {
+                    pts = vec![
+                        Point::new(40.0, 100.0).map_err(|e| e.to_string())?,
+                        Point::new(100.0, 40.0).map_err(|e| e.to_string())?,
+                        Point::new(160.0, 100.0).map_err(|e| e.to_string())?,
+                    ];
+                }
+                let path = build_bspline_path(&pts, closed).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("B-Spline".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "bspline_curve", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "clear_transformations" => {
+                self.apply_optional_selection(args);
+                let ok = self.engine.execute(EngineCommand::ClearTransformations);
+                Ok(json!({ "transformations_cleared": ok }))
+            }
+            "toggle_text_kind" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::ToggleTextKind { object_id: target });
+                Ok(json!({ "text_kind_toggled": ok, "object_id": target.0 }))
+            }
+            "find_and_replace_text" => {
+                let find = args.get("find").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let replace = args.get("replace").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let ok = self.engine.execute(EngineCommand::FindAndReplaceText { find, replace });
+                Ok(json!({ "text_replaced": ok }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1347,7 +1404,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 76);
+        assert_eq!(tools, 80);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
