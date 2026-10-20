@@ -202,9 +202,13 @@
 56. **M56 Space-Filling Hilbert Fractal Curve (`build_hilbert_curve_path`), Medial-Chord Centerline Skeleton (`medial_chord_skeleton_of_path` & `ExtractPathSkeleton`), Deterministic Transform Jitter (`JitterSelectionTransforms`), Binary `.cpl` Palette Base64 Export (`export_cpl_palette_base64`), and 208 MCP Tools**:
     - `coralcraft-geom`: `build_hilbert_curve_path` (continuous space-filling Hilbert fractal curve of order `1..=5`) and `medial_chord_skeleton_of_path` (opposing-chord medial centerline skeleton).
     - `coralcraft-engine` & `coralcraft-mcp`: `ExtractPathSkeleton`, `JitterSelectionTransforms`, `add_hilbert_curve`, `extract_path_skeleton`, `jitter_selection_transforms`, `export_cpl_palette_base64`, and **208 MCP tools**.
+57. **M57 Harmonic Lissajous Curve (`build_lissajous_path`), Max-Length Path Segment Densifier (`subdivide_path_by_max_segment_length` & `DensifyObjectPath`), Align Selection to Key Object (`AlignSelectionToKeyObject`), XML Palette Export (`export_xml_palette`), and 212 MCP Tools**:
+    - `coralcraft-geom`: `build_lissajous_path` (closed harmonic Lissajous / Bowditch curve) and `subdivide_path_by_max_segment_length` (uniform max-length edge subdivision).
+    - `coralcraft-engine` & `coralcraft-mcp`: `DensifyObjectPath`, `AlignSelectionToKeyObject`, `add_lissajous_curve`, `densify_object_path`, `align_selection_to_key_object`, `export_xml_palette`, and **212 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M57 delivered (`build_lissajous_path` & `add_lissajous_curve`, `subdivide_path_by_max_segment_length` & `DensifyObjectPath`, `AlignSelectionToKeyObject`, `export_xml_palette`, 212 MCP tools).
 - 2026-10-20: M56 delivered (`build_hilbert_curve_path` & `add_hilbert_curve`, `medial_chord_skeleton_of_path` & `ExtractPathSkeleton`, `JitterSelectionTransforms`, `export_cpl_palette_base64`, 208 MCP tools).
 - 2026-10-20: M55 delivered (`build_honeycomb_grid_path` & `add_honeycomb_grid`, `convex_hull_of_path` & `ConvexHullSelection`, `ArrangeSelectionOnCircle`, `export_pdf_imposed_base64`, 204 MCP tools).
 - 2026-10-20: M54 delivered (`build_concentric_rings_path` & `add_concentric_rings`, `dash_path_to_open_subpaths` & `DashObjectPath`, `QuantizeSelectionPositions`, `export_cdrx_zip_base64`, 200 MCP tools).

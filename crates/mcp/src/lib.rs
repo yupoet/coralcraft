@@ -3,7 +3,7 @@
 #![recursion_limit = "512"]
 
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
-use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, serialize_binary_cpl};
+use coralcraft_color::{Color, FountainBlendMode, FountainStop, Palette, PaletteSwatch, serialize_binary_cpl, serialize_xml_palette};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
     ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json,
@@ -14,8 +14,8 @@ use coralcraft_geom::{
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
     build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
     build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_hilbert_curve_path, build_honeycomb_grid_path,
-    build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path,
-    build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
+    build_impact_rays_path, build_isometric_box_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_pointillizer_path,
+    build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path, build_three_point_curve_path,
     build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
@@ -1203,6 +1203,57 @@ impl McpServer {
                         {
                             "name": "export_cpl_palette_base64",
                             "description": "Exports the document's extracted color swatches to a CorelDRAW binary .cpl (0xCDDC) palette and returns its byte length and base64-encoded payload.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "palette_name": { "type": "string" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "add_lissajous_curve",
+                            "description": "Adds a closed harmonic Lissajous / Bowditch curve path centered at (cx, cy).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "cx": { "type": "number" },
+                                    "cy": { "type": "number" },
+                                    "radius_x_pt": { "type": "number" },
+                                    "radius_y_pt": { "type": "number" },
+                                    "freq_x": { "type": "integer" },
+                                    "freq_y": { "type": "integer" },
+                                    "phase_deg": { "type": "number" },
+                                    "steps": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "densify_object_path",
+                            "description": "Densifies a vector path by subdividing every segment longer than max_len_pt into uniform sub-segments.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "max_len_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "align_selection_to_key_object",
+                            "description": "Aligns selected objects to a stationary key_object_id according to mode (left, right, top, bottom, center_horizontal, center_vertical, center).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "key_object_id": { "type": "integer" },
+                                    "mode": { "type": "string" }
+                                },
+                                "required": ["key_object_id"]
+                            }
+                        },
+                        {
+                            "name": "export_xml_palette",
+                            "description": "Exports the document's extracted color swatches to a CorelDRAW XML palette (<palette>...</palette>).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -3490,6 +3541,83 @@ impl McpServer {
                     "cpl_base64": b64
                 }))
             }
+            "add_lissajous_curve" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius_x_pt = args.get("radius_x_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let radius_y_pt = args.get("radius_y_pt").and_then(Value::as_f64).unwrap_or(45.0);
+                let freq_x = args.get("freq_x").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let freq_y = args.get("freq_y").and_then(Value::as_u64).unwrap_or(2) as u32;
+                let phase_deg = args.get("phase_deg").and_then(Value::as_f64).unwrap_or(45.0);
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(120) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_lissajous_path(center, radius_x_pt, radius_y_pt, freq_x, freq_y, phase_deg, steps).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Lissajous Curve".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "lissajous_curve", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "densify_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let max_len_pt = F64::new(args.get("max_len_pt").and_then(Value::as_f64).unwrap_or(8.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::DensifyObjectPath { object_id: target, max_len_pt });
+                Ok(json!({ "densified": ok, "object_id": target.0, "max_len_pt": max_len_pt.get() }))
+            }
+            "align_selection_to_key_object" => {
+                self.apply_optional_selection(args);
+                let key_id_raw = args.get("key_object_id").and_then(Value::as_u64).ok_or_else(|| "Missing key_object_id".to_owned())?;
+                let mode = match args.get("mode").and_then(Value::as_str).unwrap_or("center") {
+                    "left" => AlignMode::Left,
+                    "right" => AlignMode::Right,
+                    "top" => AlignMode::Top,
+                    "bottom" => AlignMode::Bottom,
+                    "center_horizontal" => AlignMode::CenterHorizontal,
+                    "center_vertical" => AlignMode::CenterVertical,
+                    _ => AlignMode::CenterToPage,
+                };
+                let ok = self.engine.execute(EngineCommand::AlignSelectionToKeyObject { key_object_id: ObjectId(key_id_raw), mode });
+                Ok(json!({ "aligned_to_key": ok, "key_object_id": key_id_raw }))
+            }
+            "export_xml_palette" => {
+                let palette_name = args.get("palette_name").and_then(Value::as_str).unwrap_or("Document Palette").to_owned();
+                let mut seen = std::collections::BTreeSet::new();
+                let mut swatches = Vec::new();
+                let mut record = |c: &Color| {
+                    let [r, g, b] = c.to_srgb8();
+                    if seen.insert([r, g, b]) {
+                        swatches.push(PaletteSwatch { name: format!("#{r:02X}{g:02X}{b:02X}"), color: c.clone() });
+                    }
+                };
+                for page in &self.engine.document.pages {
+                    for layer in &page.layers {
+                        for obj in &layer.objects {
+                            if let Some(fill) = &obj.fill {
+                                match fill {
+                                    FillStyle::Uniform { color } => record(color),
+                                    FillStyle::Fountain { stops, .. } => {
+                                        for s in stops {
+                                            record(&s.color);
+                                        }
+                                    }
+                                    FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                        record(fg_color);
+                                        record(bg_color);
+                                    }
+                                    FillStyle::Unknown { .. } => {}
+                                }
+                            }
+                            if let Some(ol) = &obj.outline {
+                                record(&ol.color);
+                            }
+                        }
+                    }
+                }
+                let palette =
+                    if swatches.is_empty() { Palette::default_workspace_palette() } else { Palette { name: palette_name, guid: None, swatches } };
+                let xml = serialize_xml_palette(&palette);
+                Ok(json!({
+                    "swatch_count": palette.swatches.len(),
+                    "xml_palette": xml
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3519,7 +3647,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 208);
+        assert_eq!(tools, 212);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3768,5 +3896,31 @@ mod tests {
         )
         .unwrap();
         assert!(cpl_b64_resp.result.unwrap()["structuredContent"]["cpl_bytes"].as_u64().unwrap() > 10);
+
+        let liss_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"add_lissajous_curve","arguments":{"cx":140.0,"cy":140.0,"radius_x_pt":60.0,"radius_y_pt":45.0,"freq_x":3,"freq_y":2,"phase_deg":45.0,"steps":96}}}"#,
+            ),
+        )
+        .unwrap();
+        let liss_id = liss_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let dens_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{{"name":"densify_object_path","arguments":{{"object_id":{liss_id},"max_len_pt":8.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(dens_resp.result.unwrap()["structuredContent"]["densified"].as_bool().unwrap());
+
+        let alkey_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{{"name":"align_selection_to_key_object","arguments":{{"selection":[{hilb_id},{liss_id}],"key_object_id":{liss_id},"mode":"center"}}}}}}"#
+        )))
+        .unwrap();
+        assert!(alkey_resp.result.unwrap()["structuredContent"]["aligned_to_key"].as_bool().unwrap());
+
+        let xml_pal_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(
+            r#"{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"export_xml_palette","arguments":{"palette_name":"M57 Palette"}}}"#,
+        ))
+        .unwrap();
+        assert!(xml_pal_resp.result.unwrap()["structuredContent"]["xml_palette"].as_str().unwrap().contains("<palette"));
     }
 }

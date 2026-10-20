@@ -2315,6 +2315,44 @@ pub fn medial_chord_skeleton_of_path(path: &Path, sample_steps: u32) -> Result<P
     Ok(out)
 }
 
+/// Densifies `path` by flattening curves and subdividing every segment longer than `max_len_pt`
+/// into uniform sub-segments (`Shape Tool -> Densify / Subdivide by Max Length`).
+pub fn subdivide_path_by_max_segment_length(path: &Path, max_len_pt: f64) -> Result<Path, GeomError> {
+    let max_len = crate::f64_canon::F64::new(max_len_pt)?.get();
+    if path.elements.is_empty() || max_len <= 0.1 {
+        return Err(GeomError::InvalidShapeParameter("invalid max_len_pt for path densification"));
+    }
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+    for poly in polys {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        out.move_to(poly.points[0])?;
+        for seg in poly.points.windows(2) {
+            let p0 = seg[0];
+            let p1 = seg[1];
+            let dx = p1.x.get() - p0.x.get();
+            let dy = p1.y.get() - p0.y.get();
+            let dist = dx.hypot(dy);
+            let n = ((dist / max_len).ceil() as usize).clamp(1, 128);
+            for k in 1..=n {
+                let t = (k as f64) / (n as f64);
+                let pt = Point::new(p0.x.get() + dx * t, p0.y.get() + dy * t)?;
+                out.line_to(pt)?;
+            }
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("densification produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2413,5 +2451,8 @@ mod m26_tests {
 
         let skel = medial_chord_skeleton_of_path(&rect_path, 24).unwrap();
         assert!(skel.elements.len() >= 2);
+
+        let dense = subdivide_path_by_max_segment_length(&rect_path, 10.0).unwrap();
+        assert!(dense.elements.len() >= 18);
     }
 }

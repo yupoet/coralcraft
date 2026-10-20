@@ -1612,6 +1612,45 @@ pub fn build_hilbert_curve_path(bounds: Rect, order: u32) -> Result<Path, GeomEr
     Ok(path)
 }
 
+/// Builds a closed harmonic Lissajous / Bowditch curve [`Path`] centered at `center`
+/// (`Object -> Insert -> Lissajous Harmonic Curve`):
+/// $x(t) = c_x + A \sin(a t + \delta),\quad y(t) = c_y + B \sin(b t)$ for $t \in [0, 2\pi)$.
+pub fn build_lissajous_path(
+    center: Point,
+    radius_x_pt: f64,
+    radius_y_pt: f64,
+    freq_x: u32,
+    freq_y: u32,
+    phase_deg: f64,
+    steps: u32,
+) -> Result<Path, GeomError> {
+    let rx = F64::new(radius_x_pt)?.get();
+    let ry = F64::new(radius_y_pt)?.get();
+    let phase_rad = F64::new(phase_deg)?.get().to_radians();
+    if rx <= 0.0 || ry <= 0.0 || !(1..=24).contains(&freq_x) || !(1..=24).contains(&freq_y) || steps < 16 {
+        return Err(GeomError::InvalidShapeParameter("invalid Lissajous curve parameters"));
+    }
+    let n = steps.clamp(16, 1024);
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let ax = f64::from(freq_x);
+    let by = f64::from(freq_y);
+    let mut path = Path::new();
+    for i in 0..n {
+        let t = std::f64::consts::TAU * f64::from(i) / f64::from(n);
+        let x = cx + rx * (ax * t + phase_rad).sin();
+        let y = cy + ry * (by * t).sin();
+        let pt = Point::new(x, y)?;
+        if i == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1713,5 +1752,8 @@ mod m27_tests {
 
         let hilbert = build_hilbert_curve_path(Rect::new(0.0, 0.0, 100.0, 100.0).unwrap(), 3).unwrap();
         assert_eq!(hilbert.elements.len(), 64);
+
+        let liss = build_lissajous_path(Point::new(100.0, 100.0).unwrap(), 60.0, 45.0, 3, 2, 45.0, 96).unwrap();
+        assert!(liss.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

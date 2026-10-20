@@ -14,7 +14,7 @@ use coralcraft_geom::{
     insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, medial_chord_skeleton_of_path,
     morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction,
     roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
-    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -337,6 +337,10 @@ pub enum EngineCommand {
     ExtractPathSkeleton { object_id: ObjectId, sample_steps: u32 },
     /// Applies a deterministic SplitMix64 pseudo-random translation, rotation, and uniform scale around each selected unlocked object's center (`Object -> Transformations -> Jitter / Randomize Selection`).
     JitterSelectionTransforms { dx_max_pt: F64, dy_max_pt: F64, angle_max_deg: F64, scale_max_pct: F64, seed: u64 },
+    /// Densifies the contour of `object_id` by subdividing every segment longer than `max_len_pt` (`Shape Tool F10 -> Densify / Subdivide by Max Length`).
+    DensifyObjectPath { object_id: ObjectId, max_len_pt: F64 },
+    /// Aligns all selected unlocked objects to a stationary `key_object_id` according to `mode` (`Object -> Align and Distribute -> Align to Key Object`).
+    AlignSelectionToKeyObject { key_object_id: ObjectId, mode: AlignMode },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4366,6 +4370,58 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::DensifyObjectPath { object_id, max_len_pt } => {
+                let max_l = max_len_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(dense) = subdivide_path_by_max_segment_length(&base_path, max_l)
+                    {
+                        obj.kind = ObjectKind::Path(dense);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::AlignSelectionToKeyObject { key_object_id, mode } => {
+                let Some(anchor_node) = self.selected_or_all_node(key_object_id) else {
+                    return false;
+                };
+                let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
+                let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
+                let mut any_moved = false;
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked || obj.id == key_object_id {
+                        return;
+                    }
+                    let bbox = combined_selection_bounds(&[obj]);
+                    let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
+                    let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
+                    let (dx, dy) = match mode {
+                        AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
+                        AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
+                        AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
+                        AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
+                        AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
+                        AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
+                        AlignMode::CenterToPage => (ax_mid - bx_mid, ay_mid - by_mid),
+                    };
+                    if let Ok(t) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(t)
+                    {
+                        obj.transform = composed;
+                        any_moved = true;
+                    }
+                });
+                if !any_moved {
+                    return false;
+                }
+            }
         }
         true
     }
@@ -5305,5 +5361,8 @@ mod tests {
             scale_max_pct: F64::new(15.0).unwrap(),
             seed: 42,
         }));
+        assert!(engine.execute(EngineCommand::DensifyObjectPath { object_id: xor_id, max_len_pt: F64::new(8.0).unwrap() }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::AlignSelectionToKeyObject { key_object_id: xor_id, mode: AlignMode::CenterToPage }));
     }
 }
