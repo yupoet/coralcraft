@@ -40,8 +40,8 @@ A whole-project review at `5a7cc75` found that many items in the "historical mil
 - [ ] R2.1 Build an `eframe`/`egui` 0.36 app shell in `coralcraft-ui-egui`, following VectorCraft's `ui-egui`: canvas, toolbox, property bar, palette, objects docker, and page tabs, driven by `EditorEngine`. Use `rfd` for file dialogs and `arboard` for the clipboard. Remove `gui_server`.
 
 **Phase 3: engine integrity**
-- [ ] R3.1 Make `execute()` transactional, returning `Result`. Failed commands must not touch history. Cap history size, and keep the ID counter outside undo snapshots.
-- [ ] R3.2 Validate the `Selection` type and use one recursive node visitor. Add a document-wide object budget.
+- [x] R3.1 Make `execute()` transactional, returning `Result`. Failed commands must not touch history. Cap history size, and keep the ID counter outside undo snapshots.
+- [x] R3.2 Validate the `Selection` type and use one recursive node visitor. Add a document-wide object budget.
 
 **Phase 4: MCP correctness**
 - [ ] R4.1 Protocol: notifications get no response, add `ping`, use -32600/-32602 correctly, negotiate the protocol version, and make the stdio loop byte-safe.

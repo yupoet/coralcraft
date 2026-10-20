@@ -373,6 +373,21 @@ pub enum EngineCommand {
     RotateSelectionProgressively { start_angle_deg: F64, end_angle_deg: F64 },
 }
 
+/// Maximum number of undo history entries retained per [`EditorEngine`].
+pub const MAX_UNDO_HISTORY: usize = 128;
+
+/// Maximum number of [`ObjectNode`]s allowed across a document (including group and PowerClip children).
+pub const MAX_DOCUMENT_OBJECTS: usize = 8_192;
+
+/// Error returned when [`EditorEngine::try_execute`] rejects an [`EngineCommand`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EngineError {
+    /// The command preconditions failed or the command produced no valid change.
+    CommandRejected,
+    /// Executing the command would exceed [`MAX_DOCUMENT_OBJECTS`].
+    ObjectBudgetExceeded { max: usize },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UndoEntry {
     document: Document,
@@ -497,19 +512,11 @@ impl EditorEngine {
         let mut out = Vec::new();
         for page in &self.document.pages {
             for layer in &page.layers {
-                for obj in &layer.objects {
-                    if self.selection.contains(&obj.id) {
-                        out.push(obj);
-                    }
-                }
+                collect_selected_recursive(&layer.objects, &self.selection, &mut out);
             }
         }
         for layer in &self.document.master_layers {
-            for obj in &layer.objects {
-                if self.selection.contains(&obj.id) {
-                    out.push(obj);
-                }
-            }
+            collect_selected_recursive(&layer.objects, &self.selection, &mut out);
         }
         out
     }
@@ -704,8 +711,61 @@ impl EditorEngine {
         }
     }
 
-    /// Executes an atomic [`EngineCommand`] and pushes the previous state onto the undo stack.
+    /// Executes an atomic [`EngineCommand`] transactionally and pushes the previous state onto the undo stack.
     pub fn execute(&mut self, cmd: EngineCommand) -> bool {
+        self.try_execute(cmd).is_ok()
+    }
+
+    /// Executes an atomic [`EngineCommand`] transactionally, rolling back and preserving undo/redo history on error.
+    pub fn try_execute(&mut self, cmd: EngineCommand) -> Result<(), EngineError> {
+        let current_total = self.total_object_count();
+        let estimated_added = match &cmd {
+            EngineCommand::AddObject { kind, .. } => 1usize.saturating_add(match kind {
+                ObjectKind::Group { children } => count_nodes_recursive(children),
+                ObjectKind::Unsupported(u) => count_nodes_recursive(&u.children),
+                _ => 0,
+            }),
+            EngineCommand::StepAndRepeat { count, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                weight.saturating_mul((*count).min(100) as usize)
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                let cells = ((*rows).clamp(1, 20) as usize).saturating_mul((*cols).clamp(1, 20) as usize).saturating_sub(1);
+                weight.saturating_mul(cells)
+            }
+            EngineCommand::CircularDuplicateSelection { count, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                weight.saturating_mul((*count).clamp(1, 72) as usize)
+            }
+            _ => 0,
+        };
+        if current_total.saturating_add(estimated_added) > MAX_DOCUMENT_OBJECTS {
+            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
+        }
+
+        let before = self.capture_snapshot();
+        if !self.apply_command(cmd) {
+            self.restore_snapshot(before);
+            return Err(EngineError::CommandRejected);
+        }
+        if self.total_object_count() > MAX_DOCUMENT_OBJECTS {
+            self.restore_snapshot(before);
+            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
+        }
+        self.sanitize_selection();
+        if self.undo_stack.len() >= MAX_UNDO_HISTORY {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(before);
+        self.redo_stack.clear();
+        Ok(())
+    }
+
+    fn apply_command(&mut self, cmd: EngineCommand) -> bool {
         match &cmd {
             EngineCommand::DeletePage { page_index } if self.document.pages.len() <= 1 || *page_index >= self.document.pages.len() => {
                 return false;
@@ -1538,8 +1598,6 @@ impl EditorEngine {
             }
             _ => {}
         }
-
-        self.push_undo_snapshot();
 
         match cmd {
             EngineCommand::AddObject { name, kind } => {
@@ -2623,6 +2681,9 @@ impl EditorEngine {
                 });
             }
             EngineCommand::SetObjectLocked { object_id, locked } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
                 self.for_each_node_mut(|obj| {
                     if obj.id == object_id {
                         obj.locked = locked;
@@ -2888,6 +2949,9 @@ impl EditorEngine {
                 }
             }
             EngineCommand::SetObjectOpacity { object_id, opacity } => {
+                if self.selected_or_all_node(object_id).is_none_or(|o| o.locked) {
+                    return false;
+                }
                 if let Ok(clamped) = F64::new(opacity.get().clamp(0.0, 1.0)) {
                     self.for_each_node_mut(|obj| {
                         if obj.id == object_id && !obj.locked {
@@ -2897,6 +2961,9 @@ impl EditorEngine {
                 }
             }
             EngineCommand::SetObjectVisible { object_id, visible } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
                 self.for_each_node_mut(|obj| {
                     if obj.id == object_id {
                         obj.visible = visible;
@@ -2904,6 +2971,9 @@ impl EditorEngine {
                 });
             }
             EngineCommand::RenameObject { object_id, name } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
                 let normalized = name.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
                 self.for_each_node_mut(|obj| {
                     if obj.id == object_id {
@@ -4870,9 +4940,35 @@ impl EditorEngine {
         }
     }
 
-    /// Replaces the current selection list.
+    /// Replaces the current selection list, deduplicating and dropping any IDs not present in the document.
     pub fn set_selection(&mut self, selection: Vec<ObjectId>) {
         self.selection = selection;
+        self.sanitize_selection();
+    }
+
+    fn sanitize_selection(&mut self) {
+        let mut valid = Vec::with_capacity(self.selection.len());
+        for &id in &self.selection {
+            if !valid.contains(&id) && self.selected_or_all_node(id).is_some() {
+                valid.push(id);
+            }
+        }
+        self.selection = valid;
+    }
+
+    /// Returns the total number of [`ObjectNode`]s across all pages, master layers, groups, and PowerClips.
+    #[must_use]
+    pub fn total_object_count(&self) -> usize {
+        let mut total = 0usize;
+        for page in &self.document.pages {
+            for layer in &page.layers {
+                total = total.saturating_add(count_nodes_recursive(&layer.objects));
+            }
+        }
+        for layer in &self.document.master_layers {
+            total = total.saturating_add(count_nodes_recursive(&layer.objects));
+        }
+        total
     }
 
     /// Selects all unlocked, visible objects on the active target layer (`Edit -> Select All -> Objects` / `Ctrl+A`).
@@ -4962,14 +5058,10 @@ impl EditorEngine {
         }
     }
 
-    fn push_undo_snapshot(&mut self) {
-        let snap = self.capture_snapshot();
-        self.undo_stack.push(snap);
-        self.redo_stack.clear();
-    }
-
     fn restore_snapshot(&mut self, entry: UndoEntry) {
+        let high_water_next_id = self.document.next_id.max(entry.document.next_id);
         self.document = entry.document;
+        self.document.next_id = high_water_next_id;
         self.active_target = entry.active_target;
         self.selection = entry.selection;
         self.tool_state = entry.tool_state;
@@ -5008,18 +5100,14 @@ impl EditorEngine {
     fn selected_or_all_node(&self, id: ObjectId) -> Option<&ObjectNode> {
         for page in &self.document.pages {
             for layer in &page.layers {
-                for obj in &layer.objects {
-                    if obj.id == id {
-                        return Some(obj);
-                    }
+                if let Some(found) = find_node_recursive(&layer.objects, id) {
+                    return Some(found);
                 }
             }
         }
         for layer in &self.document.master_layers {
-            for obj in &layer.objects {
-                if obj.id == id {
-                    return Some(obj);
-                }
+            if let Some(found) = find_node_recursive(&layer.objects, id) {
+                return Some(found);
             }
         }
         None
@@ -5083,17 +5171,82 @@ impl EditorEngine {
     fn for_each_node_mut(&mut self, mut f: impl FnMut(&mut ObjectNode)) {
         for page in &mut self.document.pages {
             for layer in &mut page.layers {
-                for obj in &mut layer.objects {
-                    f(obj);
-                }
+                visit_nodes_mut_recursive(&mut layer.objects, &mut f);
             }
         }
         for layer in &mut self.document.master_layers {
-            for obj in &mut layer.objects {
-                f(obj);
-            }
+            visit_nodes_mut_recursive(&mut layer.objects, &mut f);
         }
     }
+}
+
+fn find_node_recursive(nodes: &[ObjectNode], id: ObjectId) -> Option<&ObjectNode> {
+    for obj in nodes {
+        if obj.id == id {
+            return Some(obj);
+        }
+        if let Some(found) = find_node_recursive(&obj.powerclip_children, id) {
+            return Some(found);
+        }
+        match &obj.kind {
+            ObjectKind::Group { children } => {
+                if let Some(found) = find_node_recursive(children, id) {
+                    return Some(found);
+                }
+            }
+            ObjectKind::Unsupported(u) => {
+                if let Some(found) = find_node_recursive(&u.children, id) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn collect_selected_recursive<'a>(nodes: &'a [ObjectNode], selection: &[ObjectId], out: &mut Vec<&'a ObjectNode>) {
+    for obj in nodes {
+        if selection.contains(&obj.id) {
+            out.push(obj);
+        }
+        collect_selected_recursive(&obj.powerclip_children, selection, out);
+        match &obj.kind {
+            ObjectKind::Group { children } => collect_selected_recursive(children, selection, out),
+            ObjectKind::Unsupported(u) => collect_selected_recursive(&u.children, selection, out),
+            _ => {}
+        }
+    }
+}
+
+fn visit_nodes_mut_recursive(nodes: &mut [ObjectNode], f: &mut impl FnMut(&mut ObjectNode)) {
+    for obj in nodes {
+        f(obj);
+        visit_nodes_mut_recursive(&mut obj.powerclip_children, f);
+        match &mut obj.kind {
+            ObjectKind::Group { children } => visit_nodes_mut_recursive(children, f),
+            ObjectKind::Unsupported(u) => visit_nodes_mut_recursive(&mut u.children, f),
+            _ => {}
+        }
+    }
+}
+
+fn count_nodes_recursive(nodes: &[ObjectNode]) -> usize {
+    let mut count = 0usize;
+    for obj in nodes {
+        count = count.saturating_add(1);
+        count = count.saturating_add(count_nodes_recursive(&obj.powerclip_children));
+        match &obj.kind {
+            ObjectKind::Group { children } => {
+                count = count.saturating_add(count_nodes_recursive(children));
+            }
+            ObjectKind::Unsupported(u) => {
+                count = count.saturating_add(count_nodes_recursive(&u.children));
+            }
+            _ => {}
+        }
+    }
+    count
 }
 
 fn powerclip_subtree_depth(node: &ObjectNode) -> usize {
@@ -5871,5 +6024,73 @@ mod tests {
             start_angle_deg: F64::new(-15.0).unwrap(),
             end_angle_deg: F64::new(45.0).unwrap(),
         }));
+    }
+
+    #[test]
+    fn transactional_execute_monotonic_ids_history_cap_selection_validation_and_recursive_visitors() {
+        let mut engine = EditorEngine::default();
+
+        // 1. Create an object, undo, and create another object -> IDs must be strictly monotonic across undo!
+        let r_spec = RectSpec::sharp(Rect::new(10.0, 10.0, 50.0, 40.0).unwrap());
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("First".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let first_id = engine.selection[0];
+        assert!(engine.undo());
+        assert!(engine.can_redo());
+
+        // 2. A command that fails inside execute (e.g. ApplyVariableWidthStroke with < 2 widths)
+        // must NOT push an undo snapshot and must NOT clear the redo stack!
+        assert!(!engine.execute(EngineCommand::ApplyVariableWidthStroke { object_id: first_id, widths_pt: vec![F64::ONE] }));
+        assert!(!engine.can_undo(), "failed command must not push to undo_stack");
+        assert!(engine.can_redo(), "failed command must not clear redo_stack");
+
+        // 3. Allocating a new object after undo must not reuse `first_id`.
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Second".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let second_id = engine.selection[0];
+        assert!(second_id.0 > first_id.0, "object IDs must be monotonic across undo ({second_id:?} vs {first_id:?})");
+
+        // 4. `set_selection` deduplicates and drops non-existent IDs.
+        engine.set_selection(vec![second_id, ObjectId(999_999), second_id]);
+        assert_eq!(engine.selection, vec![second_id]);
+
+        // 5. Recursive visitor finds and mutates objects inside Group and PowerClip containers.
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Third".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let third_id = engine.selection[0];
+        engine.set_selection(vec![second_id, third_id]);
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        let group_id = engine.selection[0];
+        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside Group");
+        assert!(engine.execute(EngineCommand::RenameObject { object_id: second_id, name: Some("Nested Renamed".to_owned()) }));
+        assert_eq!(engine.inspect_object(second_id).unwrap().name.as_deref(), Some("Nested Renamed"));
+
+        // Place group inside a new container via PowerClip and inspect deeply nested child
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Frame".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let frame_id = engine.selection[0];
+        engine.set_selection(vec![group_id]);
+        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: frame_id }));
+        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside PowerClip->Group");
+
+        // 6. Undo history is capped at MAX_UNDO_HISTORY.
+        for i in 0..(MAX_UNDO_HISTORY + 20) {
+            assert!(engine.execute(EngineCommand::SetDocumentTitle { title: format!("Title {i}") }));
+        }
+        let mut undo_count = 0;
+        while engine.undo() {
+            undo_count += 1;
+        }
+        assert_eq!(undo_count, MAX_UNDO_HISTORY);
+
+        // 7. Document-wide object budget rejects exponential duplication past MAX_DOCUMENT_OBJECTS.
+        let mut budget_engine = EditorEngine::default();
+        assert!(budget_engine.execute(EngineCommand::AddObject { name: Some("Seed".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        // 1 -> 101 objects
+        assert!(budget_engine.execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ZERO }));
+        budget_engine.select_all();
+        assert_eq!(budget_engine.total_object_count(), 101);
+        // 101 * 100 = 10,100 > MAX_DOCUMENT_OBJECTS (8,192) -> rejected with ObjectBudgetExceeded!
+        assert_eq!(
+            budget_engine.try_execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ONE }),
+            Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS })
+        );
+        assert_eq!(budget_engine.total_object_count(), 101);
     }
 }
