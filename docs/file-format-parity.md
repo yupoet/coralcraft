@@ -12,16 +12,16 @@ All `.cdr` and `.cmx` format knowledge is clean-room derived from public specifi
 | Format | Extension | Generation / Variant | Probe (`M1`) | Open / Import | Save / Export | Target Milestone |
 | --- | --- | --- | --- | --- | --- | --- |
 | **CorelDRAW Legacy WL** | `.cdr` | v1 – v2 (`WL` header) | **Yes** (`CdrWl`, v100–v200) | Graceful diagnostic (`UnsupportedContainer`) | No | M1 (Probe) |
-| **CorelDRAW RIFF** | `.cdr` | v3 – X3 (v300 – v1300, bare `RIFF` + `CDR*`) | **Yes** (`Riff` + `vrsn`, `LIST cmpr`/`stlt` safe) | **Yes** (`parse_document`, `LIST cmpr` zlib/raw inflate, `mcfg`/`page`/`layr`/`obj `/`bbox`/`trfd`/`loda`/`fild`/`outl` + `ObjectKind::Unsupported` fallback) | Planned | M3 (Delivered) |
-| **CorelDRAW ZIP+RIFF** | `.cdr`, `.cdrx` | X4 – 2025+ (v1400 – v2600+, ZIP + `content/riffData.cdr` or `content/root.dat`) | **Yes** (`ZipCdr` EOCD + Central Directory + Stored/Deflate inner RIFF) | **Yes** (`extract_zip_primary_riff` Stored & Deflate + `parse_document`, 64/64 real-world samples green) | Planned | M3 (Delivered) |
-| **Corel Presentation Exchange** | `.cmx` | CMX1 (`RIFF` LE / `RIFX` BE + `CMX1` / `cdr6`) | **Yes** (`Cmx` LE/BE) | **Yes** (`parse_document` baseline) | Planned | M3 (Delivered) |
+| **CorelDRAW RIFF** | `.cdr` | v3 – X3 (v300 – v1300, bare `RIFF` + `CDR*`) | **Yes** (`Riff` + `vrsn`, `LIST cmpr`/`stlt` safe) | **Yes** (`parse_document`, `LIST cmpr` zlib/raw inflate, `mcfg`/`page`/`layr`/`obj `/`bbox`/`trfd`/`loda`/`fild`/`outl`/`CDIB`/`txtd`/`enve` + `ObjectKind::Unsupported` fallback) | **Yes** (`coralcraft_cdr::write_cdr7`) | M3 / M6–M11 (Delivered) |
+| **CorelDRAW ZIP+RIFF** | `.cdr`, `.cdrx` | X4 – 2025+ (v1400 – v2600+, ZIP + `content/riffData.cdr` or `content/root.dat`) | **Yes** (`ZipCdr` EOCD + Central Directory + Stored/Deflate inner RIFF) | **Yes** (`extract_zip_primary_riff` Stored & Deflate + `parse_document`, 64/64 real-world samples green) | **Yes** (`coralcraft_cdr::write_cdrx_zip`) | M3 / M7 (Delivered) |
+| **Corel Presentation Exchange** | `.cmx` | CMX1 (`RIFF` LE / `RIFX` BE + `CMX1` / `cdr6`) | **Yes** (`Cmx` LE/BE) | **Yes** (`parse_document` baseline) | **Yes** (`coralcraft_cdr::write_cmx1`) | M3 / M6 (Delivered) |
 | **CoralCraft Native** | `.coralcraft` | Open ZIP container (`manifest.json` + `document.json` + `blobs/`) or single-file JSON | — | **Yes** (`Document::load_bytes`) | **Yes** (`save_json` / `save_zip`) | M2 (Delivered) |
-| **Scalable Vector Graphics** | `.svg` | SVG 1.1 | — | Planned | **Yes** (`coralcraft_render::export_svg`) | M3 (Delivered) |
-| **Portable Document Format** | `.pdf` | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`) | — | Planned | **Yes** (`coralcraft_render::export_pdf`) | M3 (Delivered) |
+| **Scalable Vector Graphics** | `.svg` | SVG 1.1 | — | **Yes** (`coralcraft_doc::import_svg`) | **Yes** (`coralcraft_render::export_svg`) | M3 / M14 (Delivered) |
+| **Portable Document Format** | `.pdf` | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`) | — | — | **Yes** (`coralcraft_render::export_pdf`) | M3 / M9 (Delivered) |
 | **Portable Network Graphics** | `.png` | RGBA8 PNG with 4×4 MSAA | — | — | **Yes** (`coralcraft_render::encode_png`) | M2 (Delivered) |
-| **Encapsulated PostScript** | `.eps` | PostScript / EPS | — | Planned | Planned | M8 |
-| **AutoCAD Drawing Exchange** | `.dxf` | ASCII / Binary DXF | — | Planned | Planned | M8 |
-| **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (no built-in proprietary swatch tables) | — | **Yes** (`parse_xml_palette` / `parse_cpl_palette`) | **Yes** (`to_xml_palette` / `to_cpl_palette`) | M2 (Delivered) |
+| **Encapsulated PostScript** | `.eps` | PostScript / `EPSF-3.0` (`%%BoundingBox`, `%%HiResBoundingBox`, CMYK `setcmykcolor`, RGB `setrgbcolor`) | — | — | **Yes** (`coralcraft_render::export_eps`) | M14 (Delivered) |
+| **AutoCAD Drawing Exchange** | `.dxf` | ASCII DXF (`AC1009` / R12 `ENTITIES`: `LINE`, `POLYLINE`/`VERTEX`/`SEQEND`, `LWPOLYLINE`, `CIRCLE`) | — | **Yes** (`coralcraft_doc::import_dxf`) | **Yes** (`coralcraft_render::export_dxf`) | M14 (Delivered) |
+| **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot) | — | **Yes** (`parse_xml_palette` / `parse_cpl_palette`) | **Yes** (`to_xml_palette` / `to_cpl_palette`) | M2 / M7 (Delivered) |
 
 ## M1–M3 Format Capabilities (`coralcraft-cdr`, `coralcraft-doc`, `coralcraft-render`)
 

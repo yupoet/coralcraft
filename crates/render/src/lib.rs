@@ -1,6 +1,7 @@
 //! `coralcraft-render`: Clean-room 4x4 supersampled software rasterizer, Fountain Fill shader,
 //! PowerClip mask compositor, and ISO/IEC 15948 PNG encoder for CoralCraft.
 
+pub mod eps;
 pub mod pdf;
 pub mod png;
 pub mod raster;
@@ -11,6 +12,7 @@ use coralcraft_color::{Color, interpolate_stops};
 use coralcraft_doc::{Document, FillStyle, ObjectKind, ObjectNode, OutlineStyle, TransparencyStyle, VectorEffect};
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
+pub use eps::{export_dxf, export_eps};
 pub use pdf::{PrepressOptions, export_pdf, export_pdf_with_prepress};
 pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
@@ -584,7 +586,7 @@ fn paint_bitmap(
     }
 }
 
-fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>, RenderError> {
+pub(crate) fn extract_local_path_and_bbox(kind: &ObjectKind) -> Result<Option<(Path, Rect)>, RenderError> {
     match kind {
         ObjectKind::Rect(r) => {
             let p = r.to_path()?;
@@ -1118,5 +1120,17 @@ mod tests {
         assert!(out.surface.get_straight_rgba(110, 30)[0] > 200);
         // Brush at (30, 82) is inside the thick start ribbon (90 ± 12)
         assert!(out.surface.get_straight_rgba(30, 82)[1] > 120);
+
+        let eps = export_eps(&doc, 0).unwrap();
+        assert!(eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0"));
+        assert!(eps.contains("%%BoundingBox: 0 0 160 120"));
+        assert!(eps.contains("moveto"));
+        assert!(eps.contains("fill"));
+
+        let dxf = export_dxf(&doc, 0).unwrap();
+        assert!(dxf.contains("$ACADVER\n1\nAC1009"));
+        assert!(dxf.contains("POLYLINE"));
+        assert!(dxf.contains("VERTEX"));
+        assert!(dxf.contains("SEQEND"));
     }
 }

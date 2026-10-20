@@ -4,15 +4,15 @@ CoralCraft is a clean-room, open-source vector illustration and multi-page layou
 
 ## Summary Matrix
 
-| Workflow Domain | Current Status (M4/M5) | Target Milestone | Notes |
+| Workflow Domain | Current Status (M0–M14) | Target Milestone | Notes |
 | --- | --- | --- | --- |
 | **Document Model & Multi-Page** | **100%** (delivered) | M2 (Delivered) | Multi-page spreads, Master Pages (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`), Desktop pasteboard (`ObjectId` + `ObjectKind::Unsupported` lossless passthrough) |
-| **Objects & Geometry** | **85%** (delivered) | M2 (Delivered) | Parametric Rectangle (`Round`/`Scalloped`/`Chamfered`), Ellipse (`Full`/`Pie`/`Arc`), Polygon/Star, Cubic/Quadratic Bézier Curve, Artistic Text, Groups |
-| **Fills, Outlines & Palette** | **80%** (delivered) | M2 / M3 (Delivered) | Uniform, Fountain (`Linear`/`Radial`/`Conical`/`Square`, Direct + Rainbow CW/CCW), Outline (`behind_fill`, `scale_with_object`, Hairline), Spot/Registration/Lab colors, `.cpl` / `.xml` palette import |
-| **CorelDRAW Signature Effects** | **40%** (PowerClip delivered) | M3 / M7 | Recursive PowerClip (`powerclip_children`, `MAX_CLIP_DEPTH = 8`) in PNG, SVG 1.1, and PDF 1.4 |
-| **Interactive Tools & Classic Workspace** | **75%** (delivered) | M4 (Delivered) | Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox` (`Pick`, `Shape F10`, `Crop`, `Zoom Z`, `Freehand/Bezier F5`, `Rectangle F6`, `Ellipse F7`, `Polygon/Star Y`, `Artistic Text F8`, `Interactive Fill G`), right `ColorPaletteBar` (`[X]` No-Color, Left-Click Fill / Right-Click Outline), bottom `PageNavigatorBar`, `StatusBar`, `Objects`/`Properties` Dockers) |
-| **Prepress, Print & Imposition** | **45%** (delivered) | M3 / M8 | ISO 32000-1 PDF 1.4 `/MediaBox` + `/TrimBox` + `/BleedBox`, native CMYK (`k`/`K`), Spot/Registration/CIE Lab D50<->D65 Bradford CAT |
-| **Automation & Agentic MCP** | **75%** (MCP server delivered) | M5 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (`12` authoring & export tools) + `coralcraft --mcp` |
+| **Objects & Geometry** | **100%** (delivered) | M2–M13 (Delivered) | Parametric Rectangle (`Round`/`Scalloped`/`Chamfered`), Ellipse (`Full`/`Pie`/`Arc`), Polygon/Star, Cubic/Quadratic Bézier Curve, Fillet/Scallop/Chamfer curves, Artistic Text, Paragraph Text multi-column frames, Linear Dimension lines, Embedded Bitmaps, 2D Boolean ops (`Weld`/`Trim`/`Intersect`/`FrontMinusBack`/`BackMinusFront`), Groups |
+| **Fills, Outlines & Palette** | **100%** (delivered) | M2–M8 (Delivered) | Uniform, Fountain (`Linear`/`Radial`/`Conical`/`Square`, Direct + Rainbow CW/CCW), Uniform/Fountain Transparency (`TransparencyStyle`), Outline (`behind_fill`, `scale_with_object`, Hairline), Spot/Registration/Lab colors, binary `.cpl` / `.xml` palette import & export |
+| **CorelDRAW Signature Effects** | **100%** (delivered) | M3–M13 (Delivered) | Recursive PowerClip (`MAX_CLIP_DEPTH = 8`), Contour, Drop Shadow, Extrude, Blend + custom `ArcLengthTable` Spine, 4-corner Envelope (`enve` CDR round-trip), 2-point Perspective homography, Artistic Media Brush, Fit Text to Path |
+| **Interactive Tools & Classic Workspace** | **100%** (delivered) | M4–M12 (Delivered) | Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox` with 10 vector glyphs, right `ColorPaletteBar` (`[X]` No-Color, Left-Click Fill / Right-Click Outline), bottom `PageNavigatorBar`, `StatusBar`, `Objects`/`Properties` Dockers, `1440×900` full-workspace rasterizer, Interactive Fill handles, dashed `#0055E5` guidelines, 7-mode Alignment + 8-mode Distribution, Step & Repeat) |
+| **Prepress, Print & Interchange** | **100%** (delivered) | M3–M14 (Delivered) | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`), `PrepressOptions` (crop & Registration `1 1 1 1 K` marks), `EPSF-3.0` (`export_eps`), AutoCAD DXF (`export_dxf` / `import_dxf`), SVG 1.1 (`export_svg` / `import_svg`), CDR7/CMX1/CDRX writers |
+| **Automation & Agentic MCP** | **100%** (delivered) | M5–M14 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (**41** authoring, effect, layout, and interchange tools) + `coralcraft --mcp` |
 
 ## 1. Document & Multi-Page Architecture
 

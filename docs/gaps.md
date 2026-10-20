@@ -32,4 +32,6 @@
 - [x] 27. **[M12] Smart Distribute (`DistributeSelection`)**: Equal spacing distribution (`DistributeLeft`, `DistributeCenterHorizontal`, `DistributeRight`, `DistributeSpacingHorizontal`, `DistributeTop`, `DistributeCenterVertical`, `DistributeBottom`, `DistributeSpacingVertical`) across `>= 3` selected objects in `coralcraft-tools`, `coralcraft-engine`, and `coralcraft-mcp`.
 - [x] 28. **[M13] Perspective / 2-Point Vanishing Projective Warp (`warp_path_perspective`)**: Projective homography (`3x3` matrix) warp of vector paths and live `VectorEffect::Perspective` in `coralcraft-geom`, `coralcraft-doc`, `coralcraft-engine`, and `coralcraft-render`.
 - [x] 29. **[M13] Fillet / Scallop / Chamfer Polyline Corner Modifier (`fillet_path_corners`)**: Parametric corner rounding, scalloping, and chamfering on arbitrary polygonal `ObjectKind::Path` contours in `coralcraft-geom`, `coralcraft-engine`, and `coralcraft-mcp`.
+- [x] 30. **[M14] Encapsulated PostScript (`export_eps`) & AutoCAD Drawing Exchange (`export_dxf` / `import_dxf`) + SVG 1.1 Import (`import_svg`)**: Clean-room `EPSF-3.0` and `AC1009` DXF exporters in `coralcraft-render`, SVG 1.1 and DXF vector importers in `coralcraft-doc`, CLI integration in `coralcraft-cli`, and 41 MCP tools in `coralcraft-mcp`.
+
 

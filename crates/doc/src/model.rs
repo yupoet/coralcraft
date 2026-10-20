@@ -53,6 +53,12 @@ pub enum DocError {
         /// Total page count.
         count: usize,
     },
+    /// Invalid or unsupported SVG document structure.
+    #[error("invalid SVG document: {0}")]
+    InvalidSvg(String),
+    /// Invalid or unsupported DXF document structure.
+    #[error("invalid DXF document: {0}")]
+    InvalidDxf(String),
 }
 
 /// Semantic version of the `.coralcraft` document schema.

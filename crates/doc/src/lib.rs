@@ -2,11 +2,13 @@
 //! `ObjectKind::Unsupported`) and dual-mode `.coralcraft` container (`save_json`, `save_zip`, `load_bytes`).
 
 pub mod container;
+pub mod interchange;
 pub mod model;
 pub mod style;
 pub mod text_layout;
 
 pub use container::{BLOB_THRESHOLD, crc32, list_zip_blobs, load_bytes, save_json, save_zip, sha256_hex};
+pub use interchange::{import_dxf, import_svg};
 pub use model::{
     CURRENT_SCHEMA, DocError, Document, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, Page, PageId, ParagraphTextSpec, SchemaVersion,
     TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
@@ -342,5 +344,23 @@ mod tests {
         assert!(json.contains(r#""kind":"paragraph_text""#));
         let decoded: ObjectNode = serde_json::from_str(&json).unwrap();
         assert_eq!(node, decoded);
+    }
+
+    #[test]
+    fn import_svg_and_import_dxf_produce_valid_vector_documents() {
+        let svg_sample = r##"<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+            <rect x="10" y="20" width="120" height="80" rx="6" fill="#E03040" stroke="#112233" stroke-width="2" />
+            <circle cx="200" cy="150" r="45" fill="rgb(20, 140, 220)" />
+            <path d="M 10 10 L 90 10 C 90 50 50 90 10 90 Z" fill="#00AA55" />
+            <text x="30" y="260" font-family="Arial" font-size="18" fill="#222222">Imported SVG</text>
+        </svg>"##;
+        let doc_svg = import_svg(svg_sample).unwrap();
+        assert_eq!(doc_svg.pages[0].size.width.get(), 400.0);
+        assert_eq!(doc_svg.pages[0].size.height.get(), 300.0);
+        assert_eq!(doc_svg.pages[0].layers[0].objects.len(), 4);
+
+        let dxf_sample = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n10.0\n20\n20.0\n11\n110.0\n21\n70.0\n0\nCIRCLE\n8\n0\n10\n150.0\n20\n150.0\n40\n35.0\n0\nLWPOLYLINE\n70\n1\n10\n0.0\n20\n0.0\n10\n80.0\n20\n0.0\n10\n80.0\n20\n60.0\n0\nENDSEC\n0\nEOF\n";
+        let doc_dxf = import_dxf(dxf_sample).unwrap();
+        assert_eq!(doc_dxf.pages[0].layers[0].objects.len(), 3);
     }
 }

@@ -3,10 +3,10 @@
 
 use coralcraft_cdr::write_cdr7;
 use coralcraft_color::Color;
-use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle};
+use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{BooleanOp, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
-use coralcraft_render::{export_pdf, export_svg};
+use coralcraft_render::{export_dxf, export_eps, export_pdf, export_svg};
 use coralcraft_tools::{AlignMode, ZOrderOp};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -275,6 +275,26 @@ impl McpServer {
                         {
                             "name": "set_transparency",
                             "description": "Applies uniform or linear fountain transparency to selected objects.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_eps",
+                            "description": "Exports a document page to Encapsulated PostScript (EPSF-3.0).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_dxf",
+                            "description": "Exports a document page to AutoCAD ASCII DXF (AC1009 / R12).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "import_svg",
+                            "description": "Replaces the active document by importing an SVG 1.1 string.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "import_dxf",
+                            "description": "Replaces the active document by importing an AutoCAD ASCII DXF string.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -718,6 +738,30 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::SetTransparency { transparency });
                 Ok(json!({ "transparency_set": ok, "mode": mode }))
             }
+            "export_eps" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let eps = export_eps(&self.engine.document, page_index).map_err(|e| e.to_string())?;
+                Ok(json!({ "eps": eps }))
+            }
+            "export_dxf" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let dxf = export_dxf(&self.engine.document, page_index).map_err(|e| e.to_string())?;
+                Ok(json!({ "dxf": dxf }))
+            }
+            "import_svg" => {
+                let svg = args.get("svg").and_then(Value::as_str).ok_or_else(|| "Missing svg string".to_owned())?;
+                let doc = import_svg(svg).map_err(|e| e.to_string())?;
+                let count = doc.pages[0].layers[0].objects.len();
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({ "status": "ok", "imported_objects": count }))
+            }
+            "import_dxf" => {
+                let dxf = args.get("dxf").and_then(Value::as_str).ok_or_else(|| "Missing dxf string".to_owned())?;
+                let doc = import_dxf(dxf).map_err(|e| e.to_string())?;
+                let count = doc.pages[0].layers[0].objects.len();
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({ "status": "ok", "imported_objects": count }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -747,7 +791,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 37);
+        assert_eq!(tools, 41);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

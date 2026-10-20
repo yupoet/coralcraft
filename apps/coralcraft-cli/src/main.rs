@@ -15,9 +15,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport, parse_document};
 use coralcraft_color::{ColorError, load_palette_bytes};
-use coralcraft_doc::{DocError, Document, load_bytes, save_json, save_zip};
+use coralcraft_doc::{DocError, Document, import_dxf, import_svg, load_bytes, save_json, save_zip};
 use coralcraft_engine::ActivePageTarget;
-use coralcraft_render::{RenderOpts, export_pdf, export_svg, render_page};
+use coralcraft_render::{RenderOpts, export_dxf, export_eps, export_pdf, export_svg, render_page};
 use coralcraft_ui_egui::DesktopWorkspace;
 use serde::Serialize;
 
@@ -167,8 +167,30 @@ fn read_bounded_file(subcmd: &str, file: &str) -> Result<Vec<u8>, ExitCode> {
     })
 }
 
-/// Loads either a native `.coralcraft` document or a `.cdr`/`.cmx` document.
+/// Loads a native `.coralcraft`, `.svg`, `.dxf`, or `.cdr`/`.cmx` document.
 fn load_any_document(subcmd: &str, input: &str, bytes: &[u8]) -> Result<(Document, Vec<String>), ExitCode> {
+    let ext = Path::new(input).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if ext == "svg" {
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: invalid UTF-8 in SVG '{input}': {e}");
+            ExitCode::from(5)
+        })?;
+        return import_svg(text).map(|doc| (doc, Vec::new())).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: failed to import SVG '{input}': {e}");
+            ExitCode::from(5)
+        });
+    }
+    if ext == "dxf" {
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: invalid UTF-8 in DXF '{input}': {e}");
+            ExitCode::from(5)
+        })?;
+        return import_dxf(text).map(|doc| (doc, Vec::new())).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: failed to import DXF '{input}': {e}");
+            ExitCode::from(5)
+        });
+    }
+
     match load_bytes(bytes) {
         Ok(doc) => return Ok((doc, Vec::new())),
         Err(DocError::BadMagic | DocError::InvalidZipContainer(_)) => {}
@@ -383,9 +405,23 @@ fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: boo
                 return ExitCode::from(6);
             }
         },
+        "eps" => match export_eps(&doc, page_1based - 1) {
+            Ok(eps) => ("eps", eps.into_bytes()),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: EPS export failed for '{input}': {e}");
+                return ExitCode::from(6);
+            }
+        },
+        "dxf" => match export_dxf(&doc, page_1based - 1) {
+            Ok(dxf) => ("dxf", dxf.into_bytes()),
+            Err(e) => {
+                eprintln!("coralcraft-cli export: DXF export failed for '{input}': {e}");
+                return ExitCode::from(6);
+            }
+        },
         other => {
             eprintln!(
-                "coralcraft-cli export: unsupported output extension '.{other}' (expected .svg, .pdf, .png, .cdr, .cmx, .coralcraft, or .json)"
+                "coralcraft-cli export: unsupported output extension '.{other}' (expected .svg, .pdf, .eps, .dxf, .png, .cdr, .cmx, .coralcraft, or .json)"
             );
             return ExitCode::from(3);
         }
