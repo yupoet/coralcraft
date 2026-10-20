@@ -10,9 +10,9 @@ use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
     delete_curve_node_at, delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
-    measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
-    trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, radial_push_path_around_point, reference_point,
+    reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point,
+    subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -289,6 +289,10 @@ pub enum EngineCommand {
     BreakPathAtNode { object_id: ObjectId, element_index: usize },
     /// Scales all selected unlocked objects around their centers to match the width (`match_width`) and/or height (`match_height`) of the last selected key object (`Object -> Align and Distribute -> Equalize Size`).
     EqualizeSelectionSize { match_width: bool, match_height: bool },
+    /// Topologically morphs the world-space contour of `start_id` toward `end_id` at factor `t` (`0.0..=1.0`) with `sample_count` vertices and adds the resulting [`ObjectKind::Path`] (`Effects -> Blend -> Morph Paths`).
+    MorphBetweenObjects { start_id: ObjectId, end_id: ObjectId, t: F64, sample_count: usize },
+    /// Spaces all selected unlocked objects (`>= 2`) along the horizontal (`horizontal = true`) or vertical (`horizontal = false`) axis with an exact gap `gap_pt` between adjacent bounding boxes (`Object -> Align and Distribute -> Space with Exact Gap`).
+    DistributeExactGap { horizontal: bool, gap_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1242,6 +1246,25 @@ impl EditorEngine {
             }
             EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
                 if !match_width && !match_height {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
+                if start_id == end_id || !(0.0..=1.0).contains(&t.get()) || *sample_count < 3 {
+                    return false;
+                }
+                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
+                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
+                if !valid_a || !valid_b {
+                    return false;
+                }
+            }
+            EngineCommand::DistributeExactGap { gap_pt, .. } => {
+                if !gap_pt.get().is_finite() {
                     return false;
                 }
                 let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
@@ -3553,6 +3576,56 @@ impl EditorEngine {
                     }
                 }
             }
+            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
+                let src_a = self.selected_or_all_node(start_id).cloned();
+                let src_b = self.selected_or_all_node(end_id).cloned();
+                if let (Some(a), Some(b)) = (src_a, src_b)
+                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
+                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
+                    && let Ok(morphed) = morph_paths_linear(&pa, &pb, t.get(), sample_count)
+                {
+                    let new_id = self.document.allocate_object_id();
+                    let node =
+                        ObjectNode::new(new_id, Some("Morphed Curve".to_owned()), ObjectKind::Path(morphed), a.fill.clone(), a.outline.clone());
+                    self.target_layer_mut().objects.push(node);
+                    self.selection = vec![new_id];
+                }
+            }
+            EngineCommand::DistributeExactGap { horizontal, gap_pt } => {
+                let gap = gap_pt.get();
+                let mut items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                if items.len() >= 2 {
+                    if horizontal {
+                        items.sort_by_key(|a| a.1.x0);
+                    } else {
+                        items.sort_by_key(|a| a.1.y0);
+                    }
+                    let mut deltas = BTreeMap::new();
+                    if horizontal {
+                        let mut cur_x = items[0].1.x1.get() + gap;
+                        for (id, b) in items.iter().skip(1) {
+                            deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
+                            cur_x += b.width() + gap;
+                        }
+                    } else {
+                        let mut cur_y = items[0].1.y1.get() + gap;
+                        for (id, b) in items.iter().skip(1) {
+                            deltas.insert(*id, (0.0, cur_y - b.y0.get()));
+                            cur_y += b.height() + gap;
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(tf) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(tf)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
         }
         true
     }
@@ -4411,5 +4484,7 @@ mod tests {
         assert!(!engine.selection.is_empty());
         assert!(engine.execute(EngineCommand::BreakPathAtNode { object_id: sf_id, element_index: 1 }));
         assert!(engine.execute(EngineCommand::EqualizeSelectionSize { match_width: true, match_height: true }));
+        assert!(engine.execute(EngineCommand::DistributeExactGap { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::MorphBetweenObjects { start_id: sf_id, end_id: off_id, t: F64::new(0.5).unwrap(), sample_count: 16 }));
     }
 }

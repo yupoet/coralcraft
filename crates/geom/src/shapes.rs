@@ -888,6 +888,36 @@ pub fn build_flowchart_symbol_path(bounds: Rect, kind: FlowchartSymbolKind) -> R
     }
 }
 
+/// Builds a closed Rhodonea / Guilloche Rose Curve [`Path`] ($r(\theta) = R \cos(k \theta)$) centered
+/// at `center` with outer `radius`, petal frequency `petals_k` (`1..=36`), and `points_per_lobe` (`4..=64`).
+pub fn build_rose_guilloche_path(center: Point, radius: f64, petals_k: u32, points_per_lobe: u32) -> Result<Path, GeomError> {
+    let r_max = F64::new(radius)?.get();
+    if r_max <= 0.0 || petals_k == 0 || points_per_lobe < 4 {
+        return Err(GeomError::InvalidShapeParameter("invalid rose guilloche parameters"));
+    }
+    let k = petals_k.clamp(1, 36);
+    let lobes = if k.is_multiple_of(2) { 2 * k } else { k };
+    let max_theta = if k.is_multiple_of(2) { std::f64::consts::TAU } else { std::f64::consts::PI };
+    let total_steps = (lobes * points_per_lobe.clamp(4, 64)).min(1024);
+    let cx = center.x.get();
+    let cy = center.y.get();
+
+    let mut path = Path::new();
+    for step in 0..total_steps {
+        let theta = max_theta * (f64::from(step) / f64::from(total_steps));
+        let r = r_max * (f64::from(k) * theta).cos();
+        let (s, c) = theta.sin_cos();
+        let pt = Point::new(cx + r * c, cy + r * s)?;
+        if step == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -933,5 +963,8 @@ mod m27_tests {
             let fc = build_flowchart_symbol_path(Rect::new(0.0, 0.0, 120.0, 60.0).unwrap(), kind).unwrap();
             assert!(fc.elements.iter().any(|e| matches!(e, PathElement::Close)));
         }
+
+        let rose = build_rose_guilloche_path(Point::new(100.0, 100.0).unwrap(), 50.0, 5, 12).unwrap();
+        assert!(rose.elements.iter().any(|e| matches!(e, PathElement::Close)));
     }
 }

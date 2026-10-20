@@ -169,9 +169,13 @@
 45. **M45 Parametric Flowchart Symbols (`build_flowchart_symbol_path`), Shape Tool Break Curve at Node (`break_path_at_node`), Equalize Selection Size (`EqualizeSelectionSize`), PDF Base64 Export (`export_pdf_base64`), and 164 MCP Tools**:
     - `coralcraft-geom`: `FlowchartSymbolKind`, `build_flowchart_symbol_path` (`Flowchart Shapes -> Process/Decision/Terminator/Data/Document`), and `break_path_at_node` (`Shape Tool F10 -> Break Curve`).
     - `coralcraft-engine` & `coralcraft-mcp`: `BreakPathAtNode`, `EqualizeSelectionSize`, `add_flowchart_symbol`, `break_path_at_node`, `equalize_selection_size`, `export_pdf_base64`, and **164 MCP tools**.
+46. **M46 Parametric Rose Guilloche Curves (`build_rose_guilloche_path`), Topological Arc-Length Path Morphing (`morph_paths_linear`), Exact Gap Distribution (`DistributeExactGap`), Document Color Palette Extractor (`extract_document_palette`), and 168 MCP Tools**:
+    - `coralcraft-geom`: `build_rose_guilloche_path` (Rhodonea / guilloche curve $r(\theta) = R \cos(k \theta)$) and `morph_paths_linear` (normalized arc-length contour morphing).
+    - `coralcraft-engine` & `coralcraft-mcp`: `MorphBetweenObjects`, `DistributeExactGap`, `add_rose_guilloche`, `morph_between_objects`, `distribute_exact_gap`, `extract_document_palette`, and **168 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M46 delivered (`build_rose_guilloche_path` & `add_rose_guilloche`, `morph_paths_linear` & `MorphBetweenObjects`, `DistributeExactGap`, `extract_document_palette`, 168 MCP tools).
 - 2026-10-20: M45 delivered (`build_flowchart_symbol_path` & `add_flowchart_symbol`, `break_path_at_node` & `BreakPathAtNode`, `EqualizeSelectionSize`, `export_pdf_base64`, 164 MCP tools).
 - 2026-10-20: M44 delivered (`build_banner_ribbon_path` & `add_banner_ribbon`, `transform_curve_nodes` & `TransformCurveNodes`, `SelectByColor`, `export_png_base64`, 160 MCP tools).
 - 2026-10-20: M43 delivered (`build_block_arrow_path` & `add_block_arrow`, `subdivide_all_path_segments` & `SubdividePathSegments`, `ConvertSelectionColors`, `import_coralcraft_json`, 156 MCP tools).

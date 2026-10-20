@@ -13,7 +13,7 @@ use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect, RectSpec, Unit,
     build_angular_dimension_path, build_banner_ribbon_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path,
     build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path,
-    build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -919,6 +919,26 @@ impl McpServer {
                         {
                             "name": "export_pdf_base64",
                             "description": "Exports the entire multi-page document to ISO 32000-1 PDF 1.4 and returns pdf_bytes length and RFC 4648 pdf_base64 string.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_rose_guilloche",
+                            "description": "Adds a closed Rhodonea / Guilloche Rose Curve at (cx, cy) with radius, petals_k (1..=36), and points_per_lobe (4..=64).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "morph_between_objects",
+                            "description": "Topologically morphs start_id toward end_id at factor t (0.0..=1.0) with sample_count vertices and adds the resulting Path.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "distribute_exact_gap",
+                            "description": "Spaces all selected unlocked objects along the horizontal or vertical axis with an exact gap_pt between adjacent bounding boxes.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "extract_document_palette",
+                            "description": "Scans all objects in the document and returns the deduplicated list of colors (hex, r, g, b) used in fills, fountain stops, patterns, and outlines.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2658,6 +2678,72 @@ impl McpServer {
                     "pdf_base64": b64
                 }))
             }
+            "add_rose_guilloche" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius = args.get("radius").and_then(Value::as_f64).unwrap_or(60.0);
+                let petals_k = args.get("petals_k").and_then(Value::as_u64).unwrap_or(5) as u32;
+                let points_per_lobe = args.get("points_per_lobe").and_then(Value::as_u64).unwrap_or(16) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_rose_guilloche_path(center, radius, petals_k, points_per_lobe).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Rose Guilloche".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "rose_guilloche", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "morph_between_objects" => {
+                let start_id = ObjectId(args.get("start_id").and_then(Value::as_u64).ok_or_else(|| "Missing start_id".to_owned())?);
+                let end_id = ObjectId(args.get("end_id").and_then(Value::as_u64).ok_or_else(|| "Missing end_id".to_owned())?);
+                let t = F64::new(args.get("t").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                let sample_count = args.get("sample_count").and_then(Value::as_u64).unwrap_or(32) as usize;
+                let ok = self.engine.execute(EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count });
+                Ok(json!({ "morphed": ok, "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "distribute_exact_gap" => {
+                self.apply_optional_selection(args);
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let gap_pt = F64::new(args.get("gap_pt").and_then(Value::as_f64).unwrap_or(12.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::DistributeExactGap { horizontal, gap_pt });
+                Ok(json!({ "distributed_exact_gap": ok, "horizontal": horizontal, "gap_pt": gap_pt.get() }))
+            }
+            "extract_document_palette" => {
+                let mut seen = std::collections::BTreeSet::new();
+                let mut colors = Vec::new();
+                let mut record_color = |c: &Color| {
+                    let [r, g, b] = c.to_srgb8();
+                    if seen.insert([r, g, b]) {
+                        colors.push(json!({
+                            "hex": format!("#{r:02X}{g:02X}{b:02X}"),
+                            "r": r,
+                            "g": g,
+                            "b": b
+                        }));
+                    }
+                };
+                for page in &self.engine.document.pages {
+                    for layer in &page.layers {
+                        for obj in &layer.objects {
+                            if let Some(fill) = &obj.fill {
+                                match fill {
+                                    FillStyle::Uniform { color } => record_color(color),
+                                    FillStyle::Fountain { stops, .. } => {
+                                        for s in stops {
+                                            record_color(&s.color);
+                                        }
+                                    }
+                                    FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                        record_color(fg_color);
+                                        record_color(bg_color);
+                                    }
+                                    FillStyle::Unknown { .. } => {}
+                                }
+                            }
+                            if let Some(ol) = &obj.outline {
+                                record_color(&ol.color);
+                            }
+                        }
+                    }
+                }
+                Ok(json!({ "color_count": colors.len(), "colors": colors }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2687,7 +2773,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 164);
+        assert_eq!(tools, 168);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

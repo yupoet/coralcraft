@@ -1695,6 +1695,48 @@ pub fn break_path_at_node(path: &Path, element_index: usize) -> Result<Path, Geo
     Path::from_elements(out, path.fill_rule)
 }
 
+/// Topologically morphs `start_path` toward `end_path` at interpolation factor `t` (`0.0..=1.0`)
+/// by resampling both contours along their normalized arc lengths (`ArcLengthTable`) into `sample_count`
+/// vertices (`Effects -> Blend -> Morph Paths`).
+pub fn morph_paths_linear(start_path: &Path, end_path: &Path, t: f64, sample_count: usize) -> Result<Path, GeomError> {
+    if !t.is_finite() || !(0.0..=1.0).contains(&t) || sample_count < 3 {
+        return Err(GeomError::InvalidShapeParameter("invalid morph factor or sample_count"));
+    }
+    let lut_a = ArcLengthTable::from_path(start_path)?;
+    let lut_b = ArcLengthTable::from_path(end_path)?;
+    if lut_a.total_length() <= 1e-6 || lut_b.total_length() <= 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("cannot morph zero-length path"));
+    }
+    let n = sample_count.clamp(3, 512);
+    let closed =
+        start_path.elements.iter().any(|e| matches!(e, PathElement::Close)) && end_path.elements.iter().any(|e| matches!(e, PathElement::Close));
+    let denom = if closed { n as f64 } else { (n - 1) as f64 };
+
+    let mut out = Path::new();
+    out.fill_rule = start_path.fill_rule;
+    for i in 0..n {
+        let u = (i as f64) / denom;
+        let Some(sa) = lut_a.sample_normalized(u) else {
+            return Err(GeomError::InvalidShapeParameter("failed to sample start path"));
+        };
+        let Some(sb) = lut_b.sample_normalized(u) else {
+            return Err(GeomError::InvalidShapeParameter("failed to sample end path"));
+        };
+        let mx = (1.0 - t) * sa.point.x.get() + t * sb.point.x.get();
+        let my = (1.0 - t) * sa.point.y.get() + t * sb.point.y.get();
+        let pt = Point::new(mx, my)?;
+        if i == 0 {
+            out.move_to(pt)?;
+        } else {
+            out.line_to(pt)?;
+        }
+    }
+    if closed {
+        out.close()?;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1756,5 +1798,8 @@ mod m26_tests {
 
         let broken_closed = break_path_at_node(&rect_path, 2).unwrap();
         assert!(!broken_closed.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let morphed = morph_paths_linear(&rect_path, &poly, 0.5, 16).unwrap();
+        assert_eq!(morphed.elements.len(), 16);
     }
 }
