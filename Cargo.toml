@@ -42,6 +42,8 @@ dbg_macro = "warn"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
 
 [profile.dev.package."*"]
 opt-level = 2

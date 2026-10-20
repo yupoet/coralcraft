@@ -96,13 +96,10 @@ impl EditorEngine {
         match self.active_target {
             ActivePageTarget::Page(idx) => {
                 let page_idx = idx.min(self.document.pages.len().saturating_sub(1));
-                self.document.pages[page_idx]
-                    .layers
-                    .iter()
-                    .rev()
-                    .find(|l| l.role == LayerRole::Normal)
-                    .or_else(|| self.document.pages[page_idx].layers.last())
-                    .map_or(&[], |l| l.objects.as_slice())
+                let Some(page) = self.document.pages.get(page_idx) else {
+                    return &[];
+                };
+                page.layers.iter().rev().find(|l| l.role == LayerRole::Normal).or_else(|| page.layers.last()).map_or(&[], |l| l.objects.as_slice())
             }
             ActivePageTarget::MasterPage => {
                 self.document.master_layers.iter().find(|l| l.role == LayerRole::MasterAllPages).map_or(&[], |l| l.objects.as_slice())
@@ -147,12 +144,15 @@ impl EditorEngine {
                     Some(pos) => pos,
                     None => {
                         let layer_id = LayerId(self.document.allocate_object_id().0);
-                        let page = &mut self.document.pages[page_idx];
-                        page.layers.push(Layer::new_normal(layer_id, "Layer 1"));
-                        page.layers.len() - 1
+                        if let Some(page) = self.document.pages.get_mut(page_idx) {
+                            page.layers.push(Layer::new_normal(layer_id, "Layer 1"));
+                            page.layers.len().saturating_sub(1)
+                        } else {
+                            0
+                        }
                     }
                 };
-                &mut self.document.pages[page_idx].layers[pos]
+                self.document.pages.get_mut(page_idx).and_then(|p| p.layers.get_mut(pos)).unwrap_or(&mut self.fallback_layer)
             }
             ActivePageTarget::MasterPage => {
                 let pos = match self.document.master_layers.iter().position(|l| l.role == LayerRole::MasterAllPages) {
@@ -162,10 +162,10 @@ impl EditorEngine {
                         let mut master = Layer::new_normal(id, "Master Page");
                         master.role = LayerRole::MasterAllPages;
                         self.document.master_layers.push(master);
-                        self.document.master_layers.len() - 1
+                        self.document.master_layers.len().saturating_sub(1)
                     }
                 };
-                &mut self.document.master_layers[pos]
+                self.document.master_layers.get_mut(pos).unwrap_or(&mut self.fallback_layer)
             }
             ActivePageTarget::Desktop => {
                 let pos = match self.document.master_layers.iter().position(|l| l.role == LayerRole::Desktop) {
@@ -173,10 +173,10 @@ impl EditorEngine {
                     None => {
                         let id = LayerId(self.document.allocate_object_id().0);
                         self.document.master_layers.push(Layer::new_desktop(id));
-                        self.document.master_layers.len() - 1
+                        self.document.master_layers.len().saturating_sub(1)
                     }
                 };
-                &mut self.document.master_layers[pos]
+                self.document.master_layers.get_mut(pos).unwrap_or(&mut self.fallback_layer)
             }
         }
     }
@@ -272,7 +272,7 @@ pub(crate) fn count_nodes_recursive(nodes: &[ObjectNode]) -> usize {
 }
 
 pub(crate) fn powerclip_subtree_depth(node: &ObjectNode) -> usize {
-    node.powerclip_children.iter().map(|c| 1 + powerclip_subtree_depth(c)).max().unwrap_or(0)
+    node.powerclip_children.iter().map(|c| powerclip_subtree_depth(c).saturating_add(1)).max().unwrap_or(0)
 }
 
 pub(crate) fn object_to_path(obj: &ObjectNode) -> Option<coralcraft_geom::Path> {

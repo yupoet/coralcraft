@@ -219,7 +219,7 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
     let behind_fill = node.outline.as_ref().is_some_and(|o| o.behind_fill);
 
     if behind_fill && let Some(outline) = &node.outline {
-        emit_eps_stroke(out, &emit_ps_path, outline, world_tf);
+        emit_eps_stroke(out, &emit_ps_path, &world_path, outline, world_tf, page_h);
     }
 
     if let Some(fill) = &node.fill {
@@ -275,7 +275,66 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
                 }
                 out.push_str("grestore\n");
             }
-            FillStyle::Uniform { color } | FillStyle::TwoColorPattern { fg_color: color, .. } => {
+            FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } => {
+                out.push_str("gsave\n% TwoColorPattern\n");
+                emit_ps_path(out);
+                if world_path.fill_rule == FillRule::EvenOdd {
+                    out.push_str("eoclip\nnewpath\n");
+                } else {
+                    out.push_str("clip\nnewpath\n");
+                }
+                let wb = world_path.bounds().unwrap_or(local_bbox);
+                let x0 = wb.x0.get();
+                let y0_ps = page_h - wb.y1.get();
+                let bw = wb.width().max(1e-6);
+                let bh = wb.height().max(1e-6);
+                emit_ps_color(out, bg_color);
+                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(x0), fmt_num(y0_ps), fmt_num(bw), fmt_num(bh));
+                emit_ps_color(out, fg_color);
+                let tile = tile_size_pt.get().max(2.0);
+                let cols = ((bw / tile).ceil() as usize).clamp(1, 32);
+                let rows = ((bh / tile).ceil() as usize).clamp(1, 32);
+                let half = 0.5 * tile;
+                for r in 0..rows {
+                    let ty = y0_ps + (r as f64) * tile;
+                    for c in 0..cols {
+                        let tx = x0 + (c as f64) * tile;
+                        match kind {
+                            coralcraft_doc::PatternKind::Checkerboard | coralcraft_doc::PatternKind::Unknown => {
+                                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(half));
+                                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(tx + half), fmt_num(ty + half), fmt_num(half), fmt_num(half));
+                            }
+                            coralcraft_doc::PatternKind::PolkaDot => {
+                                let q = 0.25 * tile;
+                                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(tx + q), fmt_num(ty + q), fmt_num(half), fmt_num(half));
+                            }
+                            coralcraft_doc::PatternKind::HorizontalStripe => {
+                                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(tx), fmt_num(ty), fmt_num(tile), fmt_num(half));
+                            }
+                            coralcraft_doc::PatternKind::VerticalStripe => {
+                                let _ = writeln!(out, "{} {} {} {} rectfill", fmt_num(tx), fmt_num(ty), fmt_num(half), fmt_num(tile));
+                            }
+                            coralcraft_doc::PatternKind::DiagonalCrosshatch => {
+                                let _ = writeln!(
+                                    out,
+                                    "{} setlinewidth\nnewpath\n{} {} moveto\n{} {} lineto\n{} {} moveto\n{} {} lineto\nstroke",
+                                    fmt_num((0.12 * tile).max(0.24)),
+                                    fmt_num(tx),
+                                    fmt_num(ty),
+                                    fmt_num(tx + tile),
+                                    fmt_num(ty + tile),
+                                    fmt_num(tx),
+                                    fmt_num(ty + tile),
+                                    fmt_num(tx + tile),
+                                    fmt_num(ty)
+                                );
+                            }
+                        }
+                    }
+                }
+                out.push_str("grestore\n");
+            }
+            FillStyle::Uniform { color } => {
                 emit_ps_color(out, color);
                 emit_ps_path(out);
                 if world_path.fill_rule == FillRule::EvenOdd {
@@ -303,13 +362,13 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, page_h
     }
 
     if !behind_fill && let Some(outline) = &node.outline {
-        emit_eps_stroke(out, &emit_ps_path, outline, world_tf);
+        emit_eps_stroke(out, &emit_ps_path, &world_path, outline, world_tf, page_h);
     }
 
     Ok(())
 }
 
-fn emit_eps_stroke(out: &mut String, emit_ps_path: &dyn Fn(&mut String), outline: &OutlineStyle, world_tf: Affine2) {
+fn emit_eps_stroke(out: &mut String, emit_ps_path: &dyn Fn(&mut String), world_path: &Path, outline: &OutlineStyle, world_tf: Affine2, page_h: f64) {
     let mut w = if outline.is_hairline() { 0.24 } else { outline.width_pt.get().max(0.1) };
     if outline.scale_with_object && !outline.is_hairline() {
         let a = world_tf.a.get();
@@ -341,6 +400,23 @@ fn emit_eps_stroke(out: &mut String, emit_ps_path: &dyn Fn(&mut String), outline
     }
     emit_ps_path(out);
     out.push_str("stroke\n");
+
+    if (outline.start_arrow != coralcraft_doc::ArrowheadKind::None || outline.end_arrow != coralcraft_doc::ArrowheadKind::None)
+        && let Ok(polys) = flatten_path(world_path, &FlattenOpts::default())
+        && let Ok(arrow_polys) = crate::build_arrowhead_polylines(&polys, 0.5 * w, outline.start_arrow, outline.end_arrow)
+        && !arrow_polys.is_empty()
+    {
+        out.push_str("% Arrowheads\n");
+        for ap in &arrow_polys {
+            if let Some(&first) = ap.points.first() {
+                let _ = writeln!(out, "newpath\n{} {} moveto", fmt_num(first.x.get()), fmt_num(page_h - first.y.get()));
+                for &pt in ap.points.iter().skip(1) {
+                    let _ = writeln!(out, "{} {} lineto", fmt_num(pt.x.get()), fmt_num(page_h - pt.y.get()));
+                }
+                out.push_str("closepath\nfill\n");
+            }
+        }
+    }
 }
 
 fn emit_ps_color(out: &mut String, color: &Color) {
@@ -454,6 +530,24 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
             let _ = writeln!(out, "0\nVERTEX\n8\n{layer_name}\n10\n{}\n20\n{}", fmt_num(pt.x.get()), fmt_num(page_h - pt.y.get()));
         }
         let _ = writeln!(out, "0\nSEQEND\n8\n{layer_name}");
+    }
+
+    if let Some(outline) = &node.outline
+        && (outline.start_arrow != coralcraft_doc::ArrowheadKind::None || outline.end_arrow != coralcraft_doc::ArrowheadKind::None)
+    {
+        let w = if outline.is_hairline() { 0.24 } else { outline.width_pt.get().max(0.1) };
+        if let Ok(arrow_polys) = crate::build_arrowhead_polylines(&polys, 0.5 * w, outline.start_arrow, outline.end_arrow) {
+            for ap in &arrow_polys {
+                if ap.points.len() < 2 {
+                    continue;
+                }
+                let _ = writeln!(out, "0\nPOLYLINE\n8\n{layer_name}\n66\n1\n70\n1");
+                for &pt in &ap.points {
+                    let _ = writeln!(out, "0\nVERTEX\n8\n{layer_name}\n10\n{}\n20\n{}", fmt_num(pt.x.get()), fmt_num(page_h - pt.y.get()));
+                }
+                let _ = writeln!(out, "0\nSEQEND\n8\n{layer_name}");
+            }
+        }
     }
 
     for pc in &node.powerclip_children {
@@ -658,5 +752,78 @@ mod tests {
         let first_child = children.first().unwrap();
         assert!((first_child.transform.a.get() - 2.0).abs() < 1e-6);
         assert!((first_child.transform.tx.get() - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn import_svg_lines_polylines_polygons_and_stroke_attributes_m70() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300pt" height="200pt">
+  <line x1="10" y1="20" x2="110" y2="80" stroke="#112233" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="bevel" stroke-dasharray="6, 2, 1"/>
+  <polyline points="20,30 60,70 100,30" fill="none" stroke="#445566" stroke-width="2" stroke-linecap="square"/>
+  <polygon points="10,10 50,10 30,40" fill="#abcdef" stroke="#000000" stroke-width="1.25" stroke-linejoin="round" stroke-dasharray="4 2"/>
+</svg>"##;
+        let doc = coralcraft_doc::import_svg(svg).expect("import_svg");
+        let objs = &doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 3, "expected 3 imported SVG objects (line, polyline, polygon)");
+
+        let line_obj = objs.first().unwrap();
+        let line_outl = line_obj.outline.as_ref().expect("line outline");
+        assert!((line_outl.width_pt.get() - 3.5).abs() < 1e-6);
+        assert_eq!(line_outl.cap, LineCap::Round);
+        assert_eq!(line_outl.join, LineJoin::Bevel);
+        assert_eq!(line_outl.dash_pattern.len(), 6, "odd-length SVG stroke-dasharray must duplicate per SVG 1.1");
+
+        let poly_open = objs.get(1).unwrap();
+        let ObjectKind::Path(p_open) = &poly_open.kind else {
+            panic!("expected Path for polyline");
+        };
+        assert!(!p_open.elements.iter().any(|e| matches!(e, PathElement::Close)), "polyline must remain open");
+        assert_eq!(poly_open.outline.as_ref().unwrap().cap, LineCap::Square);
+
+        let poly_closed = objs.get(2).unwrap();
+        let ObjectKind::Path(p_closed) = &poly_closed.kind else {
+            panic!("expected Path for polygon");
+        };
+        assert!(p_closed.elements.iter().any(|e| matches!(e, PathElement::Close)), "polygon must be closed");
+        let closed_outl = poly_closed.outline.as_ref().unwrap();
+        assert!((closed_outl.width_pt.get() - 1.25).abs() < 1e-6);
+        assert_eq!(closed_outl.join, LineJoin::Round);
+        assert_eq!(closed_outl.dash_pattern.len(), 2);
+    }
+
+    #[test]
+    fn export_eps_two_color_pattern_and_eps_dxf_arrowhead_markers_m70() {
+        let mut doc = Document::new_a4_portrait();
+        let pat_fill = FillStyle::TwoColorPattern {
+            kind: coralcraft_doc::PatternKind::Checkerboard,
+            fg_color: Color::rgb8(200, 0, 0),
+            bg_color: Color::rgb8(240, 240, 240),
+            tile_size_pt: F64::new(20.0).unwrap(),
+        };
+        let rect_node = ObjectNode::new(
+            ObjectId(40),
+            Some("PatternRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 60.0, 60.0).unwrap())),
+            Some(pat_fill),
+            None,
+        );
+        let mut arrow_path = Path::new();
+        arrow_path.move_to(Point::new(50.0, 150.0).unwrap()).unwrap();
+        arrow_path.line_to(Point::new(180.0, 150.0).unwrap()).unwrap();
+        let mut arrow_outl = OutlineStyle::with_width(Color::rgb8(0, 100, 200), F64::new(2.0).unwrap());
+        arrow_outl.start_arrow = coralcraft_doc::ArrowheadKind::Circle;
+        arrow_outl.end_arrow = coralcraft_doc::ArrowheadKind::Triangle;
+        let line_node = ObjectNode::new(ObjectId(41), Some("ArrowLine".to_owned()), ObjectKind::Path(arrow_path), None, Some(arrow_outl));
+
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+        objs.push(rect_node);
+        objs.push(line_node);
+
+        let eps = export_eps(&doc, 0).expect("export_eps");
+        assert!(eps.contains("% TwoColorPattern"), "EPS should emit TwoColorPattern clipped tiles: {eps}");
+        assert!(eps.contains("% Arrowheads"), "EPS should emit arrowhead marker polygons: {eps}");
+
+        let dxf = export_dxf(&doc, 0).expect("export_dxf");
+        let polyline_count = dxf.matches("\nPOLYLINE\n").count();
+        assert!(polyline_count >= 4, "DXF should emit main path plus start/end arrowhead POLYLINE entities (got {polyline_count})");
     }
 }

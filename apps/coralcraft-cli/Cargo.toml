@@ -20,15 +20,5 @@ coralcraft-ui-egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-todo = "deny"
-unimplemented = "deny"
-dbg_macro = "deny"
-indexing_slicing = "deny"
-arithmetic_side_effects = "deny"
+[lints]
+workspace = true

@@ -252,9 +252,14 @@
     - `coralcraft-render` & `coralcraft-doc`: Rendered `FillStyle::Fountain` in `export_eps` using clipped PostScript shading bands (`gsave`/`clip`/`eoclip`/`rectfill`/`grestore`), and imported `<g>` / `</g>` group hierarchy and `transform` (`matrix`, `translate`, `scale`) in `import_svg`.
     - `coralcraft-cdr`: Encoded and decoded CMX1 `rott` (`CMX_LINE_STYLE_DESCRIPTION_SECTION = 16`, cap/join/behind_fill/scale_with_object) and `rdot` (`CMX_DOT_DASH_DESCRIPTION_SECTION = 17`, dash-pattern multipliers) in `write_cmx1` and `parse_cmx_commands_into_page`.
     - `coralcraft-ui-egui`: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` across `coralcraft-ui-egui` (11 of 12 workspace crates now enforced).
+70. **M70 SVG `<line>`/`<polyline>`/`<polygon>` & Stroke Attribute Import, EPS `TwoColorPattern` Geometric Tile Rendering & EPS/DXF Arrowhead Markers, and Workspace-Wide (`12/12` Crates) Strict Lints**:
+    - `coralcraft-doc`: Imported `<line>`, `<polyline>` (open path), `<polygon>` (closed path), `stroke-width`, `stroke-linecap`, `stroke-linejoin`, and `stroke-dasharray` (including SVG 1.1 odd-length dash duplication) in `import_svg`.
+    - `coralcraft-render`: Rendered `FillStyle::TwoColorPattern` in `export_eps` as clipped PostScript geometric pattern tiles (`Checkerboard`, `PolkaDot`, `HorizontalStripe`, `VerticalStripe`, `DiagonalCrosshatch`), and emitted `start_arrow` / `end_arrow` (`ArrowheadKind`) marker polylines in `export_eps` and `export_dxf`.
+    - `coralcraft-engine` & Workspace Root: Enforced `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"` in `coralcraft-engine` and `[workspace.lints.clippy]` (**all 12 of 12 workspace crates now enforced**).
 
 ## Changelog
 
+- 2026-10-21: M70 delivered (SVG `<line>`/`<polyline>`/`<polygon>` & stroke attribute import in `import_svg`, EPS `TwoColorPattern` clipped geometric tile rendering & EPS/DXF arrowhead marker emission, and workspace-wide `12/12` crate enforcement of `indexing_slicing = "deny"` and `arithmetic_side_effects = "deny"`).
 - 2026-10-21: M69 delivered (EPS Fountain Fill clipped PostScript `rectfill` shading bands, SVG `<g>` group hierarchy & `transform` import, CMX1 `rott` & `rdot` line-style/dash-array round-trip, and strict clippy lints in `coralcraft-ui-egui`).
 - 2026-10-21: M68 delivered (EPS native PostScript text `findfont`/`scalefont`/`setfont`/`show`, DXF `TEXT` entity export & import, CDR7 `outl` `dash_pattern` & `ArrowheadKind` round-trip, and strict clippy lints in `coralcraft-mcp`).
 - 2026-10-21: M67 delivered (EPS PowerClip `clip`/`eoclip`, `behind_fill`, `scale_with_object` & `setlinecap`/`setlinejoin`, SVG/EPS/DXF output budget guards, CMX1 `rclr`/`rpen`/`rotl` & `RenderingAttr` style parsing in `coralcraft-cdr`, and strict clippy lints in `apps/coralcraft`).

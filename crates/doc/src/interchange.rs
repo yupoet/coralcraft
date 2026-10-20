@@ -5,7 +5,7 @@ use coralcraft_color::Color;
 use coralcraft_geom::{Affine2, EllipseSpec, F64, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, ObjectKind, ObjectNode};
-use crate::style::{FillStyle, OutlineStyle};
+use crate::style::{FillStyle, LineCap, LineJoin, OutlineStyle};
 
 fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
@@ -126,6 +126,37 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline);
+                node.transform = parse_svg_transform(tag_slice);
+                push_svg_node(&mut doc, &mut group_stack, node);
+            }
+        } else if tag_slice.starts_with("<line ") || tag_slice.starts_with("<line\t") {
+            let x1 = parse_attr_f64(tag_slice, "x1").unwrap_or(0.0);
+            let y1 = parse_attr_f64(tag_slice, "y1").unwrap_or(0.0);
+            let x2 = parse_attr_f64(tag_slice, "x2").unwrap_or(0.0);
+            let y2 = parse_attr_f64(tag_slice, "y2").unwrap_or(0.0);
+            if let (Ok(p1), Ok(p2)) = (Point::new(x1, y1), Point::new(x2, y2)) {
+                let mut path = Path::new();
+                if path.move_to(p1).is_ok() && path.line_to(p2).is_ok() {
+                    let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                    let obj_id = doc.allocate_object_id();
+                    let mut node = ObjectNode::new(obj_id, Some("SVG Line".to_owned()), ObjectKind::Path(path), fill, outline);
+                    node.transform = parse_svg_transform(tag_slice);
+                    push_svg_node(&mut doc, &mut group_stack, node);
+                }
+            }
+        } else if tag_slice.starts_with("<polyline ")
+            || tag_slice.starts_with("<polyline\t")
+            || tag_slice.starts_with("<polygon ")
+            || tag_slice.starts_with("<polygon\t")
+        {
+            let is_polygon = tag_slice.starts_with("<polygon");
+            if let Some(pts_str) = extract_attr_str(tag_slice, "points")
+                && let Some(path) = parse_svg_points_path(pts_str, is_polygon)
+            {
+                let (fill, outline) = parse_svg_style_attrs(tag_slice);
+                let obj_id = doc.allocate_object_id();
+                let label = if is_polygon { "SVG Polygon" } else { "SVG Polyline" };
+                let mut node = ObjectNode::new(obj_id, Some(label.to_owned()), ObjectKind::Path(path), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
@@ -299,6 +330,28 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     Ok(path)
 }
 
+fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
+    let coords: Vec<f64> =
+        pts_str.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+    let (pairs, rem) = coords.as_chunks::<2>();
+    if !rem.is_empty() || pairs.len() < 2 {
+        return None;
+    }
+    let mut path = Path::new();
+    for (idx, &[x, y]) in pairs.iter().enumerate() {
+        let pt = Point::new(x, y).ok()?;
+        if idx == 0 {
+            path.move_to(pt).ok()?;
+        } else {
+            path.line_to(pt).ok()?;
+        }
+    }
+    if close {
+        path.close().ok()?;
+    }
+    Some(path)
+}
+
 fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineStyle>) {
     let fill = match extract_attr_str(tag_slice, "fill") {
         Some("none") | None => None,
@@ -308,7 +361,48 @@ fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineS
         Some("none") | None => None,
         Some(hex) => parse_hex_color(hex).map(OutlineStyle::hairline),
     };
-    let outline = if fill.is_none() && outline.is_none() { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
+    let mut outline = if fill.is_none() && outline.is_none() { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
+    if let Some(st) = &mut outline {
+        if let Some(w) = parse_attr_f64(tag_slice, "stroke-width")
+            && w > 0.0
+            && let Ok(w_f64) = F64::new(w)
+        {
+            st.width_pt = w_f64;
+        }
+        if let Some(cap_str) = extract_attr_str(tag_slice, "stroke-linecap") {
+            st.cap = match cap_str.trim() {
+                "round" => LineCap::Round,
+                "square" => LineCap::Square,
+                _ => LineCap::Butt,
+            };
+        }
+        if let Some(join_str) = extract_attr_str(tag_slice, "stroke-linejoin") {
+            st.join = match join_str.trim() {
+                "round" => LineJoin::Round,
+                "bevel" => LineJoin::Bevel,
+                _ => LineJoin::Miter,
+            };
+        }
+        if let Some(dash_str) = extract_attr_str(tag_slice, "stroke-dasharray") {
+            let trimmed = dash_str.trim();
+            if trimmed != "none" && !trimmed.is_empty() {
+                let mut dashes: Vec<F64> = trimmed
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|t| !t.is_empty())
+                    .filter_map(|t| t.trim_end_matches("pt").trim_end_matches("px").parse::<f64>().ok())
+                    .filter(|&v| v > 0.0)
+                    .filter_map(|v| F64::new(v).ok())
+                    .collect();
+                if !dashes.is_empty() && !dashes.len().is_multiple_of(2) {
+                    let dup = dashes.clone();
+                    dashes.extend(dup);
+                }
+                if dashes.len() <= 32 {
+                    st.dash_pattern = dashes;
+                }
+            }
+        }
+    }
     (fill, outline)
 }
 

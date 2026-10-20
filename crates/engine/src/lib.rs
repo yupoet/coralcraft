@@ -49,6 +49,7 @@ pub struct EditorEngine {
     pub snap_to_page: bool,
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
+    pub(crate) fallback_layer: Layer,
 }
 
 impl Default for EditorEngine {
@@ -77,6 +78,7 @@ impl EditorEngine {
             snap_to_page: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            fallback_layer: Layer::new_normal(LayerId(0), "Fallback"),
         }
     }
 
@@ -111,8 +113,20 @@ impl EditorEngine {
     /// Returns a reference to the currently viewed [`Page`].
     #[must_use]
     pub fn current_page(&self) -> &Page {
+        static FALLBACK_PAGE: std::sync::OnceLock<Page> = std::sync::OnceLock::new();
         let idx = self.current_page_index();
-        &self.document.pages[idx]
+        self.document.pages.get(idx).unwrap_or_else(|| {
+            FALLBACK_PAGE.get_or_init(|| Page {
+                id: PageId(1),
+                name: "Page 1".to_owned(),
+                size: Size { width: F64::ONE, height: F64::ONE },
+                bleed: F64::ZERO,
+                background: Some(FillStyle::uniform(Color::WHITE)),
+                layers: Vec::new(),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            })
+        })
     }
 
     /// Switches the active tab in the bottom Page Navigator Bar (`Page 1..N`, `Master Page`, `Desktop`).
@@ -302,7 +316,13 @@ impl EditorEngine {
                 let (c0, c1) = self.current_target_objects().iter().find(|o| self.selection.contains(&o.id)).map_or(
                     (Color::rgb8(0, 120, 215), Color::WHITE),
                     |o| match &o.fill {
-                        Some(FillStyle::Fountain { stops, .. }) if stops.len() >= 2 => (stops[0].color.clone(), stops[stops.len() - 1].color.clone()),
+                        Some(FillStyle::Fountain { stops, .. }) if stops.len() >= 2 => {
+                            if let (Some(first), Some(last)) = (stops.first(), stops.last()) {
+                                (first.color.clone(), last.color.clone())
+                            } else {
+                                (Color::rgb8(0, 120, 215), Color::WHITE)
+                            }
+                        }
                         Some(FillStyle::Uniform { color }) => (color.clone(), Color::WHITE),
                         _ => (Color::rgb8(0, 120, 215), Color::WHITE),
                     },
@@ -971,7 +991,7 @@ impl EditorEngine {
                 let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
                     !o.locked
                         && object_to_path(o).is_some_and(|p| {
-                            element_indices.iter().all(|&idx| idx < p.elements.len() && !matches!(p.elements[idx], PathElement::Close))
+                            element_indices.iter().all(|&idx| p.elements.get(idx).is_some_and(|el| !matches!(el, PathElement::Close)))
                         })
                 });
                 if !valid {
@@ -1193,7 +1213,7 @@ impl EditorEngine {
                     return false;
                 }
                 for c in candidates {
-                    if powerclip_subtree_depth(container).max(powerclip_subtree_depth(c) + 1) > 3 {
+                    if powerclip_subtree_depth(container).max(powerclip_subtree_depth(c).saturating_add(1)) > 3 {
                         return false;
                     }
                 }
@@ -1351,7 +1371,7 @@ impl EditorEngine {
                 let template_size = self.current_page().size;
                 let page_id = PageId(self.document.allocate_object_id().0);
                 let layer_id = LayerId(self.document.allocate_object_id().0);
-                let new_num = self.document.pages.len() + 1;
+                let new_num = self.document.pages.len().saturating_add(1);
                 let new_page = Page {
                     id: page_id,
                     name: format!("Page {new_num}"),
@@ -1362,14 +1382,16 @@ impl EditorEngine {
                     residual: Residual::default(),
                     extra: BTreeMap::new(),
                 };
-                let new_idx = (insert_after + 1).min(self.document.pages.len());
+                let new_idx = insert_after.saturating_add(1).min(self.document.pages.len());
                 self.document.pages.insert(new_idx, new_page);
                 self.active_target = ActivePageTarget::Page(new_idx);
                 self.selection.clear();
             }
             EngineCommand::DuplicatePage { page_index } => {
                 let idx = page_index.min(self.document.pages.len().saturating_sub(1));
-                let mut cloned = self.document.pages[idx].clone();
+                let Some(mut cloned) = self.document.pages.get(idx).cloned() else {
+                    return false;
+                };
                 cloned.id = PageId(self.document.allocate_object_id().0);
                 cloned.name = format!("{} Copy", cloned.name);
                 for layer in &mut cloned.layers {
@@ -1378,7 +1400,7 @@ impl EditorEngine {
                         reallocate_object_ids_recursive(obj, &mut self.document);
                     }
                 }
-                let new_idx = idx + 1;
+                let new_idx = idx.saturating_add(1).min(self.document.pages.len());
                 self.document.pages.insert(new_idx, cloned);
                 self.active_target = ActivePageTarget::Page(new_idx);
                 self.selection.clear();
@@ -1391,7 +1413,7 @@ impl EditorEngine {
             EngineCommand::DeletePage { page_index } => {
                 if self.document.pages.len() > 1 && page_index < self.document.pages.len() {
                     self.document.pages.remove(page_index);
-                    let clamped = page_index.min(self.document.pages.len() - 1);
+                    let clamped = page_index.min(self.document.pages.len().saturating_sub(1));
                     self.active_target = ActivePageTarget::Page(clamped);
                     self.selection.clear();
                 }
@@ -1485,11 +1507,12 @@ impl EditorEngine {
                     ZOrderOp::ForwardOne => {
                         let len = layer.objects.len();
                         if len >= 2 {
-                            for i in (0..len - 1).rev() {
-                                let is_sel = !layer.objects[i].locked && sel.contains(&layer.objects[i].id);
-                                let next_sel = sel.contains(&layer.objects[i + 1].id);
+                            for i in (0..len.saturating_sub(1)).rev() {
+                                let next_idx = i.saturating_add(1);
+                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
+                                let next_sel = layer.objects.get(next_idx).is_some_and(|o| sel.contains(&o.id));
                                 if is_sel && !next_sel {
-                                    layer.objects.swap(i, i + 1);
+                                    layer.objects.swap(i, next_idx);
                                 }
                             }
                         }
@@ -1498,10 +1521,11 @@ impl EditorEngine {
                         let len = layer.objects.len();
                         if len >= 2 {
                             for i in 1..len {
-                                let is_sel = !layer.objects[i].locked && sel.contains(&layer.objects[i].id);
-                                let prev_sel = sel.contains(&layer.objects[i - 1].id);
+                                let prev_idx = i.saturating_sub(1);
+                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
+                                let prev_sel = layer.objects.get(prev_idx).is_some_and(|o| sel.contains(&o.id));
                                 if is_sel && !prev_sel {
-                                    layer.objects.swap(i - 1, i);
+                                    layer.objects.swap(prev_idx, i);
                                 }
                             }
                         }
@@ -1573,73 +1597,77 @@ impl EditorEngine {
                     } else {
                         items.sort_by_key(|a| a.1.y0);
                     }
+                    let (Some(&(_, first_b)), Some(&(_, last_b))) = (items.first(), items.last()) else {
+                        return false;
+                    };
                     let mut deltas = BTreeMap::new();
-                    let denom = (n - 1) as f64;
+                    let n_minus_1 = n.saturating_sub(1);
+                    let denom = n_minus_1 as f64;
                     match mode {
                         DistributeMode::Left => {
-                            let start = items[0].1.x0.get();
-                            let span = items[n - 1].1.x0.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            let start = first_b.x0.get();
+                            let span = last_b.x0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (start + (k as f64 / denom) * span - b.x0.get(), 0.0));
                             }
                         }
                         DistributeMode::CenterHorizontal => {
-                            let start = (items[0].1.x0.get() + items[0].1.x1.get()) * 0.5;
-                            let end = (items[n - 1].1.x0.get() + items[n - 1].1.x1.get()) * 0.5;
+                            let start = (first_b.x0.get() + first_b.x1.get()) * 0.5;
+                            let end = (last_b.x0.get() + last_b.x1.get()) * 0.5;
                             let span = end - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 let cur = (b.x0.get() + b.x1.get()) * 0.5;
                                 deltas.insert(*id, (start + (k as f64 / denom) * span - cur, 0.0));
                             }
                         }
                         DistributeMode::Right => {
-                            let start = items[0].1.x1.get();
-                            let span = items[n - 1].1.x1.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            let start = first_b.x1.get();
+                            let span = last_b.x1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (start + (k as f64 / denom) * span - b.x1.get(), 0.0));
                             }
                         }
                         DistributeMode::SpacingHorizontal => {
-                            let min_x = items[0].1.x0.get();
-                            let max_x = items[n - 1].1.x1.get();
+                            let min_x = first_b.x0.get();
+                            let max_x = last_b.x1.get();
                             let total_w: f64 = items.iter().map(|(_, b)| b.width()).sum();
                             let gap = (max_x - min_x - total_w) / denom;
-                            let mut cur_x = min_x + items[0].1.width() + gap;
-                            for (id, b) in items.iter().take(n - 1).skip(1) {
+                            let mut cur_x = min_x + first_b.width() + gap;
+                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
                                 cur_x += b.width() + gap;
                             }
                         }
                         DistributeMode::Top => {
-                            let start = items[0].1.y0.get();
-                            let span = items[n - 1].1.y0.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            let start = first_b.y0.get();
+                            let span = last_b.y0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y0.get()));
                             }
                         }
                         DistributeMode::CenterVertical => {
-                            let start = (items[0].1.y0.get() + items[0].1.y1.get()) * 0.5;
-                            let end = (items[n - 1].1.y0.get() + items[n - 1].1.y1.get()) * 0.5;
+                            let start = (first_b.y0.get() + first_b.y1.get()) * 0.5;
+                            let end = (last_b.y0.get() + last_b.y1.get()) * 0.5;
                             let span = end - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 let cur = (b.y0.get() + b.y1.get()) * 0.5;
                                 deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - cur));
                             }
                         }
                         DistributeMode::Bottom => {
-                            let start = items[0].1.y1.get();
-                            let span = items[n - 1].1.y1.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                            let start = first_b.y1.get();
+                            let span = last_b.y1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y1.get()));
                             }
                         }
                         DistributeMode::SpacingVertical => {
-                            let min_y = items[0].1.y0.get();
-                            let max_y = items[n - 1].1.y1.get();
+                            let min_y = first_b.y0.get();
+                            let max_y = last_b.y1.get();
                             let total_h: f64 = items.iter().map(|(_, b)| b.height()).sum();
                             let gap = (max_y - min_y - total_h) / denom;
-                            let mut cur_y = min_y + items[0].1.height() + gap;
-                            for (id, b) in items.iter().take(n - 1).skip(1) {
+                            let mut cur_y = min_y + first_b.height() + gap;
+                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
                                 deltas.insert(*id, (0.0, cur_y - b.y0.get()));
                                 cur_y += b.height() + gap;
                             }
@@ -1743,18 +1771,22 @@ impl EditorEngine {
                     return false;
                 }
 
-                let first_idx = sel_indices[0];
+                let Some(&first_idx) = sel_indices.first() else {
+                    return false;
+                };
                 let anchor_idx = *sel_indices.last().unwrap_or(&first_idx);
-                let anchor_style_fill = layer.objects[anchor_idx].fill.clone();
-                let anchor_style_outline = layer.objects[anchor_idx].outline.clone();
+                let Some(anchor_obj) = layer.objects.get(anchor_idx) else {
+                    return false;
+                };
+                let anchor_style_fill = anchor_obj.fill.clone();
+                let anchor_style_outline = anchor_obj.outline.clone();
 
-                let mut combined_path = match object_to_path(&layer.objects[first_idx]) {
-                    Some(p) => p,
-                    None => return false,
+                let Some(mut combined_path) = layer.objects.get(first_idx).and_then(object_to_path) else {
+                    return false;
                 };
 
-                for &idx in &sel_indices[1..] {
-                    if let Some(p) = object_to_path(&layer.objects[idx])
+                for &idx in sel_indices.iter().skip(1) {
+                    if let Some(p) = layer.objects.get(idx).and_then(object_to_path)
                         && let Ok(merged) = boolean_paths(&combined_path, &p, op)
                     {
                         combined_path = merged;
@@ -1771,7 +1803,9 @@ impl EditorEngine {
 
                 match op {
                     BooleanOp::Trim => {
-                        layer.objects[anchor_idx] = new_node;
+                        if let Some(slot) = layer.objects.get_mut(anchor_idx) {
+                            *slot = new_node;
+                        }
                         self.selection = vec![new_id];
                     }
                     _ => {
@@ -2032,7 +2066,7 @@ impl EditorEngine {
                 let sel = self.selection.clone();
                 let mut next_id_val = self.document.next_id;
                 let layer = self.target_layer_mut();
-                let mut new_objects = Vec::with_capacity(layer.objects.len() + 4);
+                let mut new_objects = Vec::with_capacity(layer.objects.len().saturating_add(4));
                 let mut new_sel = Vec::new();
                 for obj in layer.objects.drain(..) {
                     if !obj.locked
@@ -2050,10 +2084,10 @@ impl EditorEngine {
                         if subpaths.len() >= 2 {
                             for (k, elems) in subpaths.into_iter().enumerate() {
                                 let part_id = ObjectId(next_id_val);
-                                next_id_val += 1;
+                                next_id_val = next_id_val.saturating_add(1);
                                 let mut part_node = obj.clone();
                                 part_node.id = part_id;
-                                part_node.name = Some(format!("Subpath {}", k + 1));
+                                part_node.name = Some(format!("Subpath {}", k.saturating_add(1)));
                                 part_node.kind = ObjectKind::Path(Path { elements: elems, fill_rule: FillRule::NonZero });
                                 new_objects.push(part_node);
                                 new_sel.push(part_id);
@@ -3062,7 +3096,9 @@ impl EditorEngine {
             }
             EngineCommand::AddGuideline { horizontal, position_pt } => {
                 let page_idx = self.current_page_index();
-                let page_size = self.document.pages[page_idx].size;
+                let Some(page_size) = self.document.pages.get(page_idx).map(|p| p.size) else {
+                    return false;
+                };
                 let pos = position_pt.get();
                 let (p0, p1, label) = if horizontal {
                     (Point::new(0.0, pos), Point::new(page_size.width.get(), pos), format!("Horizontal Guide ({pos:.1} pt)"))
@@ -3078,34 +3114,42 @@ impl EditorEngine {
                         outline.dash_pattern = vec![d1, d2];
                     }
                     let node = ObjectNode::new(obj_id, Some(label), ObjectKind::Path(path), None, Some(outline));
-                    if let Some(guide_layer) = self.document.pages[page_idx].layers.iter_mut().find(|l| l.role == LayerRole::Guides) {
-                        guide_layer.objects.push(node);
+                    let has_guide_layer = self.document.pages.get(page_idx).is_some_and(|p| p.layers.iter().any(|l| l.role == LayerRole::Guides));
+                    if has_guide_layer {
+                        if let Some(guide_layer) =
+                            self.document.pages.get_mut(page_idx).and_then(|p| p.layers.iter_mut().find(|l| l.role == LayerRole::Guides))
+                        {
+                            guide_layer.objects.push(node);
+                        }
                     } else {
                         let layer_id = LayerId(self.document.allocate_object_id().0);
-                        let page = &mut self.document.pages[page_idx];
-                        page.layers.push(Layer {
-                            id: layer_id,
-                            name: "Guides".to_owned(),
-                            role: LayerRole::Guides,
-                            visible: true,
-                            printable: false,
-                            locked: false,
-                            master_in_front: true,
-                            opacity: F64::ONE,
-                            objects: vec![node],
-                            residual: Residual::default(),
-                            extra: BTreeMap::new(),
-                        });
+                        if let Some(page) = self.document.pages.get_mut(page_idx) {
+                            page.layers.push(Layer {
+                                id: layer_id,
+                                name: "Guides".to_owned(),
+                                role: LayerRole::Guides,
+                                visible: true,
+                                printable: false,
+                                locked: false,
+                                master_in_front: true,
+                                opacity: F64::ONE,
+                                objects: vec![node],
+                                residual: Residual::default(),
+                                extra: BTreeMap::new(),
+                            });
+                        }
                     }
                 }
             }
             EngineCommand::ClearGuidelines => {
                 let page_idx = self.current_page_index();
                 let mut removed_ids = Vec::new();
-                for layer in &mut self.document.pages[page_idx].layers {
-                    if layer.role == LayerRole::Guides {
-                        for obj in layer.objects.drain(..) {
-                            removed_ids.push(obj.id);
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    for layer in &mut page.layers {
+                        if layer.role == LayerRole::Guides {
+                            for obj in layer.objects.drain(..) {
+                                removed_ids.push(obj.id);
+                            }
                         }
                     }
                 }
@@ -3169,9 +3213,10 @@ impl EditorEngine {
                 let page_idx = self.current_page_index();
                 if let Ok(sz) = Size::new(new_w, new_h)
                     && let Ok(tf) = Affine2::translation(dx, dy)
+                    && let Some(page) = self.document.pages.get_mut(page_idx)
                 {
-                    self.document.pages[page_idx].size = sz;
-                    for layer in &mut self.document.pages[page_idx].layers {
+                    page.size = sz;
+                    for layer in &mut page.layers {
                         if !layer.locked {
                             for obj in &mut layer.objects {
                                 if !obj.locked
@@ -3241,24 +3286,25 @@ impl EditorEngine {
                         let Ok(new_end) = Point::new(nx, ny) else {
                             continue;
                         };
-                        match &mut path.elements[idx] {
-                            PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
-                            PathElement::QuadTo { ctrl, end } => {
-                                if let Ok(nc) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
-                                    *ctrl = nc;
+                        if let Some(el) = path.elements.get_mut(idx) {
+                            match el {
+                                PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
+                                PathElement::QuadTo { ctrl, end } => {
+                                    if let Ok(nc) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
+                                        *ctrl = nc;
+                                    }
+                                    *end = new_end;
                                 }
-                                *end = new_end;
-                            }
-                            PathElement::CubicTo { c2, end, .. } => {
-                                if let Ok(nc2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
-                                    *c2 = nc2;
+                                PathElement::CubicTo { c2, end, .. } => {
+                                    if let Ok(nc2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
+                                        *c2 = nc2;
+                                    }
+                                    *end = new_end;
                                 }
-                                *end = new_end;
+                                PathElement::Close => {}
                             }
-                            PathElement::Close => {}
                         }
-                        if idx + 1 < path.elements.len()
-                            && let PathElement::CubicTo { c1, .. } = &mut path.elements[idx + 1]
+                        if let Some(PathElement::CubicTo { c1, .. }) = path.elements.get_mut(idx.saturating_add(1))
                             && let Ok(nc1) = Point::new(c1.x.get() + dx, c1.y.get() + dy)
                         {
                             *c1 = nc1;
@@ -3316,9 +3362,9 @@ impl EditorEngine {
                 let convert_color = |c: &Color| -> Color {
                     let [mut r, mut g, mut b] = c.to_srgb8();
                     if invert {
-                        r = 255 - r;
-                        g = 255 - g;
-                        b = 255 - b;
+                        r = 255u8.saturating_sub(r);
+                        g = 255u8.saturating_sub(g);
+                        b = 255u8.saturating_sub(b);
                     }
                     if grayscale {
                         let lum = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round().clamp(0.0, 255.0) as u8;
@@ -3368,12 +3414,9 @@ impl EditorEngine {
             }
             EngineCommand::SelectByColor { color, match_fill, match_outline, tolerance_u8 } => {
                 let [tr, tg, tb] = color.to_srgb8();
-                let tol = i32::from(tolerance_u8);
                 let matches_c = |c: &Color| -> bool {
                     let [r, g, b] = c.to_srgb8();
-                    (i32::from(r) - i32::from(tr)).abs() <= tol
-                        && (i32::from(g) - i32::from(tg)).abs() <= tol
-                        && (i32::from(b) - i32::from(tb)).abs() <= tol
+                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
                 };
                 self.selection = self
                     .current_target_objects()
@@ -3466,15 +3509,18 @@ impl EditorEngine {
                     } else {
                         items.sort_by_key(|a| a.1.y0);
                     }
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
                     let mut deltas = BTreeMap::new();
                     if horizontal {
-                        let mut cur_x = items[0].1.x1.get() + gap;
+                        let mut cur_x = first_b.x1.get() + gap;
                         for (id, b) in items.iter().skip(1) {
                             deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
                             cur_x += b.width() + gap;
                         }
                     } else {
-                        let mut cur_y = items[0].1.y1.get() + gap;
+                        let mut cur_y = first_b.y1.get() + gap;
                         for (id, b) in items.iter().skip(1) {
                             deltas.insert(*id, (0.0, cur_y - b.y0.get()));
                             cur_y += b.height() + gap;
@@ -3495,21 +3541,21 @@ impl EditorEngine {
                 let sel = self.selection.clone();
                 let candidates: Vec<ObjectNode> =
                     self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                if candidates.len() >= 2
-                    && let Some(pa) = object_to_path(&candidates[0]).and_then(|p| p.transform(candidates[0].transform).ok())
-                    && let Some(pb) = object_to_path(&candidates[1]).and_then(|p| p.transform(candidates[1].transform).ok())
+                if let [cand0, cand1, ..] = candidates.as_slice()
+                    && let Some(pa) = object_to_path(cand0).and_then(|p| p.transform(cand0.transform).ok())
+                    && let Some(pb) = object_to_path(cand1).and_then(|p| p.transform(cand1.transform).ok())
                     && let Ok(regions) = divide_overlapping_paths(&pa, &pb)
                 {
-                    let id_a = candidates[0].id;
-                    let id_b = candidates[1].id;
+                    let id_a = cand0.id;
+                    let id_b = cand1.id;
                     let mut new_ids = Vec::with_capacity(regions.len());
                     let mut new_nodes = Vec::with_capacity(regions.len());
                     for (idx, reg) in regions.into_iter().enumerate() {
                         let new_id = self.document.allocate_object_id();
-                        let src = if idx == 2 { &candidates[1] } else { &candidates[0] };
+                        let src = if idx == 2 { cand1 } else { cand0 };
                         let node = ObjectNode::new(
                             new_id,
-                            Some(format!("Divided Region {}", idx + 1)),
+                            Some(format!("Divided Region {}", idx.saturating_add(1))),
                             ObjectKind::Path(reg),
                             src.fill.clone(),
                             src.outline.clone(),
@@ -3537,7 +3583,7 @@ impl EditorEngine {
                     let n = targets.len();
                     let mut transforms = BTreeMap::new();
                     for (idx, (id, cur_c)) in targets.into_iter().enumerate() {
-                        let u = if n <= 1 { 0.5 } else { (idx as f64) / ((n - 1) as f64) };
+                        let u = if n <= 1 { 0.5 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
                         if let Some(sample) = lut.sample_normalized(u) {
                             let dx = sample.point.x.get() - cur_c.x.get();
                             let dy = sample.point.y.get() - cur_c.y.get();
@@ -3567,12 +3613,9 @@ impl EditorEngine {
             }
             EngineCommand::RecolorArtwork { from_color, to_color, tolerance_u8, selection_only } => {
                 let [tr, tg, tb] = from_color.to_srgb8();
-                let tol = i32::from(tolerance_u8);
                 let matches_c = |c: &Color| -> bool {
                     let [r, g, b] = c.to_srgb8();
-                    (i32::from(r) - i32::from(tr)).abs() <= tol
-                        && (i32::from(g) - i32::from(tg)).abs() <= tol
-                        && (i32::from(b) - i32::from(tb)).abs() <= tol
+                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
                 };
                 let recolor_node = |obj: &mut ObjectNode| {
                     if obj.locked {
@@ -3649,7 +3692,7 @@ impl EditorEngine {
                     });
                     let mut new_ids = Vec::with_capacity(n_steps as usize);
                     for k in 1..=n_steps {
-                        let t = f64::from(k) / f64::from(n_steps + 1);
+                        let t = f64::from(k) / f64::from(n_steps.saturating_add(1));
                         if let Ok(morphed) = morph_paths_linear(&pa, &pb, t, sample_count) {
                             let new_id = self.document.allocate_object_id();
                             let fill = if let (Some([r0, g0, b0]), Some([r1, g1, b1])) = (ca, cb) {
@@ -3691,7 +3734,7 @@ impl EditorEngine {
                 let mut cur_y = origin.y.get();
                 let mut row_h = 0.0_f64;
                 for (idx, (id, b)) in items.into_iter().enumerate() {
-                    if idx > 0 && idx % c_count == 0 {
+                    if idx > 0 && idx.checked_rem(c_count) == Some(0) {
                         cur_x = origin.x.get();
                         cur_y += row_h + gap;
                         row_h = 0.0;
@@ -3715,7 +3758,8 @@ impl EditorEngine {
                 let candidates: Vec<ObjectNode> =
                     self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
                 if candidates.len() >= 2
-                    && let Some(first_path) = object_to_path(&candidates[0]).and_then(|p| p.transform(candidates[0].transform).ok())
+                    && let Some(first_cand) = candidates.first()
+                    && let Some(first_path) = object_to_path(first_cand).and_then(|p| p.transform(first_cand.transform).ok())
                 {
                     let mut acc = first_path;
                     for cand in candidates.iter().skip(1) {
@@ -3725,7 +3769,7 @@ impl EditorEngine {
                             acc = excluded;
                         }
                     }
-                    let anchor = candidates.last().unwrap_or(&candidates[0]);
+                    let anchor = candidates.last().unwrap_or(first_cand);
                     let new_id = self.document.allocate_object_id();
                     let new_node =
                         ObjectNode::new(new_id, Some("Excluded Path".to_owned()), ObjectKind::Path(acc), anchor.fill.clone(), anchor.outline.clone());
@@ -3752,13 +3796,16 @@ impl EditorEngine {
                 for _ in 0..iters {
                     let mut any_moved = false;
                     for i in 0..n {
-                        for j in (i + 1)..n {
-                            let cxi = boxes[i].1 + 0.5 * boxes[i].3;
-                            let cyi = boxes[i].2 + 0.5 * boxes[i].4;
-                            let cxj = boxes[j].1 + 0.5 * boxes[j].3;
-                            let cyj = boxes[j].2 + 0.5 * boxes[j].4;
-                            let req_dx = 0.5 * (boxes[i].3 + boxes[j].3) + gap;
-                            let req_dy = 0.5 * (boxes[i].4 + boxes[j].4) + gap;
+                        for j in i.saturating_add(1)..n {
+                            let (Some(&(_, xi, yi, wi, hi, _, _)), Some(&(_, xj, yj, wj, hj, _, _))) = (boxes.get(i), boxes.get(j)) else {
+                                continue;
+                            };
+                            let cxi = xi + 0.5 * wi;
+                            let cyi = yi + 0.5 * hi;
+                            let cxj = xj + 0.5 * wj;
+                            let cyj = yj + 0.5 * hj;
+                            let req_dx = 0.5 * (wi + wj) + gap;
+                            let req_dy = 0.5 * (hi + hj) + gap;
                             let dx = cxj - cxi;
                             let dy = cyj - cyi;
                             let pen_x = req_dx - dx.abs();
@@ -3768,13 +3815,21 @@ impl EditorEngine {
                                 if pen_x <= pen_y {
                                     let dir = if dx.abs() > 1e-6 { dx.signum() } else { 1.0 };
                                     let push = 0.5 * pen_x * dir;
-                                    boxes[i].1 -= push;
-                                    boxes[j].1 += push;
+                                    if let Some(bi) = boxes.get_mut(i) {
+                                        bi.1 -= push;
+                                    }
+                                    if let Some(bj) = boxes.get_mut(j) {
+                                        bj.1 += push;
+                                    }
                                 } else {
                                     let dir = if dy.abs() > 1e-6 { dy.signum() } else { 1.0 };
                                     let push = 0.5 * pen_y * dir;
-                                    boxes[i].2 -= push;
-                                    boxes[j].2 += push;
+                                    if let Some(bi) = boxes.get_mut(i) {
+                                        bi.2 -= push;
+                                    }
+                                    if let Some(bj) = boxes.get_mut(j) {
+                                        bj.2 += push;
+                                    }
                                 }
                             }
                         }
@@ -4199,7 +4254,7 @@ impl EditorEngine {
                 let [r1, g1, b1] = end_color.to_srgb8();
                 let mut color_map = BTreeMap::new();
                 for (idx, id) in sel_ids.into_iter().enumerate() {
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
                     let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
                     let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
                     let b = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
@@ -4249,7 +4304,9 @@ impl EditorEngine {
                 }
                 let mut color_map = BTreeMap::new();
                 for (idx, id) in sel_ids.into_iter().enumerate() {
-                    color_map.insert(id, colors[idx % colors.len()].clone());
+                    if let Some(c) = idx.checked_rem(colors.len()).and_then(|rem| colors.get(rem)) {
+                        color_map.insert(id, c.clone());
+                    }
                 }
                 self.for_each_selected_mut(|obj| {
                     if !obj.locked
@@ -4397,7 +4454,10 @@ impl EditorEngine {
                 }
                 if horizontal {
                     items.sort_by_key(|a| a.1.x0);
-                    let mut cursor = items[0].1.x0.get();
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
+                    let mut cursor = first_b.x0.get();
                     let mut deltas = BTreeMap::new();
                     for (id, bbox) in items {
                         let dx = cursor - bbox.x0.get();
@@ -4415,7 +4475,10 @@ impl EditorEngine {
                     });
                 } else {
                     items.sort_by_key(|a| a.1.y0);
-                    let mut cursor = items[0].1.y0.get();
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
+                    let mut cursor = first_b.y0.get();
                     let mut deltas = BTreeMap::new();
                     for (id, bbox) in items {
                         let dy = cursor - bbox.y0.get();
@@ -4467,7 +4530,7 @@ impl EditorEngine {
                     let Ok(oc) = wb.center() else {
                         continue;
                     };
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
                     let sc = (1.0 - t) * s0 + t * s1;
                     scales.insert(obj.id, (oc, sc));
                 }
@@ -4519,7 +4582,7 @@ impl EditorEngine {
                     let Ok(oc) = wb.center() else {
                         continue;
                     };
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
                     let ang_rad = ((1.0 - t) * a0 + t * a1).to_radians();
                     angles.insert(obj.id, (oc, ang_rad));
                 }
@@ -4611,7 +4674,7 @@ impl EditorEngine {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use coralcraft_doc::{LineCap, LineJoin, TextCaseKind};
