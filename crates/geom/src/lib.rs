@@ -22,9 +22,10 @@ pub use flatten::{
     DEFAULT_FLATTEN_TOLERANCE, DEFAULT_MAX_FLATTEN_DEPTH, FlattenOpts, Polyline, eval_cubic, flatten_cubic, flatten_path, flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths, delete_curve_node_at,
-    distort_path, expand_artistic_brush_stroke, fillet_path_corners, insert_curve_node_at, join_open_subpaths, reverse_path_direction,
-    simplify_path_nodes, trace_bitmap_to_path, warp_path_bilinear, warp_path_perspective,
+    ArcLengthTable, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, close_open_subpaths,
+    convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, distort_path, expand_artistic_brush_stroke, fillet_path_corners,
+    insert_curve_node_at, join_open_subpaths, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path, warp_path_bilinear,
+    warp_path_perspective,
 };
 pub use shapes::{
     CornerKind, EllipseMode, EllipseSpec, KAPPA, PolygonSpec, RectSpec, build_bspline_path, build_callout_path, build_connector_path,

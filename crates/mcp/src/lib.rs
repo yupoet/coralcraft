@@ -518,6 +518,26 @@ impl McpServer {
                             "name": "delete_curve_node",
                             "description": "Deletes a path node at element_index on an object (Shape Tool -> Delete Nodes / -).",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "convert_segment_to_line",
+                            "description": "Converts the path segment at element_index on an object into a straight LineTo segment (Shape Tool -> To Line).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "convert_segment_to_curve",
+                            "description": "Converts the path segment at element_index on an object into a CubicTo Bezier curve with 1/3 and 2/3 handles (Shape Tool -> To Curve).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_page_background",
+                            "description": "Sets or clears the canvas background color on page_index (Layout -> Page Background).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_page_bleed",
+                            "description": "Sets the print bleed margin in points on page_index (Layout -> Page Setup -> Bleed).",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -1433,6 +1453,38 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::DeleteCurveNode { object_id: target, element_index });
                 Ok(json!({ "node_deleted": ok, "object_id": target.0 }))
             }
+            "convert_segment_to_line" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::ConvertSegmentToLine { object_id: target, element_index });
+                Ok(json!({ "segment_converted_to_line": ok, "object_id": target.0 }))
+            }
+            "convert_segment_to_curve" => {
+                let target = self.resolve_target_id(args)?;
+                let element_index = args.get("element_index").and_then(Value::as_u64).unwrap_or(1) as usize;
+                let ok = self.engine.execute(EngineCommand::ConvertSegmentToCurve { object_id: target, element_index });
+                Ok(json!({ "segment_converted_to_curve": ok, "object_id": target.0 }))
+            }
+            "set_page_background" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let clear = args.get("clear").and_then(Value::as_bool).unwrap_or(false);
+                let background = if clear {
+                    None
+                } else {
+                    let r = args.get("r").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                    let g = args.get("g").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                    let b = args.get("b").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                    Some(FillStyle::uniform(Color::rgb8(r, g, b)))
+                };
+                let ok = self.engine.execute(EngineCommand::SetPageBackground { page_index, background });
+                Ok(json!({ "page_background_set": ok, "page_index": page_index }))
+            }
+            "set_page_bleed" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let bleed_pt = F64::new(args.get("bleed_pt").and_then(Value::as_f64).unwrap_or(9.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SetPageBleed { page_index, bleed_pt });
+                Ok(json!({ "page_bleed_set": ok, "page_index": page_index }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1462,7 +1514,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 84);
+        assert_eq!(tools, 88);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

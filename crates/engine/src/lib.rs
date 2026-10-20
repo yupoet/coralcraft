@@ -8,8 +8,8 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, close_open_subpaths, delete_curve_node_at, insert_curve_node_at, join_open_subpaths, reference_point, reverse_path_direction,
-    simplify_path_nodes, trace_bitmap_to_path,
+    boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
+    join_open_subpaths, reference_point, reverse_path_direction, simplify_path_nodes, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -184,6 +184,14 @@ pub enum EngineCommand {
     InsertCurveNode { object_id: ObjectId, element_index: usize },
     /// Deletes the path node at `element_index` on `object_id` (`Shape Tool -> Delete Nodes` / `-`).
     DeleteCurveNode { object_id: ObjectId, element_index: usize },
+    /// Converts the path segment at `element_index` on `object_id` into a straight `LineTo` (`Shape Tool -> To Line`).
+    ConvertSegmentToLine { object_id: ObjectId, element_index: usize },
+    /// Converts the path segment at `element_index` on `object_id` into a `CubicTo` Bézier curve (`Shape Tool -> To Curve`).
+    ConvertSegmentToCurve { object_id: ObjectId, element_index: usize },
+    /// Sets or clears the canvas background fill on `page_index` (`Layout -> Page Background`).
+    SetPageBackground { page_index: usize, background: Option<FillStyle> },
+    /// Sets the print bleed margin (in points) on `page_index` (`Layout -> Page Setup -> Bleed`).
+    SetPageBleed { page_index: usize, bleed_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -814,6 +822,27 @@ impl EditorEngine {
                     .selected_or_all_node(*object_id)
                     .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_curve_node_at(&p, *element_index).is_ok()));
                 if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_line(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_curve(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetPageBackground { page_index, .. } | EngineCommand::SetPageBleed { page_index, .. } => {
+                if *page_index >= self.document.pages.len() {
                     return false;
                 }
             }
@@ -2212,6 +2241,40 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = convert_segment_to_line(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = convert_segment_to_curve(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetPageBackground { page_index, background } => {
+                if let Some(page) = self.document.pages.get_mut(page_index) {
+                    page.background = background;
+                }
+            }
+            EngineCommand::SetPageBleed { page_index, bleed_pt } => {
+                if let Some(page) = self.document.pages.get_mut(page_index)
+                    && let Ok(clamped) = F64::new(bleed_pt.get().max(0.0))
+                {
+                    page.bleed = clamped;
+                }
+            }
         }
         true
     }
@@ -2871,5 +2934,12 @@ mod tests {
         }
         assert!(engine.execute(EngineCommand::InsertCurveNode { object_id: boundary_id, element_index: 1 }));
         assert!(engine.execute(EngineCommand::DeleteCurveNode { object_id: boundary_id, element_index: 1 }));
+
+        // 20. ConvertSegmentToCurve, ConvertSegmentToLine, SetPageBackground, and SetPageBleed
+        assert!(engine.execute(EngineCommand::ConvertSegmentToCurve { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::ConvertSegmentToLine { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::SetPageBackground { page_index: 0, background: Some(FillStyle::uniform(Color::rgb8(245, 245, 240))) }));
+        assert!(engine.execute(EngineCommand::SetPageBleed { page_index: 0, bleed_pt: F64::new(9.0).unwrap() }));
+        assert_eq!(engine.document.pages[0].bleed, F64::new(9.0).unwrap());
     }
 }

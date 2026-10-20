@@ -1056,3 +1056,86 @@ pub fn delete_curve_node_at(path: &Path, element_index: usize) -> Result<Path, G
     }
     Ok(out)
 }
+
+/// Converts the curve segment at `element_index` into a straight `LineTo` segment (`Shape Tool -> To Line`).
+pub fn convert_segment_to_line(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    if element_index == 0 || element_index >= path.elements.len() {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for convert_segment_to_line"));
+    }
+    let target = match path.elements[element_index] {
+        PathElement::LineTo(end) | PathElement::QuadTo { end, .. } | PathElement::CubicTo { end, .. } => PathElement::LineTo(end),
+        PathElement::MoveTo(_) | PathElement::Close => {
+            return Err(GeomError::InvalidShapeParameter("cannot convert MoveTo or Close to line"));
+        }
+    };
+    let mut elements = path.elements.clone();
+    elements[element_index] = target;
+    Path::from_elements(elements, path.fill_rule)
+}
+
+/// Converts the segment at `element_index` into a `CubicTo` Bézier segment with collinear `1/3` and `2/3` handles (`Shape Tool -> To Curve`).
+pub fn convert_segment_to_curve(path: &Path, element_index: usize) -> Result<Path, GeomError> {
+    if element_index == 0 || element_index >= path.elements.len() {
+        return Err(GeomError::InvalidShapeParameter("element_index out of bounds for convert_segment_to_curve"));
+    }
+    let mut start = Point::ZERO;
+    let mut has_start = false;
+    for &el in &path.elements[..element_index] {
+        match el {
+            PathElement::MoveTo(p) | PathElement::LineTo(p) | PathElement::QuadTo { end: p, .. } | PathElement::CubicTo { end: p, .. } => {
+                start = p;
+                has_start = true;
+            }
+            PathElement::Close => {}
+        }
+    }
+    if !has_start {
+        return Err(GeomError::InvalidShapeParameter("missing preceding anchor for convert_segment_to_curve"));
+    }
+    let lerp = |a: Point, b: Point, t: f64| -> Result<Point, GeomError> {
+        Point::new(a.x.get() + (b.x.get() - a.x.get()) * t, a.y.get() + (b.y.get() - a.y.get()) * t)
+    };
+    let target = match path.elements[element_index] {
+        PathElement::LineTo(end) => {
+            let c1 = lerp(start, end, 1.0 / 3.0)?;
+            let c2 = lerp(start, end, 2.0 / 3.0)?;
+            PathElement::CubicTo { c1, c2, end }
+        }
+        PathElement::QuadTo { ctrl, end } => {
+            let c1 = lerp(start, ctrl, 2.0 / 3.0)?;
+            let c2 = lerp(end, ctrl, 2.0 / 3.0)?;
+            PathElement::CubicTo { c1, c2, end }
+        }
+        PathElement::CubicTo { c1, c2, end } => PathElement::CubicTo { c1, c2, end },
+        PathElement::MoveTo(_) | PathElement::Close => {
+            return Err(GeomError::InvalidShapeParameter("cannot convert MoveTo or Close to curve"));
+        }
+    };
+    let mut elements = path.elements.clone();
+    elements[element_index] = target;
+    Path::from_elements(elements, path.fill_rule)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod m26_tests {
+    use super::*;
+
+    #[test]
+    fn convert_segment_to_curve_and_back_to_line() {
+        let p0 = Point::new(0.0, 0.0).unwrap();
+        let p1 = Point::new(90.0, 60.0).unwrap();
+        let path = Path::from_elements(vec![PathElement::MoveTo(p0), PathElement::LineTo(p1)], FillRule::NonZero).unwrap();
+        let curved = convert_segment_to_curve(&path, 1).unwrap();
+        match curved.elements[1] {
+            PathElement::CubicTo { c1, c2, end } => {
+                assert!((c1.x.get() - 30.0).abs() < 1e-6);
+                assert!((c2.x.get() - 60.0).abs() < 1e-6);
+                assert_eq!(end, p1);
+            }
+            _ => unreachable!(),
+        }
+        let linear = convert_segment_to_line(&curved, 1).unwrap();
+        assert_eq!(linear.elements[1], PathElement::LineTo(p1));
+    }
+}
