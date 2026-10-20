@@ -1831,6 +1831,56 @@ pub fn build_sierpinski_triangle_path(bounds: Rect, depth: u32) -> Result<Path, 
     Ok(path)
 }
 
+/// Builds a closed Koch snowflake fractal [`Path`] centered at `center` with circumradius `radius_pt`
+/// and subdivision `iterations` (`0..=5`, producing $3 \times 4^{\text{iterations}}$ edges)
+/// (`Object -> Insert -> Koch Snowflake Fractal`).
+pub fn build_koch_snowflake_path(center: Point, radius_pt: f64, iterations: u32) -> Result<Path, GeomError> {
+    let r = F64::new(radius_pt)?.get();
+    if r <= 1.0 || iterations > 5 {
+        return Err(GeomError::InvalidShapeParameter("invalid Koch snowflake parameters"));
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    // Initial clockwise equilateral triangle vertices in Y-down screen coordinates
+    let mut pts = Vec::with_capacity(3 * (1_usize << (2 * iterations)));
+    for k in 0..3 {
+        let angle = -std::f64::consts::FRAC_PI_2 + f64::from(k) * (std::f64::consts::TAU / 3.0);
+        pts.push((cx + r * angle.cos(), cy + r * angle.sin()));
+    }
+    let sqrt3_half = 3.0_f64.sqrt() * 0.5;
+    for _ in 0..iterations {
+        let n = pts.len();
+        let mut next = Vec::with_capacity(n * 4);
+        for i in 0..n {
+            let (ax, ay) = pts[i];
+            let (bx, by) = pts[(i + 1) % n];
+            let dx = bx - ax;
+            let dy = by - ay;
+            let p1 = (ax + dx / 3.0, ay + dy / 3.0);
+            let p2 = (ax + 2.0 * dx / 3.0, ay + 2.0 * dy / 3.0);
+            // Outward normal for clockwise polygon in Y-down coordinates is (dy, -dx)
+            let peak = (0.5 * (ax + bx) + (dy / 3.0) * sqrt3_half, 0.5 * (ay + by) - (dx / 3.0) * sqrt3_half);
+            next.push((ax, ay));
+            next.push(p1);
+            next.push(peak);
+            next.push(p2);
+        }
+        pts = next;
+    }
+
+    let mut path = Path::new();
+    for (idx, (x, y)) in pts.into_iter().enumerate() {
+        let pt = Point::new(x, y)?;
+        if idx == 0 {
+            path.move_to(pt)?;
+        } else {
+            path.line_to(pt)?;
+        }
+    }
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1955,5 +2005,8 @@ mod m27_tests {
         let sierp = build_sierpinski_triangle_path(Rect::new(0.0, 0.0, 120.0, 100.0).unwrap(), 3).unwrap();
         let sierp_closes = sierp.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(sierp_closes, 27);
+
+        let koch = build_koch_snowflake_path(Point::new(100.0, 100.0).unwrap(), 50.0, 2).unwrap();
+        assert_eq!(koch.elements.len(), 3 * 16 + 1);
     }
 }

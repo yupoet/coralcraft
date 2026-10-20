@@ -220,9 +220,13 @@
 62. **M62 Sierpinski Gasket Fractal (`build_sierpinski_triangle_path`), Radial Pinch/Punch Warp (`pinch_punch_warp_path` & `PinchPunchObjectPath`), Edge-to-Edge Stack Selection (`StackSelection`), Document Summary Inspection (`get_document_summary`), and 232 MCP Tools**:
     - `coralcraft-geom`: `build_sierpinski_triangle_path` (recursive Sierpinski gasket fractal of $3^{\text{depth}}$ closed sub-triangles) and `pinch_punch_warp_path` (radial pinch/punch deformer).
     - `coralcraft-engine` & `coralcraft-mcp`: `PinchPunchObjectPath`, `StackSelection`, `add_sierpinski_triangle`, `pinch_punch_object_path`, `stack_selection`, `get_document_summary`, and **232 MCP tools**.
+63. **M63 Koch Snowflake Fractal (`build_koch_snowflake_path`), Curve-to-Polyline Polygonization (`flatten_path_to_polylines` & `FlattenObjectPathToPolylines`), Progressive Selection Scaling (`ScaleSelectionProgressively`), Stored-ZIP `.coralcraft` Base64 Export (`export_coralcraft_zip_base64`), and 236 MCP Tools**:
+    - `coralcraft-geom`: `build_koch_snowflake_path` (closed Koch snowflake fractal polygon of $3 \times 4^{\text{iterations}}$ edges) and `flatten_path_to_polylines` (adaptive de Casteljau curve-to-polyline polygonization).
+    - `coralcraft-engine` & `coralcraft-mcp`: `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `add_koch_snowflake`, `flatten_object_path_to_polylines`, `scale_selection_progressively`, `export_coralcraft_zip_base64`, and **236 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M63 delivered (`build_koch_snowflake_path` & `add_koch_snowflake`, `flatten_path_to_polylines` & `FlattenObjectPathToPolylines`, `ScaleSelectionProgressively`, `export_coralcraft_zip_base64`, 236 MCP tools).
 - 2026-10-20: M62 delivered (`build_sierpinski_triangle_path` & `add_sierpinski_triangle`, `pinch_punch_warp_path` & `PinchPunchObjectPath`, `StackSelection`, `get_document_summary`, 232 MCP tools).
 - 2026-10-20: M61 delivered (`build_truchet_tiles_path` & `add_truchet_tiles`, `interpolate_smooth_cubic_path` & `SmoothPolylineToCubicBeziers`, `OrientSelectionToCenter`, `base64_decode` & `import_cpl_palette_base64`, 228 MCP tools).
 - 2026-10-20: M60 delivered (`build_celtic_knot_ring_path` & `add_celtic_knot_ring`, `fit_circle_to_path_points` & `FitCircleToObjectPath`, `SnapSelectionToCircleRadius`, `export_svg_with_prepress`, 224 MCP tools).

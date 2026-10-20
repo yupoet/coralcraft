@@ -8,7 +8,7 @@ use coralcraft_color::{
 };
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
-    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json,
+    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json, save_zip,
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
@@ -17,9 +17,9 @@ use coralcraft_geom::{
     build_block_arrow_path, build_bspline_path, build_callout_path, build_celtic_knot_ring_path, build_complex_star_path,
     build_concentric_rings_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
     build_halftone_wave_lines_path, build_hilbert_curve_path, build_honeycomb_grid_path, build_impact_rays_path, build_isometric_box_path,
-    build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path, build_pointillizer_path, build_polyline_path,
-    build_rose_guilloche_path, build_sierpinski_triangle_path, build_spiral_path, build_spirograph_path, build_superformula_path,
-    build_three_point_curve_path, build_truchet_tiles_path, build_voronoi_mosaic_path,
+    build_koch_snowflake_path, build_lissajous_path, build_lsystem_path, build_perspective_grid_path, build_phyllotaxis_path,
+    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_sierpinski_triangle_path, build_spiral_path,
+    build_spirograph_path, build_superformula_path, build_three_point_curve_path, build_truchet_tiles_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{
     ImpositionSpec, PrepressOptions, RenderOpts, base64_decode, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed,
@@ -1522,6 +1522,50 @@ impl McpServer {
                         {
                             "name": "get_document_summary",
                             "description": "Returns document-level statistics including title, units, page_count, master_layer_count, total_object_count, active_page_index, and selection_count.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {}
+                            }
+                        },
+                        {
+                            "name": "add_koch_snowflake",
+                            "description": "Inserts a closed Koch snowflake fractal polygon path of 3 * 4^iterations edges on the active layer.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "cx": { "type": "number" },
+                                    "cy": { "type": "number" },
+                                    "radius_pt": { "type": "number" },
+                                    "iterations": { "type": "integer" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "flatten_object_path_to_polylines",
+                            "description": "Flattens all quadratic and cubic Bezier curves of a path object into linear polyline subpaths within flatness tolerance_pt.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "object_id": { "type": "integer" },
+                                    "tolerance_pt": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "scale_selection_progressively",
+                            "description": "Scales each selected unlocked object around its own center by a linearly interpolated scale factor from start_scale to end_scale in selection order.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "selection": { "type": "array", "items": { "type": "integer" } },
+                                    "start_scale": { "type": "number" },
+                                    "end_scale": { "type": "number" }
+                                }
+                            }
+                        },
+                        {
+                            "name": "export_coralcraft_zip_base64",
+                            "description": "Exports the document as a deterministic Stored ZIP .coralcraft container (manifest.json + document.json + content-addressed blobs), returning byte length and base64-encoded payload.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {}
@@ -4137,6 +4181,37 @@ impl McpServer {
                     "selection_count": self.engine.selection.len()
                 }))
             }
+            "add_koch_snowflake" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let radius_pt = args.get("radius_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let iterations = args.get("iterations").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_koch_snowflake_path(center, radius_pt, iterations).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Koch Snowflake".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "koch_snowflake", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "flatten_object_path_to_polylines" => {
+                let target = self.resolve_target_id(args)?;
+                let tolerance_pt = F64::new(args.get("tolerance_pt").and_then(Value::as_f64).unwrap_or(0.5)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::FlattenObjectPathToPolylines { object_id: target, tolerance_pt });
+                Ok(json!({ "flattened_to_polylines": ok, "object_id": target.0, "tolerance_pt": tolerance_pt.get() }))
+            }
+            "scale_selection_progressively" => {
+                self.apply_optional_selection(args);
+                let start_scale = F64::new(args.get("start_scale").and_then(Value::as_f64).unwrap_or(0.75)).map_err(|e| e.to_string())?;
+                let end_scale = F64::new(args.get("end_scale").and_then(Value::as_f64).unwrap_or(1.25)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ScaleSelectionProgressively { start_scale, end_scale });
+                Ok(json!({ "scaled_progressively": ok, "start_scale": start_scale.get(), "end_scale": end_scale.get() }))
+            }
+            "export_coralcraft_zip_base64" => {
+                let zip_bytes = save_zip(&self.engine.document).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&zip_bytes);
+                Ok(json!({
+                    "coralcraft_zip_bytes": zip_bytes.len(),
+                    "coralcraft_zip_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -4166,7 +4241,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 232);
+        assert_eq!(tools, 236);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -4598,5 +4673,32 @@ mod tests {
         )
         .unwrap();
         assert!(sum_resp.result.unwrap()["structuredContent"]["total_object_count"].as_u64().unwrap() >= 5);
+
+        let koch_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":65,"method":"tools/call","params":{"name":"add_koch_snowflake","arguments":{"cx":150.0,"cy":150.0,"radius_pt":55.0,"iterations":2}}}"#,
+            ),
+        )
+        .unwrap();
+        let koch_id = koch_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let flat_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":66,"method":"tools/call","params":{{"name":"flatten_object_path_to_polylines","arguments":{{"object_id":{truch_id},"tolerance_pt":0.5}}}}}}"#
+        )))
+        .unwrap();
+        assert!(flat_resp.result.unwrap()["structuredContent"]["flattened_to_polylines"].as_bool().unwrap());
+
+        let scp_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":67,"method":"tools/call","params":{{"name":"scale_selection_progressively","arguments":{{"selection":[{koch_id},{truch_id}],"start_scale":0.8,"end_scale":1.2}}}}}}"#
+        )))
+        .unwrap();
+        assert!(scp_resp.result.unwrap()["structuredContent"]["scaled_progressively"].as_bool().unwrap());
+
+        let cz_resp: JsonRpcResponse =
+            serde_json::from_str(&server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":68,"method":"tools/call","params":{"name":"export_coralcraft_zip_base64","arguments":{}}}"#,
+            ))
+            .unwrap();
+        assert!(cz_resp.result.unwrap()["structuredContent"]["coralcraft_zip_bytes"].as_u64().unwrap() > 100);
     }
 }

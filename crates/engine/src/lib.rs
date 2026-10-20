@@ -11,11 +11,12 @@ use coralcraft_geom::{
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
     close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at,
     delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, fit_circle_to_path_points,
-    hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path,
-    measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, pinch_punch_warp_path,
-    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
-    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments,
-    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    flatten_path_to_polylines, hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line,
+    laplacian_relax_closed_path, measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path,
+    pinch_punch_warp_path, project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments,
+    simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path,
+    subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -362,6 +363,10 @@ pub enum EngineCommand {
     PinchPunchObjectPath { object_id: ObjectId, center: Point, radius_pt: F64, strength: F64 },
     /// Packs all selected unlocked objects edge-to-edge horizontally (`horizontal = true`) or vertically (`horizontal = false`) with `gap_pt` separation (`Object -> Align and Distribute -> Stack Selection`).
     StackSelection { horizontal: bool, gap_pt: F64 },
+    /// Flattens all curves of `object_id` into linear polyline subpaths within flatness `tolerance_pt` (`Shape Tool F10 -> Polygonize / Convert Curves to Lines`).
+    FlattenObjectPathToPolylines { object_id: ObjectId, tolerance_pt: F64 },
+    /// Scales each selected unlocked object around its own center by a linearly interpolated scale factor from `start_scale` to `end_scale` in selection order (`Object -> Transformations -> Progressive Scale`).
+    ScaleSelectionProgressively { start_scale: F64, end_scale: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4709,6 +4714,57 @@ impl EditorEngine {
                     });
                 }
             }
+            EngineCommand::FlattenObjectPathToPolylines { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(flat) = flatten_path_to_polylines(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(flat);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelectionProgressively { start_scale, end_scale } => {
+                let s0 = start_scale.get();
+                let s1 = end_scale.get();
+                if s0 <= 0.05 || s1 <= 0.05 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let mut scales = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / ((n - 1) as f64) };
+                    let sc = (1.0 - t) * s0 + t * s1;
+                    scales.insert(obj.id, (oc, sc));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, sc)) = scales.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(sc, sc)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5690,5 +5746,9 @@ mod tests {
         }));
         engine.set_selection(vec![xor_id, hull_id]);
         assert!(engine.execute(EngineCommand::StackSelection { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::FlattenObjectPathToPolylines { object_id: xor_id, tolerance_pt: F64::new(0.5).unwrap() }));
+        assert!(
+            engine.execute(EngineCommand::ScaleSelectionProgressively { start_scale: F64::new(0.8).unwrap(), end_scale: F64::new(1.25).unwrap() })
+        );
     }
 }

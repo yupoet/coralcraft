@@ -2597,6 +2597,39 @@ pub fn pinch_punch_warp_path(path: &Path, center: Point, radius_pt: f64, strengt
     Path::from_elements(out_elems, path.fill_rule)
 }
 
+/// Flattens all quadratic and cubic Bézier curves in `path` into linear polyline subpaths
+/// within flatness `tolerance_pt` (`0.05..=50.0`) (`Shape Tool F10 -> Polygonize / Convert Curves to Lines`).
+pub fn flatten_path_to_polylines(path: &Path, tolerance_pt: f64) -> Result<Path, GeomError> {
+    let tol = crate::f64_canon::F64::new(tolerance_pt)?.get();
+    if path.elements.is_empty() || !(0.05..=50.0).contains(&tol) {
+        return Err(GeomError::InvalidShapeParameter("invalid flatness tolerance_pt for path polygonization"));
+    }
+    let opts = crate::flatten::FlattenOpts { tolerance: tol, max_depth: crate::flatten::DEFAULT_MAX_FLATTEN_DEPTH };
+    let polys = crate::flatten::flatten_path(path, &opts)?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+    for poly in polys {
+        let mut pts = poly.points;
+        if poly.closed && pts.len() >= 2 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a == b) {
+            pts.pop();
+        }
+        if pts.len() < 2 {
+            continue;
+        }
+        out.move_to(pts[0])?;
+        for &p in &pts[1..] {
+            out.line_to(p)?;
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("polygonization produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2716,5 +2749,8 @@ mod m26_tests {
 
         let pinched = pinch_punch_warp_path(&rect_path, Point::new(25.0, 20.0).unwrap(), 40.0, -0.5).unwrap();
         assert!(pinched.elements.len() >= 10);
+
+        let poly_flat = flatten_path_to_polylines(&fitted_circle, 0.5).unwrap();
+        assert!(!poly_flat.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })));
     }
 }
