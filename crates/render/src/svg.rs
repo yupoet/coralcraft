@@ -77,9 +77,38 @@ fn format_fill_color_meta_attr(fill: Option<&FillStyle>) -> String {
         && let Some(meta) = encode_svg_color_meta(color)
     {
         format!(" data-fill-color=\"{meta}\"")
+    } else if let Some(unk @ FillStyle::Unknown { .. }) = fill
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(unk)
+    {
+        format!(" data-fill-unknown=\"{b64}\"")
     } else {
         String::new()
     }
+}
+
+fn format_node_extra_meta_attrs(node: &ObjectNode) -> String {
+    let mut out = String::new();
+    if !node.effects.is_empty() {
+        if let Some(b64) = coralcraft_doc::encode_interchange_meta(&node.effects) {
+            let _ = write!(out, " data-effects=\"{b64}\"");
+        }
+        if !matches!(node.kind, ObjectKind::Rect(_) | ObjectKind::Ellipse(_) | ObjectKind::Polygon(_))
+            && let Some(b64) = coralcraft_doc::encode_interchange_meta(&node.kind)
+        {
+            let _ = write!(out, " data-orig-kind=\"{b64}\"");
+        }
+    }
+    if let ObjectKind::Unsupported(u) = &node.kind
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(u)
+    {
+        let _ = write!(out, " data-unsupported=\"{b64}\"");
+    }
+    if !node.residual.is_empty()
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(&node.residual)
+    {
+        let _ = write!(out, " data-residual=\"{b64}\"");
+    }
+    out
 }
 
 fn format_transparency_meta_attrs(node: &ObjectNode) -> String {
@@ -198,10 +227,17 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
         let printable_attr = if !layer.printable { " data-printable=\"0\"" } else { "" };
         let locked_attr = if layer.locked { " data-locked=\"1\"" } else { "" };
         let mif_attr = if layer.master_in_front { " data-master-in-front=\"1\"" } else { "" };
+        let lres_attr = if !layer.residual.is_empty()
+            && let Some(b64) = coralcraft_doc::encode_interchange_meta(&layer.residual)
+        {
+            format!(" data-layer-residual=\"{b64}\"")
+        } else {
+            String::new()
+        };
         let escaped_lname = escape_xml(&layer.name).replace('\n', "&#10;").replace('\r', "&#13;");
         let _ = writeln!(
             body,
-            "  <g id=\"layer-{}\" data-name=\"{escaped_lname}\"{master_layer_attr}{role_attr}{printable_attr}{locked_attr}{mif_attr}{opacity_attr}>",
+            "  <g id=\"layer-{}\" data-name=\"{escaped_lname}\"{master_layer_attr}{role_attr}{printable_attr}{locked_attr}{mif_attr}{lres_attr}{opacity_attr}>",
             layer.id.0
         );
         for node in &layer.objects {
@@ -276,10 +312,36 @@ pub fn export_svg_with_prepress(doc: &Document, page_index: usize, prepress: &cr
         String::new()
     };
     let bleed_attr = if page.bleed.get() > 0.0 { format!(" data-page-bleed=\"{}\"", fmt_num_exact(page.bleed.get())) } else { String::new() };
-    let bg_color_meta = format_fill_color_meta_attr(page.background.as_ref());
+    let palette_attr = if doc.palette != coralcraft_color::Palette::default()
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(&doc.palette)
+    {
+        format!(" data-palette=\"{b64}\"")
+    } else {
+        String::new()
+    };
+    let doc_res_attr = if !doc.residual.is_empty()
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(&doc.residual)
+    {
+        format!(" data-doc-residual=\"{b64}\"")
+    } else {
+        String::new()
+    };
+    let page_res_attr = if !page.residual.is_empty()
+        && let Some(b64) = coralcraft_doc::encode_interchange_meta(&page.residual)
+    {
+        format!(" data-page-residual=\"{b64}\"")
+    } else {
+        String::new()
+    };
+    let bg_color_meta = match &page.background {
+        Some(unk @ FillStyle::Unknown { .. }) => {
+            coralcraft_doc::encode_interchange_meta(unk).map(|b64| format!(" data-page-bg-unknown=\"{b64}\"")).unwrap_or_default()
+        }
+        other => format_fill_color_meta_attr(other.as_ref()),
+    };
     let _ = writeln!(
         svg,
-        "  <rect id=\"page-background\"{title_attr}{units_attr}{page_name_attr}{bleed_attr} x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"{bg_color_meta}/>",
+        "  <rect id=\"page-background\"{title_attr}{units_attr}{page_name_attr}{bleed_attr}{palette_attr}{doc_res_attr}{page_res_attr} x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" fill=\"{bg_fill_attr}\"{bg_color_meta}/>",
         fmt_num(w),
         fmt_num(h)
     );
@@ -470,13 +532,19 @@ fn format_transform_attr(t: Affine2) -> String {
         String::new()
     } else {
         format!(
-            " transform=\"matrix({} {} {} {} {} {})\"",
+            " transform=\"matrix({} {} {} {} {} {})\" data-transform=\"{},{},{},{},{},{}\"",
             fmt_num(t.a.get()),
             fmt_num(t.b.get()),
             fmt_num(t.c.get()),
             fmt_num(t.d.get()),
             fmt_num(t.tx.get()),
-            fmt_num(t.ty.get())
+            fmt_num(t.ty.get()),
+            fmt_num_exact(t.a.get()),
+            fmt_num_exact(t.b.get()),
+            fmt_num_exact(t.c.get()),
+            fmt_num_exact(t.d.get()),
+            fmt_num_exact(t.tx.get()),
+            fmt_num_exact(t.ty.get())
         )
     }
 }
@@ -526,8 +594,9 @@ fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String
     let start_arrow_attr = format_arrow_kind(outline.start_arrow).map(|s| format!(" data-start-arrow=\"{s}\"")).unwrap_or_default();
     let end_arrow_attr = format_arrow_kind(outline.end_arrow).map(|s| format!(" data-end-arrow=\"{s}\"")).unwrap_or_default();
     let stroke_col_meta = encode_svg_color_meta(&outline.color).map(|m| format!(" data-stroke-color=\"{m}\"")).unwrap_or_default();
+    let hairline_attr = if outline.is_hairline() { " data-hairline=\"1\"" } else { "" };
     format!(
-        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}{behind_attr}{scale_attr}{start_arrow_attr}{end_arrow_attr}{stroke_col_meta}",
+        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}{behind_attr}{scale_attr}{start_arrow_attr}{end_arrow_attr}{stroke_col_meta}{hairline_attr}",
         svg_hex_color(&outline.color),
         fmt_num(w),
         fmt_num(outline.miter_limit.get())
@@ -678,13 +747,12 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             return Ok(());
         }
         ObjectKind::Unsupported(u) => {
-            if let Some(bbox) = u.fallback_bounds {
-                let path = RectSpec::sharp(bbox).to_path()?;
-                emit_path_node(defs, body, node, &path, bbox, indent_level)?;
-            }
-            for ch in &u.children {
-                emit_svg_node(defs, body, ch, indent_level)?;
-            }
+            let bbox = match u.fallback_bounds {
+                Some(b) => b,
+                None => Rect::new(0.0, 0.0, 1.0, 1.0)?,
+            };
+            let path = RectSpec::sharp(bbox).to_path()?;
+            emit_path_node(defs, body, node, &path, bbox, indent_level)?;
             return Ok(());
         }
         _ => {}
@@ -698,9 +766,6 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
 }
 
 fn format_shape_meta_attr(node: &ObjectNode) -> String {
-    if !node.effects.is_empty() {
-        return String::new();
-    }
     match &node.kind {
         ObjectKind::Rect(rs) => {
             let ck = rs.corner_kinds.map(|k| match k {
@@ -783,7 +848,7 @@ fn emit_path_node(
 
     let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
     let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
-    let shape_meta_attr = format_shape_meta_attr(node);
+    let shape_meta_attr = format!("{}{}", format_shape_meta_attr(node), format_node_extra_meta_attrs(node));
     let trsp_meta = format_transparency_meta_attrs(node);
     let fill_color_meta = format_fill_color_meta_attr(node.fill.as_ref());
     let fill_rule_attr = if local_path.fill_rule == FillRule::EvenOdd { " fill-rule=\"evenodd\"" } else { "" };

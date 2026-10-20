@@ -476,7 +476,11 @@ fn emit_ps_color(out: &mut String, color: &Color) {
 
 /// Exports `page_index` (0-based) of `doc` as a clean-room AutoCAD ASCII DXF (`AC1009` / R12) string.
 pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderError> {
-    let layers = doc.effective_layers_for_page(page_index, true)?;
+    let layers: Vec<&coralcraft_doc::Layer> = doc
+        .effective_layers_for_page(page_index, false)?
+        .into_iter()
+        .filter(|l| l.printable || l.role != coralcraft_doc::LayerRole::Desktop || !l.objects.is_empty())
+        .collect();
     let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
     let page_w = page.size.width.get();
     let page_h = page.size.height.get();
@@ -505,12 +509,27 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
     let mut out = String::new();
     let _ = write!(
         out,
-        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$LIMMIN\n10\n0\n20\n0\n9\n$LIMMAX\n10\n{}\n20\n{}\n0\nENDSEC\n",
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$LIMMIN\n10\n0\n20\n0\n9\n$LIMMAX\n10\n{}\n20\n{}\n",
         fmt_num(page_w),
         fmt_num(page_h)
     );
+    let doc_meta =
+        coralcraft_doc::DxfDocMeta { title: doc.title.clone(), units: doc.units, palette: doc.palette.clone(), residual: doc.residual.clone() };
+    if let Some(b64) = coralcraft_doc::encode_interchange_meta(&doc_meta) {
+        emit_dxf_header_meta(&mut out, "$CORALCRAFT_DOC", &b64);
+    }
+    let page_meta = coralcraft_doc::DxfPageMeta {
+        name: page.name.clone(),
+        bleed: page.bleed,
+        background: page.background.clone(),
+        residual: page.residual.clone(),
+    };
+    if let Some(b64) = coralcraft_doc::encode_interchange_meta(&page_meta) {
+        emit_dxf_header_meta(&mut out, "$CORALCRAFT_PAGE", &b64);
+    }
+    out.push_str("0\nENDSEC\n0\nSECTION\n2\nTABLES\n");
     if !ltypes.is_empty() {
-        let _ = writeln!(out, "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n{}", ltypes.len());
+        let _ = writeln!(out, "0\nTABLE\n2\nLTYPE\n70\n{}", ltypes.len());
         for (idx, pat) in ltypes.iter().enumerate() {
             let name = format!("DASH_{}", idx.saturating_add(1));
             let total_len: f64 = pat.iter().map(|d| d.get().abs()).sum();
@@ -520,8 +539,30 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
                 let _ = writeln!(out, "49\n{}", fmt_num(signed));
             }
         }
-        out.push_str("0\nENDTAB\n0\nENDSEC\n");
+        out.push_str("0\nENDTAB\n");
     }
+    let _ = writeln!(out, "0\nTABLE\n2\nLAYER\n70\n{}", layers.len());
+    for layer in &layers {
+        let safe_layer_name = sanitize_dxf_name(&layer.name);
+        let flags = if layer.locked { 4 } else { 0 };
+        let is_master = doc.master_layers.iter().any(|ml| std::ptr::eq(ml, *layer));
+        let _ = writeln!(out, "0\nLAYER\n2\n{safe_layer_name}\n70\n{flags}\n62\n7\n6\nCONTINUOUS");
+        let lmeta = coralcraft_doc::DxfLayerMeta {
+            name: layer.name.clone(),
+            role: layer.role,
+            visible: layer.visible,
+            printable: layer.printable,
+            locked: layer.locked,
+            master_in_front: layer.master_in_front,
+            opacity: layer.opacity,
+            residual: layer.residual.clone(),
+            is_master,
+        };
+        if let Some(b64) = coralcraft_doc::encode_interchange_meta(&lmeta) {
+            emit_dxf_xdata(&mut out, "L:", &b64);
+        }
+    }
+    out.push_str("0\nENDTAB\n0\nENDSEC\n");
     if !blocks_body.is_empty() {
         out.push_str("0\nSECTION\n2\nBLOCKS\n");
         out.push_str(&blocks_body);
@@ -535,7 +576,16 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         }
         let safe_layer_name = sanitize_dxf_name(&layer.name);
         for node in &layer.objects {
-            emit_dxf_node(&mut out, node, Affine2::IDENTITY, &safe_layer_name, page_h, &ltypes)?;
+            if !node.visible || node.opacity.get() <= 0.0 {
+                continue;
+            }
+            let mut node_dxf = String::new();
+            emit_dxf_node(&mut node_dxf, node, Affine2::IDENTITY, &safe_layer_name, page_h, &ltypes)?;
+            if let Some(node_b64) = coralcraft_doc::encode_interchange_meta(node) {
+                emit_dxf_node_with_xdata(&mut out, &node_dxf, &safe_layer_name, &node_b64);
+            } else {
+                out.push_str(&node_dxf);
+            }
         }
     }
 
@@ -544,6 +594,63 @@ pub fn export_dxf(doc: &Document, page_index: usize) -> Result<String, RenderErr
         return Err(RenderError::ExportOutputTooLarge { bytes: out.len(), max: crate::pdf::MAX_PDF_EXPORT_BYTES });
     }
     Ok(out)
+}
+
+fn emit_dxf_header_meta(out: &mut String, var_name: &str, b64: &str) {
+    let _ = writeln!(out, "9\n{var_name}");
+    for chunk in b64.as_bytes().chunks(200) {
+        if let Ok(s) = std::str::from_utf8(chunk) {
+            let _ = writeln!(out, "1\n{s}");
+        }
+    }
+}
+
+fn emit_dxf_xdata(out: &mut String, prefix: &str, b64: &str) {
+    out.push_str("1001\nCORALCRAFT\n");
+    let full = format!("{prefix}{b64}");
+    for chunk in full.as_bytes().chunks(200) {
+        if let Ok(s) = std::str::from_utf8(chunk) {
+            let _ = writeln!(out, "1000\n{s}");
+        }
+    }
+}
+
+fn emit_dxf_node_with_xdata(out: &mut String, node_dxf: &str, safe_layer_name: &str, node_b64: &str) {
+    if node_dxf.is_empty() {
+        let _ = writeln!(out, "0\nPOINT\n8\n{safe_layer_name}\n10\n0\n20\n0");
+        emit_dxf_xdata(out, "N:", node_b64);
+        return;
+    }
+    let lines: Vec<&str> = node_dxf.lines().collect();
+    let mut in_entity_header = false;
+    let mut is_first_entity = true;
+    let mut idx = 0usize;
+    while let (Some(&code_line), Some(&val_line)) = (lines.get(idx), lines.get(idx.saturating_add(1))) {
+        if code_line.trim() == "0" {
+            if in_entity_header {
+                if is_first_entity {
+                    emit_dxf_xdata(out, "N:", node_b64);
+                    is_first_entity = false;
+                } else {
+                    emit_dxf_xdata(out, "", "SKIP");
+                }
+                in_entity_header = false;
+            }
+            let v = val_line.trim();
+            if v != "VERTEX" && v != "SEQEND" {
+                in_entity_header = true;
+            }
+        }
+        let _ = writeln!(out, "{code_line}\n{val_line}");
+        idx = idx.saturating_add(2);
+    }
+    if in_entity_header {
+        if is_first_entity {
+            emit_dxf_xdata(out, "N:", node_b64);
+        } else {
+            emit_dxf_xdata(out, "", "SKIP");
+        }
+    }
 }
 
 fn try_decompose_dxf_insert_transform(t: Affine2) -> Option<(f64, f64, f64, f64, f64)> {
@@ -2265,5 +2372,345 @@ mod tests {
 
     fn grp_transform_probe(s: Affine2, r: Affine2, t: Affine2, pt: coralcraft_geom::Point) -> coralcraft_geom::Point {
         s.then(r).unwrap().then(t).unwrap().apply_point(pt).unwrap()
+    }
+
+    #[test]
+    fn export_svg_and_import_svg_roundtrip_live_effects_hairline_exact_transform_palette_residuals_and_unsupported_m87() {
+        use coralcraft_color::{Color, Palette, PaletteSwatch};
+        use coralcraft_doc::{
+            ChunkTag, Document, FillStyle, ObjectId, ObjectKind, ObjectNode, OutlineStyle, RawChunk, RawPayload, UnsupportedObject, VectorEffect,
+        };
+        use coralcraft_geom::{Affine2, CornerKind, DistortionKind, F64, Path, Point, Rect, RectSpec, Size};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.palette = Palette {
+            name: "Custom Studio Palette".to_owned(),
+            guid: Some("00112233-4455-6677-8899-aabbccddeeff".to_owned()),
+            swatches: vec![
+                PaletteSwatch { name: "Brand Spot".to_owned(), color: Color::spot("PANTONE 300 C", 0.85, [0.99, 0.5, 0.0, 0.0]).unwrap() },
+                PaletteSwatch { name: "Process Gold".to_owned(), color: Color::cmyk(0.05, 0.2, 0.9, 0.0).unwrap() },
+            ],
+        };
+        doc.residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"dres"),
+            flags: 1,
+            slot: 7,
+            payload: RawPayload(vec![0x10, 0x20, 0x30]),
+            src_offset: 64,
+        });
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.size = Size::new(600.0, 450.0).unwrap();
+            page.background = Some(FillStyle::Unknown { tag: ChunkTag(*b"bguk"), payload: RawPayload(vec![1, 2, 3, 4]) });
+            page.residual.chunks.push(RawChunk {
+                tag: ChunkTag(*b"pres"),
+                flags: 2,
+                slot: 0,
+                payload: RawPayload(vec![0xAA, 0xBB]),
+                src_offset: 128,
+            });
+            page.layers.first_mut().unwrap().residual.chunks.push(RawChunk {
+                tag: ChunkTag(*b"lres"),
+                flags: 3,
+                slot: 2,
+                payload: RawPayload(vec![0xCC, 0xDD, 0xEE]),
+                src_offset: 192,
+            });
+        }
+
+        // 1. Parametric RectSpec with live VectorEffect stack (Envelope + Distortion + Contour + DropShadow + Extrude),
+        //    hairline stroke, non-dyadic exact Affine2 transform, and object residual
+        let orig_rect = RectSpec::uniform(Rect::new(40.0, 50.0, 160.0, 130.0).unwrap(), 10.0, CornerKind::Chamfered).unwrap();
+        let exact_tf = Affine2::new(1.0 / 3.0, 0.125, -0.25, 2.0 / 3.0, 12.3456789012345, 34.5678901234567).unwrap();
+        let mut obj1 = ObjectNode::new(
+            ObjectId(1),
+            Some("LiveEffectRect".to_owned()),
+            ObjectKind::Rect(orig_rect),
+            Some(FillStyle::uniform(Color::rgb8(0x33, 0x77, 0xCC))),
+            Some(OutlineStyle::hairline(Color::rgb8(0x11, 0x22, 0x33))),
+        );
+        obj1.transform = exact_tf;
+        obj1.effects = vec![
+            VectorEffect::Envelope {
+                corners: [
+                    Point::new(35.0, 45.0).unwrap(),
+                    Point::new(165.0, 40.0).unwrap(),
+                    Point::new(170.0, 135.0).unwrap(),
+                    Point::new(30.0, 140.0).unwrap(),
+                ],
+            },
+            VectorEffect::Distortion { kind: DistortionKind::PushPull, amplitude: F64::new(6.5).unwrap(), frequency: F64::new(2.0).unwrap() },
+            VectorEffect::Contour { steps: 3, offset_pt: F64::new(4.25).unwrap(), inside: false },
+            VectorEffect::DropShadow {
+                offset_x: F64::new(5.0).unwrap(),
+                offset_y: F64::new(6.0).unwrap(),
+                opacity: F64::new(0.65).unwrap(),
+                color: Color::cmyk(0.0, 0.0, 0.0, 0.8).unwrap(),
+            },
+            VectorEffect::Extrude { depth_pt: F64::new(12.0).unwrap(), angle_deg: F64::new(45.0).unwrap() },
+        ];
+        obj1.residual.chunks.push(RawChunk { tag: ChunkTag(*b"ores"), flags: 0, slot: 9, payload: RawPayload(vec![9, 8, 7]), src_offset: 256 });
+
+        // 2. ArtisticText with TextOnPath live effect + FillStyle::Unknown
+        let mut spine = Path::new();
+        spine.move_to(Point::new(50.0, 220.0).unwrap()).unwrap();
+        spine.cubic_to(Point::new(120.0, 180.0).unwrap(), Point::new(200.0, 260.0).unwrap(), Point::new(280.0, 220.0).unwrap()).unwrap();
+        let mut obj2 = ObjectNode::new(
+            ObjectId(2),
+            Some("CurvedHeadline".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Curved Banner".to_owned(),
+                font_family: "Helvetica".to_owned(),
+                size_pt: F64::new(18.0).unwrap(),
+                position: Point::new(50.0, 220.0).unwrap(),
+            },
+            Some(FillStyle::Unknown { tag: ChunkTag(*b"mesh"), payload: RawPayload(vec![0x42, 0x43, 0x44]) }),
+            None,
+        );
+        obj2.effects = vec![VectorEffect::TextOnPath { spine: spine.clone(), offset_pt: F64::new(3.5).unwrap() }];
+
+        // 3. ObjectKind::Unsupported with fallback_bounds, child node, and nested residual
+        let unsup_child = ObjectNode::new(
+            ObjectId(3),
+            Some("InnerUnsupChild".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(310.0, 60.0, 350.0, 100.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(200, 100, 50))),
+            None,
+        );
+        let mut unsup_res = coralcraft_doc::Residual::default();
+        unsup_res.chunks.push(RawChunk { tag: ChunkTag(*b"ures"), flags: 4, slot: 0, payload: RawPayload(vec![0x55, 0x66]), src_offset: 512 });
+        let unsup = UnsupportedObject {
+            tag: ChunkTag(*b"smsh"),
+            class_hint: Some("SmartMesh".to_owned()),
+            payload: RawPayload(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            fallback_bounds: Some(Rect::new(300.0, 50.0, 420.0, 140.0).unwrap()),
+            absolute_geometry: true,
+            children: vec![unsup_child],
+            residual: unsup_res,
+        };
+        let obj3 = ObjectNode::new(ObjectId(4), Some("OpaqueMeshNode".to_owned()), ObjectKind::Unsupported(unsup.clone()), None, None);
+
+        {
+            let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+            objs.push(obj1.clone());
+            objs.push(obj2.clone());
+            objs.push(obj3.clone());
+        }
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg M87");
+        assert!(svg.contains("data-effects="), "export_svg must emit data-effects: {svg}");
+        assert!(svg.contains("data-hairline=\"1\""), "export_svg must emit data-hairline: {svg}");
+        assert!(svg.contains("data-palette="), "export_svg must emit data-palette: {svg}");
+        assert!(svg.contains("data-unsupported="), "export_svg must emit data-unsupported: {svg}");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg M87");
+        assert_eq!(reimported.palette, doc.palette);
+        assert_eq!(reimported.residual, doc.residual);
+
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.background, doc.pages.first().unwrap().background);
+        assert_eq!(rpage.residual, doc.pages.first().unwrap().residual);
+
+        let rlayer = rpage.layers.first().unwrap();
+        assert_eq!(rlayer.residual, doc.pages.first().unwrap().layers.first().unwrap().residual);
+        assert_eq!(rlayer.objects.len(), 3);
+
+        let r1 = rlayer.objects.first().unwrap();
+        assert_eq!(r1.name.as_deref(), Some("LiveEffectRect"));
+        assert_eq!(r1.kind, ObjectKind::Rect(orig_rect));
+        assert_eq!(r1.transform, exact_tf, "exact Affine2 matrix must round-trip bit-exactly");
+        assert!(r1.outline.as_ref().unwrap().is_hairline(), "hairline stroke width_pt == 0.0 must be preserved");
+        assert_eq!(r1.effects, obj1.effects);
+        assert_eq!(r1.residual, obj1.residual);
+
+        let r2 = rlayer.objects.get(1).unwrap();
+        assert_eq!(r2.name.as_deref(), Some("CurvedHeadline"));
+        assert_eq!(r2.kind, obj2.kind);
+        assert_eq!(r2.fill, obj2.fill);
+        assert!(r2.outline.is_none(), "FillStyle::Unknown must not synthesize a spurious hairline outline");
+        assert_eq!(r2.effects, obj2.effects);
+
+        let r3 = rlayer.objects.get(2).unwrap();
+        assert_eq!(r3.name.as_deref(), Some("OpaqueMeshNode"));
+        assert_eq!(r3.kind, ObjectKind::Unsupported(unsup));
+    }
+
+    #[test]
+    fn export_dxf_and_import_dxf_roundtrip_layer_table_xdata_effects_powerclip_palette_residuals_and_unsupported_m87() {
+        use coralcraft_color::{Color, Palette, PaletteSwatch};
+        use coralcraft_doc::{
+            ArrowheadKind, ChunkTag, Document, FillStyle, Layer, LayerId, LayerRole, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, ObjectNode,
+            OutlineStyle, PatternKind, RawChunk, RawPayload, TransparencyStyle, UnsupportedObject, VectorEffect,
+        };
+        use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "DXF Industrial Spec".to_owned();
+        doc.units = Unit::Inch;
+        doc.palette = Palette {
+            name: "CAD Spot Swatches".to_owned(),
+            guid: None,
+            swatches: vec![PaletteSwatch { name: "Laser Red".to_owned(), color: Color::spot("LASER CUT", 1.0, [0.0, 1.0, 1.0, 0.0]).unwrap() }],
+        };
+        doc.residual.chunks.push(RawChunk { tag: ChunkTag(*b"ddxf"), flags: 1, slot: 3, payload: RawPayload(vec![0x11, 0x22]), src_offset: 32 });
+
+        let page_bg = FillStyle::TwoColorPattern {
+            kind: PatternKind::DiagonalCrosshatch,
+            fg_color: Color::cmyk(0.1, 0.0, 0.0, 0.05).unwrap(),
+            bg_color: Color::WHITE,
+            tile_size_pt: F64::new(24.0).unwrap(),
+        };
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.name = "Sheet 1 - Chassis".to_owned();
+            page.size = Size::new(720.0, 540.0).unwrap();
+            page.bleed = F64::new(6.0).unwrap();
+            page.background = Some(page_bg.clone());
+            page.residual.chunks.push(RawChunk { tag: ChunkTag(*b"pdxf"), flags: 2, slot: 0, payload: RawPayload(vec![0x33, 0x44]), src_offset: 96 });
+
+            let l1 = page.layers.first_mut().unwrap();
+            l1.name = "Cut & Etch Layer".to_owned();
+            l1.locked = true;
+            l1.opacity = F64::new(0.85).unwrap();
+            l1.residual.chunks.push(RawChunk { tag: ChunkTag(*b"ldxf"), flags: 5, slot: 1, payload: RawPayload(vec![0x77]), src_offset: 160 });
+        }
+
+        // Object 1: Parametric Star PolygonSpec with live Envelope + Contour effects, PowerClip child, Lens transparency, and arrowheads
+        let star_spec = PolygonSpec::star(Point::new(150.0, 160.0).unwrap(), 80.0, 35.0, 5, 18.0).unwrap();
+        let mut outl1 = OutlineStyle::with_width(Color::spot("CUT LINE", 1.0, [0.0, 1.0, 0.0, 0.0]).unwrap(), F64::new(2.5).unwrap());
+        outl1.cap = LineCap::Round;
+        outl1.join = LineJoin::Bevel;
+        outl1.behind_fill = true;
+        outl1.scale_with_object = false;
+        outl1.start_arrow = ArrowheadKind::Circle;
+        outl1.end_arrow = ArrowheadKind::Triangle;
+
+        let pc_inner = ObjectNode::new(
+            ObjectId(1),
+            Some("ClippedPie".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::pie(Rect::new(110.0, 120.0, 190.0, 200.0).unwrap(), 15.0, 240.0).unwrap()),
+            Some(FillStyle::uniform(Color::cmyk(0.7, 0.1, 0.0, 0.0).unwrap())),
+            None,
+        );
+
+        let mut obj1 = ObjectNode::new(
+            ObjectId(2),
+            Some("PowerClippedStar".to_owned()),
+            ObjectKind::Polygon(star_spec),
+            Some(FillStyle::uniform(Color::hsb(45.0, 0.9, 0.95).unwrap())),
+            Some(outl1.clone()),
+        );
+        obj1.locked = true;
+        obj1.opacity = F64::new(0.9).unwrap();
+        obj1.transform = Affine2::new(1.1, 0.15, -0.1, 0.95, 25.0, 15.0).unwrap();
+        obj1.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Brighten { rate: F64::new(0.35).unwrap() } });
+        obj1.effects = vec![VectorEffect::Contour { steps: 2, offset_pt: F64::new(3.0).unwrap(), inside: true }];
+        obj1.powerclip_children = vec![pc_inner];
+        obj1.residual.chunks.push(RawChunk { tag: ChunkTag(*b"odxf"), flags: 7, slot: 4, payload: RawPayload(vec![0x99, 0xAA]), src_offset: 300 });
+
+        // Object 2: Embedded Bitmap + Object 3: UnsupportedObject on a second layer
+        let obj2 = ObjectNode::new(
+            ObjectId(3),
+            Some("CalibrationBitmap".to_owned()),
+            ObjectKind::Bitmap {
+                pixel_width: 2,
+                pixel_height: 2,
+                dpi_x: F64::new(144.0).unwrap(),
+                dpi_y: F64::new(144.0).unwrap(),
+                rgba_pixels: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255],
+            },
+            None,
+            None,
+        );
+
+        let unsup = UnsupportedObject {
+            tag: ChunkTag(*b"cadx"),
+            class_hint: Some("CustomCadEntity".to_owned()),
+            payload: RawPayload(vec![10, 20, 30, 40, 50]),
+            fallback_bounds: Some(Rect::new(400.0, 100.0, 500.0, 180.0).unwrap()),
+            absolute_geometry: false,
+            children: Vec::new(),
+            residual: coralcraft_doc::Residual::default(),
+        };
+        let obj3 = ObjectNode::new(
+            ObjectId(4),
+            Some("UnsupportedCadNode".to_owned()),
+            ObjectKind::Unsupported(unsup.clone()),
+            Some(FillStyle::Unknown { tag: ChunkTag(*b"ufdx"), payload: RawPayload(vec![7, 7, 7]) }),
+            Some(OutlineStyle::hairline(Color::Registration)),
+        );
+
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.layers.first_mut().unwrap().objects.push(obj1.clone());
+            let mut layer2 = Layer::new_normal(LayerId(5), "Bitmaps & Custom");
+            layer2.printable = false;
+            layer2.objects.push(obj2.clone());
+            layer2.objects.push(obj3.clone());
+            page.layers.push(layer2);
+        }
+
+        // Master layer in doc.master_layers
+        let mut master = Layer::new_normal(LayerId(10), "Border Master");
+        master.role = LayerRole::MasterAllPages;
+        master.master_in_front = true;
+        master.objects.push(ObjectNode::new(
+            ObjectId(5),
+            Some("MasterFrame".to_owned()),
+            ObjectKind::Rect(RectSpec::uniform(Rect::new(10.0, 10.0, 710.0, 530.0).unwrap(), 8.0, CornerKind::Scalloped).unwrap()),
+            None,
+            Some(OutlineStyle::hairline(Color::BLACK)),
+        ));
+        doc.master_layers.push(master);
+
+        let dxf = crate::export_dxf(&doc, 0).expect("export_dxf M87");
+        assert!(dxf.contains("0\nTABLE\n2\nLAYER\n"), "export_dxf must emit TABLES LAYER table: {dxf}");
+        assert!(dxf.contains("1001\nCORALCRAFT\n"), "export_dxf must emit 1001 CORALCRAFT XDATA: {dxf}");
+
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf M87");
+        assert_eq!(reimported.title, "DXF Industrial Spec");
+        assert_eq!(reimported.units, Unit::Inch);
+        assert_eq!(reimported.palette, doc.palette);
+        assert_eq!(reimported.residual, doc.residual);
+
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.name, "Sheet 1 - Chassis");
+        assert_eq!(rpage.bleed, F64::new(6.0).unwrap());
+        assert_eq!(rpage.background, Some(page_bg));
+        assert_eq!(rpage.residual, doc.pages.first().unwrap().residual);
+        assert_eq!(rpage.layers.len(), 2);
+
+        let rl1 = rpage.layers.first().unwrap();
+        assert_eq!(rl1.name, "Cut & Etch Layer");
+        assert!(rl1.locked);
+        assert_eq!(rl1.opacity, F64::new(0.85).unwrap());
+        assert_eq!(rl1.residual, doc.pages.first().unwrap().layers.first().unwrap().residual);
+        assert_eq!(rl1.objects.len(), 1);
+
+        let robj1 = rl1.objects.first().unwrap();
+        assert_eq!(robj1.name.as_deref(), Some("PowerClippedStar"));
+        assert_eq!(robj1.kind, ObjectKind::Polygon(star_spec));
+        assert_eq!(robj1.fill, obj1.fill);
+        assert_eq!(robj1.outline, obj1.outline);
+        assert_eq!(robj1.transform, obj1.transform);
+        assert_eq!(robj1.transparency, obj1.transparency);
+        assert_eq!(robj1.effects, obj1.effects);
+        assert_eq!(robj1.powerclip_children.len(), 1);
+        assert_eq!(robj1.powerclip_children.first().unwrap().kind, obj1.powerclip_children.first().unwrap().kind);
+        assert_eq!(robj1.residual, obj1.residual);
+
+        let rl2 = rpage.layers.get(1).unwrap();
+        assert_eq!(rl2.name, "Bitmaps & Custom");
+        assert!(!rl2.printable);
+        assert_eq!(rl2.objects.len(), 2);
+        assert_eq!(rl2.objects.first().unwrap().kind, obj2.kind);
+        assert_eq!(rl2.objects.get(1).unwrap().kind, ObjectKind::Unsupported(unsup));
+        assert_eq!(rl2.objects.get(1).unwrap().fill, obj3.fill);
+        assert!(rl2.objects.get(1).unwrap().outline.as_ref().unwrap().is_hairline());
+
+        let rmaster = reimported.master_layers.iter().find(|l| l.name == "Border Master").expect("Border Master layer in doc.master_layers");
+        assert_eq!(rmaster.role, LayerRole::MasterAllPages);
+        assert!(rmaster.master_in_front);
+        assert_eq!(rmaster.objects.len(), 1);
     }
 }

@@ -8,8 +8,96 @@ use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Poi
 
 use crate::model::{
     DocError, Document, Layer, LayerId, LayerRole, LensKind, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment, TransparencyStyle,
+    UnsupportedObject, VectorEffect,
 };
-use crate::style::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
+use crate::style::{ArrowheadKind, FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind, Residual};
+
+/// Document-level metadata persisted in DXF `$CORALCRAFT_DOC` header records.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DxfDocMeta {
+    pub title: String,
+    pub units: Unit,
+    pub palette: coralcraft_color::Palette,
+    pub residual: Residual,
+}
+
+/// Page-level metadata persisted in DXF `$CORALCRAFT_PAGE` header records.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DxfPageMeta {
+    pub name: String,
+    pub bleed: F64,
+    pub background: Option<FillStyle>,
+    pub residual: Residual,
+}
+
+/// Layer-level metadata persisted in DXF `LAYER` table `1001\nCORALCRAFT` XDATA records.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DxfLayerMeta {
+    pub name: String,
+    pub role: LayerRole,
+    pub visible: bool,
+    pub printable: bool,
+    pub locked: bool,
+    pub master_in_front: bool,
+    pub opacity: F64,
+    pub residual: Residual,
+    pub is_master: bool,
+}
+
+/// Encodes a serializable model value into RFC 4648 standard Base64 JSON for lossless SVG/DXF metadata attributes.
+pub fn encode_interchange_meta<T: serde::Serialize>(val: &T) -> Option<String> {
+    let json = serde_json::to_vec(val).ok()?;
+    Some(encode_svg_base64(&json))
+}
+
+/// Decodes an RFC 4648 Base64 JSON payload (capped at 1 MiB) back into a model value.
+pub fn decode_interchange_meta<T: serde::de::DeserializeOwned>(s: &str) -> Option<T> {
+    const MAX_META_B64_LEN: usize = 1_400_000;
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_META_B64_LEN {
+        return None;
+    }
+    let bytes = decode_svg_base64(trimmed)?;
+    if bytes.len() > 1_048_576 {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn encode_svg_base64(bytes: &[u8]) -> String {
+    const B64_CHARS: [char; 64] = [
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b',
+        'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3',
+        '4', '5', '6', '7', '8', '9', '+', '/',
+    ];
+    let mut out = String::with_capacity((bytes.len() / 3).saturating_add(1).saturating_mul(4));
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk.first().copied().unwrap_or(0);
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        let n = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+        out.push(B64_CHARS.get(((n >> 18) & 63) as usize).copied().unwrap_or('A'));
+        out.push(B64_CHARS.get(((n >> 12) & 63) as usize).copied().unwrap_or('A'));
+        out.push(if chunk.len() > 1 { B64_CHARS.get(((n >> 6) & 63) as usize).copied().unwrap_or('A') } else { '=' });
+        out.push(if chunk.len() > 2 { B64_CHARS.get((n & 63) as usize).copied().unwrap_or('A') } else { '=' });
+    }
+    out
+}
+
+fn apply_svg_node_extra_meta(node: &mut ObjectNode, tag_slice: &str) {
+    if let Some(effs) = extract_attr_str(tag_slice, "data-effects").and_then(decode_interchange_meta::<Vec<VectorEffect>>) {
+        node.effects = effs;
+    }
+    if let Some(orig_kind) = extract_attr_str(tag_slice, "data-orig-kind").and_then(decode_interchange_meta::<ObjectKind>) {
+        node.kind = orig_kind;
+    }
+    if let Some(unsup) = extract_attr_str(tag_slice, "data-unsupported").and_then(decode_interchange_meta::<UnsupportedObject>) {
+        node.kind = ObjectKind::Unsupported(unsup);
+    }
+    if let Some(res) = extract_attr_str(tag_slice, "data-residual").and_then(decode_interchange_meta::<Residual>) {
+        node.residual = res;
+    }
+}
 
 fn apply_svg_doc_page_meta(doc: &mut Document, tag_slice: &str) {
     if let Some(title) = extract_attr_str(tag_slice, "data-title") {
@@ -25,6 +113,12 @@ fn apply_svg_doc_page_meta(doc: &mut Document, tag_slice: &str) {
             _ => doc.units,
         };
     }
+    if let Some(pal) = extract_attr_str(tag_slice, "data-palette").and_then(decode_interchange_meta::<coralcraft_color::Palette>) {
+        doc.palette = pal;
+    }
+    if let Some(dres) = extract_attr_str(tag_slice, "data-doc-residual").and_then(decode_interchange_meta::<Residual>) {
+        doc.residual = dres;
+    }
     if let Some(page) = doc.pages.first_mut() {
         if let Some(pname) = extract_attr_str(tag_slice, "data-page-name") {
             page.name = unescape_svg_xml(pname);
@@ -33,6 +127,9 @@ fn apply_svg_doc_page_meta(doc: &mut Document, tag_slice: &str) {
             && let Ok(b) = F64::new(bleed_val)
         {
             page.bleed = b;
+        }
+        if let Some(pres) = extract_attr_str(tag_slice, "data-page-residual").and_then(decode_interchange_meta::<Residual>) {
+            page.residual = pres;
         }
     }
 }
@@ -271,6 +368,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let printable = extract_attr_str(tag_slice, "data-printable") != Some("0");
                 let locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
                 let master_in_front = extract_attr_str(tag_slice, "data-master-in-front") == Some("1");
+                let layer_res = extract_attr_str(tag_slice, "data-layer-residual").and_then(decode_interchange_meta::<Residual>).unwrap_or_default();
                 if is_master_layer {
                     if let Some(pos_m) = doc.master_layers.iter().position(|ml| ml.name == layer_name && ml.objects.is_empty())
                         && let Some(ml) = doc.master_layers.get_mut(pos_m)
@@ -280,6 +378,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                         ml.printable = printable;
                         ml.locked = locked;
                         ml.master_in_front = master_in_front;
+                        ml.residual = layer_res;
                         active_master_idx = Some(pos_m);
                     } else {
                         let next_lid = LayerId(doc.master_layers.len().saturating_add(100) as u64);
@@ -289,6 +388,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                         new_layer.printable = printable;
                         new_layer.locked = locked;
                         new_layer.master_in_front = master_in_front;
+                        new_layer.residual = layer_res;
                         doc.master_layers.push(new_layer);
                         active_master_idx = Some(doc.master_layers.len().saturating_sub(1));
                     }
@@ -305,6 +405,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                             first_layer.printable = printable;
                             first_layer.locked = locked;
                             first_layer.master_in_front = master_in_front;
+                            first_layer.residual = layer_res;
                         } else {
                             let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
                             let mut new_layer = Layer::new_normal(next_lid, layer_name);
@@ -313,6 +414,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                             new_layer.printable = printable;
                             new_layer.locked = locked;
                             new_layer.master_in_front = master_in_front;
+                            new_layer.residual = layer_res;
                             page.layers.push(new_layer);
                         }
                         saw_layer_group = true;
@@ -397,7 +499,10 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 apply_svg_doc_page_meta(&mut doc, tag_slice);
                 let rw = parse_attr_f64(tag_slice, "width").unwrap_or(0.0);
                 let rh = parse_attr_f64(tag_slice, "height").unwrap_or(0.0);
-                let (fill, _) = parse_svg_style_attrs(tag_slice, &svg_gradients);
+                let (mut fill, _) = parse_svg_style_attrs(tag_slice, &svg_gradients);
+                if let Some(bg_unk) = extract_attr_str(tag_slice, "data-page-bg-unknown").and_then(decode_interchange_meta::<FillStyle>) {
+                    fill = Some(bg_unk);
+                }
                 if let Some(page) = doc.pages.first_mut() {
                     if rw > 1.0
                         && rh > 1.0
@@ -516,6 +621,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 node.opacity = parse_svg_node_opacity(tag_slice);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
+                apply_svg_node_extra_meta(&mut node, tag_slice);
                 push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         } else if (tag_slice.starts_with("<image ") || tag_slice.starts_with("<image\t"))
@@ -528,6 +634,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             node.opacity = parse_svg_node_opacity(tag_slice);
             node.transform = img_tf;
             node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
+            apply_svg_node_extra_meta(&mut node, tag_slice);
             push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
         } else if (tag_slice.starts_with("<text ") || tag_slice.starts_with("<text\t") || tag_slice == "<text>")
             && let Some(after_open) = svg_str.get(pos..)
@@ -572,6 +679,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 node.opacity = parse_svg_node_opacity(tag_slice);
                 node.transform = parse_svg_transform(tag_slice);
                 node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
+                apply_svg_node_extra_meta(&mut node, tag_slice);
                 push_svg_node(&mut doc, active_master_idx, &mut group_stack, node);
             }
         }
@@ -592,6 +700,14 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
 }
 
 fn parse_svg_transform(tag_slice: &str) -> Affine2 {
+    if let Some(exact_raw) = extract_attr_str(tag_slice, "data-transform") {
+        let nums: Vec<f64> = exact_raw.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        if let [a, b, c, d, tx, ty] = nums.as_slice()
+            && let Ok(exact_tf) = Affine2::new(*a, *b, *c, *d, *tx, *ty)
+        {
+            return exact_tf;
+        }
+    }
     let Some(raw) = extract_attr_str(tag_slice, "transform") else {
         return Affine2::IDENTITY;
     };
@@ -1164,18 +1280,24 @@ fn parse_svg_style_attrs(tag_slice: &str, svg_gradients: &BTreeMap<String, FillS
     if let Some(fill_meta_col) = extract_attr_str(tag_slice, "data-fill-color").and_then(decode_svg_color_meta) {
         fill = Some(FillStyle::uniform(fill_meta_col));
     }
+    if let Some(fill_unk) = extract_attr_str(tag_slice, "data-fill-unknown").and_then(decode_interchange_meta::<FillStyle>) {
+        fill = Some(fill_unk);
+    }
     let outline = match extract_style_or_attr_str(tag_slice, "stroke") {
         Some("none") | Some("transparent") | None => None,
         Some(raw) => parse_svg_color(raw.trim()).map(OutlineStyle::hairline),
     };
-    let has_explicit_stroke_none = matches!(extract_style_or_attr_str(tag_slice, "stroke").map(str::trim), Some("none" | "transparent"));
+    let has_explicit_stroke_none = matches!(extract_style_or_attr_str(tag_slice, "stroke").map(str::trim), Some("none" | "transparent"))
+        || (extract_attr_str(tag_slice, "data-unsupported").is_some() && extract_style_or_attr_str(tag_slice, "stroke").is_none());
     let mut outline =
         if fill.is_none() && outline.is_none() && !has_explicit_stroke_none { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
     if let Some(st) = &mut outline {
         if let Some(stroke_meta_col) = extract_attr_str(tag_slice, "data-stroke-color").and_then(decode_svg_color_meta) {
             st.color = stroke_meta_col;
         }
-        if let Some(w) = parse_attr_f64(tag_slice, "data-stroke-width-pt").or_else(|| parse_style_or_attr_f64(tag_slice, "stroke-width"))
+        if extract_attr_str(tag_slice, "data-hairline") == Some("1") {
+            st.width_pt = F64::ZERO;
+        } else if let Some(w) = parse_attr_f64(tag_slice, "data-stroke-width-pt").or_else(|| parse_style_or_attr_f64(tag_slice, "stroke-width"))
             && w > 0.0
             && let Ok(w_f64) = F64::new(w)
         {
@@ -1733,6 +1855,45 @@ fn parse_attr_f64(tag: &str, attr: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok()
 }
 
+fn reassign_object_ids(node: &mut ObjectNode, doc: &mut Document) {
+    node.id = doc.allocate_object_id();
+    for pc in &mut node.powerclip_children {
+        reassign_object_ids(pc, doc);
+    }
+    if let ObjectKind::Group { children } = &mut node.kind {
+        for ch in children {
+            reassign_object_ids(ch, doc);
+        }
+    }
+}
+
+fn push_dxf_mapped_node(
+    doc: &mut Document,
+    dxf_layer_map: &BTreeMap<String, (bool, usize)>,
+    saw_custom_layer: &mut bool,
+    active_block: &mut Option<(String, f64, f64, Vec<ObjectNode>)>,
+    layer_name: Option<&str>,
+    node: ObjectNode,
+) {
+    if active_block.is_none()
+        && let Some(lname) = layer_name.map(str::trim).filter(|s| !s.is_empty() && *s != "0")
+        && let Some(&(is_master, l_idx)) = dxf_layer_map.get(lname)
+    {
+        if is_master {
+            if let Some(ml) = doc.master_layers.get_mut(l_idx) {
+                ml.objects.push(node);
+            }
+        } else if let Some(page) = doc.pages.first_mut()
+            && let Some(pl) = page.layers.get_mut(l_idx)
+        {
+            pl.objects.push(node);
+            *saw_custom_layer = true;
+        }
+        return;
+    }
+    push_dxf_node(doc, saw_custom_layer, active_block, layer_name, node);
+}
+
 fn push_dxf_node(
     doc: &mut Document,
     saw_custom_layer: &mut bool,
@@ -1896,12 +2057,39 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             {
                 first_page.size = sz;
             }
-            break;
+        } else if c == 9 && (v == "$CORALCRAFT_DOC" || v == "$CORALCRAFT_PAGE") {
+            let mut b64_buf = String::new();
+            let mut sub = hp_idx.saturating_add(1);
+            while let Some(&(sc, sv)) = pairs.get(sub) {
+                if sc == 9 || sc == 0 {
+                    break;
+                }
+                if sc == 1 {
+                    b64_buf.push_str(sv.trim());
+                }
+                sub = sub.saturating_add(1);
+            }
+            if v == "$CORALCRAFT_DOC" {
+                if let Some(dmeta) = decode_interchange_meta::<DxfDocMeta>(&b64_buf) {
+                    doc.title = dmeta.title;
+                    doc.units = dmeta.units;
+                    doc.palette = dmeta.palette;
+                    doc.residual = dmeta.residual;
+                }
+            } else if let Some(pmeta) = decode_interchange_meta::<DxfPageMeta>(&b64_buf)
+                && let Some(first_page) = doc.pages.first_mut()
+            {
+                first_page.name = pmeta.name;
+                first_page.bleed = pmeta.bleed;
+                first_page.background = pmeta.background;
+                first_page.residual = pmeta.residual;
+            }
         }
     }
     let doc_page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
 
     let mut saw_custom_layer = false;
+    let mut dxf_layer_map: BTreeMap<String, (bool, usize)> = BTreeMap::new();
     let mut blocks: BTreeMap<String, Vec<ObjectNode>> = BTreeMap::new();
     let mut active_block: Option<(String, f64, f64, Vec<ObjectNode>)> = None;
     let mut ltypes: BTreeMap<String, Vec<F64>> = BTreeMap::new();
@@ -1909,7 +2097,146 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
     let mut p = 0usize;
     while let Some(&(code, val)) = pairs.get(p) {
         let (bx_off, page_h) = if let Some((_, bx, by, _)) = &active_block { (*bx, *by) } else { (0.0, doc_page_h) };
-        if code == 0 && val == "LTYPE" {
+        if active_block.is_none()
+            && code == 0
+            && matches!(
+                val,
+                "INSERT" | "LINE" | "POLYLINE" | "CIRCLE" | "ARC" | "ELLIPSE" | "LWPOLYLINE" | "SPLINE" | "SOLID" | "TEXT" | "MTEXT" | "POINT"
+            )
+        {
+            let is_polyline = val == "POLYLINE";
+            let mut scan = p.saturating_add(1);
+            let mut ent_layer: Option<&str> = None;
+            let mut in_cc_xdata = false;
+            let mut xdata_buf = String::new();
+            while let Some(&(c, v)) = pairs.get(scan) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    8 => ent_layer = Some(v),
+                    1001 => in_cc_xdata = v.trim() == "CORALCRAFT",
+                    1000 if in_cc_xdata => xdata_buf.push_str(v.trim()),
+                    _ => {}
+                }
+                scan = scan.saturating_add(1);
+            }
+            if xdata_buf == "SKIP" || xdata_buf.starts_with("N:") || val == "POINT" {
+                if let Some(b64) = xdata_buf.strip_prefix("N:")
+                    && let Some(mut node) = decode_interchange_meta::<ObjectNode>(b64)
+                {
+                    reassign_object_ids(&mut node, &mut doc);
+                    push_dxf_mapped_node(&mut doc, &dxf_layer_map, &mut saw_custom_layer, &mut active_block, ent_layer, node);
+                }
+                p = scan;
+                if is_polyline {
+                    while let Some(&(c, v)) = pairs.get(p) {
+                        if c == 0 && v == "VERTEX" {
+                            p = p.saturating_add(1);
+                            while let Some(&(vc, _)) = pairs.get(p) {
+                                if vc == 0 {
+                                    break;
+                                }
+                                p = p.saturating_add(1);
+                            }
+                        } else if c == 0 && v == "SEQEND" {
+                            p = p.saturating_add(1);
+                            while let Some(&(sc, _)) = pairs.get(p) {
+                                if sc == 0 {
+                                    break;
+                                }
+                                p = p.saturating_add(1);
+                            }
+                            break;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        if code == 0 && val == "LAYER" {
+            p = p.saturating_add(1);
+            let mut safe_name = String::new();
+            let mut in_cc_xdata = false;
+            let mut xdata_buf = String::new();
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    2 if safe_name.is_empty() => safe_name = v.trim().to_owned(),
+                    1001 => in_cc_xdata = v.trim() == "CORALCRAFT",
+                    1000 if in_cc_xdata => xdata_buf.push_str(v.trim()),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            if !safe_name.is_empty()
+                && safe_name != "0"
+                && let Some(b64) = xdata_buf.strip_prefix("L:")
+                && let Some(lmeta) = decode_interchange_meta::<DxfLayerMeta>(b64)
+            {
+                if lmeta.is_master {
+                    let m_idx = if let Some(pos_m) = doc.master_layers.iter().position(|ml| ml.name == lmeta.name && ml.objects.is_empty())
+                        && let Some(ml) = doc.master_layers.get_mut(pos_m)
+                    {
+                        ml.role = lmeta.role;
+                        ml.visible = lmeta.visible;
+                        ml.printable = lmeta.printable;
+                        ml.locked = lmeta.locked;
+                        ml.master_in_front = lmeta.master_in_front;
+                        ml.opacity = lmeta.opacity;
+                        ml.residual = lmeta.residual;
+                        pos_m
+                    } else {
+                        let next_lid = LayerId(doc.master_layers.len().saturating_add(100) as u64);
+                        let mut new_layer = Layer::new_normal(next_lid, lmeta.name);
+                        new_layer.role = lmeta.role;
+                        new_layer.visible = lmeta.visible;
+                        new_layer.printable = lmeta.printable;
+                        new_layer.locked = lmeta.locked;
+                        new_layer.master_in_front = lmeta.master_in_front;
+                        new_layer.opacity = lmeta.opacity;
+                        new_layer.residual = lmeta.residual;
+                        doc.master_layers.push(new_layer);
+                        doc.master_layers.len().saturating_sub(1)
+                    };
+                    dxf_layer_map.insert(safe_name, (true, m_idx));
+                } else if let Some(page) = doc.pages.first_mut() {
+                    let l_idx = if !saw_custom_layer
+                        && let Some(first_layer) = page.layers.first_mut()
+                        && first_layer.objects.is_empty()
+                    {
+                        first_layer.name = lmeta.name;
+                        first_layer.role = lmeta.role;
+                        first_layer.visible = lmeta.visible;
+                        first_layer.printable = lmeta.printable;
+                        first_layer.locked = lmeta.locked;
+                        first_layer.master_in_front = lmeta.master_in_front;
+                        first_layer.opacity = lmeta.opacity;
+                        first_layer.residual = lmeta.residual;
+                        saw_custom_layer = true;
+                        0
+                    } else {
+                        let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
+                        let mut new_layer = Layer::new_normal(next_lid, lmeta.name);
+                        new_layer.role = lmeta.role;
+                        new_layer.visible = lmeta.visible;
+                        new_layer.printable = lmeta.printable;
+                        new_layer.locked = lmeta.locked;
+                        new_layer.master_in_front = lmeta.master_in_front;
+                        new_layer.opacity = lmeta.opacity;
+                        new_layer.residual = lmeta.residual;
+                        page.layers.push(new_layer);
+                        saw_custom_layer = true;
+                        page.layers.len().saturating_sub(1)
+                    };
+                    dxf_layer_map.insert(safe_name, (false, l_idx));
+                }
+            }
+        } else if code == 0 && val == "LTYPE" {
             p = p.saturating_add(1);
             let mut lt_name = String::new();
             let mut dashes = Vec::new();
