@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M38 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M39 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -36,9 +36,10 @@
   28. **M35: Knife Tool (`knife_cut_path_by_line`), Crop Tool (`CropToRect`), Polygon/Star Live Updates (`update_polygon_parameters`), Cross-Layer Object Transfer (`MoveObjectToLayer`), and 124 MCP Tools (`commit c49412c`)**.
   29. **M36: Eraser Tool (`erase_path_within_circle` / `X`), Snap Settings (`SetSnapSettings`), Viewport Zoom/Pan (`set_viewport`), Active Tool Switcher (`set_active_tool`), and 128 MCP Tools (`commit a736bdc`)**.
   30. **M37: Virtual Segment Delete (`delete_segment_at_index`), Smart Fill Tool (`SmartFillAtPoint`), CMX1 & CDRX ZIP Export MCP Tools (`export_cmx1_byte_len`, `export_cdrx_zip_byte_len`), and 132 MCP Tools (`commit 75e0fc2`)**.
-  31. **M38: Parallel / Offset Curve (`offset_open_or_closed_path`), Winding / Even-Odd Fill Rule (`SetPathFillRule`), CMYK & HSB Color Authoring (`set_style_cmyk`, `set_style_hsb`), and 136 MCP Tools**:
-      - `coralcraft-geom`: Added `offset_open_or_closed_path`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `OffsetObjectPath`, `SetPathFillRule`, `offset_object_path`, `set_path_fill_rule`, `set_style_cmyk`, `set_style_hsb`, and expanded MCP server to **136 tools**.
+  31. **M38: Parallel / Offset Curve (`offset_open_or_closed_path`), Winding / Even-Odd Fill Rule (`SetPathFillRule`), CMYK & HSB Color Authoring (`set_style_cmyk`, `set_style_hsb`), and 136 MCP Tools (`commit 38da6e2`)**.
+  32. **M39: Path Length & Area Measurement (`measure_path_length_and_area`), Swap Object Positions (`SwapObjectPositions`), Center Selection to Page (`CenterSelectionToPage` / `P`), Spot & Registration Color Authoring (`set_style_spot`), and 140 MCP Tools**:
+      - `coralcraft-geom`: Added `measure_path_length_and_area`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SwapObjectPositions`, `CenterSelectionToPage`, `measure_object_geometry`, `swap_object_positions`, `center_selection_to_page`, `set_style_spot`, and expanded MCP server to **140 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

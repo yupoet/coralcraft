@@ -9,9 +9,9 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
-    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, offset_open_or_closed_path,
-    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
-    smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
+    delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
+    measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_path_around_point, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -254,6 +254,10 @@ pub enum EngineCommand {
     OffsetObjectPath { object_id: ObjectId, distance_pt: F64, copy: bool },
     /// Updates the winding fill rule (`FillRule::NonZero` or `FillRule::EvenOdd`) of `object_id` (`Properties` Docker).
     SetPathFillRule { object_id: ObjectId, fill_rule: FillRule },
+    /// Swaps the bounding-box centers of `first_id` and `second_id` (`Object -> Align and Distribute -> Swap`).
+    SwapObjectPositions { first_id: ObjectId, second_id: ObjectId },
+    /// Centers the current selection horizontally and/or vertically on the active page (`Object -> Align and Distribute -> Center to Page`).
+    CenterSelectionToPage { horizontal: bool, vertical: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1065,6 +1069,25 @@ impl EditorEngine {
             EngineCommand::SetPathFillRule { object_id, .. } => {
                 let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
                 if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SwapObjectPositions { first_id, second_id } => {
+                if first_id == second_id {
+                    return false;
+                }
+                let ok1 = self.selected_or_all_node(*first_id).is_some_and(|o| !o.locked);
+                let ok2 = self.selected_or_all_node(*second_id).is_some_and(|o| !o.locked);
+                if !ok1 || !ok2 {
+                    return false;
+                }
+            }
+            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
+                if !horizontal && !vertical {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
                     return false;
                 }
             }
@@ -2907,6 +2930,46 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::SwapObjectPositions { first_id, second_id } => {
+                let c1 = self.selected_or_all_node(first_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
+                let c2 = self.selected_or_all_node(second_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
+                if let (Some(p1), Some(p2)) = (c1, c2) {
+                    let dx = p2.x.get() - p1.x.get();
+                    let dy = p2.y.get() - p1.y.get();
+                    let tf1 = Affine2::translation(dx, dy).unwrap_or(Affine2::IDENTITY);
+                    let tf2 = Affine2::translation(-dx, -dy).unwrap_or(Affine2::IDENTITY);
+                    self.for_each_node_mut(|obj| {
+                        if !obj.locked {
+                            if obj.id == first_id {
+                                if let Ok(composed) = obj.transform.then(tf1) {
+                                    obj.transform = composed;
+                                }
+                            } else if obj.id == second_id
+                                && let Ok(composed) = obj.transform.then(tf2)
+                            {
+                                obj.transform = composed;
+                            }
+                        }
+                    });
+                }
+            }
+            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if let Ok(sel_center) = combined_selection_bounds(&sel_nodes).center() {
+                    let page_size = self.current_page().size;
+                    let dx = if horizontal { 0.5 * page_size.width.get() - sel_center.x.get() } else { 0.0 };
+                    let dy = if vertical { 0.5 * page_size.height.get() - sel_center.y.get() } else { 0.0 };
+                    if let Ok(tf) = Affine2::translation(dx, dy) {
+                        self.for_each_selected_mut(|obj| {
+                            if !obj.locked
+                                && let Ok(composed) = obj.transform.then(tf)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                }
+            }
         }
         true
     }
@@ -2944,6 +3007,14 @@ impl EditorEngine {
     /// Selects all unlocked, visible objects on the active target layer (`Edit -> Select All -> Objects` / `Ctrl+A`).
     pub fn select_all(&mut self) {
         self.selection = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).map(|o| o.id).collect();
+    }
+
+    /// Computes `(length_pt, signed_area_sq_pt)` of the world-space contour of `object_id` (`Object Properties -> Curve`).
+    pub fn measure_object_geometry(&self, object_id: ObjectId) -> Option<(f64, f64)> {
+        let obj = self.selected_or_all_node(object_id)?;
+        let local_path = object_to_path(obj)?;
+        let world_path = local_path.transform(obj.transform).ok()?;
+        measure_path_length_and_area(&world_path).ok()
     }
 }
 
@@ -3699,6 +3770,10 @@ mod tests {
         }));
         let sf_id = engine.selection[0];
         assert!(engine.execute(EngineCommand::OffsetObjectPath { object_id: sf_id, distance_pt: F64::new(5.0).unwrap(), copy: true }));
+        let off_id = engine.selection[0];
         assert!(engine.execute(EngineCommand::SetPathFillRule { object_id: sf_id, fill_rule: FillRule::EvenOdd }));
+        assert!(engine.execute(EngineCommand::SwapObjectPositions { first_id: sf_id, second_id: off_id }));
+        engine.set_selection(vec![sf_id]);
+        assert!(engine.execute(EngineCommand::CenterSelectionToPage { horizontal: true, vertical: true }));
     }
 }

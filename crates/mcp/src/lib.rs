@@ -779,6 +779,26 @@ impl McpServer {
                             "name": "set_style_hsb",
                             "description": "Sets fill or outline color in HSB (h_deg in 0..360, s and b in 0.0..=1.0) on selected objects or creation defaults.",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "measure_object_geometry",
+                            "description": "Computes total path length (length_pt) and signed/absolute area (area_sq_pt) of an object in world points (Object Properties -> Curve).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "swap_object_positions",
+                            "description": "Swaps the bounding-box centers of two objects (first_id, second_id).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "center_selection_to_page",
+                            "description": "Centers the current selection horizontally and/or vertically on the active page (Object -> Align and Distribute -> Center to Page / P).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_style_spot",
+                            "description": "Sets fill or outline to a named Spot color (or Registration when name is 'Registration') with tint (0.0..=1.0) and CMYK fallback.",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -2235,6 +2255,45 @@ impl McpServer {
                 let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color: Some(color) });
                 Ok(json!({ "hsb_style_applied": ok }))
             }
+            "measure_object_geometry" => {
+                let target = self.resolve_target_id(args)?;
+                let (length_pt, signed_area_sq_pt) =
+                    self.engine.measure_object_geometry(target).ok_or_else(|| format!("Object {} not measurable", target.0))?;
+                Ok(json!({
+                    "object_id": target.0,
+                    "length_pt": length_pt,
+                    "signed_area_sq_pt": signed_area_sq_pt,
+                    "area_sq_pt": signed_area_sq_pt.abs()
+                }))
+            }
+            "swap_object_positions" => {
+                let first_id = ObjectId(args.get("first_id").and_then(Value::as_u64).ok_or_else(|| "Missing first_id".to_owned())?);
+                let second_id = ObjectId(args.get("second_id").and_then(Value::as_u64).ok_or_else(|| "Missing second_id".to_owned())?);
+                let ok = self.engine.execute(EngineCommand::SwapObjectPositions { first_id, second_id });
+                Ok(json!({ "swapped": ok, "first_id": first_id.0, "second_id": second_id.0 }))
+            }
+            "center_selection_to_page" => {
+                self.apply_optional_selection(args);
+                let horizontal = args.get("horizontal").and_then(Value::as_bool).unwrap_or(true);
+                let vertical = args.get("vertical").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::CenterSelectionToPage { horizontal, vertical });
+                Ok(json!({ "centered": ok, "horizontal": horizontal, "vertical": vertical }))
+            }
+            "set_style_spot" => {
+                let channel = match args.get("channel").and_then(Value::as_str).unwrap_or("fill") {
+                    "outline" | "stroke" => PaletteChannel::Outline,
+                    _ => PaletteChannel::Fill,
+                };
+                let name = args.get("name").and_then(Value::as_str).unwrap_or("Spot 1");
+                let tint = args.get("tint").and_then(Value::as_f64).unwrap_or(1.0).clamp(0.0, 1.0);
+                let c = args.get("c").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let m = args.get("m").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let k = args.get("k").and_then(Value::as_f64).unwrap_or(0.0).clamp(0.0, 1.0);
+                let color = Color::spot(name, tint, [c, m, y, k]).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::ApplyPaletteSwatch { channel, color: Some(color) });
+                Ok(json!({ "spot_style_applied": ok, "name": name }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2264,7 +2323,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 136);
+        assert_eq!(tools, 140);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

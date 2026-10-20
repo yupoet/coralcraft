@@ -1447,6 +1447,43 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
     Ok(out)
 }
 
+/// Computes `(total_arc_length_pt, enclosed_area_pt2)` for `path` (`CorelDRAW Curve Statistics`).
+///
+/// Open subpaths contribute to `total_arc_length_pt` and `0.0` to `enclosed_area_pt2`; closed
+/// subpaths include their closing chord in `total_arc_length_pt` and accumulate signed Shoelace
+/// area ($\frac{1}{2} \sum (x_i y_{i+1} - x_{i+1} y_i)$).
+pub fn measure_path_length_and_area(path: &Path) -> Result<(f64, f64), GeomError> {
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut total_len = 0.0;
+    let mut signed_area2 = 0.0;
+    for poly in polylines {
+        let n = poly.points.len();
+        if n < 2 {
+            continue;
+        }
+        for seg in poly.points.windows(2) {
+            let dx = seg[1].x.get() - seg[0].x.get();
+            let dy = seg[1].y.get() - seg[0].y.get();
+            total_len += dx.hypot(dy);
+        }
+        if poly.closed {
+            let first = poly.points[0];
+            let last = poly.points[n - 1];
+            total_len += (first.x.get() - last.x.get()).hypot(first.y.get() - last.y.get());
+            if n >= 3 {
+                let mut sub_area2 = 0.0;
+                for i in 0..n {
+                    let p0 = poly.points[i];
+                    let p1 = poly.points[(i + 1) % n];
+                    sub_area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
+                }
+                signed_area2 += sub_area2;
+            }
+        }
+    }
+    Ok((total_len, 0.5 * signed_area2.abs()))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1483,5 +1520,10 @@ mod m26_tests {
         assert!(matches!(vsd.elements[1], PathElement::MoveTo(_)));
         let offset = offset_open_or_closed_path(&linear, 10.0).unwrap();
         assert_eq!(offset.elements.len(), 2);
+
+        let rect_path = crate::shapes::RectSpec::sharp(crate::Rect::new(0.0, 0.0, 50.0, 40.0).unwrap()).to_path().unwrap();
+        let (perim, area) = measure_path_length_and_area(&rect_path).unwrap();
+        assert!((perim - 180.0).abs() < 1e-6);
+        assert!((area - 2000.0).abs() < 1e-6);
     }
 }
