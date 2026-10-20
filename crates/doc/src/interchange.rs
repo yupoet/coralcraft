@@ -2,7 +2,7 @@
 //! for `coralcraft-doc`.
 
 use coralcraft_color::Color;
-use coralcraft_geom::{Affine2, EllipseSpec, F64, Path, Point, Rect, RectSpec, Size};
+use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
 use crate::model::{DocError, Document, ObjectKind, ObjectNode};
 use crate::style::{FillStyle, LineCap, LineJoin, OutlineStyle};
@@ -108,9 +108,20 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 && h > 0.0
                 && let Ok(r) = Rect::new(x, y, x + w, y + h)
             {
+                let rx_opt = parse_attr_f64(tag_slice, "rx").filter(|&v| v > 0.0);
+                let ry_opt = parse_attr_f64(tag_slice, "ry").filter(|&v| v > 0.0);
+                let rad = match (rx_opt, ry_opt) {
+                    (Some(rx), Some(ry)) => rx.max(ry),
+                    (Some(rx), None) => rx,
+                    (None, Some(ry)) => ry,
+                    (None, None) => 0.0,
+                }
+                .clamp(0.0, 0.5 * w.min(h));
+                let rspec =
+                    if rad > 0.0 { RectSpec::uniform(r, rad, CornerKind::Round).unwrap_or_else(|_| RectSpec::sharp(r)) } else { RectSpec::sharp(r) };
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
-                let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(RectSpec::sharp(r)), fill, outline);
+                let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(rspec), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
@@ -151,8 +162,11 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
         {
             let is_polygon = tag_slice.starts_with("<polygon");
             if let Some(pts_str) = extract_attr_str(tag_slice, "points")
-                && let Some(path) = parse_svg_points_path(pts_str, is_polygon)
+                && let Some(mut path) = parse_svg_points_path(pts_str, is_polygon)
             {
+                if extract_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
+                    path.fill_rule = FillRule::EvenOdd;
+                }
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
                 let label = if is_polygon { "SVG Polygon" } else { "SVG Polyline" };
@@ -166,9 +180,12 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 continue;
             }
             if let Some(d_str) = extract_attr_str(tag_slice, "d")
-                && let Ok(path) = parse_svg_path_d(d_str)
+                && let Ok(mut path) = parse_svg_path_d(d_str)
                 && !path.is_empty()
             {
+                if extract_attr_str(tag_slice, "fill-rule").map(str::trim) == Some("evenodd") {
+                    path.fill_rule = FillRule::EvenOdd;
+                }
                 let (fill, outline) = parse_svg_style_attrs(tag_slice);
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline);
@@ -244,6 +261,22 @@ fn parse_svg_transform(tag_slice: &str) -> Affine2 {
             [sx] => return Affine2::scaling(*sx, *sx).unwrap_or(Affine2::IDENTITY),
             _ => {}
         }
+    } else if let Some(rest) = s.strip_prefix("rotate(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        let nums: Vec<f64> =
+            inner.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+        match nums.as_slice() {
+            [ang, cx, cy] => {
+                if let (Ok(t0), Ok(rot), Ok(t1)) = (Affine2::translation(-*cx, -*cy), Affine2::rotation_deg(*ang), Affine2::translation(*cx, *cy))
+                    && let Ok(tr) = t0.then(rot).and_then(|m| m.then(t1))
+                {
+                    return tr;
+                }
+            }
+            [ang] => return Affine2::rotation_deg(*ang).unwrap_or(Affine2::IDENTITY),
+            _ => {}
+        }
     }
     Affine2::IDENTITY
 }
@@ -275,37 +308,70 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     }
 
     let mut i = 0usize;
+    let mut cur_x = 0.0_f64;
+    let mut cur_y = 0.0_f64;
+    let mut sub_x = 0.0_f64;
+    let mut sub_y = 0.0_f64;
     while let Some(cmd) = tokens.get(i).map(String::as_str) {
         i = i.saturating_add(1);
         match cmd {
-            "M" if i.saturating_add(1) < tokens.len() => {
-                if let (Some(x), Some(y)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
-                    let pt = Point::new(x, y)?;
+            "M" | "m" if i.saturating_add(1) < tokens.len() => {
+                if let (Some(dx), Some(dy)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
+                    let (nx, ny) = if cmd == "m" { (cur_x + dx, cur_y + dy) } else { (dx, dy) };
+                    let pt = Point::new(nx, ny)?;
                     path.move_to(pt)?;
+                    cur_x = nx;
+                    cur_y = ny;
+                    sub_x = nx;
+                    sub_y = ny;
                 }
                 i = i.saturating_add(2);
             }
-            "L" if i.saturating_add(1) < tokens.len() => {
-                if let (Some(x), Some(y)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
-                    let pt = Point::new(x, y)?;
+            "L" | "l" if i.saturating_add(1) < tokens.len() => {
+                if let (Some(dx), Some(dy)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
+                    let (nx, ny) = if cmd == "l" { (cur_x + dx, cur_y + dy) } else { (dx, dy) };
+                    let pt = Point::new(nx, ny)?;
                     path.line_to(pt)?;
+                    cur_x = nx;
+                    cur_y = ny;
                 }
                 i = i.saturating_add(2);
             }
-            "Q" if i.saturating_add(3) < tokens.len() => {
+            "H" | "h" if i < tokens.len() => {
+                if let Some(dx) = token_f64(&tokens, i) {
+                    let nx = if cmd == "h" { cur_x + dx } else { dx };
+                    let pt = Point::new(nx, cur_y)?;
+                    path.line_to(pt)?;
+                    cur_x = nx;
+                }
+                i = i.saturating_add(1);
+            }
+            "V" | "v" if i < tokens.len() => {
+                if let Some(dy) = token_f64(&tokens, i) {
+                    let ny = if cmd == "v" { cur_y + dy } else { dy };
+                    let pt = Point::new(cur_x, ny)?;
+                    path.line_to(pt)?;
+                    cur_y = ny;
+                }
+                i = i.saturating_add(1);
+            }
+            "Q" | "q" if i.saturating_add(3) < tokens.len() => {
                 if let (Some(cx), Some(cy), Some(ex), Some(ey)) = (
                     token_f64(&tokens, i),
                     token_f64(&tokens, i.saturating_add(1)),
                     token_f64(&tokens, i.saturating_add(2)),
                     token_f64(&tokens, i.saturating_add(3)),
                 ) {
-                    let ctrl = Point::new(cx, cy)?;
-                    let pt = Point::new(ex, ey)?;
+                    let (acx, acy, aex, aey) = if cmd == "q" { (cur_x + cx, cur_y + cy, cur_x + ex, cur_y + ey) } else { (cx, cy, ex, ey) };
+                    let ctrl = Point::new(acx, acy)?;
+                    let pt = Point::new(aex, aey)?;
                     path.quad_to(ctrl, pt)?;
+                    cur_x = aex;
+                    cur_y = aey;
                 }
                 i = i.saturating_add(4);
             }
-            "C" if i.saturating_add(5) < tokens.len() => {
+            "C" | "c" if i.saturating_add(5) < tokens.len() => {
                 if let (Some(c1x), Some(c1y), Some(c2x), Some(c2y), Some(ex), Some(ey)) = (
                     token_f64(&tokens, i),
                     token_f64(&tokens, i.saturating_add(1)),
@@ -314,15 +380,24 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                     token_f64(&tokens, i.saturating_add(4)),
                     token_f64(&tokens, i.saturating_add(5)),
                 ) {
-                    let c1 = Point::new(c1x, c1y)?;
-                    let c2 = Point::new(c2x, c2y)?;
-                    let pt = Point::new(ex, ey)?;
+                    let (ac1x, ac1y, ac2x, ac2y, aex, aey) = if cmd == "c" {
+                        (cur_x + c1x, cur_y + c1y, cur_x + c2x, cur_y + c2y, cur_x + ex, cur_y + ey)
+                    } else {
+                        (c1x, c1y, c2x, c2y, ex, ey)
+                    };
+                    let c1 = Point::new(ac1x, ac1y)?;
+                    let c2 = Point::new(ac2x, ac2y)?;
+                    let pt = Point::new(aex, aey)?;
                     path.cubic_to(c1, c2, pt)?;
+                    cur_x = aex;
+                    cur_y = aey;
                 }
                 i = i.saturating_add(6);
             }
             "Z" | "z" => {
                 path.close()?;
+                cur_x = sub_x;
+                cur_y = sub_y;
             }
             _ => {}
         }
@@ -584,6 +659,83 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         Some(OutlineStyle::hairline(Color::BLACK)),
                     ),
                 );
+            }
+        } else if code == 0 && val == "ARC" {
+            p = p.saturating_add(1);
+            let mut cx = 0.0;
+            let mut cy = 0.0;
+            let mut r = 0.0;
+            let mut a0_deg = 0.0;
+            let mut a1_deg = 360.0;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => cx = v.parse::<f64>().unwrap_or(0.0),
+                    20 => cy = v.parse::<f64>().unwrap_or(0.0),
+                    40 => r = v.parse::<f64>().unwrap_or(0.0),
+                    50 => a0_deg = v.parse::<f64>().unwrap_or(0.0),
+                    51 => a1_deg = v.parse::<f64>().unwrap_or(360.0),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            let sy = page_h - cy;
+            if r > 0.0
+                && let Ok(rect) = Rect::new(cx - r, sy - r, cx + r, sy + r)
+                && let Ok(spec) = EllipseSpec::arc(rect, (-a1_deg).rem_euclid(360.0), (-a0_deg).rem_euclid(360.0))
+            {
+                let id = doc.allocate_object_id();
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF Arc".to_owned()), ObjectKind::Ellipse(spec), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                );
+            }
+        } else if code == 0 && val == "ELLIPSE" {
+            p = p.saturating_add(1);
+            let mut cx = 0.0;
+            let mut cy = 0.0;
+            let mut mx = 0.0;
+            let mut my = 0.0;
+            let mut ratio = 1.0_f64;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    10 => cx = v.parse::<f64>().unwrap_or(0.0),
+                    20 => cy = v.parse::<f64>().unwrap_or(0.0),
+                    11 => mx = v.parse::<f64>().unwrap_or(0.0),
+                    21 => my = v.parse::<f64>().unwrap_or(0.0),
+                    40 => ratio = v.parse::<f64>().unwrap_or(1.0),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            let sy = page_h - cy;
+            let rx = mx.hypot(my);
+            let ry = rx * ratio.clamp(1e-3, 1.0);
+            if rx > 0.0
+                && ry > 0.0
+                && let Ok(rect) = Rect::new(cx - rx, sy - ry, cx + rx, sy + ry)
+            {
+                let id = doc.allocate_object_id();
+                let mut node = ObjectNode::new(
+                    id,
+                    Some("DXF Ellipse".to_owned()),
+                    ObjectKind::Ellipse(EllipseSpec::full(rect)),
+                    None,
+                    Some(OutlineStyle::hairline(Color::BLACK)),
+                );
+                let ang_deg = (-my).atan2(mx).to_degrees();
+                if ang_deg.abs() > 1e-6
+                    && let (Ok(t0), Ok(rot), Ok(t1)) = (Affine2::translation(-cx, -sy), Affine2::rotation_deg(ang_deg), Affine2::translation(cx, sy))
+                    && let Ok(tr) = t0.then(rot).and_then(|m| m.then(t1))
+                {
+                    node.transform = tr;
+                }
+                push_to_first_layer(&mut doc, node);
             }
         } else if code == 0 && val == "LWPOLYLINE" {
             p = p.saturating_add(1);

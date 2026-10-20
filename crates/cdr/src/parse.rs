@@ -732,6 +732,85 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                                         if let Some(col) = cmx_colors.get(c_idx.saturating_sub(1)) {
                                             decoded_fill = Some(FillStyle::uniform(col.clone()));
                                         }
+                                    } else if fill_type == 2 && sub_pos.saturating_add(fill_spec_len) <= attr_slice.len() {
+                                        let ftn_end = sub_pos.saturating_add(fill_spec_len);
+                                        let mut ftn_pos = sub_pos.saturating_add(5);
+                                        let mut f_type = 0u16;
+                                        let mut pad_pct = 0u16;
+                                        let mut angle_micro = 0i32;
+                                        let mut x_off = 0i32;
+                                        let mut y_off = 0i32;
+                                        let mut mode_raw = 0u16;
+                                        let mut stops = Vec::new();
+                                        while ftn_pos < ftn_end {
+                                            let Some(&ftn_tag) = attr_slice.get(ftn_pos) else {
+                                                break;
+                                            };
+                                            if ftn_tag == 255 || ftn_pos.saturating_add(3) > ftn_end {
+                                                break;
+                                            }
+                                            let ftn_len = (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(1)).unwrap_or(3) as usize).max(3);
+                                            if ftn_tag == 1 && ftn_pos.saturating_add(25) <= ftn_end {
+                                                f_type = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0);
+                                                pad_pct = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(7)).unwrap_or(0);
+                                                angle_micro = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(9)).unwrap_or(0);
+                                                x_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(13)).unwrap_or(0);
+                                                y_off = read_i32(ctx.endian, attr_slice, ftn_pos.saturating_add(17)).unwrap_or(0);
+                                                mode_raw = read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(23)).unwrap_or(0);
+                                            } else if ftn_tag == 2 && ftn_pos.saturating_add(5) <= ftn_end {
+                                                let color_count =
+                                                    (read_u16(ctx.endian, attr_slice, ftn_pos.saturating_add(3)).unwrap_or(0) as usize).min(64);
+                                                for idx in 0..color_count {
+                                                    let base = ftn_pos.saturating_add(5).saturating_add(idx.saturating_mul(4));
+                                                    if base.saturating_add(4) > ftn_end {
+                                                        break;
+                                                    }
+                                                    let c_idx = read_u16(ctx.endian, attr_slice, base).unwrap_or(1) as usize;
+                                                    let pos_pct = read_u16(ctx.endian, attr_slice, base.saturating_add(2)).unwrap_or(0);
+                                                    let col = cmx_colors.get(c_idx.saturating_sub(1)).cloned().unwrap_or(Color::BLACK);
+                                                    let off = (f64::from(pos_pct) / 100.0).clamp(0.0, 1.0);
+                                                    if let Ok(st) = FountainStop::new(off, col) {
+                                                        stops.push(st);
+                                                    }
+                                                }
+                                            }
+                                            ftn_pos = ftn_pos.saturating_add(ftn_len);
+                                        }
+                                        if stops.len() >= 2 {
+                                            let angle_deg = (f64::from(angle_micro) / 1_000_000.0).clamp(-360.0, 360.0);
+                                            let cx_f = F64::new((0.5 + f64::from(x_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                                            let cy_f = F64::new((0.5 - f64::from(y_off) / 100.0).clamp(0.0, 1.0)).unwrap_or(F64::HALF);
+                                            let geometry = match f_type {
+                                                1 => FountainGeometry::Radial {
+                                                    center_x: cx_f,
+                                                    center_y: cy_f,
+                                                    radius: F64::HALF,
+                                                    focal_x: cx_f,
+                                                    focal_y: cy_f,
+                                                },
+                                                2 => FountainGeometry::Conical {
+                                                    center_x: cx_f,
+                                                    center_y: cy_f,
+                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                                },
+                                                3 => FountainGeometry::Square {
+                                                    center_x: cx_f,
+                                                    center_y: cy_f,
+                                                    radius: F64::HALF,
+                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                                },
+                                                _ => FountainGeometry::Linear {
+                                                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                                                    edge_pad: F64::new(f64::from(pad_pct.min(49))).unwrap_or(F64::ZERO),
+                                                },
+                                            };
+                                            let blend_mode = match mode_raw {
+                                                1 => FountainBlendMode::RainbowCw,
+                                                2 => FountainBlendMode::RainbowCcw,
+                                                _ => FountainBlendMode::Direct,
+                                            };
+                                            decoded_fill = Some(FillStyle::Fountain { geometry, blend_mode, stops });
+                                        }
                                     }
                                     sub_pos = sub_pos.saturating_add(fill_spec_len);
                                     if attr_slice.get(sub_pos) == Some(&255) {
@@ -2616,6 +2695,16 @@ struct CmxWriteTables {
     outlines: Vec<(u16, u16, u16, u16)>,
 }
 
+struct CmxFountainSpec {
+    f_type: u16,
+    pad_pct: u16,
+    angle_micro: i32,
+    x_off: i32,
+    y_off: i32,
+    mode_raw: u16,
+    stop_entries: Vec<(u16, u16)>,
+}
+
 fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTables, page_cmds: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         // CMX_Command_BeginGroup (code = 14)
@@ -2657,16 +2746,58 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
     let mut render_attr = Vec::new();
     let mut mask = 0u8;
     let mut fill_color_idx = 1u16;
+    let mut cmx_fountain: Option<CmxFountainSpec> = None;
     if let Some(fill) = &node.fill {
         mask |= 0x01;
-        let c = match fill {
-            FillStyle::Uniform { color } => color.clone(),
-            FillStyle::Fountain { stops, .. } => stops.first().map(|s| s.color.clone()).unwrap_or(Color::WHITE),
-            FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
-            FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
-        };
-        tables.colors.push(c);
-        fill_color_idx = tables.colors.len() as u16;
+        match fill {
+            FillStyle::Fountain { geometry, blend_mode, stops } if stops.len() >= 2 => {
+                let (f_type, pad_pct, angle_micro, x_off, y_off) = match geometry {
+                    FountainGeometry::Linear { angle_deg, edge_pad } => {
+                        (0u16, edge_pad.get().round().clamp(0.0, 49.0) as u16, (angle_deg.get() * 1_000_000.0).round() as i32, 0i32, 0i32)
+                    }
+                    FountainGeometry::Radial { center_x, center_y, .. } => {
+                        (1u16, 0u16, 0i32, ((center_x.get() - 0.5) * 100.0).round() as i32, ((0.5 - center_y.get()) * 100.0).round() as i32)
+                    }
+                    FountainGeometry::Conical { center_x, center_y, angle_deg } => (
+                        2u16,
+                        0u16,
+                        (angle_deg.get() * 1_000_000.0).round() as i32,
+                        ((center_x.get() - 0.5) * 100.0).round() as i32,
+                        ((0.5 - center_y.get()) * 100.0).round() as i32,
+                    ),
+                    FountainGeometry::Square { center_x, center_y, angle_deg, .. } => (
+                        3u16,
+                        0u16,
+                        (angle_deg.get() * 1_000_000.0).round() as i32,
+                        ((center_x.get() - 0.5) * 100.0).round() as i32,
+                        ((0.5 - center_y.get()) * 100.0).round() as i32,
+                    ),
+                };
+                let mode_raw: u16 = match blend_mode {
+                    FountainBlendMode::Direct => 0,
+                    FountainBlendMode::RainbowCw => 1,
+                    FountainBlendMode::RainbowCcw => 2,
+                };
+                let mut stop_entries = Vec::with_capacity(stops.len().min(64));
+                for st in stops.iter().take(64) {
+                    tables.colors.push(st.color.clone());
+                    let c_idx = tables.colors.len() as u16;
+                    let pos_pct = (st.offset.get() * 100.0).round().clamp(0.0, 100.0) as u16;
+                    stop_entries.push((c_idx, pos_pct));
+                }
+                cmx_fountain = Some(CmxFountainSpec { f_type, pad_pct, angle_micro, x_off, y_off, mode_raw, stop_entries });
+            }
+            _ => {
+                let c = match fill {
+                    FillStyle::Uniform { color } => color.clone(),
+                    FillStyle::Fountain { stops, .. } => stops.first().map(|s| s.color.clone()).unwrap_or(Color::WHITE),
+                    FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
+                    FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
+                };
+                tables.colors.push(c);
+                fill_color_idx = tables.colors.len() as u16;
+            }
+        }
     }
     let mut outl_idx = 1u16;
     if let Some(outl) = &node.outline {
@@ -2711,15 +2842,44 @@ fn encode_cmx_node(node: &ObjectNode, cx: f64, cy: f64, tables: &mut CmxWriteTab
     }
     render_attr.push(mask);
     if (mask & 0x01) != 0 {
-        render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
-        render_attr.extend_from_slice(&13u16.to_le_bytes()); // tagLength = 13
-        render_attr.extend_from_slice(&1u16.to_le_bytes()); // fillType = 1 (Uniform)
-        render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Uniform
-        render_attr.extend_from_slice(&7u16.to_le_bytes()); // subTagLength = 7
-        render_attr.extend_from_slice(&fill_color_idx.to_le_bytes());
-        render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
-        render_attr.push(255u8); // EndTag (Uniform)
-        render_attr.push(255u8); // EndTag (FillSpec)
+        if let Some(ftn) = &cmx_fountain {
+            let color_sub_len = (5usize.saturating_add(ftn.stop_entries.len().saturating_mul(4))) as u16;
+            let fill_spec_len = (40usize.saturating_add(ftn.stop_entries.len().saturating_mul(4))) as u16;
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
+            render_attr.extend_from_slice(&fill_spec_len.to_le_bytes());
+            render_attr.extend_from_slice(&2u16.to_le_bytes()); // fillType = 2 (Fountain)
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Fountain_Base
+            render_attr.extend_from_slice(&29u16.to_le_bytes()); // subTagLength = 29
+            render_attr.extend_from_slice(&ftn.f_type.to_le_bytes());
+            render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+            render_attr.extend_from_slice(&ftn.pad_pct.to_le_bytes());
+            render_attr.extend_from_slice(&ftn.angle_micro.to_le_bytes());
+            render_attr.extend_from_slice(&ftn.x_off.to_le_bytes());
+            render_attr.extend_from_slice(&ftn.y_off.to_le_bytes());
+            render_attr.extend_from_slice(&256u16.to_le_bytes()); // steps = 256
+            render_attr.extend_from_slice(&ftn.mode_raw.to_le_bytes());
+            render_attr.extend_from_slice(&0u16.to_le_bytes()); // rateMethod = 0
+            render_attr.extend_from_slice(&50u16.to_le_bytes()); // rateValue = 50
+            render_attr.push(2u8); // CMX_Tag_RenderAttr_FillSpec_Fountain_Color
+            render_attr.extend_from_slice(&color_sub_len.to_le_bytes());
+            render_attr.extend_from_slice(&(ftn.stop_entries.len() as u16).to_le_bytes());
+            for &(c_idx, pos_pct) in &ftn.stop_entries {
+                render_attr.extend_from_slice(&c_idx.to_le_bytes());
+                render_attr.extend_from_slice(&pos_pct.to_le_bytes());
+            }
+            render_attr.push(255u8); // EndTag (Fountain)
+            render_attr.push(255u8); // EndTag (FillSpec)
+        } else {
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
+            render_attr.extend_from_slice(&13u16.to_le_bytes()); // tagLength = 13
+            render_attr.extend_from_slice(&1u16.to_le_bytes()); // fillType = 1 (Uniform)
+            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Uniform
+            render_attr.extend_from_slice(&7u16.to_le_bytes()); // subTagLength = 7
+            render_attr.extend_from_slice(&fill_color_idx.to_le_bytes());
+            render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+            render_attr.push(255u8); // EndTag (Uniform)
+            render_attr.push(255u8); // EndTag (FillSpec)
+        }
     }
     if (mask & 0x02) != 0 {
         render_attr.push(1u8); // CMX_Tag_RenderAttr_OutlineSpec

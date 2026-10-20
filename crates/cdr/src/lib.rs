@@ -977,4 +977,87 @@ mod tests {
         assert!(decoded_outl.scale_with_object);
         assert_eq!(decoded_outl.dash_pattern, vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()]);
     }
+
+    #[test]
+    fn write_cmx1_and_parse_pure_cmx_fountain_fill_m71() {
+        use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+        use coralcraft_doc::{Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, ObjectNode, OutlineStyle};
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let linear_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Linear { angle_deg: F64::new(45.0).unwrap(), edge_pad: F64::new(10.0).unwrap() },
+            blend_mode: FountainBlendMode::Direct,
+            stops: vec![
+                FountainStop::new(0.0, Color::rgb8(255, 10, 20)).unwrap(),
+                FountainStop::new(0.5, Color::rgb8(10, 220, 30)).unwrap(),
+                FountainStop::new(1.0, Color::rgb8(20, 40, 240)).unwrap(),
+            ],
+        };
+        let radial_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Radial {
+                center_x: F64::new(0.6).unwrap(),
+                center_y: F64::new(0.4).unwrap(),
+                radius: F64::HALF,
+                focal_x: F64::new(0.6).unwrap(),
+                focal_y: F64::new(0.4).unwrap(),
+            },
+            blend_mode: FountainBlendMode::RainbowCw,
+            stops: vec![FountainStop::new(0.0, Color::rgb8(240, 200, 10)).unwrap(), FountainStop::new(1.0, Color::rgb8(80, 10, 160)).unwrap()],
+        };
+
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(91),
+            Some("CmxLinearFountain".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(40.0, 40.0, 160.0, 120.0).unwrap())),
+            Some(linear_fill),
+            Some(OutlineStyle::with_width(Color::rgb8(15, 25, 35), F64::new(2.0).unwrap())),
+        ));
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(92),
+            Some("CmxRadialFountain".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(180.0, 40.0, 280.0, 140.0).unwrap())),
+            Some(radial_fill),
+            None,
+        ));
+
+        let cmx_bytes = write_cmx1(&doc).expect("write_cmx1");
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
+        let pure_riff_sz = (pure_cmx.len() - 8) as u32;
+        pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
+
+        let parsed_pure = parse_document(&pure_cmx).expect("parse standalone CMX1 with Fountain fill");
+        let objs = &parsed_pure.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 2);
+
+        match &objs[0].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Linear { angle_deg, edge_pad }, blend_mode, stops }) => {
+                assert!((angle_deg.get() - 45.0).abs() < 1e-3);
+                assert!((edge_pad.get() - 10.0).abs() < 1e-3);
+                assert_eq!(*blend_mode, FountainBlendMode::Direct);
+                assert_eq!(stops.len(), 3);
+                assert_eq!(stops[0].color, Color::rgb8(255, 10, 20));
+                assert!((stops[1].offset.get() - 0.5).abs() < 1e-3);
+                assert_eq!(stops[1].color, Color::rgb8(10, 220, 30));
+                assert_eq!(stops[2].color, Color::rgb8(20, 40, 240));
+            }
+            other => panic!("expected Linear Fountain fill on obj[0], got {other:?}"),
+        }
+        let outl0 = objs[0].outline.as_ref().expect("outline after fountain fill");
+        assert_eq!(outl0.color, Color::rgb8(15, 25, 35));
+        assert!((outl0.width_pt.get() - 2.0).abs() < 1e-2);
+
+        match &objs[1].fill {
+            Some(FillStyle::Fountain { geometry: FountainGeometry::Radial { center_x, center_y, .. }, blend_mode, stops }) => {
+                assert!((center_x.get() - 0.6).abs() < 1e-2);
+                assert!((center_y.get() - 0.4).abs() < 1e-2);
+                assert_eq!(*blend_mode, FountainBlendMode::RainbowCw);
+                assert_eq!(stops.len(), 2);
+                assert_eq!(stops[0].color, Color::rgb8(240, 200, 10));
+                assert_eq!(stops[1].color, Color::rgb8(80, 10, 160));
+            }
+            other => panic!("expected Radial Fountain fill on obj[1], got {other:?}"),
+        }
+    }
 }

@@ -826,4 +826,53 @@ mod tests {
         let polyline_count = dxf.matches("\nPOLYLINE\n").count();
         assert!(polyline_count >= 4, "DXF should emit main path plus start/end arrowhead POLYLINE entities (got {polyline_count})");
     }
+
+    #[test]
+    fn import_svg_relative_paths_rounded_rect_rotate_and_dxf_arc_ellipse_m71() {
+        use coralcraft_geom::{EllipseMode, FillRule};
+
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="300pt" height="200pt">
+  <rect x="20" y="30" width="100" height="60" rx="12" fill="#224466" transform="rotate(90, 70, 60)"/>
+  <path d="m 10 20 h 40 v 30 l -20 10 q 10 10 20 0 c 5 -5 15 -5 20 0 z" fill="#884422" fill-rule="evenodd"/>
+</svg>"##;
+        let doc = coralcraft_doc::import_svg(svg).expect("import_svg");
+        let objs = &doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 2);
+
+        let rect_node = objs.first().unwrap();
+        let ObjectKind::Rect(rspec) = &rect_node.kind else {
+            panic!("expected ObjectKind::Rect");
+        };
+        assert!((rspec.radii[0].get() - 12.0).abs() < 1e-6, "expected rx=12 corner radius on SVG rect");
+        let center_rot = rect_node.transform.apply_point(Point::new(70.0, 60.0).unwrap()).unwrap();
+        assert!((center_rot.x.get() - 70.0).abs() < 1e-4 && (center_rot.y.get() - 60.0).abs() < 1e-4, "rotate(90,70,60) must fix (70,60)");
+        let corner_rot = rect_node.transform.apply_point(Point::new(80.0, 60.0).unwrap()).unwrap();
+        assert!((corner_rot.x.get() - 70.0).abs() < 1e-4 && (corner_rot.y.get() - 70.0).abs() < 1e-4);
+
+        let path_node = objs.get(1).unwrap();
+        let ObjectKind::Path(svg_path) = &path_node.kind else {
+            panic!("expected ObjectKind::Path");
+        };
+        assert_eq!(svg_path.fill_rule, FillRule::EvenOdd);
+        assert_eq!(svg_path.elements.len(), 7, "expected MoveTo, 3 LineTo (h,v,l), QuadTo, CubicTo, Close");
+        assert_eq!(svg_path.elements.get(1), Some(&PathElement::LineTo(Point::new(50.0, 20.0).unwrap())));
+        assert_eq!(svg_path.elements.get(2), Some(&PathElement::LineTo(Point::new(50.0, 50.0).unwrap())));
+        assert_eq!(svg_path.elements.get(3), Some(&PathElement::LineTo(Point::new(30.0, 60.0).unwrap())));
+
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nARC\n10\n100.0\n20\n200.0\n40\n50.0\n50\n0.0\n51\n90.0\n0\nELLIPSE\n10\n150.0\n20\n300.0\n11\n60.0\n21\n0.0\n40\n0.5\n0\nENDSEC\n0\nEOF\n";
+        let dxf_doc = coralcraft_doc::import_dxf(dxf).expect("import_dxf");
+        let dxf_objs = &dxf_doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(dxf_objs.len(), 2, "expected ARC and ELLIPSE imported from DXF");
+        let ObjectKind::Ellipse(arc_spec) = &dxf_objs.first().unwrap().kind else {
+            panic!("expected ObjectKind::Ellipse for DXF ARC");
+        };
+        assert_eq!(arc_spec.mode, EllipseMode::Arc);
+        assert!((arc_spec.rect.width() - 100.0).abs() < 1e-4);
+        let ObjectKind::Ellipse(ell_spec) = &dxf_objs.get(1).unwrap().kind else {
+            panic!("expected ObjectKind::Ellipse for DXF ELLIPSE");
+        };
+        assert_eq!(ell_spec.mode, EllipseMode::Full);
+        assert!((ell_spec.rect.width() - 120.0).abs() < 1e-4);
+        assert!((ell_spec.rect.height() - 60.0).abs() < 1e-4);
+    }
 }
