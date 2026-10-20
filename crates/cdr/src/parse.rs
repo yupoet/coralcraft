@@ -465,9 +465,17 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
             collect_layer_lists(&ch.children, &mut m_layers);
             for (l_idx, l_chunk) in m_layers.iter().enumerate() {
                 let mut layer = Layer::new_normal(LayerId(ctx.alloc_id()), format!("Master Layer {}", l_idx.saturating_add(1)));
-                for sub in &l_chunk.children {
+                for (slot_idx, sub) in l_chunk.children.iter().enumerate() {
                     if &sub.fourcc == b"lmta" {
                         decode_lmta(&sub.payload, ctx.endian, &mut layer);
+                    } else if sub.list_type.is_none() && !sub.payload.is_empty() && sub.payload.len() <= 512 {
+                        layer.residual.chunks.push(RawChunk {
+                            tag: ChunkTag(sub.fourcc),
+                            flags: 0,
+                            slot: slot_idx as u32,
+                            payload: RawPayload(sub.payload.clone()),
+                            src_offset: sub.src_offset,
+                        });
                     }
                 }
                 collect_loose_objects_recursive(&l_chunk.children, ctx, ctx.default_page_size, &mut layer.objects, warnings);
@@ -1083,7 +1091,7 @@ fn collect_loose_objects_recursive(
             if !group_children.is_empty() {
                 let grp_id = ObjectId(ctx.alloc_id());
                 let mut grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children: group_children }, None, None);
-                for sub in &ch.children {
+                for (slot_idx, sub) in ch.children.iter().enumerate() {
                     if &sub.fourcc == b"omta"
                         && let Some((name, visible, locked, opacity)) = decode_omta(&sub.payload, ctx.endian)
                     {
@@ -1095,12 +1103,38 @@ fn collect_loose_objects_recursive(
                         && let Some(tf) = decode_trfd(&sub.payload, ctx.endian)
                     {
                         grp_node.transform = tf;
+                    } else if &sub.fourcc == b"trns"
+                        && let Some(tr) = decode_trns(&sub.payload, ctx.endian, ctx.version, warnings)
+                    {
+                        grp_node.transparency = Some(tr);
+                    } else if &sub.fourcc == b"enve"
+                        && let Some(corners) = decode_enve(&sub.payload, ctx.endian, ctx.version, page_size)
+                    {
+                        grp_node.effects.push(coralcraft_doc::VectorEffect::Envelope { corners });
+                    } else if &sub.fourcc == b"vefx"
+                        && let Some(fx) = decode_vefx(&sub.payload, ctx.endian, ctx.version, page_size, warnings)
+                    {
+                        grp_node.effects.push(fx);
+                    } else if &sub.fourcc == b"LIST" && sub.list_type == Some(*b"pclp") {
+                        collect_loose_objects_recursive(&sub.children, ctx, page_size, &mut grp_node.powerclip_children, warnings);
+                    } else if sub.list_type.is_none()
+                        && !matches!(&sub.fourcc, b"omta" | b"trfd" | b"trns" | b"enve" | b"vefx")
+                        && !sub.payload.is_empty()
+                        && sub.payload.len() <= 512
+                    {
+                        grp_node.residual.chunks.push(RawChunk {
+                            tag: ChunkTag(sub.fourcc),
+                            flags: 0,
+                            slot: slot_idx as u32,
+                            payload: RawPayload(sub.payload.clone()),
+                            src_offset: sub.src_offset,
+                        });
                     }
                 }
                 out.push(grp_node);
             }
-        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"mstr") {
-            // Master layers are parsed separately by `process_chunk_tree`
+        } else if &ch.fourcc == b"LIST" && matches!(ch.list_type.as_ref(), Some(b"mstr" | b"pclp" | b"uchl" | b"ures")) {
+            // Specialized container lists are parsed separately by their owners
         } else if !ch.children.is_empty() {
             collect_loose_objects_recursive(&ch.children, ctx, page_size, out, warnings);
         }
@@ -1137,9 +1171,17 @@ fn parse_page_chunk(page_chunk: &ParsedChunk, ctx: &mut ParserCtx, page: &mut Pa
         for (l_idx, l_chunk) in layer_chunks.iter().enumerate() {
             let layer_name = format!("Layer {}", l_idx.saturating_add(1));
             let mut layer = Layer::new_normal(LayerId(ctx.alloc_id()), layer_name);
-            for ch in &l_chunk.children {
+            for (slot_idx, ch) in l_chunk.children.iter().enumerate() {
                 if &ch.fourcc == b"lmta" {
                     decode_lmta(&ch.payload, ctx.endian, &mut layer);
+                } else if ch.list_type.is_none() && !ch.payload.is_empty() && ch.payload.len() <= 512 {
+                    layer.residual.chunks.push(RawChunk {
+                        tag: ChunkTag(ch.fourcc),
+                        flags: 0,
+                        slot: slot_idx as u32,
+                        payload: RawPayload(ch.payload.clone()),
+                        src_offset: ch.src_offset,
+                    });
                 }
             }
             collect_loose_objects_recursive(&l_chunk.children, ctx, page.size, &mut layer.objects, warnings);
@@ -1170,6 +1212,8 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     let mut transparency: Option<coralcraft_doc::TransparencyStyle> = None;
     let mut obj_meta: Option<(Option<String>, bool, bool, F64)> = None;
     let mut powerclip_children: Vec<ObjectNode> = Vec::new();
+    let mut unsup_children: Vec<ObjectNode> = Vec::new();
+    let mut unsup_residual = Residual::default();
     let mut loda_payload: Option<(&[u8], [u8; 4])> = None;
     let mut bmp_payload: Option<&[u8]> = None;
     let mut txtd_payload: Option<&[u8]> = None;
@@ -1179,6 +1223,20 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     for ch in &obj_chunk.children {
         if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"pclp") {
             collect_loose_objects_recursive(&ch.children, ctx, page_size, &mut powerclip_children, warnings);
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"uchl") {
+            collect_loose_objects_recursive(&ch.children, ctx, page_size, &mut unsup_children, warnings);
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"ures") {
+            for (slot_idx, sub) in ch.children.iter().enumerate() {
+                if sub.list_type.is_none() && !sub.payload.is_empty() && sub.payload.len() <= 512 {
+                    unsup_residual.chunks.push(RawChunk {
+                        tag: ChunkTag(sub.fourcc),
+                        flags: 0,
+                        slot: slot_idx as u32,
+                        payload: RawPayload(sub.payload.clone()),
+                        src_offset: sub.src_offset,
+                    });
+                }
+            }
         }
     }
 
@@ -1276,7 +1334,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         }
     }
 
-    let kind = if let Some(bmp_data) = bmp_payload {
+    let mut kind = if let Some(bmp_data) = bmp_payload {
         if let Some(bmp) = decode_bmp_or_cdib_chunk(bmp_data, ctx.endian) {
             bmp
         } else if let Some((payload, tag)) = loda_payload {
@@ -1313,7 +1371,16 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
         })
     };
 
-    if fill.is_none() && outline.is_none() && !matches!(kind, ObjectKind::Bitmap { .. }) {
+    if let ObjectKind::Unsupported(u) = &mut kind {
+        if !unsup_children.is_empty() {
+            u.children = unsup_children;
+        }
+        if !unsup_residual.chunks.is_empty() {
+            u.residual = unsup_residual;
+        }
+    }
+
+    if fill.is_none() && outline.is_none() && !matches!(kind, ObjectKind::Bitmap { .. } | ObjectKind::Unsupported(_)) {
         outline = Some(OutlineStyle::hairline(Color::BLACK));
     }
 
@@ -1343,7 +1410,7 @@ fn contains_u32(haystack: &[u8], needle: u32, endian: Endian) -> bool {
 fn flatten_obj_subchunks<'a>(chunks: &'a [ParsedChunk], out: &mut Vec<&'a ParsedChunk>) {
     for ch in chunks {
         if &ch.fourcc == b"LIST" {
-            if ch.list_type == Some(*b"pclp") {
+            if matches!(ch.list_type.as_ref(), Some(b"pclp" | b"uchl" | b"ures")) {
                 continue;
             }
             flatten_obj_subchunks(&ch.children, out);
@@ -1965,6 +2032,15 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
             warnings.push(format!("W-FILL-UNSUPPORTED: fill_type 7 in fild#{fill_id} preserved as FillStyle::Unknown"));
             Some((fill_id, FillStyle::Unknown { tag: ChunkTag(*b"fild"), payload: RawPayload(payload.iter().copied().take(256).collect()) }))
         }
+        99 if payload.len() >= 20 && payload.get(8..12) == Some(b"UKFL") => {
+            let mut tag_bytes = [0u8; 4];
+            if let Some(t) = payload.get(12..16) {
+                tag_bytes.copy_from_slice(t);
+            }
+            let len = (read_u32(endian, payload, 16).unwrap_or(0) as usize).min(65535);
+            let raw = payload.get(20..20usize.saturating_add(len).min(payload.len())).unwrap_or_default().to_vec();
+            Some((fill_id, FillStyle::Unknown { tag: ChunkTag(tag_bytes), payload: RawPayload(raw) }))
+        }
         other => {
             warnings.push(format!("W-FILL-UNSUPPORTED: fill_type {other} in fild#{fill_id} preserved as FillStyle::Unknown"));
             Some((fill_id, FillStyle::Unknown { tag: ChunkTag(*b"fild"), payload: RawPayload(payload.iter().copied().take(256).collect()) }))
@@ -2294,6 +2370,40 @@ fn decode_explicit_shape_payload(
                 if let Some(para) = decode_loda_paragraph_text(payload.get(4..).unwrap_or(&[]), endian, version, page_size, bbox_rect) {
                     return para;
                 }
+            }
+            0x99 if payload.len() >= 51 && payload.get(4..8) == Some(b"UNSP") => {
+                let mut u_tag = [0u8; 4];
+                if let Some(tb) = payload.get(8..12) {
+                    u_tag.copy_from_slice(tb);
+                }
+                let flags = payload.get(12).copied().unwrap_or(0);
+                let absolute_geometry = (flags & 0x01) != 0;
+                let has_fb = (flags & 0x02) != 0;
+                let fallback_bounds = if has_fb {
+                    let x0 = read_f64(endian, payload, 13).unwrap_or(0.0);
+                    let y0 = read_f64(endian, payload, 21).unwrap_or(0.0);
+                    let x1 = read_f64(endian, payload, 29).unwrap_or(0.0);
+                    let y1 = read_f64(endian, payload, 37).unwrap_or(0.0);
+                    Rect::new(x0, y0, x1, y1).ok().or(bbox_rect)
+                } else {
+                    bbox_rect
+                };
+                let hint_len = usize::from(read_u16(endian, payload, 45).unwrap_or(0));
+                let hint_end = 47usize.saturating_add(hint_len).min(payload.len());
+                let class_hint = payload.get(47..hint_end).and_then(|s| std::str::from_utf8(s).ok()).filter(|s| !s.is_empty()).map(str::to_owned);
+                let pay_len = (read_u32(endian, payload, hint_end).unwrap_or(0) as usize).min(65535);
+                let pay_start = hint_end.saturating_add(4);
+                let pay_end = pay_start.saturating_add(pay_len).min(payload.len());
+                let raw_pay = payload.get(pay_start..pay_end).unwrap_or_default().to_vec();
+                return ObjectKind::Unsupported(UnsupportedObject {
+                    tag: ChunkTag(u_tag),
+                    class_hint,
+                    payload: RawPayload(raw_pay),
+                    fallback_bounds,
+                    absolute_geometry,
+                    children: Vec::new(),
+                    residual: Residual::default(),
+                });
             }
             _ => {}
         }
@@ -2867,8 +2977,14 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
             p.extend_from_slice(&encode_cdr_color_v500(fg_color));
             p.extend_from_slice(&encode_cdr_color_v500(bg_color));
         }
-        FillStyle::Unknown { .. } => {
+        FillStyle::Unknown { tag, payload } => {
             p.extend_from_slice(&99u16.to_le_bytes());
+            p.extend_from_slice(&0u16.to_le_bytes());
+            p.extend_from_slice(b"UKFL");
+            p.extend_from_slice(&tag.0);
+            let len = payload.0.len().min(65535);
+            p.extend_from_slice(&(len as u32).to_le_bytes());
+            p.extend_from_slice(payload.0.get(..len).unwrap_or_default());
         }
     }
     p
@@ -3093,10 +3209,28 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
         ObjectKind::Group { .. } => {}
         ObjectKind::Unsupported(u) => {
             meta.extend_from_slice(&0x99u32.to_le_bytes());
-            meta.extend_from_slice(&u.payload.0);
-            while meta.len() < 20 {
-                meta.push(0);
+            meta.extend_from_slice(b"UNSP");
+            meta.extend_from_slice(&u.tag.0);
+            let mut flags = 0u8;
+            if u.absolute_geometry {
+                flags |= 0x01;
             }
+            if u.fallback_bounds.is_some() {
+                flags |= 0x02;
+            }
+            meta.push(flags);
+            let fb = u.fallback_bounds.unwrap_or_default();
+            meta.extend_from_slice(&fb.x0.get().to_le_bytes());
+            meta.extend_from_slice(&fb.y0.get().to_le_bytes());
+            meta.extend_from_slice(&fb.x1.get().to_le_bytes());
+            meta.extend_from_slice(&fb.y1.get().to_le_bytes());
+            let hint_bytes = u.class_hint.as_deref().unwrap_or("").as_bytes();
+            let hint_len = hint_bytes.len().min(1024);
+            meta.extend_from_slice(&(hint_len as u16).to_le_bytes());
+            meta.extend_from_slice(hint_bytes.get(..hint_len).unwrap_or_default());
+            let pay_len = u.payload.0.len().min(65535);
+            meta.extend_from_slice(&(pay_len as u32).to_le_bytes());
+            meta.extend_from_slice(u.payload.0.get(..pay_len).unwrap_or_default());
         }
     }
 }
@@ -3104,6 +3238,8 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
 fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &mut u32, layer_children: &mut Vec<u8>) -> Result<(), ProbeError> {
     if let ObjectKind::Group { children } = &node.kind {
         let mut grp_children = Vec::new();
+        let cx = page_size.width.get() * 0.5;
+        let cy = page_size.height.get() * 0.5;
         if node.transform != Affine2::IDENTITY {
             let mut trfd = Vec::with_capacity(72);
             trfd.extend_from_slice(&72u32.to_le_bytes());
@@ -3122,9 +3258,37 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
             trfd.extend_from_slice(&y0_cdr.to_le_bytes());
             append_riff_chunk(&mut grp_children, *b"trfd", &trfd);
         }
+        if let Some(trns) = &node.transparency {
+            let tp = encode_trns_payload(trns);
+            append_riff_chunk(&mut grp_children, *b"trns", &tp);
+        }
         if node.name.is_some() || !node.visible || node.locked || (node.opacity.get() - 1.0).abs() > 1e-6 {
             let omta = encode_omta_payload(node);
             append_riff_chunk(&mut grp_children, *b"omta", &omta);
+        }
+        for effect in &node.effects {
+            if let coralcraft_doc::VectorEffect::Envelope { corners } = effect {
+                let mut enve = Vec::with_capacity(32);
+                for pt in corners {
+                    enve.extend_from_slice(&pt_to_cdr_i32(pt.x.get() - cx).to_le_bytes());
+                    enve.extend_from_slice(&pt_to_cdr_i32(cy - pt.y.get()).to_le_bytes());
+                }
+                append_riff_chunk(&mut grp_children, *b"enve", &enve);
+            } else if let Some(vefx) = encode_vefx_payload(effect, cx, cy) {
+                append_riff_chunk(&mut grp_children, *b"vefx", &vefx);
+            }
+        }
+        if !node.powerclip_children.is_empty() {
+            let mut pclp_children = Vec::new();
+            for pc in &node.powerclip_children {
+                encode_object_into_layer(pc, page_size, next_style_id, &mut pclp_children)?;
+            }
+            append_riff_list(&mut grp_children, *b"pclp", &pclp_children);
+        }
+        for rc in &node.residual.chunks {
+            if !matches!(&rc.tag.0, b"trfd" | b"trns" | b"omta" | b"enve" | b"vefx" | b"LIST") && !rc.payload.0.is_empty() {
+                append_riff_chunk(&mut grp_children, rc.tag.0, &rc.payload.0);
+            }
         }
         for child in children {
             encode_object_into_layer(child, page_size, next_style_id, &mut grp_children)?;
@@ -3274,6 +3438,24 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     }
 
     append_riff_chunk(&mut obj_children, *b"loda", &loda);
+    if let ObjectKind::Unsupported(u) = &node.kind {
+        if !u.children.is_empty() {
+            let mut uchl_children = Vec::new();
+            for uch in &u.children {
+                encode_object_into_layer(uch, page_size, next_style_id, &mut uchl_children)?;
+            }
+            append_riff_list(&mut obj_children, *b"uchl", &uchl_children);
+        }
+        if !u.residual.chunks.is_empty() {
+            let mut ures_children = Vec::new();
+            for rc in &u.residual.chunks {
+                if !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut ures_children, rc.tag.0, &rc.payload.0);
+                }
+            }
+            append_riff_list(&mut obj_children, *b"ures", &ures_children);
+        }
+    }
     for rc in &node.residual.chunks {
         if !matches!(
             &rc.tag.0,
@@ -3413,6 +3595,11 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
             let mut layer_children = Vec::new();
             let lmta = encode_lmta_payload(mlayer);
             append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for rc in &mlayer.residual.chunks {
+                if !matches!(&rc.tag.0, b"lmta" | b"LIST") && !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut layer_children, rc.tag.0, &rc.payload.0);
+                }
+            }
             for obj in &mlayer.objects {
                 encode_object_into_layer(obj, master_page_size, &mut next_style_id, &mut layer_children)?;
             }
@@ -3438,6 +3625,11 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
             let mut layer_children = Vec::new();
             let lmta = encode_lmta_payload(layer);
             append_riff_chunk(&mut layer_children, *b"lmta", &lmta);
+            for rc in &layer.residual.chunks {
+                if !matches!(&rc.tag.0, b"lmta" | b"LIST") && !rc.payload.0.is_empty() {
+                    append_riff_chunk(&mut layer_children, rc.tag.0, &rc.payload.0);
+                }
+            }
             for obj in &layer.objects {
                 encode_object_into_layer(obj, page.size, &mut next_style_id, &mut layer_children)?;
             }

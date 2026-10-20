@@ -643,4 +643,48 @@ mod tests {
         assert!((doc.pages[0].layers[1].opacity.get() - 0.75).abs() < 1e-6);
         assert_eq!(doc.pages[0].layers[1].objects.len(), 1);
     }
+
+    #[test]
+    fn import_dxf_multilayer_block_insert_polyline_bulge_and_lineweight_m80() {
+        use coralcraft_geom::PathElement;
+
+        let dxf = concat!(
+            "0\nSECTION\n2\nBLOCKS\n",
+            "0\nBLOCK\n2\nSTAMP\n10\n0.0\n20\n0.0\n",
+            "0\nLINE\n8\n0\n62\n1\n370\n50\n10\n0.0\n20\n0.0\n11\n40.0\n21\n0.0\n",
+            "0\nENDBLK\n",
+            "0\nENDSEC\n",
+            "0\nSECTION\n2\nENTITIES\n",
+            "0\nPOLYLINE\n8\nBorderLayer\n62\n5\n370\n100\n70\n1\n",
+            "0\nVERTEX\n10\n10.0\n20\n100.0\n42\n1.0\n",
+            "0\nVERTEX\n10\n90.0\n20\n100.0\n",
+            "0\nSEQEND\n",
+            "0\nINSERT\n8\nStampLayer\n2\nSTAMP\n10\n50.0\n20\n200.0\n41\n2.0\n42\n2.0\n50\n90.0\n",
+            "0\nENDSEC\n0\nEOF\n"
+        );
+
+        let doc = import_dxf(dxf).expect("import_dxf M80");
+        assert_eq!(doc.pages[0].layers.len(), 2);
+        assert_eq!(doc.pages[0].layers[0].name, "BorderLayer");
+        assert_eq!(doc.pages[0].layers[0].objects.len(), 1);
+        let poly_node = &doc.pages[0].layers[0].objects[0];
+        let poly_outl = poly_node.outline.as_ref().expect("POLYLINE outline");
+        assert_eq!(poly_outl.color, Color::rgb8(0, 0, 255));
+        assert!((poly_outl.width_pt.get() - (1.0 * 72.0 / 25.4)).abs() < 1e-2);
+        let ObjectKind::Path(poly_path) = &poly_node.kind else {
+            panic!("expected Path for POLYLINE");
+        };
+        assert!(poly_path.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })), "POLYLINE VERTEX 42 bulge must emit cubic arcs");
+
+        assert_eq!(doc.pages[0].layers[1].name, "StampLayer");
+        assert_eq!(doc.pages[0].layers[1].objects.len(), 1);
+        let ins_node = &doc.pages[0].layers[1].objects[0];
+        let ObjectKind::Group { children } = &ins_node.kind else {
+            panic!("expected Group for INSERT block instance");
+        };
+        assert_eq!(children.len(), 1);
+        let child_outl = children[0].outline.as_ref().expect("BLOCK LINE outline");
+        assert_eq!(child_outl.color, Color::rgb8(255, 0, 0));
+        assert!((ins_node.transform.tx.get() - 50.0).abs() < 1e-3);
+    }
 }

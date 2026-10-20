@@ -1610,4 +1610,116 @@ mod tests {
         assert_eq!(parsed.document.pages[1].layers[0].name, "Notes");
         assert_eq!(parsed.document.pages[1].layers[0].objects.len(), 1);
     }
+
+    #[test]
+    fn write_cdr7_layer_group_residuals_unsupported_object_and_unknown_fill_roundtrip_m80() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{
+            ChunkTag, Document, FillStyle, ObjectId, ObjectKind, ObjectNode, RawChunk, RawPayload, Residual, TransparencyStyle, UnsupportedObject,
+            VectorEffect,
+        };
+        use coralcraft_geom::{F64, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].layers[0].residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"lyrc"),
+            flags: 0,
+            slot: 1,
+            payload: RawPayload(vec![0x11, 0x22, 0x33, 0x44]),
+            src_offset: 0,
+        });
+        doc.master_layers[0].residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"mlyc"),
+            flags: 0,
+            slot: 1,
+            payload: RawPayload(vec![0x55, 0x66]),
+            src_offset: 0,
+        });
+
+        let unk_fill = FillStyle::Unknown { tag: ChunkTag(*b"txfl"), payload: RawPayload(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x42]) };
+        let box_with_unk_fill = ObjectNode::new(
+            ObjectId(180),
+            Some("UnkFillRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(10.0, 20.0, 90.0, 70.0).unwrap())),
+            Some(unk_fill.clone()),
+            None,
+        );
+        doc.pages[0].layers[0].objects.push(box_with_unk_fill);
+
+        let unsup_child = ObjectNode::new(
+            ObjectId(181),
+            Some("UnsupChild".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(15.0, 25.0, 45.0, 55.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(100, 150, 200))),
+            None,
+        );
+        let mut unsup_res = Residual::default();
+        unsup_res.chunks.push(RawChunk { tag: ChunkTag(*b"usrc"), flags: 0, slot: 0, payload: RawPayload(vec![1, 2, 3]), src_offset: 0 });
+        let unsup = ObjectNode::new(
+            ObjectId(182),
+            Some("OpaqueMesh".to_owned()),
+            ObjectKind::Unsupported(UnsupportedObject {
+                tag: ChunkTag(*b"mesh"),
+                class_hint: Some("GradientMesh".to_owned()),
+                payload: RawPayload(vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06]),
+                fallback_bounds: Some(Rect::new(50.0, 60.0, 150.0, 140.0).unwrap()),
+                absolute_geometry: true,
+                children: vec![unsup_child],
+                residual: unsup_res,
+            }),
+            None,
+            None,
+        );
+        doc.pages[0].layers[0].objects.push(unsup);
+
+        let grp_child = ObjectNode::new(
+            ObjectId(183),
+            Some("GrpChild".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(100.0, 100.0, 180.0, 160.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(200, 80, 40))),
+            None,
+        );
+        let pc_child = ObjectNode::new(
+            ObjectId(184),
+            Some("GrpPowerClip".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(110.0, 110.0, 140.0, 140.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(40, 200, 120))),
+            None,
+        );
+        let mut grp = ObjectNode::new(ObjectId(185), Some("RichGroup".to_owned()), ObjectKind::Group { children: vec![grp_child] }, None, None);
+        grp.transparency = Some(TransparencyStyle::uniform(0.7));
+        grp.effects.push(VectorEffect::Contour { steps: 2, offset_pt: F64::new(3.0).unwrap(), inside: false });
+        grp.powerclip_children.push(pc_child);
+        grp.residual.chunks.push(RawChunk { tag: ChunkTag(*b"grpc"), flags: 0, slot: 0, payload: RawPayload(vec![9, 8, 7]), src_offset: 0 });
+        doc.pages[0].layers[0].objects.push(grp);
+
+        let bytes = write_cdr7(&doc).expect("write_cdr7 M80");
+        let parsed = parse_document(&bytes).expect("parse_document M80");
+
+        let lyr = &parsed.document.pages[0].layers[0];
+        assert!(lyr.residual.chunks.iter().any(|c| &c.tag.0 == b"lyrc" && c.payload.0 == vec![0x11, 0x22, 0x33, 0x44]));
+        assert!(parsed.document.master_layers[0].residual.chunks.iter().any(|c| &c.tag.0 == b"mlyc" && c.payload.0 == vec![0x55, 0x66]));
+
+        assert_eq!(lyr.objects[0].fill, Some(unk_fill));
+
+        let ObjectKind::Unsupported(u) = &lyr.objects[1].kind else {
+            panic!("expected ObjectKind::Unsupported, got {:?}", lyr.objects[1].kind);
+        };
+        assert_eq!(&u.tag.0, b"mesh");
+        assert_eq!(u.class_hint.as_deref(), Some("GradientMesh"));
+        assert_eq!(u.payload.0, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        assert!(u.absolute_geometry);
+        assert_eq!(u.fallback_bounds, Some(Rect::new(50.0, 60.0, 150.0, 140.0).unwrap()));
+        assert_eq!(u.children.len(), 1);
+        assert_eq!(u.children[0].name.as_deref(), Some("UnsupChild"));
+        assert!(u.residual.chunks.iter().any(|c| &c.tag.0 == b"usrc" && c.payload.0 == vec![1, 2, 3]));
+
+        let p_grp = &lyr.objects[2];
+        assert_eq!(p_grp.name.as_deref(), Some("RichGroup"));
+        assert_eq!(p_grp.transparency, Some(TransparencyStyle::uniform(0.7)));
+        assert_eq!(p_grp.effects.len(), 1);
+        assert_eq!(p_grp.powerclip_children.len(), 1);
+        assert_eq!(p_grp.powerclip_children[0].name.as_deref(), Some("GrpPowerClip"));
+        assert!(p_grp.residual.chunks.iter().any(|c| &c.tag.0 == b"grpc" && c.payload.0 == vec![9, 8, 7]));
+    }
 }

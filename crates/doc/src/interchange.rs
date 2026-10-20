@@ -9,14 +9,6 @@ use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Poi
 use crate::model::{DocError, Document, Layer, LayerId, ObjectKind, ObjectNode, TransparencyStyle};
 use crate::style::{FillStyle, FountainGeometry, LineCap, LineJoin, OutlineStyle, PatternKind};
 
-fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
-    if let Some(page) = doc.pages.first_mut()
-        && let Some(layer) = page.layers.first_mut()
-    {
-        layer.objects.push(node);
-    }
-}
-
 fn push_to_active_layer(doc: &mut Document, node: ObjectNode) {
     if let Some(page) = doc.pages.first_mut()
         && let Some(layer) = page.layers.last_mut()
@@ -1310,13 +1302,65 @@ fn parse_attr_f64(tag: &str, attr: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok()
 }
 
-/// Imports an AutoCAD ASCII DXF (`SECTION` / `ENTITIES` with `LINE` and `POLYLINE`/`VERTEX`/`SEQEND`) string into a [`Document`].
+fn push_dxf_node(
+    doc: &mut Document,
+    saw_custom_layer: &mut bool,
+    active_block: &mut Option<(String, f64, f64, Vec<ObjectNode>)>,
+    layer_name: Option<&str>,
+    node: ObjectNode,
+) {
+    if let Some((_, _, _, blk_objs)) = active_block.as_mut() {
+        blk_objs.push(node);
+        return;
+    }
+    let Some(page) = doc.pages.first_mut() else {
+        return;
+    };
+    let clean_name = layer_name.map(str::trim).filter(|s| !s.is_empty() && *s != "0");
+    if let Some(lname) = clean_name {
+        if let Some(existing) = page.layers.iter_mut().find(|l| l.name == lname) {
+            existing.objects.push(node);
+            *saw_custom_layer = true;
+            return;
+        }
+        if !*saw_custom_layer
+            && let Some(first_layer) = page.layers.first_mut()
+            && first_layer.objects.is_empty()
+        {
+            first_layer.name = lname.to_owned();
+            first_layer.objects.push(node);
+            *saw_custom_layer = true;
+            return;
+        }
+        let next_lid = LayerId(page.layers.len().saturating_add(1) as u64);
+        let mut new_layer = Layer::new_normal(next_lid, lname.to_owned());
+        new_layer.objects.push(node);
+        page.layers.push(new_layer);
+        *saw_custom_layer = true;
+    } else if let Some(first_layer) = page.layers.first_mut() {
+        first_layer.objects.push(node);
+    }
+}
+
+fn dxf_make_outline(aci: Option<i32>, truecolor: Option<i32>, lw_100mm: Option<i32>) -> OutlineStyle {
+    let col = dxf_aci_to_color(aci, truecolor);
+    if let Some(lw) = lw_100mm
+        && lw > 0
+        && let Ok(w_pt) = F64::new((f64::from(lw) * 0.01 * 72.0 / 25.4).clamp(0.05, 288.0))
+    {
+        OutlineStyle::with_width(col, w_pt)
+    } else {
+        OutlineStyle::hairline(col)
+    }
+}
+
+/// Imports an AutoCAD ASCII DXF (`SECTION` / `BLOCKS` / `ENTITIES`) string into a [`Document`].
 pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
     if !dxf_str.contains("ENTITIES") {
         return Err(DocError::InvalidDxf("missing ENTITIES section".to_owned()));
     }
     let mut doc = Document::new_a4_portrait();
-    let page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
+    let doc_page_h = doc.pages.first().map_or(841.89, |p| p.size.height.get());
     let lines: Vec<&str> = dxf_str.lines().map(str::trim).collect();
 
     let mut pairs = Vec::with_capacity(lines.len() / 2);
@@ -1330,10 +1374,92 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         }
     }
 
+    let mut saw_custom_layer = false;
+    let mut blocks: BTreeMap<String, Vec<ObjectNode>> = BTreeMap::new();
+    let mut active_block: Option<(String, f64, f64, Vec<ObjectNode>)> = None;
+
     let mut p = 0usize;
     while let Some(&(code, val)) = pairs.get(p) {
-        if code == 0 && val == "LINE" {
+        let (bx_off, page_h) = if let Some((_, bx, by, _)) = &active_block { (*bx, *by) } else { (0.0, doc_page_h) };
+        if code == 0 && val == "BLOCK" {
             p = p.saturating_add(1);
+            let mut bname = String::new();
+            let mut bx = 0.0;
+            let mut by = 0.0;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    2 | 3 if bname.is_empty() => bname = v.to_owned(),
+                    10 => bx = v.parse::<f64>().unwrap_or(0.0),
+                    20 => by = v.parse::<f64>().unwrap_or(0.0),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            if !bname.is_empty() {
+                active_block = Some((bname, bx, by, Vec::new()));
+            }
+        } else if code == 0 && val == "ENDBLK" {
+            p = p.saturating_add(1);
+            while let Some(&(c, _)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                p = p.saturating_add(1);
+            }
+            if let Some((bname, _, _, objs)) = active_block.take() {
+                blocks.insert(bname, objs);
+            }
+        } else if code == 0 && val == "INSERT" {
+            p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut bname = "";
+            let mut ix = 0.0;
+            let mut iy = 0.0;
+            let mut sx = 1.0_f64;
+            let mut sy: Option<f64> = None;
+            let mut rot_deg = 0.0_f64;
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    8 => layer_name = Some(v),
+                    2 => bname = v,
+                    10 => ix = v.parse::<f64>().unwrap_or(0.0),
+                    20 => iy = v.parse::<f64>().unwrap_or(0.0),
+                    41 => sx = v.parse::<f64>().unwrap_or(1.0),
+                    42 => sy = v.parse::<f64>().ok(),
+                    50 => rot_deg = v.parse::<f64>().unwrap_or(0.0),
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            if let Some(template_objs) = blocks.get(bname).cloned()
+                && !template_objs.is_empty()
+            {
+                let mut children = Vec::with_capacity(template_objs.len());
+                for mut ch in template_objs {
+                    ch.id = doc.allocate_object_id();
+                    children.push(ch);
+                }
+                let grp_id = doc.allocate_object_id();
+                let mut grp = ObjectNode::new(grp_id, Some(format!("DXF Insert {bname}")), ObjectKind::Group { children }, None, None);
+                let sy_val = sy.unwrap_or(sx);
+                let scale_tf = Affine2::scaling(sx, sy_val).unwrap_or(Affine2::IDENTITY);
+                let rot_tf = Affine2::rotation_deg(-rot_deg).unwrap_or(Affine2::IDENTITY);
+                let tr_tf = Affine2::translation(ix - bx_off, page_h - iy).unwrap_or(Affine2::IDENTITY);
+                grp.transform = scale_tf.then(rot_tf).and_then(|m| m.then(tr_tf)).unwrap_or(tr_tf);
+                push_dxf_node(&mut doc, &mut saw_custom_layer, &mut active_block, layer_name, grp);
+            }
+        } else if code == 0 && val == "LINE" {
+            p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut x0 = 0.0;
             let mut y0 = 0.0;
             let mut x1 = 0.0;
@@ -1343,6 +1469,10 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => x0 = v.parse::<f64>().unwrap_or(0.0),
                     20 => y0 = v.parse::<f64>().unwrap_or(0.0),
                     11 => x1 = v.parse::<f64>().unwrap_or(0.0),
@@ -1352,33 +1482,46 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 p = p.saturating_add(1);
             }
             let mut path = Path::new();
-            if let (Ok(pt0), Ok(pt1)) = (Point::new(x0, page_h - y0), Point::new(x1, page_h - y1)) {
+            if let (Ok(pt0), Ok(pt1)) = (Point::new(x0 - bx_off, page_h - y0), Point::new(x1 - bx_off, page_h - y1)) {
                 let _ = path.move_to(pt0);
                 let _ = path.line_to(pt1);
                 let id = doc.allocate_object_id();
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF Line".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(id, Some("DXF Line".to_owned()), ObjectKind::Path(path), None, Some(dxf_make_outline(aci, truecolor, lw_100mm))),
                 );
             }
         } else if code == 0 && val == "POLYLINE" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut closed = false;
             while let Some(&(c, v)) = pairs.get(p) {
                 if c == 0 {
                     break;
                 }
-                if c == 70 && v.parse::<i32>().unwrap_or(0) & 1 != 0 {
-                    closed = true;
+                match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
+                    70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
+                    _ => {}
                 }
                 p = p.saturating_add(1);
             }
-            let mut pts = Vec::new();
+            let mut verts: Vec<(f64, f64, f64)> = Vec::new();
             while let Some(&(c, v)) = pairs.get(p) {
                 if c == 0 && v == "VERTEX" {
                     p = p.saturating_add(1);
                     let mut vx = 0.0;
                     let mut vy = 0.0;
+                    let mut vbulge = 0.0;
                     while let Some(&(vc, vv)) = pairs.get(p) {
                         if vc == 0 {
                             break;
@@ -1386,13 +1529,12 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                         match vc {
                             10 => vx = vv.parse::<f64>().unwrap_or(0.0),
                             20 => vy = vv.parse::<f64>().unwrap_or(0.0),
+                            42 => vbulge = vv.parse::<f64>().unwrap_or(0.0),
                             _ => {}
                         }
                         p = p.saturating_add(1);
                     }
-                    if let Ok(pt) = Point::new(vx, page_h - vy) {
-                        pts.push(pt);
-                    }
+                    verts.push((vx, vy, vbulge));
                 } else if c == 0 && v == "SEQEND" {
                     p = p.saturating_add(1);
                     while let Some(&(sc, _)) = pairs.get(p) {
@@ -1406,25 +1548,58 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
             }
-            if let (Some(&first), Some(rest)) = (pts.first(), pts.get(1..))
-                && !rest.is_empty()
+            if verts.len() >= 2
+                && let Some(&(fx, fy, _)) = verts.first()
+                && let Ok(first) = Point::new(fx - bx_off, page_h - fy)
             {
                 let mut path = Path::new();
                 let _ = path.move_to(first);
-                for &pt in rest {
-                    let _ = path.line_to(pt);
+                let seg_count = if closed { verts.len() } else { verts.len().saturating_sub(1) };
+                for idx_v in 0..seg_count {
+                    let Some(&(x1_dxf, y1_dxf, bulge_dxf)) = verts.get(idx_v) else {
+                        break;
+                    };
+                    let next_idx = if idx_v.saturating_add(1) < verts.len() { idx_v.saturating_add(1) } else { 0 };
+                    let Some(&(x2_dxf, y2_dxf, _)) = verts.get(next_idx) else {
+                        break;
+                    };
+                    let x1 = x1_dxf - bx_off;
+                    let y1 = page_h - y1_dxf;
+                    let x2 = x2_dxf - bx_off;
+                    let y2 = page_h - y2_dxf;
+                    if bulge_dxf.abs() > 1e-6 {
+                        let b = -bulge_dxf;
+                        let d = (x2 - x1).hypot(y2 - y1);
+                        let r = d * (1.0 + b * b) / (4.0 * b.abs()).max(1e-9);
+                        let _ = emit_svg_elliptical_arc(&mut path, x1, y1, r, r, 0.0, b.abs() > 1.0, b > 0.0, x2, y2);
+                    } else if let Ok(pt) = Point::new(x2, y2) {
+                        let _ = path.line_to(pt);
+                    }
                 }
                 if closed {
                     let _ = path.close();
                 }
                 let id = doc.allocate_object_id();
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF Polyline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Polyline".to_owned()),
+                        ObjectKind::Path(path),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                    ),
                 );
             }
         } else if code == 0 && val == "CIRCLE" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut cx = 0.0;
             let mut cy = 0.0;
             let mut r = 0.0;
@@ -1433,6 +1608,10 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => cx = v.parse::<f64>().unwrap_or(0.0),
                     20 => cy = v.parse::<f64>().unwrap_or(0.0),
                     40 => r = v.parse::<f64>().unwrap_or(0.0),
@@ -1440,24 +1619,32 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 p = p.saturating_add(1);
             }
+            let sx = cx - bx_off;
             let sy = page_h - cy;
             if r > 0.0
-                && let Ok(rect) = Rect::new(cx - r, sy - r, cx + r, sy + r)
+                && let Ok(rect) = Rect::new(sx - r, sy - r, sx + r, sy + r)
             {
                 let id = doc.allocate_object_id();
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
                     ObjectNode::new(
                         id,
                         Some("DXF Circle".to_owned()),
                         ObjectKind::Ellipse(EllipseSpec::full(rect)),
                         None,
-                        Some(OutlineStyle::hairline(Color::BLACK)),
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
                     ),
                 );
             }
         } else if code == 0 && val == "ARC" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut cx = 0.0;
             let mut cy = 0.0;
             let mut r = 0.0;
@@ -1468,6 +1655,10 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => cx = v.parse::<f64>().unwrap_or(0.0),
                     20 => cy = v.parse::<f64>().unwrap_or(0.0),
                     40 => r = v.parse::<f64>().unwrap_or(0.0),
@@ -1477,19 +1668,33 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 p = p.saturating_add(1);
             }
+            let sx = cx - bx_off;
             let sy = page_h - cy;
             if r > 0.0
-                && let Ok(rect) = Rect::new(cx - r, sy - r, cx + r, sy + r)
+                && let Ok(rect) = Rect::new(sx - r, sy - r, sx + r, sy + r)
                 && let Ok(spec) = EllipseSpec::arc(rect, (-a1_deg).rem_euclid(360.0), (-a0_deg).rem_euclid(360.0))
             {
                 let id = doc.allocate_object_id();
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF Arc".to_owned()), ObjectKind::Ellipse(spec), None, Some(OutlineStyle::hairline(Color::BLACK))),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Arc".to_owned()),
+                        ObjectKind::Ellipse(spec),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                    ),
                 );
             }
         } else if code == 0 && val == "ELLIPSE" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut cx = 0.0;
             let mut cy = 0.0;
             let mut mx = 0.0;
@@ -1500,6 +1705,10 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => cx = v.parse::<f64>().unwrap_or(0.0),
                     20 => cy = v.parse::<f64>().unwrap_or(0.0),
                     11 => mx = v.parse::<f64>().unwrap_or(0.0),
@@ -1509,12 +1718,13 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 }
                 p = p.saturating_add(1);
             }
+            let sx = cx - bx_off;
             let sy = page_h - cy;
             let rx = mx.hypot(my);
             let ry = rx * ratio.clamp(1e-3, 1.0);
             if rx > 0.0
                 && ry > 0.0
-                && let Ok(rect) = Rect::new(cx - rx, sy - ry, cx + rx, sy + ry)
+                && let Ok(rect) = Rect::new(sx - rx, sy - ry, sx + rx, sy + ry)
             {
                 let id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(
@@ -1522,31 +1732,35 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     Some("DXF Ellipse".to_owned()),
                     ObjectKind::Ellipse(EllipseSpec::full(rect)),
                     None,
-                    Some(OutlineStyle::hairline(Color::BLACK)),
+                    Some(dxf_make_outline(aci, truecolor, lw_100mm)),
                 );
                 let ang_deg = (-my).atan2(mx).to_degrees();
                 if ang_deg.abs() > 1e-6
-                    && let (Ok(t0), Ok(rot), Ok(t1)) = (Affine2::translation(-cx, -sy), Affine2::rotation_deg(ang_deg), Affine2::translation(cx, sy))
+                    && let (Ok(t0), Ok(rot), Ok(t1)) = (Affine2::translation(-sx, -sy), Affine2::rotation_deg(ang_deg), Affine2::translation(sx, sy))
                     && let Ok(tr) = t0.then(rot).and_then(|m| m.then(t1))
                 {
                     node.transform = tr;
                 }
-                push_to_first_layer(&mut doc, node);
+                push_dxf_node(&mut doc, &mut saw_custom_layer, &mut active_block, layer_name, node);
             }
         } else if code == 0 && val == "LWPOLYLINE" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
             let mut closed = false;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut verts: Vec<(f64, f64, f64)> = Vec::new();
             while let Some(&(c, v)) = pairs.get(p) {
                 if c == 0 {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
                     70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => verts.push((v.parse::<f64>().unwrap_or(0.0), 0.0, 0.0)),
                     20 => {
                         if let Some(last) = verts.last_mut() {
@@ -1564,7 +1778,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             }
             if verts.len() >= 2
                 && let Some(&(fx, fy, _)) = verts.first()
-                && let Ok(first) = Point::new(fx, page_h - fy)
+                && let Ok(first) = Point::new(fx - bx_off, page_h - fy)
             {
                 let mut path = Path::new();
                 let _ = path.move_to(first);
@@ -1577,9 +1791,9 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     let Some(&(x2_dxf, y2_dxf, _)) = verts.get(next_idx) else {
                         break;
                     };
-                    let x1 = x1_dxf;
+                    let x1 = x1_dxf - bx_off;
                     let y1 = page_h - y1_dxf;
-                    let x2 = x2_dxf;
+                    let x2 = x2_dxf - bx_off;
                     let y2 = page_h - y2_dxf;
                     if bulge_dxf.abs() > 1e-6 {
                         let b = -bulge_dxf;
@@ -1594,17 +1808,27 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     let _ = path.close();
                 }
                 let id = doc.allocate_object_id();
-                let stroke_col = dxf_aci_to_color(aci, truecolor);
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF LwPolyline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(stroke_col))),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF LwPolyline".to_owned()),
+                        ObjectKind::Path(path),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                    ),
                 );
             }
         } else if code == 0 && val == "SPLINE" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
             let mut closed = false;
             let mut aci: Option<i32> = None;
             let mut truecolor: Option<i32> = None;
+            let mut lw_100mm: Option<i32> = None;
             let mut ctrl_pts: Vec<(f64, f64)> = Vec::new();
             let mut fit_pts: Vec<(f64, f64)> = Vec::new();
             while let Some(&(c, v)) = pairs.get(p) {
@@ -1612,9 +1836,11 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
                     70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
                     62 => aci = v.parse::<i32>().ok(),
                     420 => truecolor = v.parse::<i32>().ok(),
+                    370 => lw_100mm = v.parse::<i32>().ok(),
                     10 => ctrl_pts.push((v.parse::<f64>().unwrap_or(0.0), 0.0)),
                     20 => {
                         if let Some(last) = ctrl_pts.last_mut() {
@@ -1632,7 +1858,7 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 p = p.saturating_add(1);
             }
             let src = if ctrl_pts.len() >= 2 { &ctrl_pts } else { &fit_pts };
-            let pts: Vec<Point> = src.iter().filter_map(|&(x, y)| Point::new(x, page_h - y).ok()).collect();
+            let pts: Vec<Point> = src.iter().filter_map(|&(x, y)| Point::new(x - bx_off, page_h - y).ok()).collect();
             if let Some(&first) = pts.first()
                 && pts.len() >= 2
             {
@@ -1660,14 +1886,25 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     let _ = path.close();
                 }
                 let id = doc.allocate_object_id();
-                let stroke_col = dxf_aci_to_color(aci, truecolor);
-                push_to_first_layer(
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF Spline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(stroke_col))),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(
+                        id,
+                        Some("DXF Spline".to_owned()),
+                        ObjectKind::Path(path),
+                        None,
+                        Some(dxf_make_outline(aci, truecolor, lw_100mm)),
+                    ),
                 );
             }
         } else if code == 0 && val == "SOLID" {
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
             let mut x0 = 0.0;
             let mut y0 = 0.0;
             let mut x1 = 0.0;
@@ -1681,6 +1918,9 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
                     10 => x0 = v.parse::<f64>().unwrap_or(0.0),
                     20 => y0 = v.parse::<f64>().unwrap_or(0.0),
                     11 => x1 = v.parse::<f64>().unwrap_or(0.0),
@@ -1695,9 +1935,12 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
             }
             let x3_v = x3.unwrap_or(x2);
             let y3_v = y3.unwrap_or(y2);
-            if let (Ok(p0), Ok(p1), Ok(p2), Ok(p3)) =
-                (Point::new(x0, page_h - y0), Point::new(x1, page_h - y1), Point::new(x2, page_h - y2), Point::new(x3_v, page_h - y3_v))
-            {
+            if let (Ok(p0), Ok(p1), Ok(p2), Ok(p3)) = (
+                Point::new(x0 - bx_off, page_h - y0),
+                Point::new(x1 - bx_off, page_h - y1),
+                Point::new(x2 - bx_off, page_h - y2),
+                Point::new(x3_v - bx_off, page_h - y3_v),
+            ) {
                 let mut path = Path::new();
                 let _ = path.move_to(p0);
                 let _ = path.line_to(p1);
@@ -1707,14 +1950,21 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 let _ = path.line_to(p2);
                 let _ = path.close();
                 let id = doc.allocate_object_id();
-                push_to_first_layer(
+                let fill_col = dxf_aci_to_color(aci, truecolor);
+                push_dxf_node(
                     &mut doc,
-                    ObjectNode::new(id, Some("DXF Solid".to_owned()), ObjectKind::Path(path), Some(FillStyle::uniform(Color::BLACK)), None),
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
+                    ObjectNode::new(id, Some("DXF Solid".to_owned()), ObjectKind::Path(path), Some(FillStyle::uniform(fill_col)), None),
                 );
             }
         } else if code == 0 && (val == "TEXT" || val == "MTEXT") {
             let is_mtext = val == "MTEXT";
             p = p.saturating_add(1);
+            let mut layer_name: Option<&str> = None;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
             let mut tx = 0.0;
             let mut ty = 0.0;
             let mut height = 12.0;
@@ -1724,6 +1974,9 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                     break;
                 }
                 match c {
+                    8 => layer_name = Some(v),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
                     10 => tx = v.parse::<f64>().unwrap_or(0.0),
                     20 => ty = v.parse::<f64>().unwrap_or(0.0),
                     40 => height = v.parse::<f64>().unwrap_or(12.0),
@@ -1736,18 +1989,22 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
                 text_val = text_val.replace("\\P", " ").replace("\\p", " ");
             }
             if !text_val.is_empty()
-                && let Ok(pos) = Point::new(tx, page_h - ty)
+                && let Ok(pos) = Point::new(tx - bx_off, page_h - ty)
                 && let Ok(size_pt) = F64::new(height.max(1.0))
             {
                 let id = doc.allocate_object_id();
                 let label = if is_mtext { "DXF MText" } else { "DXF Text" };
-                push_to_first_layer(
+                let fill_col = dxf_aci_to_color(aci, truecolor);
+                push_dxf_node(
                     &mut doc,
+                    &mut saw_custom_layer,
+                    &mut active_block,
+                    layer_name,
                     ObjectNode::new(
                         id,
                         Some(label.to_owned()),
                         ObjectKind::ArtisticText { text: text_val, font_family: "Sans".to_owned(), size_pt, position: pos },
-                        Some(FillStyle::uniform(Color::BLACK)),
+                        Some(FillStyle::uniform(fill_col)),
                         None,
                     ),
                 );

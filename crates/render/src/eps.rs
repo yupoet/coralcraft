@@ -512,6 +512,15 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
         }
         return Ok(());
     }
+    let dxf_truecolor_attr = |col: &Color| -> String {
+        let [r, g, b] = col.to_srgb8();
+        let tc = ((i32::from(r) & 0xFF) << 16) | ((i32::from(g) & 0xFF) << 8) | (i32::from(b) & 0xFF);
+        format!("420\n{tc}\n")
+    };
+    let text_col_attr = match &node.fill {
+        Some(FillStyle::Uniform { color }) => dxf_truecolor_attr(color),
+        _ => String::new(),
+    };
     if node.effects.is_empty() {
         match &node.kind {
             ObjectKind::ArtisticText { text, size_pt, position, .. } => {
@@ -521,7 +530,7 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
                     let h_pt = (size_pt.get() * transform_scale(world_tf)).max(0.1);
                     let _ = writeln!(
                         out,
-                        "0\nTEXT\n8\n{layer_name}\n10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
+                        "0\nTEXT\n8\n{layer_name}\n{text_col_attr}10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
                         fmt_num(world_pt.x.get()),
                         fmt_num(page_h - world_pt.y.get()),
                         fmt_num(h_pt)
@@ -540,7 +549,7 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
                     {
                         let _ = writeln!(
                             out,
-                            "0\nTEXT\n8\n{layer_name}\n10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
+                            "0\nTEXT\n8\n{layer_name}\n{text_col_attr}10\n{}\n20\n{}\n40\n{}\n1\n{clean}",
                             fmt_num(world_pt.x.get()),
                             fmt_num(page_h - world_pt.y.get()),
                             fmt_num(h_pt)
@@ -559,12 +568,23 @@ fn emit_dxf_node(out: &mut String, node: &ObjectNode, parent_tf: Affine2, layer_
     let world_path = local_path.transform(world_tf)?;
     let polys = flatten_path(&world_path, &FlattenOpts::default())?;
 
+    let mut poly_style_attrs = String::new();
+    if let Some(outline) = &node.outline {
+        poly_style_attrs.push_str(&dxf_truecolor_attr(&outline.color));
+        if !outline.is_hairline() && outline.width_pt.get() > 0.0 {
+            let lw_100mm = ((outline.width_pt.get() * 25.4 / 72.0) * 100.0).round().clamp(1.0, 2110.0) as i32;
+            let _ = writeln!(poly_style_attrs, "370\n{lw_100mm}");
+        }
+    } else if let Some(FillStyle::Uniform { color }) = &node.fill {
+        poly_style_attrs.push_str(&dxf_truecolor_attr(color));
+    }
+
     for poly in &polys {
         if poly.points.len() < 2 {
             continue;
         }
         let closed_flag = if poly.closed { 1 } else { 0 };
-        let _ = writeln!(out, "0\nPOLYLINE\n8\n{layer_name}\n66\n1\n70\n{closed_flag}");
+        let _ = writeln!(out, "0\nPOLYLINE\n8\n{layer_name}\n{poly_style_attrs}66\n1\n70\n{closed_flag}");
         for &pt in &poly.points {
             let _ = writeln!(out, "0\nVERTEX\n8\n{layer_name}\n10\n{}\n20\n{}", fmt_num(pt.x.get()), fmt_num(page_h - pt.y.get()));
         }
@@ -1171,5 +1191,51 @@ mod tests {
         assert_eq!(rpage.layers.get(1).unwrap().name, "Overlay Layer");
         assert!((rpage.layers.get(1).unwrap().opacity.get() - 0.6).abs() < 1e-6);
         assert_eq!(rpage.layers.get(1).unwrap().objects.len(), 1);
+    }
+
+    #[test]
+    fn export_dxf_roundtrips_multilayer_truecolor_and_lineweight_via_import_dxf_m80() {
+        use coralcraft_doc::{Layer, LayerId};
+
+        let mut doc = Document::new_a4_portrait();
+        let page = doc.pages.first_mut().unwrap();
+        page.layers.first_mut().unwrap().name = "Walls".to_owned();
+        page.layers.first_mut().unwrap().objects.push(ObjectNode::new(
+            ObjectId(1),
+            Some("WallRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 120.0, 80.0).unwrap())),
+            None,
+            Some(OutlineStyle::with_width(Color::rgb8(0x22, 0x66, 0xCC), F64::new(2.8346).unwrap())),
+        ));
+
+        let mut layer2 = Layer::new_normal(LayerId(2), "Labels");
+        layer2.objects.push(ObjectNode::new(
+            ObjectId(2),
+            Some("LabelText".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Room A".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(14.0).unwrap(),
+                position: Point::new(40.0, 50.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::rgb8(0xDD, 0x44, 0x11))),
+            None,
+        ));
+        page.layers.push(layer2);
+
+        let dxf = crate::export_dxf(&doc, 0).expect("export_dxf M80");
+        let reimported = coralcraft_doc::import_dxf(&dxf).expect("import_dxf from export_dxf M80");
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.layers.len(), 2);
+        assert_eq!(rpage.layers.first().unwrap().name, "Walls");
+        assert_eq!(rpage.layers.first().unwrap().objects.len(), 1);
+        let wall_outl = rpage.layers.first().unwrap().objects.first().unwrap().outline.as_ref().unwrap();
+        assert_eq!(wall_outl.color, Color::rgb8(0x22, 0x66, 0xCC));
+        assert!((wall_outl.width_pt.get() - 2.8346).abs() < 0.05);
+
+        assert_eq!(rpage.layers.get(1).unwrap().name, "Labels");
+        assert_eq!(rpage.layers.get(1).unwrap().objects.len(), 1);
+        let lbl = rpage.layers.get(1).unwrap().objects.first().unwrap();
+        assert_eq!(lbl.fill, Some(FillStyle::uniform(Color::rgb8(0xDD, 0x44, 0x11))));
     }
 }
