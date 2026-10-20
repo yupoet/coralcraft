@@ -12,10 +12,10 @@ use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteCh
 use coralcraft_geom::{
     AxonometricPlane, BasicShapeKind, BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point,
     PolygonSpec, Rect, RectSpec, Unit, build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_basic_shape_path,
-    build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_flowchart_symbol_path,
-    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path, build_perspective_grid_path,
-    build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path, build_superformula_path,
-    build_three_point_curve_path, build_voronoi_mosaic_path,
+    build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_concentric_rings_path, build_connector_path,
+    build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_isometric_box_path, build_lsystem_path,
+    build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_spirograph_path,
+    build_superformula_path, build_three_point_curve_path, build_voronoi_mosaic_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -1081,6 +1081,26 @@ impl McpServer {
                         {
                             "name": "export_cmx1_base64",
                             "description": "Exports the document to Corel Presentation Exchange (RIFF CMX1) binary format and returns its byte length and base64-encoded payload.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_concentric_rings",
+                            "description": "Adds a parametric concentric bullseye/target rings compound path with EvenOdd fill rule centered at (cx, cy).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "dash_object_path",
+                            "description": "Splits an object's path along its arc length into discrete open dashed subpaths according to dash_pattern_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "quantize_selection_positions",
+                            "description": "Snaps each selected object's top-left bounding corner to the nearest (grid_x_pt, grid_y_pt) grid multiple.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_cdrx_zip_base64",
+                            "description": "Exports the document to modern ZIP-based CDRX (content/riffData.cdr) format and returns its byte length and base64-encoded payload.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -3206,6 +3226,48 @@ impl McpServer {
                     "cmx1_base64": b64
                 }))
             }
+            "add_concentric_rings" => {
+                let cx = args.get("cx").and_then(Value::as_f64).unwrap_or(150.0);
+                let cy = args.get("cy").and_then(Value::as_f64).unwrap_or(150.0);
+                let inner_radius_pt = args.get("inner_radius_pt").and_then(Value::as_f64).unwrap_or(15.0);
+                let outer_radius_pt = args.get("outer_radius_pt").and_then(Value::as_f64).unwrap_or(60.0);
+                let ring_count = args.get("ring_count").and_then(Value::as_u64).unwrap_or(4) as u32;
+                let center = Point::new(cx, cy).map_err(|e| e.to_string())?;
+                let path = build_concentric_rings_path(center, inner_radius_pt, outer_radius_pt, ring_count).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Concentric Rings".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "concentric_rings", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "dash_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let mut dash_pattern_pt = Vec::new();
+                if let Some(arr) = args.get("dash_pattern_pt").and_then(Value::as_array) {
+                    for v in arr {
+                        if let Some(d) = v.as_f64() {
+                            dash_pattern_pt.push(F64::new(d).map_err(|e| e.to_string())?);
+                        }
+                    }
+                }
+                if dash_pattern_pt.is_empty() {
+                    dash_pattern_pt = vec![F64::new(10.0).map_err(|e| e.to_string())?, F64::new(5.0).map_err(|e| e.to_string())?];
+                }
+                let ok = self.engine.execute(EngineCommand::DashObjectPath { object_id: target, dash_pattern_pt });
+                Ok(json!({ "dashed": ok, "object_id": target.0 }))
+            }
+            "quantize_selection_positions" => {
+                self.apply_optional_selection(args);
+                let grid_x_pt = F64::new(args.get("grid_x_pt").and_then(Value::as_f64).unwrap_or(10.0)).map_err(|e| e.to_string())?;
+                let grid_y_pt = F64::new(args.get("grid_y_pt").and_then(Value::as_f64).unwrap_or(10.0)).map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::QuantizeSelectionPositions { grid_x_pt, grid_y_pt });
+                Ok(json!({ "quantized": ok, "grid_x_pt": grid_x_pt.get(), "grid_y_pt": grid_y_pt.get() }))
+            }
+            "export_cdrx_zip_base64" => {
+                let bytes = write_cdrx_zip(&self.engine.document).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(&bytes);
+                Ok(json!({
+                    "cdrx_zip_bytes": bytes.len(),
+                    "cdrx_zip_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -3235,7 +3297,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 196);
+        assert_eq!(tools, 200);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -3402,5 +3464,31 @@ mod tests {
         )
         .unwrap();
         assert!(cmx_b64_resp.result.unwrap()["structuredContent"]["cmx1_bytes"].as_u64().unwrap() > 40);
+
+        let rings_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(
+                r#"{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"add_concentric_rings","arguments":{"cx":140.0,"cy":140.0,"inner_radius_pt":15.0,"outer_radius_pt":60.0,"ring_count":4}}}"#,
+            ),
+        )
+        .unwrap();
+        let rings_id = rings_resp.result.unwrap()["structuredContent"]["selected_id"].as_u64().unwrap();
+
+        let dash_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{{"name":"dash_object_path","arguments":{{"object_id":{rings_id},"dash_pattern_pt":[10.0,5.0]}}}}}}"#
+        )))
+        .unwrap();
+        assert!(dash_resp.result.unwrap()["structuredContent"]["dashed"].as_bool().unwrap());
+
+        let qpos_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&format!(
+            r#"{{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{{"name":"quantize_selection_positions","arguments":{{"selection":[{rings_id},{sp_id}],"grid_x_pt":10.0,"grid_y_pt":10.0}}}}}}"#
+        )))
+        .unwrap();
+        assert!(qpos_resp.result.unwrap()["structuredContent"]["quantized"].as_bool().unwrap());
+
+        let cdrx_b64_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"export_cdrx_zip_base64","arguments":{}}}"#),
+        )
+        .unwrap();
+        assert!(cdrx_b64_resp.result.unwrap()["structuredContent"]["cdrx_zip_bytes"].as_u64().unwrap() > 80);
     }
 }

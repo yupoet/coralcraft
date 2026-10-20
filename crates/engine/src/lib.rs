@@ -9,11 +9,12 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, ArcLengthTable, AxonometricPlane, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect,
     RectSpec, Size, Unit, artistic_text_to_path, boolean_paths, break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path,
-    close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths,
-    erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
-    measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, project_path_axonometric, radial_push_path_around_point,
-    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
-    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+    close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, dash_path_to_open_subpaths, delete_curve_node_at,
+    delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, expand_tapered_stroke_profile, hatch_path_region,
+    insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
+    project_path_axonometric, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
+    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
+    twirl_path_around_point, wave_distort_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -324,6 +325,10 @@ pub enum EngineCommand {
     ApplyDihedralSymmetry { object_id: ObjectId, center: Point, folds: u32, reflect: bool },
     /// Scales each selected unlocked object around its own center based on its radial distance from `center` within `falloff_radius_pt` (`Object -> Transformations -> Falloff Scale by Distance`).
     ScaleSelectionByDistance { center: Point, min_scale: F64, max_scale: F64, falloff_radius_pt: F64 },
+    /// Splits the contour of `object_id` along its arc length into discrete open dashed subpaths according to `dash_pattern_pt` (`Object -> Shaping -> Split Curve into Dashes`).
+    DashObjectPath { object_id: ObjectId, dash_pattern_pt: Vec<F64> },
+    /// Snaps each selected unlocked object's top-left world bounding corner to the nearest `(grid_x_pt, grid_y_pt)` grid multiple (`Object -> Align and Distribute -> Snap Selection to Grid`).
+    QuantizeSelectionPositions { grid_x_pt: F64, grid_y_pt: F64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4181,6 +4186,55 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::DashObjectPath { object_id, dash_pattern_pt } => {
+                if dash_pattern_pt.is_empty() {
+                    return false;
+                }
+                let raw_pat: Vec<f64> = dash_pattern_pt.iter().map(|d| d.get()).collect();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(dashed) = dash_path_to_open_subpaths(&base_path, &raw_pat)
+                    {
+                        obj.kind = ObjectKind::Path(dashed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::QuantizeSelectionPositions { grid_x_pt, grid_y_pt } => {
+                let gx = grid_x_pt.get();
+                let gy = grid_y_pt.get();
+                if gx <= 0.0 || gy <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let x0 = wb.x0.get();
+                    let y0 = wb.y0.get();
+                    let sx = (x0 / gx).round() * gx;
+                    let sy = (y0 / gy).round() * gy;
+                    deltas.insert(obj.id, (sx - x0, sy - y0));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
         }
         true
     }
@@ -5098,5 +5152,10 @@ mod tests {
             max_scale: F64::new(1.5).unwrap(),
             falloff_radius_pt: F64::new(120.0).unwrap(),
         }));
+        assert!(
+            engine
+                .execute(EngineCommand::DashObjectPath { object_id: xor_id, dash_pattern_pt: vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()] })
+        );
+        assert!(engine.execute(EngineCommand::QuantizeSelectionPositions { grid_x_pt: F64::new(10.0).unwrap(), grid_y_pt: F64::new(10.0).unwrap() }));
     }
 }

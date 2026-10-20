@@ -1482,6 +1482,34 @@ pub fn build_spirograph_path(
     Ok(path)
 }
 
+/// Builds a parametric concentric bullseye / target rings [`Path`] centered at `center`
+/// (`Object -> Insert -> Concentric Target Rings`).
+///
+/// Generates `ring_count` (`1..=32`) concentric circular 4-arc cubic Bézier subpaths
+/// spaced evenly from `inner_radius_pt` to `outer_radius_pt` with [`FillRule::EvenOdd`].
+pub fn build_concentric_rings_path(center: Point, inner_radius_pt: f64, outer_radius_pt: f64, ring_count: u32) -> Result<Path, GeomError> {
+    let r_in = F64::new(inner_radius_pt)?.get();
+    let r_out = F64::new(outer_radius_pt)?.get();
+    if r_in <= 0.0 || r_out <= r_in || !(1..=32).contains(&ring_count) {
+        return Err(GeomError::InvalidShapeParameter("invalid concentric rings parameters"));
+    }
+    let cx = center.x.get();
+    let cy = center.y.get();
+    let mut path = Path::new();
+    path.fill_rule = crate::path::FillRule::EvenOdd;
+
+    for i in 0..ring_count {
+        let t = if ring_count == 1 { 1.0 } else { f64::from(i) / f64::from(ring_count - 1) };
+        let r = r_in + (r_out - r_in) * t;
+        let rect = Rect::new(cx - r, cy - r, cx + r, cy + r)?;
+        let circle = EllipseSpec::full(rect).to_path()?;
+        for elem in circle.elements {
+            path.elements.push(elem);
+        }
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1571,5 +1599,10 @@ mod m27_tests {
 
         let spiro = build_spirograph_path(Point::new(100.0, 100.0).unwrap(), 60.0, 20.0, 15.0, false, 3, 96).unwrap();
         assert!(spiro.elements.iter().any(|e| matches!(e, PathElement::Close)));
+
+        let rings = build_concentric_rings_path(Point::new(100.0, 100.0).unwrap(), 15.0, 60.0, 4).unwrap();
+        let ring_closes = rings.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
+        assert_eq!(ring_closes, 4);
+        assert_eq!(rings.fill_rule, crate::path::FillRule::EvenOdd);
     }
 }

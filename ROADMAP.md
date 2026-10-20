@@ -193,9 +193,13 @@
 53. **M53 Parametric Spirograph / Roulette Curves (`build_spirograph_path`), Dihedral $D_n$ Kaleidoscope Symmetry (`build_dihedral_symmetry_path`), Attractor Distance Falloff Scaling (`ScaleSelectionByDistance`), CMX1 Base64 Export (`export_cmx1_base64`), and 196 MCP Tools**:
     - `coralcraft-geom`: `build_spirograph_path` (hypotrochoid and epitrochoid roulette curves) and `build_dihedral_symmetry_path` ($C_n$ rotational and $D_n$ reflection kaleidoscope symmetry).
     - `coralcraft-engine` & `coralcraft-mcp`: `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `add_spirograph`, `apply_dihedral_symmetry`, `scale_selection_by_distance`, `export_cmx1_base64`, and **196 MCP tools**.
+54. **M54 Parametric Concentric Target Rings (`build_concentric_rings_path`), Dash-Pattern Curve Splitter (`dash_path_to_open_subpaths`), Grid Position Quantization (`QuantizeSelectionPositions`), CDRX ZIP Base64 Export (`export_cdrx_zip_base64`), and 200 MCP Tools**:
+    - `coralcraft-geom`: `build_concentric_rings_path` (concentric `EvenOdd` bullseye rings) and `dash_path_to_open_subpaths` (arc-length dash/gap path splitter).
+    - `coralcraft-engine` & `coralcraft-mcp`: `DashObjectPath`, `QuantizeSelectionPositions`, `add_concentric_rings`, `dash_object_path`, `quantize_selection_positions`, `export_cdrx_zip_base64`, and **200 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M54 delivered (`build_concentric_rings_path` & `add_concentric_rings`, `dash_path_to_open_subpaths` & `DashObjectPath`, `QuantizeSelectionPositions`, `export_cdrx_zip_base64`, 200 MCP tools).
 - 2026-10-20: M53 delivered (`build_spirograph_path` & `add_spirograph`, `build_dihedral_symmetry_path` & `ApplyDihedralSymmetry`, `ScaleSelectionByDistance`, `export_cmx1_base64`, 196 MCP tools).
 - 2026-10-20: M52 delivered (`build_isometric_box_path` & `add_isometric_box`, `wave_distort_path` & `WaveDistortObjectPath`, `RadialScaleSelectionPositions`, `export_cdr7_base64`, 192 MCP tools).
 - 2026-10-20: M51 delivered (`build_voronoi_mosaic_path` & `add_voronoi_mosaic`, `expand_tapered_stroke_profile` & `ApplyVariableWidthStroke`, `chaikin_smooth_path` & `ChaikinSmoothObjectPath`, `export_dxf_base64`, 188 MCP tools).

@@ -2101,6 +2101,79 @@ pub fn build_dihedral_symmetry_path(path: &Path, center: Point, folds: u32, refl
     Ok(out)
 }
 
+/// Splits `path` along its flattened arc length into discrete open dashed subpaths
+/// according to `dash_pattern_pt` (`Object -> Shaping -> Split Curve into Dashes`).
+pub fn dash_path_to_open_subpaths(path: &Path, dash_pattern_pt: &[f64]) -> Result<Path, GeomError> {
+    if dash_pattern_pt.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("dash pattern must not be empty"));
+    }
+    let mut pattern = Vec::with_capacity(dash_pattern_pt.len() * 2);
+    for &d in dash_pattern_pt {
+        let val = crate::F64::new(d)?.get();
+        if val <= 0.0 {
+            return Err(GeomError::InvalidShapeParameter("dash pattern entries must be positive"));
+        }
+        pattern.push(val);
+    }
+    if pattern.len() % 2 == 1 {
+        let clone = pattern.clone();
+        pattern.extend_from_slice(&clone);
+    }
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path::new();
+    out.fill_rule = path.fill_rule;
+
+    for poly in polys {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        let mut pat_idx = 0usize;
+        let mut pat_rem = pattern[0];
+        let mut draw_on = true;
+        let mut in_dash = false;
+
+        for seg in poly.points.windows(2) {
+            let p0 = seg[0];
+            let p1 = seg[1];
+            let dx = p1.x.get() - p0.x.get();
+            let dy = p1.y.get() - p0.y.get();
+            let seg_len = dx.hypot(dy);
+            if seg_len <= 1e-9 {
+                continue;
+            }
+            let mut dist = 0.0;
+            while dist < seg_len - 1e-9 {
+                let step = pat_rem.min(seg_len - dist);
+                let t0 = dist / seg_len;
+                let t1 = (dist + step) / seg_len;
+                if draw_on {
+                    let s_pt = Point::new(p0.x.get() + dx * t0, p0.y.get() + dy * t0)?;
+                    let e_pt = Point::new(p0.x.get() + dx * t1, p0.y.get() + dy * t1)?;
+                    if !in_dash {
+                        out.move_to(s_pt)?;
+                        in_dash = true;
+                    }
+                    out.line_to(e_pt)?;
+                }
+                dist += step;
+                pat_rem -= step;
+                if pat_rem <= 1e-9 {
+                    pat_idx = (pat_idx + 1) % pattern.len();
+                    pat_rem = pattern[pat_idx];
+                    draw_on = !draw_on;
+                    if !draw_on {
+                        in_dash = false;
+                    }
+                }
+            }
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("dash splitting produced empty path"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -2189,5 +2262,9 @@ mod m26_tests {
 
         let sym = build_dihedral_symmetry_path(&rect_path, Point::new(50.0, 50.0).unwrap(), 4, true).unwrap();
         assert_eq!(sym.elements.len(), rect_path.elements.len() * 8);
+
+        let dashed = dash_path_to_open_subpaths(&rect_path, &[10.0, 5.0]).unwrap();
+        let dash_moves = dashed.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count();
+        assert!(dash_moves >= 8);
     }
 }
