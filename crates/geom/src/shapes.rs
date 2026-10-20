@@ -982,6 +982,47 @@ pub fn build_barcode_path(bounds: Rect, digits: &str) -> Result<Path, GeomError>
     Ok(path)
 }
 
+/// Builds a 2-Point Perspective Grid [`Path`] inside `bounds` with left and right vanishing points
+/// at `(bounds.x0, horizon_y_pt)` and `(bounds.x1, horizon_y_pt)` and `subdivisions` (`2..=32`) rays
+/// (`Object -> Perspective -> Draw in Perspective Grid`).
+pub fn build_perspective_grid_path(bounds: Rect, horizon_y_pt: f64, subdivisions: u32) -> Result<Path, GeomError> {
+    let w = bounds.width();
+    let h = bounds.height();
+    let hy = F64::new(horizon_y_pt)?.get();
+    if w <= 0.0 || h <= 0.0 || subdivisions < 2 {
+        return Err(GeomError::InvalidShapeParameter("invalid perspective grid parameters"));
+    }
+    let divs = subdivisions.clamp(2, 32);
+    let x0 = bounds.x0.get();
+    let y0 = bounds.y0.get();
+    let x1 = bounds.x1.get();
+    let y1 = bounds.y1.get();
+    let vp_left = Point::new(x0, hy)?;
+    let vp_right = Point::new(x1, hy)?;
+
+    let mut path = Path::new();
+    // Horizon line
+    path.move_to(vp_left)?;
+    path.line_to(vp_right)?;
+
+    // Converging rays from left and right vanishing points to bottom & top edges
+    for i in 0..=divs {
+        let u = f64::from(i) / f64::from(divs);
+        let tx = x0 + u * w;
+        let bot_pt = Point::new(tx, y1)?;
+        let top_pt = Point::new(tx, y0)?;
+        path.move_to(vp_left)?;
+        path.line_to(bot_pt)?;
+        path.move_to(vp_right)?;
+        path.line_to(bot_pt)?;
+        path.move_to(vp_left)?;
+        path.line_to(top_pt)?;
+        path.move_to(vp_right)?;
+        path.line_to(top_pt)?;
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -1034,5 +1075,8 @@ mod m27_tests {
         let barcode = build_barcode_path(Rect::new(0.0, 0.0, 180.0, 60.0).unwrap(), "012345678905").unwrap();
         let bar_closes = barcode.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert!(bar_closes >= 10);
+
+        let pgrid = build_perspective_grid_path(Rect::new(0.0, 0.0, 200.0, 120.0).unwrap(), 50.0, 4).unwrap();
+        assert!(pgrid.elements.len() > 20);
     }
 }

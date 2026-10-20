@@ -1755,6 +1755,80 @@ pub fn divide_overlapping_paths(subject: &Path, clip: &Path) -> Result<Vec<Path>
     Ok(regions)
 }
 
+/// Generates parallel and optional cross-hatch engraving strokes inside `path` at `angle_deg`
+/// and `spacing_pt` (`Object -> Hatch / Engraving Fill`).
+pub fn hatch_path_region(path: &Path, angle_deg: f64, spacing_pt: f64, cross_hatch: bool) -> Result<Path, GeomError> {
+    if !angle_deg.is_finite() || !spacing_pt.is_finite() || spacing_pt < 0.5 {
+        return Err(GeomError::InvalidShapeParameter("invalid hatch angle or spacing"));
+    }
+    let polys = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut edges = Vec::new();
+    for poly in &polys {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        for w in poly.points.windows(2) {
+            edges.push((w[0], w[1]));
+        }
+        if poly.closed
+            && let (Some(&first), Some(&last)) = (poly.points.first(), poly.points.last())
+            && first != last
+        {
+            edges.push((last, first));
+        }
+    }
+    if edges.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("cannot hatch empty path"));
+    }
+
+    let step = spacing_pt.max(0.5);
+    let mut out = Path::new();
+    let angles = if cross_hatch { vec![angle_deg, angle_deg + 90.0] } else { vec![angle_deg] };
+    for ang in angles {
+        let (s, c) = ang.to_radians().sin_cos();
+        let mut v_min = f64::INFINITY;
+        let mut v_max = f64::NEG_INFINITY;
+        let mut rot_edges = Vec::with_capacity(edges.len());
+        for &(p0, p1) in &edges {
+            let u0 = p0.x.get() * c + p0.y.get() * s;
+            let v0 = -p0.x.get() * s + p0.y.get() * c;
+            let u1 = p1.x.get() * c + p1.y.get() * s;
+            let v1 = -p1.x.get() * s + p1.y.get() * c;
+            v_min = v_min.min(v0).min(v1);
+            v_max = v_max.max(v0).max(v1);
+            rot_edges.push((u0, v0, u1, v1));
+        }
+        let mut v = v_min + 0.5 * step;
+        let mut line_count = 0usize;
+        while v < v_max && line_count < 512 {
+            line_count += 1;
+            let mut hits = Vec::new();
+            for &(u0, v0, u1, v1) in &rot_edges {
+                if (v0 <= v && v1 > v) || (v1 <= v && v0 > v) {
+                    let t = (v - v0) / (v1 - v0);
+                    hits.push(u0 + t * (u1 - u0));
+                }
+            }
+            hits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            for pair in hits.chunks_exact(2) {
+                let ua = pair[0];
+                let ub = pair[1];
+                if (ub - ua).abs() > 1e-6 {
+                    let pa = Point::new(ua * c - v * s, ua * s + v * c)?;
+                    let pb = Point::new(ub * c - v * s, ub * s + v * c)?;
+                    out.move_to(pa)?;
+                    out.line_to(pb)?;
+                }
+            }
+            v += step;
+        }
+    }
+    if out.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("hatch spacing too wide for path bounds"));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1823,5 +1897,8 @@ mod m26_tests {
         let rect2 = crate::shapes::RectSpec::sharp(crate::Rect::new(25.0, 15.0, 75.0, 55.0).unwrap()).to_path().unwrap();
         let divided = divide_overlapping_paths(&rect_path, &rect2).unwrap();
         assert_eq!(divided.len(), 3);
+
+        let hatched = hatch_path_region(&rect_path, 45.0, 8.0, true).unwrap();
+        assert!(hatched.elements.len() >= 10);
     }
 }

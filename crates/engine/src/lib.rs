@@ -9,10 +9,11 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, ArcLengthTable, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, Unit,
     artistic_text_to_path, boolean_paths, break_path_at_node, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
-    delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, insert_curve_node_at, join_open_subpaths,
-    knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path, radial_push_path_around_point,
-    reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at,
-    smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point,
+    delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle, hatch_path_region, insert_curve_node_at,
+    join_open_subpaths, knife_cut_path_by_line, measure_path_length_and_area, morph_paths_linear, offset_open_or_closed_path,
+    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes, smear_path_from_point,
+    smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments, trace_bitmap_to_path, transform_curve_nodes,
+    twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -299,6 +300,10 @@ pub enum EngineCommand {
     DistributeSelectionAlongPath { spine_object_id: ObjectId, rotate_to_tangent: bool },
     /// Globally replaces colors matching `from_color` within `tolerance_u8` with `to_color` across fills, fountain stops, two-color patterns, and outlines (`Edit -> Find and Replace -> Replace Objects -> Replace a Color`).
     RecolorArtwork { from_color: Color, to_color: Color, tolerance_u8: u8, selection_only: bool },
+    /// Replaces `object_id` with parallel/cross-hatched vector engraving lines at `angle_deg` and `spacing_pt` (`Object -> Hatch / Engraving Fill`).
+    HatchObjectPath { object_id: ObjectId, angle_deg: F64, spacing_pt: F64, cross_hatch: bool },
+    /// Generates `steps` (`1..=32`) standalone intermediate morphed vector [`ObjectKind::Path`] objects between `start_id` and `end_id` with interpolated fill and outline colors (`Effects -> Blend -> Break Blend Apart`).
+    CreateIntermediateBlendPaths { start_id: ObjectId, end_id: ObjectId, steps: u32, sample_count: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1298,6 +1303,24 @@ impl EditorEngine {
             }
             EngineCommand::RecolorArtwork { selection_only, .. } => {
                 if *selection_only && self.selected_nodes().iter().all(|o| o.locked) {
+                    return false;
+                }
+            }
+            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| hatch_path_region(&p, angle_deg.get(), spacing_pt.get(), *cross_hatch).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
+                if start_id == end_id || *steps == 0 || *sample_count < 3 {
+                    return false;
+                }
+                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
+                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
+                if !valid_a || !valid_b {
                     return false;
                 }
             }
@@ -3779,6 +3802,61 @@ impl EditorEngine {
                     self.for_each_node_mut(recolor_node);
                 }
             }
+            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
+                let ang = angle_deg.get();
+                let sp = spacing_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(hatched) = hatch_path_region(&base_path, ang, sp, cross_hatch)
+                    {
+                        obj.kind = ObjectKind::Path(hatched);
+                        if obj.outline.is_none() {
+                            obj.outline = Some(OutlineStyle::hairline(Color::BLACK));
+                        }
+                    }
+                });
+            }
+            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
+                let n_steps = steps.clamp(1, 32);
+                let src_a = self.selected_or_all_node(start_id).cloned();
+                let src_b = self.selected_or_all_node(end_id).cloned();
+                if let (Some(a), Some(b)) = (src_a, src_b)
+                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
+                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
+                {
+                    let ca = a.fill.as_ref().and_then(|f| match f {
+                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
+                        _ => None,
+                    });
+                    let cb = b.fill.as_ref().and_then(|f| match f {
+                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
+                        _ => None,
+                    });
+                    let mut new_ids = Vec::with_capacity(n_steps as usize);
+                    for k in 1..=n_steps {
+                        let t = f64::from(k) / f64::from(n_steps + 1);
+                        if let Ok(morphed) = morph_paths_linear(&pa, &pb, t, sample_count) {
+                            let new_id = self.document.allocate_object_id();
+                            let fill = if let (Some([r0, g0, b0]), Some([r1, g1, b1])) = (ca, cb) {
+                                let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
+                                let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
+                                let bl = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
+                                Some(FillStyle::uniform(Color::rgb8(r, g, bl)))
+                            } else {
+                                a.fill.clone()
+                            };
+                            let node = ObjectNode::new(new_id, Some(format!("Blend Step {k}")), ObjectKind::Path(morphed), fill, a.outline.clone());
+                            new_ids.push(new_id);
+                            self.target_layer_mut().objects.push(node);
+                        }
+                    }
+                    if !new_ids.is_empty() {
+                        self.selection = new_ids;
+                    }
+                }
+            }
         }
         true
     }
@@ -4650,5 +4728,14 @@ mod tests {
         }));
         engine.set_selection(vec![sf_id, off_id]);
         assert!(engine.execute(EngineCommand::DivideSelection));
+        let div_ids = engine.selection.clone();
+        assert!(engine.execute(EngineCommand::CreateIntermediateBlendPaths { start_id: div_ids[0], end_id: div_ids[1], steps: 2, sample_count: 16 }));
+        assert_eq!(engine.selection.len(), 2);
+        assert!(engine.execute(EngineCommand::HatchObjectPath {
+            object_id: div_ids[0],
+            angle_deg: F64::new(45.0).unwrap(),
+            spacing_pt: F64::new(6.0).unwrap(),
+            cross_hatch: true,
+        }));
     }
 }

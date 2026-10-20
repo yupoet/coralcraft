@@ -175,9 +175,13 @@
 47. **M47 Vector Barcode Generator (`build_barcode_path`), Boolean Divide (`divide_overlapping_paths`), Distribute Selection Along Path (`DistributeSelectionAlongPath`), Global Recolor Artwork (`RecolorArtwork`), and 172 MCP Tools**:
     - `coralcraft-geom`: `build_barcode_path` (`Object -> Insert -> Barcode`) and `divide_overlapping_paths` (`Object -> Shaping -> Divide`).
     - `coralcraft-engine` & `coralcraft-mcp`: `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, `add_barcode`, `divide_selection`, `distribute_selection_along_path`, `recolor_artwork`, and **172 MCP tools**.
+48. **M48 2-Point Perspective Grid (`build_perspective_grid_path`), Vector Hatch / Engraving Fill (`hatch_path_region`), Intermediate Morphed Blend Steps (`CreateIntermediateBlendPaths`), SVG Base64 Export (`export_svg_base64`), and 176 MCP Tools**:
+    - `coralcraft-geom`: `build_perspective_grid_path` (`Object -> Perspective -> Perspective Grid`) and `hatch_path_region` (`Object -> Hatch / Engraving Fill`).
+    - `coralcraft-engine` & `coralcraft-mcp`: `HatchObjectPath`, `CreateIntermediateBlendPaths`, `add_perspective_grid`, `hatch_object_path`, `create_intermediate_blend_paths`, `export_svg_base64`, and **176 MCP tools**.
 
 ## Changelog
 
+- 2026-10-20: M48 delivered (`build_perspective_grid_path` & `add_perspective_grid`, `hatch_path_region` & `HatchObjectPath`, `CreateIntermediateBlendPaths`, `export_svg_base64`, 176 MCP tools).
 - 2026-10-20: M47 delivered (`build_barcode_path` & `add_barcode`, `divide_overlapping_paths` & `DivideSelection`, `DistributeSelectionAlongPath`, `RecolorArtwork`, 172 MCP tools).
 - 2026-10-20: M46 delivered (`build_rose_guilloche_path` & `add_rose_guilloche`, `morph_paths_linear` & `MorphBetweenObjects`, `DistributeExactGap`, `extract_document_palette`, 168 MCP tools).
 - 2026-10-20: M45 delivered (`build_flowchart_symbol_path` & `add_flowchart_symbol`, `break_path_at_node` & `BreakPathAtNode`, `EqualizeSelectionSize`, `export_pdf_base64`, 164 MCP tools).

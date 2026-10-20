@@ -13,7 +13,8 @@ use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, FlowchartSymbolKind, Point, PolygonSpec, Rect, RectSpec, Unit,
     build_angular_dimension_path, build_banner_ribbon_path, build_barcode_path, build_block_arrow_path, build_bspline_path, build_callout_path,
     build_complex_star_path, build_connector_path, build_flowchart_symbol_path, build_gear_wheel_path, build_graph_paper_path,
-    build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path, build_three_point_curve_path,
+    build_impact_rays_path, build_perspective_grid_path, build_pointillizer_path, build_polyline_path, build_rose_guilloche_path, build_spiral_path,
+    build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, RenderOpts, base64_encode, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg, render_page};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -959,6 +960,26 @@ impl McpServer {
                         {
                             "name": "recolor_artwork",
                             "description": "Globally replaces colors matching (from_r, from_g, from_b) within tolerance_u8 with (to_r, to_g, to_b) across fills, gradients, patterns, and outlines.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_perspective_grid",
+                            "description": "Adds a 2-Point Perspective Grid Path inside (x, y, width, height) with horizon_y_pt and subdivisions (2..=32).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "hatch_object_path",
+                            "description": "Replaces object_id with parallel and optional cross-hatch vector engraving strokes at angle_deg and spacing_pt.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "create_intermediate_blend_paths",
+                            "description": "Generates steps (1..=32) standalone intermediate morphed vector Path objects between start_id and end_id.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "export_svg_base64",
+                            "description": "Exports page_index to clean-room SVG 1.1 and returns svg_bytes length and RFC 4648 svg_base64 string.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2807,6 +2828,44 @@ impl McpServer {
                 });
                 Ok(json!({ "recolored": ok }))
             }
+            "add_perspective_grid" => {
+                let x = args.get("x").and_then(Value::as_f64).unwrap_or(20.0);
+                let y = args.get("y").and_then(Value::as_f64).unwrap_or(20.0);
+                let w = args.get("width").and_then(Value::as_f64).unwrap_or(240.0);
+                let h = args.get("height").and_then(Value::as_f64).unwrap_or(160.0);
+                let horizon_y_pt = args.get("horizon_y_pt").and_then(Value::as_f64).unwrap_or(y + 0.4 * h);
+                let subdivisions = args.get("subdivisions").and_then(Value::as_u64).unwrap_or(6) as u32;
+                let rect = Rect::new(x, y, x + w, y + h).map_err(|e| e.to_string())?;
+                let path = build_perspective_grid_path(rect, horizon_y_pt, subdivisions).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Perspective Grid".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "perspective_grid", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "hatch_object_path" => {
+                let target = self.resolve_target_id(args)?;
+                let angle_deg = F64::new(args.get("angle_deg").and_then(Value::as_f64).unwrap_or(45.0)).map_err(|e| e.to_string())?;
+                let spacing_pt = F64::new(args.get("spacing_pt").and_then(Value::as_f64).unwrap_or(6.0)).map_err(|e| e.to_string())?;
+                let cross_hatch = args.get("cross_hatch").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::HatchObjectPath { object_id: target, angle_deg, spacing_pt, cross_hatch });
+                Ok(json!({ "hatched": ok, "object_id": target.0 }))
+            }
+            "create_intermediate_blend_paths" => {
+                let start_id = ObjectId(args.get("start_id").and_then(Value::as_u64).ok_or_else(|| "Missing start_id".to_owned())?);
+                let end_id = ObjectId(args.get("end_id").and_then(Value::as_u64).ok_or_else(|| "Missing end_id".to_owned())?);
+                let steps = args.get("steps").and_then(Value::as_u64).unwrap_or(3) as u32;
+                let sample_count = args.get("sample_count").and_then(Value::as_u64).unwrap_or(32) as usize;
+                let ok = self.engine.execute(EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|i| i.0).collect();
+                Ok(json!({ "blend_paths_created": ok, "created_ids": ids }))
+            }
+            "export_svg_base64" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |idx| idx as usize);
+                let svg = export_svg(&self.engine.document, page_index).map_err(|e| e.to_string())?;
+                let b64 = base64_encode(svg.as_bytes());
+                Ok(json!({
+                    "svg_bytes": svg.len(),
+                    "svg_base64": b64
+                }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2836,7 +2895,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 172);
+        assert_eq!(tools, 176);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
