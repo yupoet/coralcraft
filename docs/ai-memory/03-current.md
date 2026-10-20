@@ -4,7 +4,7 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M42 are 100% delivered and passing all CI gates**).
+- **Stage**: `usable beta baseline` (**M0 through M43 are 100% delivered and passing all CI gates**).
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -40,9 +40,10 @@
   32. **M39: Path Length & Area Measurement (`measure_path_length_and_area`), Swap Object Positions (`SwapObjectPositions`), Center Selection to Page (`CenterSelectionToPage` / `P`), Spot & Registration Color Authoring (`set_style_spot`), and 140 MCP Tools (`commit 82c1147`)**.
   33. **M40: Smooth / Symmetrical Curve Node (`smooth_curve_node_at`), 2D Grid Array Duplication (`ArrayDuplicateSelection`), Ruler Guidelines (`AddGuideline` & `ClearGuidelines`), and 144 MCP Tools (`commit e6778b9`)**.
   34. **M41: Polyline / Freehand Path Builder (`build_polyline_path`), Polar Circular Array Duplication (`CircularDuplicateSelection`), Fit Page to Selection (`FitPageToSelection`), Outline Cap/Join/Miter Controls (`SetOutlineCapAndJoin`), and 148 MCP Tools (`commit 1400b41`)**.
-  35. **M42: Parametric Gear Wheel (`build_gear_wheel_path`), Shape Tool Curve Node Alignment (`AlignCurveNodes`), HSB Color Harmony Shifting (`ShiftSelectionColors`), Native `.coralcraft` JSON Export (`export_coralcraft_json`), and 152 MCP Tools**:
-      - `coralcraft-geom`: Added `build_gear_wheel_path`.
-      - `coralcraft-engine` & `coralcraft-mcp`: Added `AlignCurveNodes`, `ShiftSelectionColors`, `add_gear_wheel`, `align_curve_nodes`, `shift_selection_colors`, `export_coralcraft_json`, and expanded MCP server to **152 tools**.
+  35. **M42: Parametric Gear Wheel (`build_gear_wheel_path`), Shape Tool Curve Node Alignment (`AlignCurveNodes`), HSB Color Harmony Shifting (`ShiftSelectionColors`), Native `.coralcraft` JSON Export (`export_coralcraft_json`), and 152 MCP Tools (`commit 7e2eb2e`)**.
+  36. **M43: Parametric Block Arrow (`build_block_arrow_path`), Midpoint Segment Subdivision (`subdivide_all_path_segments`), Vector Color Inversion & Grayscale (`ConvertSelectionColors`), Native `.coralcraft` JSON Import (`import_coralcraft_json`), and 156 MCP Tools**:
+      - `coralcraft-geom`: Added `build_block_arrow_path` and `subdivide_all_path_segments`.
+      - `coralcraft-engine` & `coralcraft-mcp`: Added `SubdividePathSegments`, `ConvertSelectionColors`, `add_block_arrow`, `subdivide_path_segments`, `convert_selection_colors`, `import_coralcraft_json`, and expanded MCP server to **156 tools**.
 
 ## 2. Multi-Model Cross-Validation Consensus (M14)
 

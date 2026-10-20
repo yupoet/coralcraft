@@ -11,8 +11,8 @@ use coralcraft_geom::{
     artistic_text_to_path, boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at,
     delete_segment_at_index, erase_path_within_circle, insert_curve_node_at, join_open_subpaths, knife_cut_path_by_line,
     measure_path_length_and_area, offset_open_or_closed_path, radial_push_path_around_point, reference_point, reverse_path_direction,
-    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, trace_bitmap_to_path,
-    twirl_path_around_point,
+    roughen_path_segments, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, subdivide_all_path_segments,
+    trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -277,6 +277,10 @@ pub enum EngineCommand {
     AlignCurveNodes { object_id: ObjectId, element_indices: Vec<usize>, horizontal: bool, vertical: bool },
     /// Shifts HSB hue (`hue_delta_deg`), saturation (`saturation_delta`), and brightness (`brightness_delta`) across all fills, fountain stops, patterns, and outlines of the selection (`Effects -> Adjust -> Hue/Saturation/Lightness`).
     ShiftSelectionColors { hue_delta_deg: F64, saturation_delta: F64, brightness_delta: F64 },
+    /// Subdivides every segment of `object_id` at its midpoint $t = 0.5$ (`Shape Tool F10 -> Select All Nodes -> Add Nodes (+)`).
+    SubdividePathSegments { object_id: ObjectId },
+    /// Converts all fills, fountain stops, two-color patterns, and outlines of the selection via sRGB inversion (`invert`) and/or BT.709 luminance grayscale (`grayscale`) (`Effects -> Transform -> Invert Colors` / `Edit -> Find and Replace -> Convert to Grayscale`).
+    ConvertSelectionColors { invert: bool, grayscale: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1181,6 +1185,23 @@ impl EditorEngine {
             }
             EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
                 if hue_delta_deg.get().abs() <= 1e-6 && saturation_delta.get().abs() <= 1e-6 && brightness_delta.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::SubdividePathSegments { object_id } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| subdivide_all_path_segments(&p).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
+                if !invert && !grayscale {
                     return false;
                 }
                 let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
@@ -3352,6 +3373,57 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::SubdividePathSegments { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = subdivide_all_path_segments(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
+                let convert_color = |c: &Color| -> Color {
+                    let [mut r, mut g, mut b] = c.to_srgb8();
+                    if invert {
+                        r = 255 - r;
+                        g = 255 - g;
+                        b = 255 - b;
+                    }
+                    if grayscale {
+                        let lum = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round().clamp(0.0, 255.0) as u8;
+                        r = lum;
+                        g = lum;
+                        b = lum;
+                    }
+                    Color::rgb8(r, g, b)
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => *color = convert_color(color),
+                            FillStyle::Fountain { stops, .. } => {
+                                for stop in stops {
+                                    stop.color = convert_color(&stop.color);
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                *fg_color = convert_color(fg_color);
+                                *bg_color = convert_color(bg_color);
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(outline) = &mut obj.outline {
+                        outline.color = convert_color(&outline.color);
+                    }
+                });
+            }
         }
         true
     }
@@ -4186,5 +4258,7 @@ mod tests {
             saturation_delta: F64::new(0.1).unwrap(),
             brightness_delta: F64::new(-0.05).unwrap(),
         }));
+        assert!(engine.execute(EngineCommand::SubdividePathSegments { object_id: sf_id }));
+        assert!(engine.execute(EngineCommand::ConvertSelectionColors { invert: true, grayscale: true }));
     }
 }

@@ -6,13 +6,14 @@ use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{Color, FountainBlendMode, FountainStop};
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
-    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, save_json,
+    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json,
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseMode, EllipseSpec, F64, FillRule, Point, PolygonSpec, Rect, RectSpec, Unit,
-    build_angular_dimension_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path, build_gear_wheel_path,
-    build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path, build_three_point_curve_path,
+    build_angular_dimension_path, build_block_arrow_path, build_bspline_path, build_callout_path, build_complex_star_path, build_connector_path,
+    build_gear_wheel_path, build_graph_paper_path, build_impact_rays_path, build_pointillizer_path, build_polyline_path, build_spiral_path,
+    build_three_point_curve_path,
 };
 use coralcraft_render::{ImpositionSpec, export_dxf, export_eps, export_pdf, export_pdf_imposed, export_svg};
 use coralcraft_tools::{AlignMode, PolygonSubMode, ZOrderOp, combined_selection_bounds};
@@ -858,6 +859,26 @@ impl McpServer {
                         {
                             "name": "export_coralcraft_json",
                             "description": "Serializes the entire multi-page Document to lossless native .coralcraft JSON.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "add_block_arrow",
+                            "description": "Adds a closed 7-vertex Block Arrow Path from (start_x, start_y) to (end_x, end_y) with configurable shaft and head dimensions.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "subdivide_path_segments",
+                            "description": "Subdivides every segment of an object's path at its midpoint t = 0.5 (Shape Tool F10 -> Select All Nodes -> Add Nodes (+)).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "convert_selection_colors",
+                            "description": "Converts all fills, fountain stops, two-color patterns, and outlines of the selection via sRGB inversion (invert) and/or BT.709 luminance grayscale (grayscale).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "import_coralcraft_json",
+                            "description": "Loads a native .coralcraft JSON document string into the active EditorEngine.",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -2472,6 +2493,39 @@ impl McpServer {
                 let json_str = String::from_utf8(bytes).map_err(|e| e.to_string())?;
                 Ok(json!({ "coralcraft_json_bytes": json_str.len(), "coralcraft_json": json_str }))
             }
+            "add_block_arrow" => {
+                let sx = args.get("start_x").and_then(Value::as_f64).unwrap_or(50.0);
+                let sy = args.get("start_y").and_then(Value::as_f64).unwrap_or(100.0);
+                let ex = args.get("end_x").and_then(Value::as_f64).unwrap_or(200.0);
+                let ey = args.get("end_y").and_then(Value::as_f64).unwrap_or(100.0);
+                let shaft_w = args.get("shaft_width_pt").and_then(Value::as_f64).unwrap_or(24.0);
+                let head_w = args.get("head_width_pt").and_then(Value::as_f64).unwrap_or(48.0);
+                let head_l = args.get("head_length_pt").and_then(Value::as_f64).unwrap_or(36.0);
+                let start = Point::new(sx, sy).map_err(|e| e.to_string())?;
+                let end = Point::new(ex, ey).map_err(|e| e.to_string())?;
+                let path = build_block_arrow_path(start, end, shaft_w, head_w, head_l).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Block Arrow".to_owned()), kind: ObjectKind::Path(path) });
+                Ok(json!({ "added": "block_arrow", "selected_id": self.engine.selection.first().map(|id| id.0) }))
+            }
+            "subdivide_path_segments" => {
+                let target = self.resolve_target_id(args)?;
+                let ok = self.engine.execute(EngineCommand::SubdividePathSegments { object_id: target });
+                Ok(json!({ "subdivided": ok, "object_id": target.0 }))
+            }
+            "convert_selection_colors" => {
+                self.apply_optional_selection(args);
+                let invert = args.get("invert").and_then(Value::as_bool).unwrap_or(false);
+                let grayscale = args.get("grayscale").and_then(Value::as_bool).unwrap_or(true);
+                let ok = self.engine.execute(EngineCommand::ConvertSelectionColors { invert, grayscale });
+                Ok(json!({ "colors_converted": ok, "invert": invert, "grayscale": grayscale }))
+            }
+            "import_coralcraft_json" => {
+                let raw = args.get("coralcraft_json").and_then(Value::as_str).ok_or_else(|| "Missing coralcraft_json string".to_owned())?;
+                let doc = load_bytes(raw.as_bytes()).map_err(|e| e.to_string())?;
+                let pages = doc.pages.len();
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({ "status": "ok", "pages": pages }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -2501,7 +2555,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 152);
+        assert_eq!(tools, 156);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

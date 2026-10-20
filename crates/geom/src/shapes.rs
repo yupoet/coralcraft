@@ -737,6 +737,42 @@ pub fn build_gear_wheel_path(center: Point, outer_radius: f64, inner_radius: f64
     Ok(path)
 }
 
+/// Builds a closed 7-vertex Block Arrow [`Path`] from `start` to `end` (`Polygon Flyout -> Arrow Shapes`).
+pub fn build_block_arrow_path(start: Point, end: Point, shaft_width_pt: f64, head_width_pt: f64, head_length_pt: f64) -> Result<Path, GeomError> {
+    let shaft_w = F64::new(shaft_width_pt)?.get();
+    let head_w = F64::new(head_width_pt)?.get();
+    let head_l = F64::new(head_length_pt)?.get();
+    if shaft_w <= 0.0 || head_w < shaft_w || head_l <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("invalid block arrow dimensions"));
+    }
+    let dx = end.x.get() - start.x.get();
+    let dy = end.y.get() - start.y.get();
+    let len = dx.hypot(dy);
+    if len <= 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("block arrow length must be positive"));
+    }
+    let ux = dx / len;
+    let uy = dy / len;
+    let nx = -uy;
+    let ny = ux;
+    let eff_head_l = head_l.min(0.8 * len);
+    let neck_x = start.x.get() + (len - eff_head_l) * ux;
+    let neck_y = start.y.get() + (len - eff_head_l) * uy;
+    let hs = 0.5 * shaft_w;
+    let hh = 0.5 * head_w;
+
+    let mut path = Path::new();
+    path.move_to(Point::new(start.x.get() + hs * nx, start.y.get() + hs * ny)?)?;
+    path.line_to(Point::new(neck_x + hs * nx, neck_y + hs * ny)?)?;
+    path.line_to(Point::new(neck_x + hh * nx, neck_y + hh * ny)?)?;
+    path.line_to(end)?;
+    path.line_to(Point::new(neck_x - hh * nx, neck_y - hh * ny)?)?;
+    path.line_to(Point::new(neck_x - hs * nx, neck_y - hs * ny)?)?;
+    path.line_to(Point::new(start.x.get() - hs * nx, start.y.get() - hs * ny)?)?;
+    path.close()?;
+    Ok(path)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m27_tests {
@@ -764,5 +800,8 @@ mod m27_tests {
         let gear = build_gear_wheel_path(Point::new(50.0, 50.0).unwrap(), 40.0, 30.0, 8).unwrap();
         let gear_closes = gear.elements.iter().filter(|e| matches!(e, PathElement::Close)).count();
         assert_eq!(gear_closes, 2);
+
+        let arrow = build_block_arrow_path(Point::new(0.0, 50.0).unwrap(), Point::new(100.0, 50.0).unwrap(), 20.0, 40.0, 30.0).unwrap();
+        assert_eq!(arrow.elements.len(), 8);
     }
 }

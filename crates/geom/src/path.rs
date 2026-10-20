@@ -1532,6 +1532,54 @@ pub fn smooth_curve_node_at(path: &Path, element_index: usize, tension: f64) -> 
     Path::from_elements(elements, path.fill_rule)
 }
 
+/// Subdivides every line, quadratic, and cubic segment of `path` at its midpoint $t = 0.5$
+/// (`Shape Tool F10 -> Select All Nodes -> Add Nodes (+)`).
+pub fn subdivide_all_path_segments(path: &Path) -> Result<Path, GeomError> {
+    if path.elements.is_empty() {
+        return Err(GeomError::InvalidShapeParameter("cannot subdivide empty path"));
+    }
+    let mid_pt = |a: Point, b: Point| -> Result<Point, GeomError> { Point::new(0.5 * (a.x.get() + b.x.get()), 0.5 * (a.y.get() + b.y.get())) };
+    let mut out = Vec::with_capacity(path.elements.len() * 2);
+    let mut cur = Point::ZERO;
+    for &el in &path.elements {
+        match el {
+            PathElement::MoveTo(p) => {
+                cur = p;
+                out.push(PathElement::MoveTo(p));
+            }
+            PathElement::LineTo(p) => {
+                let m = mid_pt(cur, p)?;
+                out.push(PathElement::LineTo(m));
+                out.push(PathElement::LineTo(p));
+                cur = p;
+            }
+            PathElement::QuadTo { ctrl, end } => {
+                let q0 = mid_pt(cur, ctrl)?;
+                let q1 = mid_pt(ctrl, end)?;
+                let m = mid_pt(q0, q1)?;
+                out.push(PathElement::QuadTo { ctrl: q0, end: m });
+                out.push(PathElement::QuadTo { ctrl: q1, end });
+                cur = end;
+            }
+            PathElement::CubicTo { c1, c2, end } => {
+                let m01 = mid_pt(cur, c1)?;
+                let m12 = mid_pt(c1, c2)?;
+                let m23 = mid_pt(c2, end)?;
+                let q0 = mid_pt(m01, m12)?;
+                let q1 = mid_pt(m12, m23)?;
+                let m = mid_pt(q0, q1)?;
+                out.push(PathElement::CubicTo { c1: m01, c2: q0, end: m });
+                out.push(PathElement::CubicTo { c1: q1, c2: m23, end });
+                cur = end;
+            }
+            PathElement::Close => {
+                out.push(PathElement::Close);
+            }
+        }
+    }
+    Path::from_elements(out, path.fill_rule)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
