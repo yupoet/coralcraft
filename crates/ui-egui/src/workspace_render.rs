@@ -144,7 +144,9 @@ pub fn render_workspace_frame(ws: &DesktopWorkspace) -> Result<RenderOutput, Ren
                 |o| match &o.fill {
                     Some(coralcraft_doc::FillStyle::Fountain { geometry, stops, .. }) => {
                         let ang = match geometry {
-                            coralcraft_doc::FountainGeometry::Linear { angle_deg, .. } => angle_deg.get(),
+                            coralcraft_doc::FountainGeometry::Linear { angle_deg, .. }
+                            | coralcraft_doc::FountainGeometry::Conical { angle_deg, .. }
+                            | coralcraft_doc::FountainGeometry::Square { angle_deg, .. } => angle_deg.get(),
                             coralcraft_doc::FountainGeometry::Radial { .. } => 0.0,
                         };
                         let c0 = stops.first().map(|s| s.color.to_rgba8(1.0)).unwrap_or([0, 120, 215, 255]);

@@ -518,7 +518,7 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
                     }
                     s.push_str("Q\n");
                 }
-                FountainGeometry::Radial { center_x, center_y, radius, .. } => {
+                FountainGeometry::Radial { center_x, center_y, radius, .. } | FountainGeometry::Square { center_x, center_y, radius, .. } => {
                     let cx = x0 + center_x.get() * bw;
                     let cy = y0 + center_y.get() * bh;
                     let max_r = (radius.get() * bw.hypot(bh)).max(1e-6);
@@ -528,6 +528,32 @@ fn emit_pdf_fill(s: &mut String, path: &Path, bbox: Rect, fill: &FillStyle) -> R
                         let rgb = interpolate_stops(stops, *blend_mode, t)?;
                         emit_pdf_color(s, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] }, false);
                         let _ = writeln!(s, "{} {} {} {} re f", fmt_num(cx - r), fmt_num(cy - r), fmt_num(2.0 * r), fmt_num(2.0 * r));
+                    }
+                }
+                FountainGeometry::Conical { center_x, center_y, angle_deg } => {
+                    let cx = x0 + center_x.get() * bw;
+                    let cy = y0 + center_y.get() * bh;
+                    let max_r = bw.hypot(bh).max(1e-6);
+                    let base_rad = angle_deg.get().to_radians();
+                    for i in 0..bands {
+                        let norm0 = (i as f64) / (bands as f64);
+                        let norm1 = ((i + 1) as f64) / (bands as f64);
+                        let norm_mid = 0.5 * (norm0 + norm1);
+                        let t = (1.0 - (2.0 * norm_mid - 1.0).abs()).clamp(0.0, 1.0);
+                        let rgb = interpolate_stops(stops, *blend_mode, t)?;
+                        emit_pdf_color(s, &Color::Rgb { r: rgb[0], g: rgb[1], b: rgb[2] }, false);
+                        let a0 = base_rad + norm0 * std::f64::consts::TAU;
+                        let a1 = base_rad + norm1 * std::f64::consts::TAU;
+                        let _ = writeln!(
+                            s,
+                            "{} {} m {} {} l {} {} l h f",
+                            fmt_num(cx),
+                            fmt_num(cy),
+                            fmt_num(cx + max_r * a0.cos()),
+                            fmt_num(cy + max_r * a0.sin()),
+                            fmt_num(cx + max_r * a1.cos()),
+                            fmt_num(cy + max_r * a1.sin())
+                        );
                     }
                 }
             }
@@ -558,6 +584,12 @@ fn emit_pdf_stroke(s: &mut String, path: &Path, outline: &OutlineStyle, obj_tran
     };
     emit_pdf_color(s, &outline.color, true);
     let _ = writeln!(s, "{} w {cap_code} J {join_code} j {} M", fmt_num(w), fmt_num(outline.miter_limit.get()));
+    if outline.dash_pattern.is_empty() {
+        s.push_str("[] 0 d\n");
+    } else {
+        let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
+        let _ = writeln!(s, "[{}] 0 d", joined.join(" "));
+    }
     emit_pdf_path_ops(s, path);
     s.push_str("S\n");
 }

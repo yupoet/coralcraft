@@ -179,6 +179,26 @@ pub enum FountainGeometry {
         /// Focal point Y in `[0, 1]` unit square.
         focal_y: F64,
     },
+    /// Conical (angular sweep) fountain fill in unit-square `[0, 1]` object coordinates.
+    Conical {
+        /// Center X in `[0, 1]` unit square (`0.5` = center).
+        center_x: F64,
+        /// Center Y in `[0, 1]` unit square (`0.5` = center).
+        center_y: F64,
+        /// Starting sweep angle in degrees.
+        angle_deg: F64,
+    },
+    /// Square (Chebyshev / diamond) fountain fill in unit-square `[0, 1]` object coordinates.
+    Square {
+        /// Center X in `[0, 1]` unit square (`0.5` = center).
+        center_x: F64,
+        /// Center Y in `[0, 1]` unit square (`0.5` = center).
+        center_y: F64,
+        /// Half-side extent in unit square (`0.5` = inscribed square).
+        radius: F64,
+        /// Rotation angle in degrees.
+        angle_deg: F64,
+    },
 }
 
 /// Object or page fill style.
@@ -259,6 +279,9 @@ pub struct OutlineStyle {
     pub behind_fill: bool,
     /// CorelDRAW "Scale with object" option: when `true`, the stroke width scales with the object's transform.
     pub scale_with_object: bool,
+    /// Optional alternating dash-and-gap lengths in typographic points (`F12` Outline Pen Style). Empty means solid line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dash_pattern: Vec<F64>,
 }
 
 impl OutlineStyle {
@@ -273,6 +296,7 @@ impl OutlineStyle {
             miter_limit: F64::new(10.0).unwrap_or(F64::ONE),
             behind_fill: false,
             scale_with_object: false,
+            dash_pattern: Vec::new(),
         }
     }
 
@@ -287,6 +311,7 @@ impl OutlineStyle {
             miter_limit: F64::new(10.0).unwrap_or(F64::ONE),
             behind_fill: false,
             scale_with_object: false,
+            dash_pattern: Vec::new(),
         }
     }
 

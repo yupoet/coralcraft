@@ -8,7 +8,7 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
-    boolean_paths, trace_bitmap_to_path,
+    boolean_paths, reference_point, trace_bitmap_to_path,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -141,6 +141,10 @@ pub enum EngineCommand {
     CreateBoundary,
     /// Converts each selected object's `OutlineStyle` stroke into a closed filled `ObjectKind::Path` (`Object -> Convert Outline to Object` / `Ctrl+Shift+Q`).
     ConvertOutlineToObject,
+    /// Rotates selected objects by `angle_deg` around the 9-point Object Origin (`origin_index` in `0..=8`), optionally duplicating (`Alt+F8`).
+    RotateSelection { angle_deg: F64, origin_index: u8, copy: bool },
+    /// Scales selected objects by `(scale_x, scale_y)` around the 9-point Object Origin (`origin_index` in `0..=8`), optionally duplicating (`Alt+F9`).
+    ScaleSelection { scale_x: F64, scale_y: F64, origin_index: u8, copy: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,6 +619,26 @@ impl EditorEngine {
                     .iter()
                     .any(|o| !o.locked && sel.contains(&o.id) && o.outline.is_some() && object_to_path(o).is_some());
                 if !has_outlined {
+                    return false;
+                }
+            }
+            EngineCommand::RotateSelection { angle_deg, origin_index, .. } => {
+                if *origin_index > 8 || angle_deg.get().abs() <= 1e-9 {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, .. } => {
+                if *origin_index > 8 || scale_x.get().abs() <= 1e-6 || scale_y.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
                     return false;
                 }
             }
@@ -1668,8 +1692,73 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::RotateSelection { angle_deg, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_rot) = Affine2::rotation_deg(angle_deg.get()) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(rot_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(rot_tf, copy);
+            }
+            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(scale_x.get(), scale_y.get()) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(scale_tf, copy);
+            }
         }
         true
+    }
+
+    fn apply_selection_transform(&mut self, tf: Affine2, copy: bool) {
+        if copy {
+            let sel = self.selection.clone();
+            let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+            let mut new_selection = Vec::new();
+            for mut dup in templates {
+                reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                if let Ok(composed) = dup.transform.then(tf) {
+                    dup.transform = composed;
+                }
+                new_selection.push(dup.id);
+                self.target_layer_mut().objects.push(dup);
+            }
+            if !new_selection.is_empty() {
+                self.selection = new_selection;
+            }
+        } else {
+            self.for_each_selected_mut(|obj| {
+                if let Ok(composed) = obj.transform.then(tf) {
+                    obj.transform = composed;
+                }
+            });
+        }
     }
 
     /// Replaces the current selection list.
@@ -2184,5 +2273,14 @@ mod tests {
         let converted = engine.selected_or_all_node(boundary_id).unwrap();
         assert!(converted.outline.is_none());
         assert!(converted.fill.is_some());
+
+        // 14. RotateSelection & ScaleSelection around 9-point Object Origin (origin_index = 4 center)
+        assert!(engine.execute(EngineCommand::RotateSelection { angle_deg: F64::new(45.0).unwrap(), origin_index: 4, copy: false }));
+        assert!(engine.execute(EngineCommand::ScaleSelection {
+            scale_x: F64::new(1.5).unwrap(),
+            scale_y: F64::new(1.5).unwrap(),
+            origin_index: 0,
+            copy: true,
+        }));
     }
 }

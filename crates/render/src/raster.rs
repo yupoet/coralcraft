@@ -134,6 +134,82 @@ fn accumulate_subpixel_span(row_cov: &mut [u8], w: usize, x0: f64, x1: f64) {
     }
 }
 
+/// Splits device-space or local-space polylines into open dashed sub-polylines according to `dash_pattern`.
+pub fn dash_polylines(polys: &[Polyline], dash_pattern: &[f64]) -> Result<Vec<Polyline>, GeomError> {
+    let mut pat: Vec<f64> = dash_pattern.iter().copied().filter(|d| d.is_finite() && *d > 1e-6).take(32).collect();
+    if pat.is_empty() {
+        return Ok(polys.to_vec());
+    }
+    if pat.len() % 2 == 1 {
+        let copy = pat.clone();
+        pat.extend(copy);
+    }
+
+    let mut out = Vec::new();
+    for poly in polys {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        let mut pts = poly.points.clone();
+        if poly.closed
+            && let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+            && first.distance(last) > EPS
+        {
+            pts.push(first);
+        }
+
+        let mut pat_idx = 0usize;
+        let mut rem = pat[0];
+        let mut pen_down = true;
+        let mut current_dash: Vec<Point> = vec![pts[0]];
+
+        for seg in pts.windows(2) {
+            let p0 = seg[0];
+            let p1 = seg[1];
+            let dx = p1.x.get() - p0.x.get();
+            let dy = p1.y.get() - p0.y.get();
+            let seg_len = dx.hypot(dy);
+            if seg_len <= EPS {
+                continue;
+            }
+            let ux = dx / seg_len;
+            let uy = dy / seg_len;
+            let mut dist = 0.0;
+
+            while dist + rem < seg_len - EPS {
+                dist += rem;
+                let cut = Point::new(p0.x.get() + ux * dist, p0.y.get() + uy * dist)?;
+                if pen_down {
+                    current_dash.push(cut);
+                    if current_dash.len() >= 2 {
+                        out.push(Polyline { points: std::mem::take(&mut current_dash), closed: false });
+                    } else {
+                        current_dash.clear();
+                    }
+                }
+                pat_idx = (pat_idx + 1) % pat.len();
+                rem = pat[pat_idx];
+                pen_down = pat_idx.is_multiple_of(2);
+                if pen_down {
+                    current_dash.push(cut);
+                }
+            }
+
+            let left_on_seg = seg_len - dist;
+            rem -= left_on_seg;
+            if pen_down {
+                current_dash.push(p1);
+            }
+        }
+
+        if pen_down && current_dash.len() >= 2 {
+            out.push(Polyline { points: current_dash, closed: false });
+        }
+    }
+
+    Ok(out)
+}
+
 /// Expands device-space or local-space polylines into closed stroke-outline polylines
 /// with half-width `half_w`, `cap`, `join`, and `miter_limit`.
 pub fn expand_stroke_polylines(polys: &[Polyline], half_w: f64, cap: LineCap, join: LineJoin, miter_limit: f64) -> Result<Vec<Polyline>, GeomError> {
@@ -405,6 +481,22 @@ pub fn evaluate_fountain_t(geometry: FountainGeometry, u: f64, v: f64) -> f64 {
             let r = radius.get().max(1e-6);
             let dist = (u - fx).hypot(v - fy);
             (dist / r).clamp(0.0, 1.0)
+        }
+        FountainGeometry::Conical { center_x, center_y, angle_deg } => {
+            let dx = u - center_x.get();
+            let dy = v - center_y.get();
+            let theta = (dy.atan2(dx) - angle_deg.get().to_radians()).rem_euclid(std::f64::consts::TAU);
+            let norm = theta / std::f64::consts::TAU;
+            (1.0 - (2.0 * norm - 1.0).abs()).clamp(0.0, 1.0)
+        }
+        FountainGeometry::Square { center_x, center_y, radius, angle_deg } => {
+            let dx = u - center_x.get();
+            let dy = v - center_y.get();
+            let (s, c) = (-angle_deg.get().to_radians()).sin_cos();
+            let rx = dx * c - dy * s;
+            let ry = dx * s + dy * c;
+            let r = radius.get().max(1e-6);
+            (rx.abs().max(ry.abs()) / r).clamp(0.0, 1.0)
         }
     }
 }

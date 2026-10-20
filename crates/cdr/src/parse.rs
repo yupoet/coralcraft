@@ -771,10 +771,16 @@ pub fn decode_fild(payload: &[u8], endian: Endian, _version: u16, warnings: &mut
                     color: Color::BLACK,
                 }),
             ];
-            let geometry = if f_type == 1 {
-                FountainGeometry::Radial { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, focal_x: F64::HALF, focal_y: F64::HALF }
-            } else {
-                FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO }
+            let geometry = match f_type {
+                1 => FountainGeometry::Radial { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, focal_x: F64::HALF, focal_y: F64::HALF },
+                2 => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO) },
+                3 => FountainGeometry::Square {
+                    center_x: F64::HALF,
+                    center_y: F64::HALF,
+                    radius: F64::HALF,
+                    angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO),
+                },
+                _ => FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
             };
             Some((fill_id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops }))
         }
@@ -1324,6 +1330,8 @@ fn encode_fild_payload(fill_id: u32, fill: &FillStyle) -> Vec<u8> {
             p.extend_from_slice(&2u16.to_le_bytes());
             let (f_type, angle_i16) = match geometry {
                 FountainGeometry::Radial { .. } => (1u16, 0i16),
+                FountainGeometry::Conical { angle_deg, .. } => (2u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
+                FountainGeometry::Square { angle_deg, .. } => (3u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
                 FountainGeometry::Linear { angle_deg, .. } => (0u16, angle_deg.get().round().clamp(-360.0, 360.0) as i16),
             };
             p.extend_from_slice(&f_type.to_le_bytes());

@@ -127,6 +127,12 @@ fn emit_eps_node(out: &mut String, node: &ObjectNode, page_h: f64) -> Result<(),
         let w = if outline.is_hairline() { 0.24 } else { outline.width_pt.get().max(0.1) };
         emit_ps_color(out, &outline.color);
         let _ = writeln!(out, "{} setlinewidth", fmt_num(w));
+        if outline.dash_pattern.is_empty() {
+            out.push_str("[] 0 setdash\n");
+        } else {
+            let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
+            let _ = writeln!(out, "[{}] 0 setdash", joined.join(" "));
+        }
         emit_ps_path(out);
         out.push_str("stroke\n");
     }

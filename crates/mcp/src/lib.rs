@@ -3,8 +3,11 @@
 #![recursion_limit = "512"]
 
 use coralcraft_cdr::write_cdr7;
-use coralcraft_color::Color;
-use coralcraft_doc::{Document, ObjectId, ObjectKind, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf, import_svg};
+use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+use coralcraft_doc::{
+    Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, OutlineStyle, ParagraphTextSpec, TextAlignment, TransparencyStyle, import_dxf,
+    import_svg,
+};
 use coralcraft_engine::{EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
     BooleanOp, CornerKind, DistortionKind, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec, build_angular_dimension_path, build_callout_path,
@@ -374,6 +377,26 @@ impl McpServer {
                         {
                             "name": "convert_outline_to_object",
                             "description": "Converts selected objects' outlines into closed filled vector paths (Object -> Convert Outline to Object / Ctrl+Shift+Q).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_outline_dash",
+                            "description": "Sets outline width_pt and dash_pattern array on selected objects (F12 Outline Pen).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_fountain_fill",
+                            "description": "Applies a Linear, Radial, Conical, or Square Fountain gradient fill to selected objects (F11 Fountain Fill).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "rotate_selection",
+                            "description": "Rotates selected objects by angle_deg around any 9-point Object Origin (origin_index 0..=8), optionally duplicating (Alt+F8).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "scale_selection",
+                            "description": "Scales selected objects by (scale_x, scale_y) around any 9-point Object Origin (origin_index 0..=8), optionally duplicating (Alt+F9).",
                             "inputSchema": { "type": "object" }
                         }
                     ]
@@ -991,6 +1014,75 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "converted_outline": ok, "selected_ids": ids }))
             }
+            "set_outline_dash" => {
+                self.apply_optional_selection(args);
+                let width_pt = F64::new(args.get("width_pt").and_then(Value::as_f64).unwrap_or(2.0)).map_err(|e| e.to_string())?;
+                let r = args.get("r").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let g = args.get("g").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let b = args.get("b").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let mut dash_pattern = Vec::new();
+                if let Some(arr) = args.get("dash_pattern").and_then(Value::as_array) {
+                    for v in arr {
+                        if let Some(f) = v.as_f64()
+                            && let Ok(val) = F64::new(f)
+                        {
+                            dash_pattern.push(val);
+                        }
+                    }
+                }
+                let mut outline = OutlineStyle::with_width(Color::rgb8(r, g, b), width_pt);
+                outline.dash_pattern = dash_pattern;
+                let ok = self.engine.execute(EngineCommand::SetOutline { outline: Some(outline) });
+                Ok(json!({ "outline_set": ok }))
+            }
+            "set_fountain_fill" => {
+                self.apply_optional_selection(args);
+                let angle_deg = F64::new(args.get("angle_deg").and_then(Value::as_f64).unwrap_or(0.0)).map_err(|e| e.to_string())?;
+                let geometry = match args.get("type").and_then(Value::as_str).unwrap_or("linear") {
+                    "radial" => FountainGeometry::Radial {
+                        center_x: F64::HALF,
+                        center_y: F64::HALF,
+                        radius: F64::HALF,
+                        focal_x: F64::HALF,
+                        focal_y: F64::HALF,
+                    },
+                    "conical" => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg },
+                    "square" => FountainGeometry::Square { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, angle_deg },
+                    _ => FountainGeometry::Linear { angle_deg, edge_pad: F64::ZERO },
+                };
+                let r1 = args.get("start_r").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                let g1 = args.get("start_g").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let b1 = args.get("start_b").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let r2 = args.get("end_r").and_then(Value::as_u64).unwrap_or(0).min(255) as u8;
+                let g2 = args.get("end_g").and_then(Value::as_u64).unwrap_or(100).min(255) as u8;
+                let b2 = args.get("end_b").and_then(Value::as_u64).unwrap_or(255).min(255) as u8;
+                let stops = vec![
+                    FountainStop::new(0.0, Color::rgb8(r1, g1, b1)).map_err(|e| e.to_string())?,
+                    FountainStop::new(1.0, Color::rgb8(r2, g2, b2)).map_err(|e| e.to_string())?,
+                ];
+                let fill = FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops };
+                let ok = self.engine.execute(EngineCommand::SetFill { fill: Some(fill) });
+                Ok(json!({ "fountain_fill_set": ok }))
+            }
+            "rotate_selection" => {
+                self.apply_optional_selection(args);
+                let angle_deg = F64::new(args.get("angle_deg").and_then(Value::as_f64).unwrap_or(45.0)).map_err(|e| e.to_string())?;
+                let origin_index = args.get("origin_index").and_then(Value::as_u64).unwrap_or(4).min(8) as u8;
+                let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::RotateSelection { angle_deg, origin_index, copy });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "rotated": ok, "selected_ids": ids }))
+            }
+            "scale_selection" => {
+                self.apply_optional_selection(args);
+                let scale_x = F64::new(args.get("scale_x").and_then(Value::as_f64).unwrap_or(1.5)).map_err(|e| e.to_string())?;
+                let scale_y = F64::new(args.get("scale_y").and_then(Value::as_f64).unwrap_or(1.5)).map_err(|e| e.to_string())?;
+                let origin_index = args.get("origin_index").and_then(Value::as_u64).unwrap_or(4).min(8) as u8;
+                let copy = args.get("copy").and_then(Value::as_bool).unwrap_or(false);
+                let ok = self.engine.execute(EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, copy });
+                let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
+                Ok(json!({ "scaled": ok, "selected_ids": ids }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1020,7 +1112,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 56);
+        assert_eq!(tools, 60);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

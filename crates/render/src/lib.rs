@@ -15,7 +15,7 @@ use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpe
 pub use eps::{export_dxf, export_eps};
 pub use pdf::{ImpositionSpec, PrepressOptions, export_pdf, export_pdf_imposed, export_pdf_with_prepress};
 pub use png::{adler32, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
-pub use raster::{SS, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
+pub use raster::{SS, dash_polylines, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{
     MAX_CLIP_DEPTH, MAX_SURFACE_PIXELS, MAX_SURFACE_SIDE, RenderError, RenderWarning, Surface, premul_to_straight, src_over_premul,
     straight_to_premul,
@@ -453,18 +453,23 @@ fn paint_outline(
 ) -> Result<(), RenderError> {
     // CorelDRAW Hairline (`width_pt == 0.0`) always renders as 1.0 device pixel width;
     // otherwise width scales by `page_scale` and optionally `sqrt(|det(obj_transform)|)` when `scale_with_object == true`.
-    let width_dev = if outline.is_hairline() {
-        1.0
-    } else {
-        let obj_scale = if outline.scale_with_object { obj_transform.determinant().abs().sqrt() } else { 1.0 };
-        outline.width_pt.get() * page_scale * obj_scale
-    };
+    let obj_scale = if outline.scale_with_object { obj_transform.determinant().abs().sqrt() } else { 1.0 };
+    let width_dev = if outline.is_hairline() { 1.0 } else { outline.width_pt.get() * page_scale * obj_scale };
 
     if width_dev <= 1e-6 {
         return Ok(());
     }
 
-    let stroke_polys = expand_stroke_polylines(dev_polys, 0.5 * width_dev, outline.cap, outline.join, outline.miter_limit.get())?;
+    let dashed_storage;
+    let effective_polys = if outline.dash_pattern.is_empty() {
+        dev_polys
+    } else {
+        let scaled_dashes: Vec<f64> = outline.dash_pattern.iter().map(|d| (d.get() * page_scale * obj_scale).max(1.0)).collect();
+        dashed_storage = dash_polylines(dev_polys, &scaled_dashes)?;
+        &dashed_storage
+    };
+
+    let stroke_polys = expand_stroke_polylines(effective_polys, 0.5 * width_dev, outline.cap, outline.join, outline.miter_limit.get())?;
     if stroke_polys.is_empty() {
         return Ok(());
     }
@@ -1153,5 +1158,31 @@ mod tests {
         let pdf_imp = export_pdf_imposed(&doc, &imp_spec).unwrap();
         assert!(pdf_imp.starts_with(b"%PDF-1.4"));
         assert!(pdf_imp.len() > 400);
+
+        // Conical & Square fountain evaluation and dashed outline export across SVG, PDF, and EPS
+        let t_conical = evaluate_fountain_t(FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: F64::ZERO }, 0.0, 0.5);
+        assert!((t_conical - 1.0).abs() < 1e-6);
+        let t_square = evaluate_fountain_t(
+            FountainGeometry::Square { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, angle_deg: F64::ZERO },
+            0.75,
+            0.5,
+        );
+        assert!((t_square - 0.5).abs() < 1e-6);
+
+        let mut dashed_outl = OutlineStyle::with_width(Color::BLACK, F64::new(2.0).unwrap());
+        dashed_outl.dash_pattern = vec![F64::new(6.0).unwrap(), F64::new(4.0).unwrap()];
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(303),
+            Some("Dashed Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 80.0, 60.0).unwrap())),
+            None,
+            Some(dashed_outl),
+        ));
+        let svg_dashed = export_svg(&doc, 0).unwrap();
+        assert!(svg_dashed.contains("stroke-dasharray=\"6,4\""));
+        let eps_dashed = export_eps(&doc, 0).unwrap();
+        assert!(eps_dashed.contains("[6 4] 0 setdash"));
+        let pdf_dashed = String::from_utf8_lossy(&export_pdf(&doc).unwrap()).into_owned();
+        assert!(pdf_dashed.contains("[6 4] 0 d"));
     }
 }

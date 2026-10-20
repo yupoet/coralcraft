@@ -246,6 +246,40 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
             }
             defs.push_str("    </radialGradient>\n");
         }
+        FountainGeometry::Conical { center_x, center_y, angle_deg } => {
+            let rcx = bbox.x0.get() + center_x.get() * bw;
+            let rcy = bbox.y0.get() + center_y.get() * bh;
+            let r = (0.5 * bw.hypot(bh)).max(1e-6);
+            let _ = writeln!(
+                defs,
+                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"conical\" data-angle=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
+                fmt_num(angle_deg.get()),
+                fmt_num(rcx),
+                fmt_num(rcy),
+                fmt_num(r),
+            );
+            for stop in stops {
+                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+            }
+            defs.push_str("    </radialGradient>\n");
+        }
+        FountainGeometry::Square { center_x, center_y, radius, angle_deg } => {
+            let rcx = bbox.x0.get() + center_x.get() * bw;
+            let rcy = bbox.y0.get() + center_y.get() * bh;
+            let r = (radius.get() * bw.hypot(bh)).max(1e-6);
+            let _ = writeln!(
+                defs,
+                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"square\" data-angle=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
+                fmt_num(angle_deg.get()),
+                fmt_num(rcx),
+                fmt_num(rcy),
+                fmt_num(r),
+            );
+            for stop in stops {
+                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+            }
+            defs.push_str("    </radialGradient>\n");
+        }
     }
 }
 
@@ -283,8 +317,14 @@ fn format_stroke_attrs(outline: &OutlineStyle, obj_transform: Affine2) -> String
         LineJoin::Round => "round",
         LineJoin::Bevel => "bevel",
     };
+    let dash_attr = if outline.dash_pattern.is_empty() {
+        String::new()
+    } else {
+        let joined: Vec<String> = outline.dash_pattern.iter().map(|d| fmt_num(d.get())).collect();
+        format!(" stroke-dasharray=\"{}\"", joined.join(","))
+    };
     format!(
-        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"",
+        "stroke=\"{}\" stroke-width=\"{}\" stroke-linecap=\"{cap}\" stroke-linejoin=\"{join}\" stroke-miterlimit=\"{}\"{dash_attr}",
         svg_hex_color(&outline.color),
         fmt_num(w),
         fmt_num(outline.miter_limit.get())
