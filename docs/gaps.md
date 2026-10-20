@@ -51,6 +51,7 @@
 - [x] 46. **[M30] Twirl Tool Localized Path Deformer (`twirl_path_around_point`), Clear & Clone Vector Effects (`ClearEffects` & `CloneEffectsFrom`), Page Size & Units (`set_page_size`), and 104 MCP Tools**: `twirl_path_around_point`, `TwirlObjectPath`, `ClearEffects`, `CloneEffectsFrom`, `set_page_size`, and 104 MCP tools in `coralcraft-mcp`.
 - [x] 47. **[M31] Attract and Repel Tool Localized Path Deformer (`radial_push_path_around_point`), Page Duplication/Rename/Delete (`duplicate_page`, `rename_page`, `delete_page`), and 108 MCP Tools**: `radial_push_path_around_point`, `AttractRepelObjectPath`, `attract_repel_path`, `duplicate_page`, `rename_page`, `delete_page`, and 108 MCP tools in `coralcraft-mcp`.
 - [x] 48. **[M32] Smear Tool Localized Path Deformer (`smear_path_from_point`), Paragraph Text Frame Layout (`SetParagraphTextLayout`), Page Target Switch (`set_active_page_target`), Object Inspection (`inspect_object`), and 112 MCP Tools**: `smear_path_from_point`, `SmearObjectPath`, `SetParagraphTextLayout`, `inspect_object`, `smear_path`, `set_paragraph_text_layout`, `set_active_page_target`, and 112 MCP tools in `coralcraft-mcp`.
+- [x] 49. **[M33] Roughen Brush Localized Path Deformer (`roughen_path_segments`), Artistic Text Typography Properties (`SetArtisticTextProperties`), Page & Layer Listing (`list_pages` & `list_layers`), and 116 MCP Tools**: `roughen_path_segments`, `RoughenObjectPath`, `SetArtisticTextProperties`, `list_pages`, `list_layers`, `roughen_path`, `set_artistic_text_properties`, and 116 MCP tools in `coralcraft-mcp`.
 
 
 

@@ -659,6 +659,26 @@ impl McpServer {
                             "name": "inspect_object",
                             "description": "Returns detailed metadata (id, name, kind, visible, locked, opacity, bounds, effects_count) for an object.",
                             "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "roughen_path",
+                            "description": "Subdivides segments of an object with serrated zigzag normal teeth of amplitude tooth_height_pt and frequency (Roughen Tool).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "set_artistic_text_properties",
+                            "description": "Updates text, font_family, and/or size_pt on an ArtisticText or ParagraphText object (Text -> Edit Text / Ctrl+Shift+T).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "list_page_objects",
+                            "description": "Lists all objects on page_index with id, name, kind, layer_id, visible, locked, and opacity (Objects Docker).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "list_layers",
+                            "description": "Lists all layers on page_index with id, name, role, visible, locked, printable, opacity, and object_count (Objects Docker).",
+                            "inputSchema": { "type": "object" }
                         }
                     ]
                 })),
@@ -1823,6 +1843,72 @@ impl McpServer {
                     }
                 }))
             }
+            "roughen_path" => {
+                let target = self.resolve_target_id(args)?;
+                let tooth_height_pt = F64::new(args.get("tooth_height_pt").and_then(Value::as_f64).unwrap_or(2.5)).map_err(|e| e.to_string())?;
+                let frequency = args.get("frequency").and_then(Value::as_u64).unwrap_or(4).max(1) as u32;
+                let ok = self.engine.execute(EngineCommand::RoughenObjectPath { object_id: target, tooth_height_pt, frequency });
+                Ok(json!({ "roughened": ok, "object_id": target.0 }))
+            }
+            "set_artistic_text_properties" => {
+                let target = self.resolve_target_id(args)?;
+                let text = args.get("text").and_then(Value::as_str).map(ToOwned::to_owned);
+                let font_family = args.get("font_family").and_then(Value::as_str).map(ToOwned::to_owned);
+                let size_pt = args.get("size_pt").and_then(Value::as_f64).map(F64::new).transpose().map_err(|e| e.to_string())?;
+                let ok = self.engine.execute(EngineCommand::SetArtisticTextProperties { object_id: target, text, font_family, size_pt });
+                Ok(json!({ "text_properties_updated": ok, "object_id": target.0 }))
+            }
+            "list_page_objects" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |v| v as usize);
+                let page = self.engine.document.pages.get(page_index).ok_or_else(|| format!("Page {page_index} out of range"))?;
+                let mut objs = Vec::new();
+                for layer in &page.layers {
+                    for obj in &layer.objects {
+                        let kind_name = match &obj.kind {
+                            ObjectKind::Rect(_) => "rect",
+                            ObjectKind::Ellipse(_) => "ellipse",
+                            ObjectKind::Polygon(_) => "polygon",
+                            ObjectKind::Path(_) => "path",
+                            ObjectKind::ArtisticText { .. } => "artistic_text",
+                            ObjectKind::ParagraphText(_) => "paragraph_text",
+                            ObjectKind::Group { .. } => "group",
+                            ObjectKind::Bitmap { .. } => "bitmap",
+                            ObjectKind::Unsupported(_) => "unsupported",
+                        };
+                        objs.push(json!({
+                            "id": obj.id.0,
+                            "name": obj.name,
+                            "kind": kind_name,
+                            "layer_id": layer.id.0,
+                            "visible": obj.visible,
+                            "locked": obj.locked,
+                            "opacity": obj.opacity.get()
+                        }));
+                    }
+                }
+                Ok(json!({ "page_index": page_index, "objects": objs }))
+            }
+            "list_layers" => {
+                let page_index = args.get("page_index").and_then(Value::as_u64).map_or_else(|| self.engine.current_page_index(), |v| v as usize);
+                let page = self.engine.document.pages.get(page_index).ok_or_else(|| format!("Page {page_index} out of range"))?;
+                let layers: Vec<Value> = page
+                    .layers
+                    .iter()
+                    .map(|l| {
+                        json!({
+                            "id": l.id.0,
+                            "name": l.name,
+                            "role": l.role,
+                            "visible": l.visible,
+                            "locked": l.locked,
+                            "printable": l.printable,
+                            "opacity": l.opacity.get(),
+                            "object_count": l.objects.len()
+                        })
+                    })
+                    .collect();
+                Ok(json!({ "page_index": page_index, "layers": layers }))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -1852,7 +1938,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 112);
+        assert_eq!(tools, 116);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

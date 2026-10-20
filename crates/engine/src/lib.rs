@@ -9,8 +9,8 @@ use coralcraft_doc::{
 use coralcraft_geom::{
     Affine2, BooleanOp, CornerKind, DistortionKind, EllipseMode, F64, FillRule, Path, PathElement, Point, Rect, Size, Unit, artistic_text_to_path,
     boolean_paths, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, delete_curve_node_at, insert_curve_node_at,
-    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, simplify_path_nodes, smear_path_from_point,
-    trace_bitmap_to_path, twirl_path_around_point,
+    join_open_subpaths, radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, simplify_path_nodes,
+    smear_path_from_point, trace_bitmap_to_path, twirl_path_around_point,
 };
 use coralcraft_tools::{
     AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
@@ -229,6 +229,10 @@ pub enum EngineCommand {
         line_spacing: Option<F64>,
         alignment: Option<TextAlignment>,
     },
+    /// Subdivides segments of `object_id` with serrated zigzag normal teeth (`Roughen Tool`).
+    RoughenObjectPath { object_id: ObjectId, tooth_height_pt: F64, frequency: u32 },
+    /// Updates `text`, `font_family`, and/or `size_pt` on an `ArtisticText` or `ParagraphText` object (`Text -> Edit Text` / `Ctrl+Shift+T`).
+    SetArtisticTextProperties { object_id: ObjectId, text: Option<String>, font_family: Option<String>, size_pt: Option<F64> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -937,6 +941,22 @@ impl EditorEngine {
             }
             EngineCommand::SetParagraphTextLayout { object_id, .. } => {
                 let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| roughen_path_segments(&p, tooth_height_pt.get(), *frequency).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetArtisticTextProperties { object_id, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
                 if !valid {
                     return false;
                 }
@@ -2568,6 +2588,54 @@ impl EditorEngine {
                     }
                 });
             }
+            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
+                let h = tooth_height_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = roughen_path_segments(&base_path, h, frequency)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetArtisticTextProperties { object_id, text, font_family, size_pt } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text: t, font_family: ff, size_pt: sz, .. } => {
+                            if let Some(new_t) = &text {
+                                *t = new_t.clone();
+                            }
+                            if let Some(new_ff) = &font_family {
+                                *ff = new_ff.clone();
+                            }
+                            if let Some(new_sz) = size_pt
+                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
+                            {
+                                *sz = clamped;
+                            }
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            if let Some(new_t) = &text {
+                                spec.text = new_t.clone();
+                            }
+                            if let Some(new_ff) = &font_family {
+                                spec.font_family = new_ff.clone();
+                            }
+                            if let Some(new_sz) = size_pt
+                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
+                            {
+                                spec.font_size_pt = clamped;
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
         }
         true
     }
@@ -3312,6 +3380,21 @@ mod tests {
         if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
             assert_eq!(pt.columns, 2);
             assert_eq!(pt.alignment, TextAlignment::Justify);
+        } else {
+            panic!("expected ParagraphText");
+        }
+
+        // 26. RoughenObjectPath and SetArtisticTextProperties
+        assert!(engine.execute(EngineCommand::RoughenObjectPath { object_id: boundary_id, tooth_height_pt: F64::new(2.0).unwrap(), frequency: 3 }));
+        assert!(engine.execute(EngineCommand::SetArtisticTextProperties {
+            object_id: art_id,
+            text: Some("UPDATED CORALCRAFT".to_owned()),
+            font_family: Some("Helvetica".to_owned()),
+            size_pt: Some(F64::new(20.0).unwrap()),
+        }));
+        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
+            assert_eq!(pt.text, "UPDATED CORALCRAFT");
+            assert_eq!(pt.font_family, "Helvetica");
         } else {
             panic!("expected ParagraphText");
         }

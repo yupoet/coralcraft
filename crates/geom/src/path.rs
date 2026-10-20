@@ -1212,6 +1212,52 @@ pub fn smear_path_from_point(path: &Path, origin: Point, radius_pt: f64, dx_pt: 
     Ok(out)
 }
 
+/// Subdivides segments of `path` with serrated zigzag normal teeth of amplitude `tooth_height_pt`
+/// and `frequency` teeth per segment (`Roughen Tool`).
+pub fn roughen_path_segments(path: &Path, tooth_height_pt: f64, frequency: u32) -> Result<Path, GeomError> {
+    let h = crate::F64::new(tooth_height_pt)?.get();
+    if h < 0.0 || frequency == 0 {
+        return Err(GeomError::InvalidShapeParameter("tooth_height_pt must be >= 0 and frequency >= 1"));
+    }
+    let steps = frequency.clamp(1, 32);
+    let polylines = crate::flatten::flatten_path(path, &crate::flatten::FlattenOpts::default())?;
+    let mut out = Path { elements: Vec::new(), fill_rule: path.fill_rule };
+    for poly in polylines {
+        if poly.points.len() < 2 {
+            continue;
+        }
+        out.move_to(poly.points[0])?;
+        for seg in poly.points.windows(2) {
+            let a = seg[0];
+            let b = seg[1];
+            let dx = b.x.get() - a.x.get();
+            let dy = b.y.get() - a.y.get();
+            let len = dx.hypot(dy);
+            if len <= 1e-6 {
+                out.line_to(b)?;
+                continue;
+            }
+            let nx = -dy / len;
+            let ny = dx / len;
+            for k in 0..steps {
+                let t_mid = (f64::from(k) + 0.5) / f64::from(steps);
+                let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                let mx = a.x.get() + dx * t_mid + nx * h * sign;
+                let my = a.y.get() + dy * t_mid + ny * h * sign;
+                out.line_to(Point::new(mx, my)?)?;
+                let t_end = f64::from(k + 1) / f64::from(steps);
+                let ex = a.x.get() + dx * t_end;
+                let ey = a.y.get() + dy * t_end;
+                out.line_to(Point::new(ex, ey)?)?;
+            }
+        }
+        if poly.closed {
+            out.close()?;
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod m26_tests {
@@ -1240,5 +1286,7 @@ mod m26_tests {
         assert_eq!(attracted.elements.len(), 2);
         let smeared = smear_path_from_point(&curved, Point::new(45.0, 30.0).unwrap(), 60.0, 15.0, -10.0).unwrap();
         assert_eq!(smeared.elements.len(), 2);
+        let roughened = roughen_path_segments(&linear, 3.0, 4).unwrap();
+        assert!(roughened.elements.len() > 2);
     }
 }
