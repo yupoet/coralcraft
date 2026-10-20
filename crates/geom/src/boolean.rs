@@ -353,6 +353,67 @@ pub fn fit_text_to_path(text: &str, font_family: &str, size_pt: f64, spine: &Pat
     Ok(out)
 }
 
+/// Builds a parametric CorelDRAW Linear Dimension path (`p1 -> p2`) with extension lines,
+/// arrowheads, and a centered measurement `label` offset by `offset_pt`.
+pub fn build_linear_dimension_path(p1: Point, p2: Point, offset_pt: f64, label: &str, font_size_pt: f64) -> Result<Path, GeomError> {
+    if !offset_pt.is_finite() || !font_size_pt.is_finite() {
+        return Err(GeomError::NonFiniteCoordinate);
+    }
+    if font_size_pt <= 0.0 {
+        return Err(GeomError::InvalidShapeParameter("dimension font size must be positive"));
+    }
+    let dx = p2.x.get() - p1.x.get();
+    let dy = p2.y.get() - p1.y.get();
+    let len = dx.hypot(dy);
+    if len < 1e-6 {
+        return Err(GeomError::InvalidShapeParameter("degenerate dimension"));
+    }
+
+    let arrow = (font_size_pt * 0.4).clamp(2.0, 8.0);
+    let sign = if offset_pt >= 0.0 { -1.0 } else { 1.0 };
+    let by = -offset_pt;
+    let ext_end = by + sign * arrow * 0.75;
+
+    let mut local = Path::new();
+    // 1. Extension line 1 and 2
+    local.move_to(Point::new(0.0, 0.0)?)?;
+    local.line_to(Point::new(0.0, ext_end)?)?;
+    local.move_to(Point::new(len, 0.0)?)?;
+    local.line_to(Point::new(len, ext_end)?)?;
+
+    // 2. Dimension line
+    local.move_to(Point::new(0.0, by)?)?;
+    local.line_to(Point::new(len, by)?)?;
+
+    // 3. Left and right arrowheads
+    let aw = arrow.min(len * 0.4);
+    let ah = aw * 0.4;
+    local.move_to(Point::new(0.0, by)?)?;
+    local.line_to(Point::new(aw, by - ah)?)?;
+    local.line_to(Point::new(aw, by + ah)?)?;
+    local.close()?;
+
+    local.move_to(Point::new(len, by)?)?;
+    local.line_to(Point::new(len - aw, by - ah)?)?;
+    local.line_to(Point::new(len - aw, by + ah)?)?;
+    local.close()?;
+
+    // 4. Centered measurement label
+    if !label.is_empty() {
+        let scale = (font_size_pt / 10.0).max(0.1);
+        let label_w: f64 = label.chars().map(|ch| (glyph_outline(ch).0 + 1.5) * scale).sum();
+        let text_origin = Point::new((len - label_w) * 0.5, by - 3.0)?;
+        let label_path = artistic_text_to_path(label, "Sans", font_size_pt, text_origin);
+        for el in label_path.elements {
+            local.push(el)?;
+        }
+    }
+
+    let angle_deg = dy.atan2(dx).to_degrees();
+    let tf = crate::affine::Affine2::rotation_deg(angle_deg)?.then(crate::affine::Affine2::translation(p1.x.get(), p1.y.get())?)?;
+    local.transform(tf)
+}
+
 #[derive(Clone, Copy)]
 enum GlyphOp {
     MoveTo(f64, f64),
@@ -476,5 +537,11 @@ mod tests {
         let cb = curved_text.bounds().unwrap();
         assert!(cb.width() > 20.0);
         assert!(cb.height() > 15.0);
+
+        let dim = build_linear_dimension_path(Point::new(20.0, 100.0).unwrap(), Point::new(140.0, 100.0).unwrap(), 18.0, "120 pt", 10.0).unwrap();
+        let db = dim.bounds().unwrap();
+        assert!((db.x0.get() - 20.0).abs() < 1e-4);
+        assert!((db.x1.get() - 140.0).abs() < 1e-4);
+        assert!(db.height() >= 18.0);
     }
 }

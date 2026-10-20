@@ -248,6 +248,16 @@ impl McpServer {
                             "inputSchema": { "type": "object" }
                         },
                         {
+                            "name": "add_linear_dimension",
+                            "description": "Adds an engineering linear dimension annotation between (x1, y1) and (x2, y2) with offset_pt and label.",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
+                            "name": "distribute_selection",
+                            "description": "Distributes >= 3 selected objects evenly (left, center_horizontal, right, spacing_horizontal, top, center_vertical, bottom, spacing_vertical).",
+                            "inputSchema": { "type": "object" }
+                        },
+                        {
                             "name": "expand_effects",
                             "description": "Bakes live non-destructive vector effects on object_id into static vector geometry.",
                             "inputSchema": { "type": "object" }
@@ -609,6 +619,42 @@ impl McpServer {
                 let ids: Vec<u64> = self.engine.selection.iter().map(|id| id.0).collect();
                 Ok(json!({ "step_and_repeat_executed": ok, "created_selection": ids }))
             }
+            "add_linear_dimension" => {
+                let x1 = args.get("x1").and_then(Value::as_f64).unwrap_or(20.0);
+                let y1 = args.get("y1").and_then(Value::as_f64).unwrap_or(50.0);
+                let x2 = args.get("x2").and_then(Value::as_f64).unwrap_or(140.0);
+                let y2 = args.get("y2").and_then(Value::as_f64).unwrap_or(50.0);
+                let offset_pt = args.get("offset_pt").and_then(Value::as_f64).unwrap_or(16.0);
+                let font_size_pt = args.get("font_size_pt").and_then(Value::as_f64).unwrap_or(10.0);
+                let p1 = Point::new(x1, y1).map_err(|e| e.to_string())?;
+                let p2 = Point::new(x2, y2).map_err(|e| e.to_string())?;
+                let default_label = format!("{:.1} pt", p1.distance(p2));
+                let label = args.get("label").and_then(Value::as_str).unwrap_or(&default_label);
+                let path = coralcraft_geom::build_linear_dimension_path(p1, p2, offset_pt, label, font_size_pt).map_err(|e| e.to_string())?;
+                self.engine.execute(EngineCommand::AddObject { name: Some("Linear Dimension".to_owned()), kind: ObjectKind::Path(path) });
+                let sel = self.engine.selection.first().map(|id| id.0);
+                Ok(json!({ "selected_id": sel, "label": label }))
+            }
+            "distribute_selection" => {
+                if let Some(arr) = args.get("selection").and_then(Value::as_array) {
+                    let ids: Vec<ObjectId> = arr.iter().filter_map(Value::as_u64).map(ObjectId).collect();
+                    self.engine.set_selection(ids);
+                }
+                let mode_str = args.get("mode").and_then(Value::as_str).unwrap_or("spacing_horizontal");
+                let mode = match mode_str {
+                    "left" => coralcraft_tools::DistributeMode::Left,
+                    "center_horizontal" => coralcraft_tools::DistributeMode::CenterHorizontal,
+                    "right" => coralcraft_tools::DistributeMode::Right,
+                    "spacing_horizontal" => coralcraft_tools::DistributeMode::SpacingHorizontal,
+                    "top" => coralcraft_tools::DistributeMode::Top,
+                    "center_vertical" => coralcraft_tools::DistributeMode::CenterVertical,
+                    "bottom" => coralcraft_tools::DistributeMode::Bottom,
+                    "spacing_vertical" => coralcraft_tools::DistributeMode::SpacingVertical,
+                    other => return Err(format!("Unsupported distribute mode: {other}")),
+                };
+                let ok = self.engine.execute(EngineCommand::DistributeSelection { mode });
+                Ok(json!({ "distributed": ok, "mode": mode_str }))
+            }
             "expand_effects" => {
                 let target = self.resolve_target_id(args)?;
                 let ok = self.engine.execute(EngineCommand::ExpandEffects { object_id: target });
@@ -661,7 +707,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 33);
+        assert_eq!(tools, 35);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(

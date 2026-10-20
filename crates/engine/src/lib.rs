@@ -8,8 +8,8 @@ use coralcraft_doc::{
 };
 use coralcraft_geom::{Affine2, BooleanOp, CornerKind, EllipseMode, F64, Point, Rect, Size, Unit, artistic_text_to_path, boolean_paths};
 use coralcraft_tools::{
-    AlignMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp, build_property_bar_schema,
-    combined_selection_bounds, object_local_bounds,
+    AlignMode, DistributeMode, KeyShortcut, PageOrientation, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp,
+    build_property_bar_schema, combined_selection_bounds, object_local_bounds,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -84,6 +84,8 @@ pub enum EngineCommand {
     ReorderSelection { op: ZOrderOp },
     /// Aligns selected objects relative to the anchor object (last selected) or the active page (`L/R/T/B/C/E/P`).
     AlignSelection { mode: AlignMode },
+    /// Distributes `>= 3` selected objects evenly along the horizontal or vertical axis.
+    DistributeSelection { mode: DistributeMode },
     /// Places selected unlocked objects inside `container_id` as PowerClip children (up to nesting depth 3).
     PlaceInsidePowerClip { container_id: ObjectId },
     /// Extracts all PowerClip children from `container_id` back into the parent layer above `container_id`.
@@ -536,6 +538,13 @@ impl EditorEngine {
                     return false;
                 }
             }
+            EngineCommand::DistributeSelection { .. } => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 3 {
+                    return false;
+                }
+            }
             EngineCommand::PlaceInsidePowerClip { container_id } => {
                 let sel = &self.selection;
                 let objs = self.current_target_objects();
@@ -903,6 +912,107 @@ impl EditorEngine {
                             AlignMode::CenterToPage => (0.0, 0.0),
                         };
                         if let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::DistributeSelection { mode } => {
+                let sel = &self.selection;
+                let mut items: Vec<(ObjectId, Rect)> = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| !o.locked && sel.contains(&o.id))
+                    .map(|o| (o.id, combined_selection_bounds(&[o])))
+                    .collect();
+                let n = items.len();
+                if n >= 3 {
+                    let is_horizontal = matches!(
+                        mode,
+                        DistributeMode::Left | DistributeMode::CenterHorizontal | DistributeMode::Right | DistributeMode::SpacingHorizontal
+                    );
+                    if is_horizontal {
+                        items.sort_by_key(|a| a.1.x0);
+                    } else {
+                        items.sort_by_key(|a| a.1.y0);
+                    }
+                    let mut deltas = BTreeMap::new();
+                    let denom = (n - 1) as f64;
+                    match mode {
+                        DistributeMode::Left => {
+                            let start = items[0].1.x0.get();
+                            let span = items[n - 1].1.x0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x0.get(), 0.0));
+                            }
+                        }
+                        DistributeMode::CenterHorizontal => {
+                            let start = (items[0].1.x0.get() + items[0].1.x1.get()) * 0.5;
+                            let end = (items[n - 1].1.x0.get() + items[n - 1].1.x1.get()) * 0.5;
+                            let span = end - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                let cur = (b.x0.get() + b.x1.get()) * 0.5;
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - cur, 0.0));
+                            }
+                        }
+                        DistributeMode::Right => {
+                            let start = items[0].1.x1.get();
+                            let span = items[n - 1].1.x1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x1.get(), 0.0));
+                            }
+                        }
+                        DistributeMode::SpacingHorizontal => {
+                            let min_x = items[0].1.x0.get();
+                            let max_x = items[n - 1].1.x1.get();
+                            let total_w: f64 = items.iter().map(|(_, b)| b.width()).sum();
+                            let gap = (max_x - min_x - total_w) / denom;
+                            let mut cur_x = min_x + items[0].1.width() + gap;
+                            for (id, b) in items.iter().take(n - 1).skip(1) {
+                                deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
+                                cur_x += b.width() + gap;
+                            }
+                        }
+                        DistributeMode::Top => {
+                            let start = items[0].1.y0.get();
+                            let span = items[n - 1].1.y0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y0.get()));
+                            }
+                        }
+                        DistributeMode::CenterVertical => {
+                            let start = (items[0].1.y0.get() + items[0].1.y1.get()) * 0.5;
+                            let end = (items[n - 1].1.y0.get() + items[n - 1].1.y1.get()) * 0.5;
+                            let span = end - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                let cur = (b.y0.get() + b.y1.get()) * 0.5;
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - cur));
+                            }
+                        }
+                        DistributeMode::Bottom => {
+                            let start = items[0].1.y1.get();
+                            let span = items[n - 1].1.y1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n - 1).skip(1) {
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y1.get()));
+                            }
+                        }
+                        DistributeMode::SpacingVertical => {
+                            let min_y = items[0].1.y0.get();
+                            let max_y = items[n - 1].1.y1.get();
+                            let total_h: f64 = items.iter().map(|(_, b)| b.height()).sum();
+                            let gap = (max_y - min_y - total_h) / denom;
+                            let mut cur_y = min_y + items[0].1.height() + gap;
+                            for (id, b) in items.iter().take(n - 1).skip(1) {
+                                deltas.insert(*id, (0.0, cur_y - b.y0.get()));
+                                cur_y += b.height() + gap;
+                            }
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
                             && let Ok(composed) = obj.transform.then(t)
                         {
                             obj.transform = composed;
@@ -1679,6 +1789,10 @@ mod tests {
         }));
         assert_eq!(engine.current_target_objects().len(), before_count + 3);
         assert_eq!(engine.selection.len(), 3);
+        let dup_ids = engine.selection.clone();
+        assert!(engine.execute(EngineCommand::DistributeSelection { mode: DistributeMode::SpacingHorizontal }));
+        assert_eq!(engine.selection, dup_ids);
+        assert!(engine.undo());
         assert!(engine.undo());
         assert_eq!(engine.current_target_objects().len(), before_count);
     }

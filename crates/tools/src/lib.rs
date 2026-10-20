@@ -683,6 +683,28 @@ pub enum AlignMode {
     CenterToPage,
 }
 
+/// CorelDRAW Object Distribution mode across `>= 3` selected objects (`Object -> Align and Distribute`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistributeMode {
+    /// Equal intervals between left edges.
+    Left,
+    /// Equal intervals between horizontal centers.
+    CenterHorizontal,
+    /// Equal intervals between right edges.
+    Right,
+    /// Equal horizontal gaps (`SpacingHorizontal`) between adjacent bounding boxes.
+    SpacingHorizontal,
+    /// Equal intervals between top edges.
+    Top,
+    /// Equal intervals between vertical centers.
+    CenterVertical,
+    /// Equal intervals between bottom edges.
+    Bottom,
+    /// Equal vertical gaps (`SpacingVertical`) between adjacent bounding boxes.
+    SpacingVertical,
+}
+
 /// Hit-tests the on-curve anchor points of a [`coralcraft_geom::Path`] in world space for the
 /// `F10` Shape Tool (`ToolKind::Shape`). Returns the index in `path.elements` of the nearest
 /// anchor within `tolerance_pt` (default `6.0` pt).
