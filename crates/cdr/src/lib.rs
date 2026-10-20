@@ -1485,4 +1485,57 @@ mod tests {
         assert!((g0.transform.tx.get() - 25.0).abs() < 1e-4);
         assert!((g0.transform.ty.get() - (-15.0)).abs() < 1e-4);
     }
+
+    #[test]
+    fn write_cdr7_document_palette_and_object_page_doc_residual_chunks_roundtrip_m78() {
+        use coralcraft_color::{Color, Palette, PaletteSwatch};
+        use coralcraft_doc::{ChunkTag, Document, FillStyle, ObjectId, ObjectKind, ObjectNode, RawChunk, RawPayload};
+        use coralcraft_geom::{Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.palette = Palette {
+            name: "Custom Brand Swatches".to_owned(),
+            guid: Some("brand-2026-guid".to_owned()),
+            swatches: vec![
+                PaletteSwatch { name: "Brand Crimson".to_owned(), color: Color::rgb8(210, 30, 45) },
+                PaletteSwatch { name: "Process Teal".to_owned(), color: Color::cmyk(0.8, 0.1, 0.3, 0.05).unwrap() },
+                PaletteSwatch { name: "Golden HSB".to_owned(), color: Color::hsb(45.0, 0.9, 0.95).unwrap() },
+                PaletteSwatch { name: "Neutral Gray".to_owned(), color: Color::gray(0.4).unwrap() },
+                PaletteSwatch { name: "Metallic Foil".to_owned(), color: Color::spot("Metallic Foil", 0.75, [0.1, 0.2, 0.6, 0.1]).unwrap() },
+                PaletteSwatch { name: "Reg Mark".to_owned(), color: Color::Registration },
+            ],
+        };
+        doc.residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"udoc"),
+            flags: 0,
+            slot: 0,
+            payload: RawPayload(vec![0xAA, 0xBB, 0xCC, 0xDD]),
+            src_offset: 0,
+        });
+        doc.pages[0].residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"upag"),
+            flags: 0,
+            slot: 0,
+            payload: RawPayload(vec![0x11, 0x22, 0x33]),
+            src_offset: 0,
+        });
+
+        let mut node = ObjectNode::new(
+            ObjectId(160),
+            Some("ResidualBox".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(20.0, 20.0, 120.0, 90.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(210, 30, 45))),
+            None,
+        );
+        node.residual.chunks.push(RawChunk { tag: ChunkTag(*b"uobj"), flags: 0, slot: 0, payload: RawPayload(vec![1, 2, 3, 4, 5]), src_offset: 0 });
+        doc.pages[0].layers[0].objects.push(node);
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        assert_eq!(parsed.document.palette, doc.palette);
+        assert!(parsed.document.residual.chunks.iter().any(|c| c.tag == ChunkTag(*b"udoc") && c.payload.0 == vec![0xAA, 0xBB, 0xCC, 0xDD]));
+        assert!(parsed.document.pages[0].residual.chunks.iter().any(|c| c.tag == ChunkTag(*b"upag") && c.payload.0 == vec![0x11, 0x22, 0x33]));
+        let obj0 = &parsed.document.pages[0].layers[0].objects[0];
+        assert!(obj0.residual.chunks.iter().any(|c| c.tag == ChunkTag(*b"uobj") && c.payload.0 == vec![1, 2, 3, 4, 5]));
+    }
 }

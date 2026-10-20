@@ -532,4 +532,87 @@ mod tests {
             other => panic!("expected ArtisticText from <text><tspan>, got {other:?}"),
         }
     }
+
+    #[test]
+    fn import_svg_mask_fountain_transparency_clip_path_powerclip_and_base64_png_image_m78() {
+        // 2x1 stored-deflate RGBA8 PNG: pixel(0,0)=[255,0,0,255], pixel(1,0)=[0,255,0,128]
+        // PNG signature + IHDR(2x1, 8-bit RGBA) + IDAT(zlib stored 9 bytes: [0, 255,0,0,255, 0,255,0,128]) + IEND
+        let b64_png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AWP4z8DwH4gZGBj+AwA5cQf82/7j1AAAAABJRU5ErkJggg==";
+        let _ = b64_png;
+        // Build a deterministic stored-deflate PNG in-memory for the test
+        let raw_scanline: [u8; 9] = [0, 255, 0, 0, 255, 0, 255, 0, 128];
+        let mut zlib = vec![0x78, 0x01, 0x01, 9, 0, !9u8, 0xFF];
+        zlib.extend_from_slice(&raw_scanline);
+        // Adler-32 of [0, 255, 0, 0, 255, 0, 255, 0, 128]
+        let mut s1 = 1u32;
+        let mut s2 = 0u32;
+        for &b in &raw_scanline {
+            s1 = (s1 + u32::from(b)) % 65_521;
+            s2 = (s2 + s1) % 65_521;
+        }
+        zlib.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let ihdr: [u8; 13] = [0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0];
+        for (ctype, data) in [(*b"IHDR", ihdr.as_slice()), (*b"IDAT", zlib.as_slice()), (*b"IEND", &[][..])] {
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let cs = png.len();
+            png.extend_from_slice(&ctype);
+            png.extend_from_slice(data);
+            let crc = crc32(&png[cs..]);
+            png.extend_from_slice(&crc.to_be_bytes());
+        }
+        const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut b64 = String::new();
+        for chunk in png.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            let n = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+            b64.push(B64_CHARS[((n >> 18) & 63) as usize] as char);
+            b64.push(B64_CHARS[((n >> 12) & 63) as usize] as char);
+            b64.push(if chunk.len() > 1 { B64_CHARS[((n >> 6) & 63) as usize] as char } else { '=' });
+            b64.push(if chunk.len() > 2 { B64_CHARS[(n & 63) as usize] as char } else { '=' });
+        }
+
+        let svg = format!(
+            r##"<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="grad-trsp-1" x1="0" y1="0" x2="100" y2="0">
+              <stop offset="0" stop-color="#ffffff"/>
+              <stop offset="1" stop-color="#000000"/>
+            </linearGradient>
+            <mask id="mask-obj-1" maskUnits="userSpaceOnUse">
+              <rect x="0" y="0" width="100" height="80" fill="url(#grad-trsp-1)"/>
+            </mask>
+            <clipPath id="clip-1" clipPathUnits="userSpaceOnUse">
+              <path d="M 10 10 L 110 10 L 110 90 L 10 90 Z"/>
+            </clipPath>
+          </defs>
+          <rect x="0" y="0" width="100" height="80" fill="#ff0000" mask="url(#mask-obj-1)"/>
+          <path d="M 10 10 L 110 10 L 110 90 L 10 90 Z" fill="#eeeeee"/>
+          <g clip-path="url(#clip-1)">
+            <circle cx="60" cy="50" r="30" fill="#00aa44"/>
+          </g>
+          <image x="20" y="30" width="40" height="20" href="data:image/png;base64,{b64}"/>
+        </svg>"##
+        );
+
+        let doc = import_svg(&svg).expect("import_svg with mask, clipPath, and image");
+        let objs = &doc.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 3);
+
+        assert!(matches!(objs[0].transparency, Some(TransparencyStyle::Fountain { geometry: FountainGeometry::Linear { .. }, .. })));
+        assert_eq!(objs[1].powerclip_children.len(), 1);
+        assert!(matches!(objs[1].powerclip_children[0].kind, ObjectKind::Ellipse(_)));
+
+        match &objs[2].kind {
+            ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } => {
+                assert_eq!((*pixel_width, *pixel_height), (2, 1));
+                assert_eq!(rgba_pixels.as_slice(), &[255, 0, 0, 255, 0, 255, 0, 128]);
+            }
+            other => panic!("expected Bitmap from <image>, got {other:?}"),
+        }
+        assert!((objs[2].transform.tx.get() - 20.0).abs() < 1e-6);
+        assert!((objs[2].transform.ty.get() - 30.0).abs() < 1e-6);
+    }
 }

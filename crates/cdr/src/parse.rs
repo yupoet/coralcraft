@@ -452,9 +452,13 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
     // Pass 1: Collect document-level configuration (`mcfg`), fills (`fild`), and outlines (`outl`)
     collect_resources_recursive(chunks, ctx, warnings);
 
-    for ch in chunks {
+    for (slot_idx, ch) in chunks.iter().enumerate() {
         if &ch.fourcc == b"dmta" {
             decode_dmta(&ch.payload, ctx.endian, doc);
+        } else if &ch.fourcc == b"plte" {
+            if let Ok(pal) = coralcraft_color::load_palette_bytes(&ch.payload) {
+                doc.palette = pal;
+            }
         } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"mstr") {
             doc.master_layers.clear();
             let mut m_layers = Vec::new();
@@ -469,6 +473,35 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
                 collect_loose_objects_recursive(&l_chunk.children, ctx, ctx.default_page_size, &mut layer.objects, warnings);
                 doc.master_layers.push(layer);
             }
+        } else if ch.list_type.is_none()
+            && !matches!(
+                &ch.fourcc,
+                b"vrsn"
+                    | b"dmta"
+                    | b"plte"
+                    | b"mcfg"
+                    | b"fild"
+                    | b"outl"
+                    | b"page"
+                    | b"rclr"
+                    | b"rpen"
+                    | b"rott"
+                    | b"rdot"
+                    | b"rotl"
+                    | b"ccmm"
+                    | b"cont"
+                    | b"indx"
+            )
+            && !ch.payload.is_empty()
+            && ch.payload.len() <= 512
+        {
+            doc.residual.chunks.push(RawChunk {
+                tag: ChunkTag(ch.fourcc),
+                flags: 0,
+                slot: slot_idx as u32,
+                payload: RawPayload(ch.payload.clone()),
+                src_offset: ch.src_offset,
+            });
         }
     }
 
@@ -1030,13 +1063,21 @@ fn collect_loose_objects_recursive(
 }
 
 fn parse_page_chunk(page_chunk: &ParsedChunk, ctx: &mut ParserCtx, page: &mut Page, warnings: &mut Vec<String>) {
-    for ch in &page_chunk.children {
+    for (slot_idx, ch) in page_chunk.children.iter().enumerate() {
         if &ch.fourcc == b"mcfg"
             && let Some(sz) = decode_mcfg(&ch.payload, ctx.endian, ctx.version)
         {
             page.size = sz;
         } else if &ch.fourcc == b"pmta" {
             decode_pmta(&ch.payload, ctx.endian, ctx.version, page, warnings);
+        } else if ch.list_type.is_none() && !matches!(&ch.fourcc, b"mcfg" | b"pmta") && !ch.payload.is_empty() && ch.payload.len() <= 512 {
+            page.residual.chunks.push(RawChunk {
+                tag: ChunkTag(ch.fourcc),
+                flags: 0,
+                slot: slot_idx as u32,
+                payload: RawPayload(ch.payload.clone()),
+                src_offset: ch.src_offset,
+            });
         }
     }
 
@@ -3188,6 +3229,29 @@ fn encode_object_into_layer(node: &ObjectNode, page_size: Size, next_style_id: &
     }
 
     append_riff_chunk(&mut obj_children, *b"loda", &loda);
+    for rc in &node.residual.chunks {
+        if !matches!(
+            &rc.tag.0,
+            b"bbox"
+                | b"trfd"
+                | b"fild"
+                | b"outl"
+                | b"trns"
+                | b"omta"
+                | b"vefx"
+                | b"enve"
+                | b"txtd"
+                | b"txts"
+                | b"loda"
+                | b"lobj"
+                | b"bmp "
+                | b"CDIB"
+                | b"LIST"
+        ) && !rc.payload.0.is_empty()
+        {
+            append_riff_chunk(&mut obj_children, rc.tag.0, &rc.payload.0);
+        }
+    }
     append_riff_list(layer_children, *b"obj ", &obj_children);
     Ok(())
 }
@@ -3279,6 +3343,15 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     append_riff_chunk(&mut body, *b"vrsn", &version.to_le_bytes());
     let dmta = encode_dmta_payload(doc);
     append_riff_chunk(&mut body, *b"dmta", &dmta);
+    if doc.palette != coralcraft_color::Palette::default_workspace_palette() {
+        let xml_pal = coralcraft_color::serialize_xml_palette(&doc.palette);
+        append_riff_chunk(&mut body, *b"plte", xml_pal.as_bytes());
+    }
+    for rc in &doc.residual.chunks {
+        if !matches!(&rc.tag.0, b"vrsn" | b"dmta" | b"plte" | b"mcfg" | b"fild" | b"outl" | b"LIST") && !rc.payload.0.is_empty() {
+            append_riff_chunk(&mut body, rc.tag.0, &rc.payload.0);
+        }
+    }
 
     let mcfg_off = if version >= 1300 {
         12usize
@@ -3310,6 +3383,11 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
         append_riff_chunk(&mut page_children, *b"mcfg", &mcfg);
         let pmta = encode_pmta_payload(page);
         append_riff_chunk(&mut page_children, *b"pmta", &pmta);
+        for rc in &page.residual.chunks {
+            if !matches!(&rc.tag.0, b"mcfg" | b"pmta" | b"LIST") && !rc.payload.0.is_empty() {
+                append_riff_chunk(&mut page_children, rc.tag.0, &rc.payload.0);
+            }
+        }
 
         for layer in &page.layers {
             let mut layer_children = Vec::new();
