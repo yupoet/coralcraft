@@ -144,7 +144,7 @@ fn print_human_report(file: &str, report: &ProbeReport) {
 
     println!("chunks: {}", report.chunks.len());
     for chunk in &report.chunks {
-        let indent = "  ".repeat(chunk.depth + 1);
+        let indent = "  ".repeat(chunk.depth.saturating_add(1));
         if let Some(lt) = &chunk.list_type {
             println!("{indent}{} ({lt}) offset={} size={} opaque={}", chunk.fourcc, chunk.offset, chunk.size, chunk.opaque_payload);
         } else {
@@ -285,7 +285,7 @@ fn run_render(input: &str, output: &str, page_1based: usize, scale: f64, transpa
 
     let opts = RenderOpts { scale, transparent_background: transparent, export_mode: true };
 
-    let rendered = match render_page(&doc, page_1based - 1, &opts) {
+    let rendered = match render_page(&doc, page_1based.saturating_sub(1), &opts) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("coralcraft-cli render: render pipeline failed for '{input}': {e}");
@@ -367,7 +367,7 @@ fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: boo
     let ext = Path::new(output).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
 
     let (format_name, out_bytes) = match ext.as_str() {
-        "svg" => match export_svg(&doc, page_1based - 1) {
+        "svg" => match export_svg(&doc, page_1based.saturating_sub(1)) {
             Ok(svg) => ("svg", svg.into_bytes()),
             Err(e) => {
                 eprintln!("coralcraft-cli export: SVG export failed for '{input}': {e}");
@@ -383,7 +383,7 @@ fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: boo
         },
         "png" => {
             let opts = RenderOpts { scale: dpi / 72.0, transparent_background: false, export_mode: true };
-            match render_page(&doc, page_1based - 1, &opts) {
+            match render_page(&doc, page_1based.saturating_sub(1), &opts) {
                 Ok(r) => ("png", r.png_bytes),
                 Err(e) => {
                     eprintln!("coralcraft-cli export: PNG export failed for '{input}': {e}");
@@ -419,14 +419,14 @@ fn run_export(input: &str, output: &str, page_1based: usize, dpi: f64, json: boo
                 return ExitCode::from(6);
             }
         },
-        "eps" => match export_eps(&doc, page_1based - 1) {
+        "eps" => match export_eps(&doc, page_1based.saturating_sub(1)) {
             Ok(eps) => ("eps", eps.into_bytes()),
             Err(e) => {
                 eprintln!("coralcraft-cli export: EPS export failed for '{input}': {e}");
                 return ExitCode::from(6);
             }
         },
-        "dxf" => match export_dxf(&doc, page_1based - 1) {
+        "dxf" => match export_dxf(&doc, page_1based.saturating_sub(1)) {
             Ok(dxf) => ("dxf", dxf.into_bytes()),
             Err(e) => {
                 eprintln!("coralcraft-cli export: DXF export failed for '{input}': {e}");
@@ -549,7 +549,7 @@ fn run_workspace_preview(input: &str, output: &str, page_1based: usize, width: u
         Err(code) => return code,
     };
 
-    let page_idx = page_1based - 1;
+    let page_idx = page_1based.saturating_sub(1);
     if page_idx >= doc.pages.len() {
         eprintln!("coralcraft-cli workspace-preview: page {} out of range (document has {} pages)", page_1based, doc.pages.len());
         return ExitCode::from(6);
@@ -559,7 +559,7 @@ fn run_workspace_preview(input: &str, output: &str, page_1based: usize, width: u
     ws.window_width = width.max(640);
     ws.window_height = height.max(480);
     ws.engine.set_active_target(ActivePageTarget::Page(page_idx));
-    if let Some(first_obj) = ws.engine.document.pages[page_idx].layers.iter().flat_map(|l| &l.objects).next() {
+    if let Some(first_obj) = ws.engine.document.pages.get(page_idx).into_iter().flat_map(|p| &p.layers).flat_map(|l| &l.objects).next() {
         let id = first_obj.id;
         ws.engine.set_selection(vec![id]);
     }

@@ -502,6 +502,7 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
     for ch in chunks {
         if &ch.fourcc == b"page" && ch.payload.len() >= 8 {
             let mut pos = 0usize;
+            let mut group_stack: Vec<Vec<ObjectNode>> = Vec::new();
             while pos.saturating_add(4) <= ch.payload.len() {
                 let sz_i16 = read_i16(ctx.endian, &ch.payload, pos).unwrap_or(0);
                 let (inst_size, header_len) = if sz_i16 < 0 {
@@ -515,7 +516,25 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                 }
                 let code_off = if sz_i16 < 0 { pos.saturating_add(6) } else { pos.saturating_add(2) };
                 let code = read_i16(ctx.endian, &ch.payload, code_off).unwrap_or(0).unsigned_abs();
-                if code == 67 {
+                if code == 14 {
+                    // CMX_Command_BeginGroup
+                    if group_stack.len() < 64 {
+                        group_stack.push(Vec::new());
+                    }
+                } else if code == 15 {
+                    // CMX_Command_EndGroup
+                    if let Some(children) = group_stack.pop()
+                        && !children.is_empty()
+                    {
+                        let grp_id = ObjectId(ctx.alloc_id());
+                        let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                        if let Some(parent) = group_stack.last_mut() {
+                            parent.push(grp_node);
+                        } else if let Some(layer) = page.layers.first_mut() {
+                            layer.objects.push(grp_node);
+                        }
+                    }
+                } else if code == 67 {
                     // CMX_Command_PolyCurve
                     let mut tag_pos = pos.saturating_add(header_len);
                     let inst_end = pos.saturating_add(inst_size);
@@ -537,14 +556,12 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                                 with_pad.extend_from_slice(pt_slice.get(2..).unwrap_or_default());
                                 if let Some(path) = decode_cdr_point_types_array(&with_pad, ctx.endian, 700, page.size) {
                                     let obj_id = ObjectId(ctx.alloc_id());
-                                    if let Some(layer) = page.layers.first_mut() {
-                                        layer.objects.push(ObjectNode::new(
-                                            obj_id,
-                                            None,
-                                            ObjectKind::Path(path),
-                                            None,
-                                            Some(OutlineStyle::hairline(Color::BLACK)),
-                                        ));
+                                    let obj_node =
+                                        ObjectNode::new(obj_id, None, ObjectKind::Path(path), None, Some(OutlineStyle::hairline(Color::BLACK)));
+                                    if let Some(parent) = group_stack.last_mut() {
+                                        parent.push(obj_node);
+                                    } else if let Some(layer) = page.layers.first_mut() {
+                                        layer.objects.push(obj_node);
                                     }
                                 }
                             }
@@ -553,6 +570,17 @@ fn parse_cmx_commands_into_page(chunks: &[ParsedChunk], ctx: &mut ParserCtx, pag
                     }
                 }
                 pos = pos.saturating_add(inst_size);
+            }
+            while let Some(children) = group_stack.pop() {
+                if !children.is_empty() {
+                    let grp_id = ObjectId(ctx.alloc_id());
+                    let grp_node = ObjectNode::new(grp_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                    if let Some(parent) = group_stack.last_mut() {
+                        parent.push(grp_node);
+                    } else if let Some(layer) = page.layers.first_mut() {
+                        layer.objects.push(grp_node);
+                    }
+                }
             }
         }
     }
@@ -2300,14 +2328,133 @@ fn write_riff_document(doc: &Document, form_type: [u8; 4], version: u16) -> Resu
     Ok(out)
 }
 
-fn collect_flat_objects<'a>(nodes: &'a [ObjectNode], out: &mut Vec<&'a ObjectNode>) {
-    for n in nodes {
-        if let ObjectKind::Group { children } = &n.kind {
-            collect_flat_objects(children, out);
-        } else {
-            out.push(n);
+fn encode_cmx_node(
+    node: &ObjectNode,
+    cx: f64,
+    cy: f64,
+    colors: &mut Vec<Color>,
+    pens: &mut Vec<i32>,
+    outlines: &mut Vec<(u16, u16)>,
+    page_cmds: &mut Vec<u8>,
+) -> Result<(), ProbeError> {
+    if let ObjectKind::Group { children } = &node.kind {
+        // CMX_Command_BeginGroup (code = 14)
+        let bbox = node_bbox_for_export(node);
+        let mut cmd = Vec::with_capacity(34);
+        cmd.extend_from_slice(&34i16.to_le_bytes()); // instructionSize = 34
+        cmd.extend_from_slice(&14i16.to_le_bytes()); // CMX_Command_BeginGroup
+        cmd.push(1u8); // CMX_Tag_BeginGroup_GroupSpecification
+        cmd.extend_from_slice(&29u16.to_le_bytes()); // tagLength = 29
+        cmd.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+        cmd.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+        cmd.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+        cmd.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+        cmd.extend_from_slice(&0u16.to_le_bytes()); // groupCount = 0
+        cmd.extend_from_slice(&(children.len().min(usize::from(u16::MAX)) as u16).to_le_bytes()); // commandCount
+        cmd.extend_from_slice(&0u32.to_le_bytes()); // commandSize = 0
+        cmd.extend_from_slice(&0u16.to_le_bytes()); // flags = 0
+        cmd.push(255u8); // CMX_Tag_EndTag
+        page_cmds.extend_from_slice(&cmd);
+
+        for child in children {
+            encode_cmx_node(child, cx, cy, colors, pens, outlines, page_cmds)?;
         }
+
+        // CMX_Command_EndGroup (code = 15)
+        page_cmds.extend_from_slice(&4i16.to_le_bytes());
+        page_cmds.extend_from_slice(&15i16.to_le_bytes());
+        return Ok(());
     }
+
+    let export_path = node_to_export_path(node);
+    let (pts, types) = encode_path_to_cdr_points_types(&export_path, cx, cy)?;
+    let point_num =
+        u16::try_from(pts.len()).map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_points".to_owned(), max: usize::from(u16::MAX) })?;
+    let point_tag_len_usize = 5usize.saturating_add(pts.len().saturating_mul(9));
+    let point_tag_len = u16::try_from(point_tag_len_usize)
+        .map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_tag_bytes".to_owned(), max: usize::from(u16::MAX) })?;
+
+    let mut render_attr = Vec::new();
+    let mut mask = 0u8;
+    let mut fill_color_idx = 1u16;
+    if let Some(fill) = &node.fill {
+        mask |= 0x01;
+        let c = match fill {
+            FillStyle::Uniform { color } => color.clone(),
+            FillStyle::Fountain { stops, .. } => stops.first().map(|s| s.color.clone()).unwrap_or(Color::WHITE),
+            FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
+            FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
+        };
+        colors.push(c);
+        fill_color_idx = colors.len() as u16;
+    }
+    let mut outl_idx = 1u16;
+    if let Some(outl) = &node.outline {
+        mask |= 0x02;
+        colors.push(outl.color.clone());
+        let c_idx = colors.len() as u16;
+        pens.push(pt_to_cdr_i32(outl.width_pt.get().max(0.25)));
+        let p_idx = pens.len() as u16;
+        outlines.push((c_idx, p_idx));
+        outl_idx = outlines.len() as u16;
+    }
+    render_attr.push(mask);
+    if (mask & 0x01) != 0 {
+        render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
+        render_attr.extend_from_slice(&13u16.to_le_bytes()); // tagLength = 13
+        render_attr.extend_from_slice(&1u16.to_le_bytes()); // fillType = 1 (Uniform)
+        render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Uniform
+        render_attr.extend_from_slice(&7u16.to_le_bytes()); // subTagLength = 7
+        render_attr.extend_from_slice(&fill_color_idx.to_le_bytes());
+        render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
+        render_attr.push(255u8); // EndTag (Uniform)
+        render_attr.push(255u8); // EndTag (FillSpec)
+    }
+    if (mask & 0x02) != 0 {
+        render_attr.push(1u8); // CMX_Tag_RenderAttr_OutlineSpec
+        render_attr.extend_from_slice(&5u16.to_le_bytes()); // tagLength = 5
+        render_attr.extend_from_slice(&outl_idx.to_le_bytes());
+        render_attr.push(255u8); // EndTag (OutlineSpec)
+    }
+    let render_tag_len = (3usize.saturating_add(render_attr.len())) as u16;
+
+    let bbox = node_bbox_for_export(node);
+    let mut body = Vec::new();
+    // Tag 1: CMX_Tag_PolyCurve_RenderingAttr
+    body.push(1u8);
+    body.extend_from_slice(&render_tag_len.to_le_bytes());
+    body.extend_from_slice(&render_attr);
+    // Tag 2: CMX_Tag_PolyCurve_PointList
+    body.push(2u8);
+    body.extend_from_slice(&point_tag_len.to_le_bytes());
+    body.extend_from_slice(&point_num.to_le_bytes());
+    for (x_cdr, y_cdr) in &pts {
+        body.extend_from_slice(&x_cdr.to_le_bytes());
+        body.extend_from_slice(&y_cdr.to_le_bytes());
+    }
+    body.extend_from_slice(&types);
+    // Tag 3: CMX_Tag_Polycurve_BoundingBox
+    body.push(3u8);
+    body.extend_from_slice(&19u16.to_le_bytes());
+    body.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
+    body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
+    body.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
+    body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
+    // EndTag
+    body.push(255u8);
+
+    if let Ok(inst_sz) = i16::try_from(4usize.saturating_add(body.len())) {
+        page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+        page_cmds.extend_from_slice(&67i16.to_le_bytes()); // CMX_Command_PolyCurve
+        page_cmds.extend_from_slice(&body);
+    } else {
+        let inst_sz = (8usize.saturating_add(body.len())) as i32;
+        page_cmds.extend_from_slice(&(-1i16).to_le_bytes());
+        page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
+        page_cmds.extend_from_slice(&67i16.to_le_bytes());
+        page_cmds.extend_from_slice(&body);
+    }
+    Ok(())
 }
 
 fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
@@ -2343,99 +2490,9 @@ fn write_cmx1_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
         page_cmds.extend_from_slice(&cmd);
     }
 
-    let mut flat_objs = Vec::new();
     for layer in &first_page.layers {
-        collect_flat_objects(&layer.objects, &mut flat_objs);
-    }
-
-    for node in flat_objs {
-        let export_path = node_to_export_path(node);
-        let (pts, types) = encode_path_to_cdr_points_types(&export_path, cx, cy)?;
-        let point_num = u16::try_from(pts.len())
-            .map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_points".to_owned(), max: usize::from(u16::MAX) })?;
-        let point_tag_len_usize = 5usize.saturating_add(pts.len().saturating_mul(9));
-        let point_tag_len = u16::try_from(point_tag_len_usize)
-            .map_err(|_| ProbeError::LimitExceeded { limit: "cmx_polycurve_tag_bytes".to_owned(), max: usize::from(u16::MAX) })?;
-
-        let mut render_attr = Vec::new();
-        let mut mask = 0u8;
-        let mut fill_color_idx = 1u16;
-        if let Some(fill) = &node.fill {
-            mask |= 0x01;
-            let c = match fill {
-                FillStyle::Uniform { color } => color.clone(),
-                FillStyle::Fountain { stops, .. } => stops.first().map(|s| s.color.clone()).unwrap_or(Color::WHITE),
-                FillStyle::TwoColorPattern { fg_color, .. } => fg_color.clone(),
-                FillStyle::Unknown { .. } => Color::rgb8(128, 128, 128),
-            };
-            colors.push(c);
-            fill_color_idx = colors.len() as u16;
-        }
-        let mut outl_idx = 1u16;
-        if let Some(outl) = &node.outline {
-            mask |= 0x02;
-            colors.push(outl.color.clone());
-            let c_idx = colors.len() as u16;
-            pens.push(pt_to_cdr_i32(outl.width_pt.get().max(0.25)));
-            let p_idx = pens.len() as u16;
-            outlines.push((c_idx, p_idx));
-            outl_idx = outlines.len() as u16;
-        }
-        render_attr.push(mask);
-        if (mask & 0x01) != 0 {
-            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec
-            render_attr.extend_from_slice(&13u16.to_le_bytes()); // tagLength = 13
-            render_attr.extend_from_slice(&1u16.to_le_bytes()); // fillType = 1 (Uniform)
-            render_attr.push(1u8); // CMX_Tag_RenderAttr_FillSpec_Uniform
-            render_attr.extend_from_slice(&7u16.to_le_bytes()); // subTagLength = 7
-            render_attr.extend_from_slice(&fill_color_idx.to_le_bytes());
-            render_attr.extend_from_slice(&100u16.to_le_bytes()); // screen = 100
-            render_attr.push(255u8); // EndTag (Uniform)
-            render_attr.push(255u8); // EndTag (FillSpec)
-        }
-        if (mask & 0x02) != 0 {
-            render_attr.push(1u8); // CMX_Tag_RenderAttr_OutlineSpec
-            render_attr.extend_from_slice(&5u16.to_le_bytes()); // tagLength = 5
-            render_attr.extend_from_slice(&outl_idx.to_le_bytes());
-            render_attr.push(255u8); // EndTag (OutlineSpec)
-        }
-        let render_tag_len = (3usize.saturating_add(render_attr.len())) as u16;
-
-        let bbox = node_bbox_for_export(node);
-        let mut body = Vec::new();
-        // Tag 1: CMX_Tag_PolyCurve_RenderingAttr
-        body.push(1u8);
-        body.extend_from_slice(&render_tag_len.to_le_bytes());
-        body.extend_from_slice(&render_attr);
-        // Tag 2: CMX_Tag_PolyCurve_PointList
-        body.push(2u8);
-        body.extend_from_slice(&point_tag_len.to_le_bytes());
-        body.extend_from_slice(&point_num.to_le_bytes());
-        for (x_cdr, y_cdr) in &pts {
-            body.extend_from_slice(&x_cdr.to_le_bytes());
-            body.extend_from_slice(&y_cdr.to_le_bytes());
-        }
-        body.extend_from_slice(&types);
-        // Tag 3: CMX_Tag_Polycurve_BoundingBox
-        body.push(3u8);
-        body.extend_from_slice(&19u16.to_le_bytes());
-        body.extend_from_slice(&pt_to_cdr_i32(bbox.x0.get() - cx).to_le_bytes());
-        body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y0.get()).to_le_bytes());
-        body.extend_from_slice(&pt_to_cdr_i32(bbox.x1.get() - cx).to_le_bytes());
-        body.extend_from_slice(&pt_to_cdr_i32(cy - bbox.y1.get()).to_le_bytes());
-        // EndTag
-        body.push(255u8);
-
-        if let Ok(inst_sz) = i16::try_from(4usize.saturating_add(body.len())) {
-            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
-            page_cmds.extend_from_slice(&67i16.to_le_bytes()); // CMX_Command_PolyCurve
-            page_cmds.extend_from_slice(&body);
-        } else {
-            let inst_sz = (8usize.saturating_add(body.len())) as i32;
-            page_cmds.extend_from_slice(&(-1i16).to_le_bytes());
-            page_cmds.extend_from_slice(&inst_sz.to_le_bytes());
-            page_cmds.extend_from_slice(&67i16.to_le_bytes());
-            page_cmds.extend_from_slice(&body);
+        for node in &layer.objects {
+            encode_cmx_node(node, cx, cy, &mut colors, &mut pens, &mut outlines, &mut page_cmds)?;
         }
     }
 

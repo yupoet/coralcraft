@@ -26,16 +26,16 @@ pub use flatten::{
     flatten_quad,
 };
 pub use path::{
-    ArcLengthTable, AxonometricPlane, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, Path, PathElement, PathSample, break_path_at_node,
-    build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path,
-    dash_path_to_open_subpaths, delete_curve_node_at, delete_segment_at_index, distort_path, divide_overlapping_paths, expand_artistic_brush_stroke,
-    expand_tapered_stroke_profile, fillet_path_corners, fit_circle_to_path_points, flatten_path_to_polylines, hatch_path_region,
-    insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, laplacian_relax_closed_path, measure_path_length_and_area,
-    medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, pinch_punch_warp_path, project_path_axonometric,
-    radial_push_path_around_point, reverse_path_direction, roughen_path_segments, shear_warp_path_along_axis, simplify_path_nodes,
-    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments,
-    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, warp_path_bilinear,
-    warp_path_perspective, wave_distort_path,
+    ArcLengthTable, AxonometricPlane, DistortionKind, FillRule, MAX_PATH_ELEMENTS, NodeKind, OffsetJoinKind, Path, PathElement, PathSample,
+    break_path_at_node, build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line,
+    convex_hull_of_path, dash_path_to_open_subpaths, delete_curve_node_at, delete_segment_at_index, distort_path, divide_overlapping_paths,
+    expand_artistic_brush_stroke, expand_tapered_stroke_profile, fillet_path_corners, fit_circle_to_path_points, flatten_path_to_polylines,
+    hatch_path_region, insert_curve_node_at, interpolate_smooth_cubic_path, join_open_subpaths, laplacian_relax_closed_path,
+    measure_path_length_and_area, medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, offset_path_with_join,
+    pinch_punch_warp_path, project_path_axonometric, radial_push_path_around_point, reverse_path_direction, roughen_path_segments,
+    shear_warp_path_along_axis, simplify_path_nodes, smear_path_from_point, smooth_curve_node_at, smooth_path_around_point,
+    spherical_fisheye_warp_path, subdivide_all_path_segments, subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes,
+    twirl_path_around_point, warp_path_bilinear, warp_path_perspective, wave_distort_path,
 };
 pub use shapes::{
     BasicShapeKind, CornerKind, EllipseMode, EllipseSpec, FlowchartSymbolKind, KAPPA, PolygonSpec, RectSpec, build_banner_ribbon_path,

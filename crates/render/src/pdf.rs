@@ -15,6 +15,9 @@ use crate::svg::fmt_num;
 use coralcraft_geom::F64;
 use serde::{Deserialize, Serialize};
 
+/// Maximum serialized byte budget (`128 MiB`) for clean-room PDF 1.4 export (`export_pdf_with_prepress` / `export_pdf_imposed`).
+pub const MAX_PDF_EXPORT_BYTES: usize = 128 * 1024 * 1024;
+
 /// Prepress printer's marks options for print-ready PDF 1.4 and SVG 1.1 export.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrepressOptions {
@@ -120,12 +123,15 @@ pub fn export_pdf_imposed(doc: &Document, spec: &ImpositionSpec) -> Result<Vec<u
         .into_bytes(),
     );
     let stream_bytes = s.as_bytes();
+    if stream_bytes.len() > MAX_PDF_EXPORT_BYTES {
+        return Err(RenderError::ExportOutputTooLarge { bytes: stream_bytes.len(), max: MAX_PDF_EXPORT_BYTES });
+    }
     let mut content_obj = format!("<< /Length {} >>\nstream\n", stream_bytes.len()).into_bytes();
     content_obj.extend_from_slice(stream_bytes);
     content_obj.extend_from_slice(b"endstream");
     objects.push(content_obj);
 
-    Ok(serialize_pdf_objects(&objects))
+    serialize_pdf_objects_with_budget(&objects, MAX_PDF_EXPORT_BYTES)
 }
 
 /// Returns the 8 corner crop-mark line segments `((x0, y0), (x1, y1))` for a trim box of `(w, h)`.
@@ -147,12 +153,16 @@ pub(crate) fn registration_target_centers(w: f64, h: f64) -> [(f64, f64); 4] {
     [(w * 0.5, -9.0), (w * 0.5, h + 9.0), (-9.0, h * 0.5), (w + 9.0, h * 0.5)]
 }
 
-fn serialize_pdf_objects(objects: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn serialize_pdf_objects_with_budget(objects: &[Vec<u8>], max_bytes: usize) -> Result<Vec<u8>, RenderError> {
     let mut out = Vec::with_capacity(4096);
     out.extend_from_slice(b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
     let mut offsets = Vec::with_capacity(objects.len().saturating_add(1));
     offsets.push(0usize);
     for (idx, obj_bytes) in objects.iter().enumerate() {
+        let projected = out.len().saturating_add(obj_bytes.len()).saturating_add(32);
+        if projected > max_bytes {
+            return Err(RenderError::ExportOutputTooLarge { bytes: projected, max: max_bytes });
+        }
         let obj_num = idx.saturating_add(1);
         offsets.push(out.len());
         out.extend_from_slice(format!("{obj_num} 0 obj\n").as_bytes());
@@ -166,7 +176,10 @@ fn serialize_pdf_objects(objects: &[Vec<u8>]) -> Vec<u8> {
         out.extend_from_slice(format!("{off:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
-    out
+    if out.len() > max_bytes {
+        return Err(RenderError::ExportOutputTooLarge { bytes: out.len(), max: max_bytes });
+    }
+    Ok(out)
 }
 
 /// Exports all pages of `doc` into a self-contained ISO 32000-1 PDF 1.4 byte vector.
@@ -250,7 +263,7 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
         objects.push(content_obj);
     }
 
-    Ok(serialize_pdf_objects(&objects))
+    serialize_pdf_objects_with_budget(&objects, MAX_PDF_EXPORT_BYTES)
 }
 
 fn build_page_content_stream(
@@ -718,4 +731,19 @@ fn emit_pdf_geometry_and_powerclip(s: &mut String, node: &ObjectNode, local_path
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serialize_pdf_objects_with_budget_enforces_byte_limit_m66() {
+        let small = vec![b"<< /Type /Catalog >>".to_vec()];
+        assert!(serialize_pdf_objects_with_budget(&small, 1024).is_ok());
+        let err = serialize_pdf_objects_with_budget(&small, 32).unwrap_err();
+        assert!(matches!(err, RenderError::ExportOutputTooLarge { max: 32, .. }));
+        assert_eq!(MAX_PDF_EXPORT_BYTES, 128 * 1024 * 1024);
+    }
 }

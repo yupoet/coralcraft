@@ -4,7 +4,7 @@
 //! directory (`std::env::temp_dir()`) and removed on drop; no binary test files are ever
 //! stored inside the repository tree.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use std::fs;
 use std::path::PathBuf;

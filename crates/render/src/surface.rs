@@ -43,6 +43,14 @@ pub enum RenderError {
     /// PNG payload exceeds 32-bit chunk length ceiling.
     #[error("PNG image payload exceeds u32 chunk limit")]
     PngTooLarge,
+    /// Vector export output stream exceeded the maximum byte budget (`MAX_PDF_EXPORT_BYTES`).
+    #[error("vector export output ({bytes} bytes) exceeds maximum limit ({max} bytes)")]
+    ExportOutputTooLarge {
+        /// Current or requested byte count.
+        bytes: usize,
+        /// Maximum permitted byte count.
+        max: usize,
+    },
 }
 
 /// Non-fatal warnings recorded during page rendering.

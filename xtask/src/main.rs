@@ -293,9 +293,9 @@ fn walk_rs(dir: &Path, c: &mut Counts) {
         } else if name.ends_with(".rs")
             && let Ok(s) = fs::read_to_string(&p)
         {
-            c.files += 1;
-            c.lines += s.lines().count();
-            c.tests += count_tests(&s);
+            c.files = c.files.saturating_add(1);
+            c.lines = c.lines.saturating_add(s.lines().count());
+            c.tests = c.tests.saturating_add(count_tests(&s));
         }
     }
 }
@@ -336,9 +336,9 @@ fn stats(root: &Path) -> Result<(), String> {
     let mut total = Counts::default();
     for (name, c) in &rows {
         println!("{name:<24} {:>6} {:>8} {:>8}", c.files, c.lines, c.tests);
-        total.files += c.files;
-        total.lines += c.lines;
-        total.tests += c.tests;
+        total.files = total.files.saturating_add(c.files);
+        total.lines = total.lines.saturating_add(c.lines);
+        total.tests = total.tests.saturating_add(c.tests);
     }
     println!("{}", "-".repeat(50));
     println!("{:<24} {:>6} {:>8} {:>8}", "TOTAL", total.files, total.lines, total.tests);

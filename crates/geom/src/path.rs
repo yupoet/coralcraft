@@ -1414,11 +1414,30 @@ pub fn delete_segment_at_index(path: &Path, element_index: usize) -> Result<Path
     Path::from_elements(elems, path.fill_rule)
 }
 
+/// Corner join style for parallel curve and contour offsetting (`Effects -> Contour`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OffsetJoinKind {
+    /// Miter join with miter-limit clamping (`<= 2.5 * |distance_pt|`).
+    #[default]
+    Miter,
+    /// Circular arc fan centered at the original vertex with radius `|distance_pt|`.
+    Round,
+    /// Flat chamfer segment connecting the incoming and outgoing offset edge endpoints.
+    Bevel,
+}
+
 /// Computes a parallel offset path shifted by signed `distance_pt` (`CorelDRAW Parallel Drawing / Offset Curve`).
 ///
 /// Closed subpaths orient `distance_pt > 0` outward using signed polygon area; open subpaths shift
 /// along the left-hand unit normal with miter clamping at sharp joints.
 pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path, GeomError> {
+    offset_path_with_join(path, distance_pt, OffsetJoinKind::Miter)
+}
+
+/// Computes a parallel offset path shifted by signed `distance_pt` with explicit corner join style
+/// (`OffsetJoinKind::Miter`, `OffsetJoinKind::Round`, or `OffsetJoinKind::Bevel`).
+pub fn offset_path_with_join(path: &Path, distance_pt: f64, join: OffsetJoinKind) -> Result<Path, GeomError> {
     let d = crate::F64::new(distance_pt)?.get();
     if d.abs() <= crate::EPS {
         return Ok(path.clone());
@@ -1432,7 +1451,11 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
         if len <= 1e-9 { (0.0, 0.0) } else { (-dy / len, dx / len) }
     };
     for poly in polylines {
-        let n = poly.points.len();
+        let mut pts = poly.points;
+        if poly.closed && pts.len() >= 3 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.distance(*b) < 1e-6) {
+            pts.pop();
+        }
+        let n = pts.len();
         if n < 2 {
             continue;
         }
@@ -1441,7 +1464,7 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
             let mut area2 = 0.0;
             for i in 0..n {
                 let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
-                if let (Some(&p0), Some(&p1)) = (poly.points.get(i), poly.points.get(next_i)) {
+                if let (Some(&p0), Some(&p1)) = (pts.get(i), pts.get(next_i)) {
                     area2 += p0.x.get() * p1.y.get() - p1.x.get() * p0.y.get();
                 }
             }
@@ -1450,41 +1473,72 @@ pub fn offset_open_or_closed_path(path: &Path, distance_pt: f64) -> Result<Path,
             }
         }
         let eff_d = d * sign;
-        let mut shifted = Vec::with_capacity(n);
+        let mut shifted = Vec::with_capacity(n.saturating_mul(2));
         for i in 0..n {
-            let Some(&cur_pt) = poly.points.get(i) else { continue };
+            let Some(&cur_pt) = pts.get(i) else { continue };
+            let is_open_endpoint = !poly.closed && (i == 0 || i.saturating_add(1) == n);
             let (n1, n2) = if poly.closed {
                 let prev_i = i.saturating_add(n.saturating_sub(1)).checked_rem(n).unwrap_or(0);
                 let next_i = i.saturating_add(1).checked_rem(n).unwrap_or(0);
-                let prev = poly.points.get(prev_i).copied().unwrap_or(cur_pt);
-                let next = poly.points.get(next_i).copied().unwrap_or(cur_pt);
+                let prev = pts.get(prev_i).copied().unwrap_or(cur_pt);
+                let next = pts.get(next_i).copied().unwrap_or(cur_pt);
                 (seg_normal(prev, cur_pt), seg_normal(cur_pt, next))
             } else if i == 0 {
-                let next = poly.points.get(1).copied().unwrap_or(cur_pt);
+                let next = pts.get(1).copied().unwrap_or(cur_pt);
                 let n0 = seg_normal(cur_pt, next);
                 (n0, n0)
             } else if i.saturating_add(1) == n {
-                let prev = poly.points.get(n.saturating_sub(2)).copied().unwrap_or(cur_pt);
+                let prev = pts.get(n.saturating_sub(2)).copied().unwrap_or(cur_pt);
                 let nl = seg_normal(prev, cur_pt);
                 (nl, nl)
             } else {
-                let prev = poly.points.get(i.saturating_sub(1)).copied().unwrap_or(cur_pt);
-                let next = poly.points.get(i.saturating_add(1)).copied().unwrap_or(cur_pt);
+                let prev = pts.get(i.saturating_sub(1)).copied().unwrap_or(cur_pt);
+                let next = pts.get(i.saturating_add(1)).copied().unwrap_or(cur_pt);
                 (seg_normal(prev, cur_pt), seg_normal(cur_pt, next))
             };
-            let bx = n1.0 + n2.0;
-            let by = n1.1 + n2.1;
-            let blen = bx.hypot(by);
-            let (ox, oy) = if blen <= 1e-6 {
-                (n1.0 * eff_d, n1.1 * eff_d)
-            } else {
-                let ux = bx / blen;
-                let uy = by / blen;
-                let dot = (ux * n1.0 + uy * n1.1).max(0.4);
-                let miter = (eff_d / dot).clamp(-2.5 * eff_d.abs(), 2.5 * eff_d.abs());
-                (ux * miter, uy * miter)
-            };
-            shifted.push(Point::new(cur_pt.x.get() + ox, cur_pt.y.get() + oy)?);
+            if is_open_endpoint {
+                shifted.push(Point::new(cur_pt.x.get() + n1.0 * eff_d, cur_pt.y.get() + n1.1 * eff_d)?);
+                continue;
+            }
+            let norm_diff = (n1.0 - n2.0).hypot(n1.1 - n2.1);
+            match join {
+                OffsetJoinKind::Miter => {
+                    let bx = n1.0 + n2.0;
+                    let by = n1.1 + n2.1;
+                    let blen = bx.hypot(by);
+                    let (ox, oy) = if blen <= 1e-6 {
+                        (n1.0 * eff_d, n1.1 * eff_d)
+                    } else {
+                        let ux = bx / blen;
+                        let uy = by / blen;
+                        let dot = (ux * n1.0 + uy * n1.1).max(0.4);
+                        let miter = (eff_d / dot).clamp(-2.5 * eff_d.abs(), 2.5 * eff_d.abs());
+                        (ux * miter, uy * miter)
+                    };
+                    shifted.push(Point::new(cur_pt.x.get() + ox, cur_pt.y.get() + oy)?);
+                }
+                OffsetJoinKind::Bevel => {
+                    shifted.push(Point::new(cur_pt.x.get() + n1.0 * eff_d, cur_pt.y.get() + n1.1 * eff_d)?);
+                    if norm_diff > 1e-4 {
+                        shifted.push(Point::new(cur_pt.x.get() + n2.0 * eff_d, cur_pt.y.get() + n2.1 * eff_d)?);
+                    }
+                }
+                OffsetJoinKind::Round => {
+                    if norm_diff <= 1e-4 {
+                        shifted.push(Point::new(cur_pt.x.get() + n1.0 * eff_d, cur_pt.y.get() + n1.1 * eff_d)?);
+                    } else {
+                        let a1 = (n1.1 * eff_d).atan2(n1.0 * eff_d);
+                        let a2 = (n2.1 * eff_d).atan2(n2.0 * eff_d);
+                        let da = (a2 - a1 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
+                        let r = eff_d.abs();
+                        let arc_steps = 6_u32;
+                        for k in 0..=arc_steps {
+                            let angle = a1 + da * (f64::from(k) / f64::from(arc_steps));
+                            shifted.push(Point::new(cur_pt.x.get() + r * angle.cos(), cur_pt.y.get() + r * angle.sin())?);
+                        }
+                    }
+                }
+            }
         }
         if let Some((&first, rest)) = shifted.split_first() {
             out.move_to(first)?;
@@ -2903,5 +2957,16 @@ mod m26_tests {
 
         let sheared = shear_warp_path_along_axis(&rect_path, crate::Rect::new(0.0, 0.0, 50.0, 40.0).unwrap(), 10.0, 5.0).unwrap();
         assert_eq!(sheared.elements.len(), rect_path.elements.len());
+
+        let miter_rect = offset_path_with_join(&rect_path, 10.0, OffsetJoinKind::Miter).unwrap();
+        let bevel_rect = offset_path_with_join(&rect_path, 10.0, OffsetJoinKind::Bevel).unwrap();
+        let round_rect = offset_path_with_join(&rect_path, 10.0, OffsetJoinKind::Round).unwrap();
+        assert_eq!(miter_rect.elements.len(), 5);
+        assert_eq!(bevel_rect.elements.len(), 9);
+        assert!(round_rect.elements.len() > bevel_rect.elements.len());
+        let (_, bevel_area) = measure_path_length_and_area(&bevel_rect).unwrap();
+        let (_, round_area) = measure_path_length_and_area(&round_rect).unwrap();
+        let (_, miter_area) = measure_path_length_and_area(&miter_rect).unwrap();
+        assert!(bevel_area < round_area && round_area < miter_area);
     }
 }

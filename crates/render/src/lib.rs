@@ -13,7 +13,7 @@ use coralcraft_doc::{Document, FillStyle, LensKind, ObjectKind, ObjectNode, Outl
 use coralcraft_geom::{Affine2, FillRule, FlattenOpts, Path, Point, Rect, RectSpec, artistic_text_to_path, flatten_path};
 
 pub use eps::{export_dxf, export_eps};
-pub use pdf::{ImpositionSpec, PrepressOptions, export_pdf, export_pdf_imposed, export_pdf_with_prepress};
+pub use pdf::{ImpositionSpec, MAX_PDF_EXPORT_BYTES, PrepressOptions, export_pdf, export_pdf_imposed, export_pdf_with_prepress};
 pub use png::{adler32, base64_decode, base64_encode, decode_stored_png_rgba, encode_png, encode_raw_png_rgba};
 pub use raster::{SS, build_arrowhead_polylines, dash_polylines, evaluate_fountain_t, expand_stroke_polylines, rasterize_coverage, shade_coverage};
 pub use surface::{

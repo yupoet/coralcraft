@@ -850,4 +850,48 @@ mod tests {
         let parsed_x6 = parse_document(&x6_zip).expect("parse X6 multi-stream ZIP");
         assert_eq!(parsed_x6.document.pages.len(), 2, "both root.dat and data/page2.dat pages must be parsed");
     }
+
+    #[test]
+    fn write_cmx1_begin_group_end_group_roundtrip_m66() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::{EllipseSpec, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let child_a = ObjectNode::new(
+            ObjectId(51),
+            Some("ChildRect".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(Rect::new(30.0, 30.0, 90.0, 70.0).unwrap())),
+            None,
+            None,
+        );
+        let child_b = ObjectNode::new(
+            ObjectId(52),
+            Some("ChildEllipse".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(110.0, 40.0, 170.0, 100.0).unwrap())),
+            None,
+            None,
+        );
+        let grp = ObjectNode::new(ObjectId(53), Some("Group".to_owned()), ObjectKind::Group { children: vec![child_a, child_b] }, None, None);
+        doc.pages[0].layers[0].objects.push(grp);
+
+        let cmx_bytes = write_cmx1(&doc).expect("write_cmx1 with Group");
+        let parsed = parse_document(&cmx_bytes).expect("parse cmx1 with Group");
+        assert_eq!(parsed.document.pages[0].layers[0].objects.len(), 1);
+        match &parsed.document.pages[0].layers[0].objects[0].kind {
+            ObjectKind::Group { children } => assert_eq!(children.len(), 2),
+            other => panic!("expected ObjectKind::Group, got {other:?}"),
+        }
+
+        // Also test standalone CMX1 `page` chunk (without trailing `LIST page`) containing `BeginGroup`/`EndGroup`
+        let list_pos = cmx_bytes.windows(8).position(|w| &w[0..4] == b"LIST").expect("LIST page in cmx_bytes");
+        let mut pure_cmx = cmx_bytes[..list_pos].to_vec();
+        let pure_riff_sz = (pure_cmx.len() - 8) as u32;
+        pure_cmx[4..8].copy_from_slice(&pure_riff_sz.to_le_bytes());
+        let parsed_pure = parse_document(&pure_cmx).expect("parse standalone CMX1 page commands");
+        assert_eq!(parsed_pure.document.pages[0].layers[0].objects.len(), 1);
+        match &parsed_pure.document.pages[0].layers[0].objects[0].kind {
+            ObjectKind::Group { children } => assert_eq!(children.len(), 2),
+            other => panic!("expected ObjectKind::Group from CMX1 BeginGroup/EndGroup, got {other:?}"),
+        }
+    }
 }
