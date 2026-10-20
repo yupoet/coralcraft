@@ -1,0 +1,60 @@
+# Continuous integration: `cargo xtask ci` (fmt, clippy -D warnings, tests, cleanroom, assets,
+# layers) on native Linux, macOS and Windows runners. Action pins follow refs/vectorcraft.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  xtask-ci:
+    name: xtask ci (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+  linux-package-smoke:
+    # Build the .deb against a glibc 2.17 baseline and install it on an older distribution, so a
+    # package that only works on the build host can't pass (docs/ai-memory/04-known-issues.md #10).
+    name: Linux .deb install smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install zig and cargo-zigbuild
+        run: |
+          python3 -m pip install --user ziglang
+          cargo install --locked cargo-zigbuild
+      - name: Build .deb and .tar.gz
+        run: bash packaging/linux/package.sh
+      - name: Install and run on Debian 11 (glibc 2.31)
+        run: |
+          docker run --rm -v "$PWD/dist/release":/r:ro debian:11 sh -ec '
+            dpkg -i /r/coralcraft-*-linux-x86_64.deb
+            coralcraft-cli --version
+            coralcraft --version
+            printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""
+          '

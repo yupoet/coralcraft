@@ -72,6 +72,24 @@ impl McpServer {
         Self { engine: EditorEngine::default() }
     }
 
+    /// Serves newline-delimited JSON-RPC 2.0 messages from `reader` until EOF, writing one response
+    /// line per request to `writer` (the MCP stdio transport). Blank lines are skipped.
+    ///
+    /// # Errors
+    /// Returns an I/O error when reading from `reader` or writing to `writer` fails.
+    pub fn serve_stdio<R: std::io::BufRead, W: std::io::Write>(&mut self, reader: R, mut writer: W) -> std::io::Result<()> {
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let resp = self.handle_json_str(&line);
+            writeln!(writer, "{resp}")?;
+            writer.flush()?;
+        }
+        Ok(())
+    }
+
     /// Processes a single JSON-RPC 2.0 request string and returns a serialized JSON-RPC 2.0 response.
     #[must_use]
     pub fn handle_json_str(&mut self, line: &str) -> String {

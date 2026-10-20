@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Build and package CoralCraft for Linux GUI (x86_64):
-#   - coralcraft-<version>-linux-x86_64.deb       Debian/Ubuntu/Mint/Pop!_OS package (dpkg-deb)
-#   - coralcraft-<version>-linux-x86_64.rpm       Fedora/RHEL/openSUSE RPM package
-#   - coralcraft-<version>-linux-x86_64.flatpak   Flatpak single-file bundle
-#   - coralcraft-<version>-linux-x86_64.AppImage  Single-file portable executable Linux GUI bundle
+# Build and package CoralCraft for Linux (x86_64):
+#   - coralcraft-<version>-linux-x86_64.deb       Debian/Ubuntu package (dpkg-deb)
 #   - coralcraft-<version>-linux-x86_64.tar.gz    FHS archive with install.sh
+#
+# Binaries target a glibc 2.17 baseline via `cargo zigbuild` so they run on older distributions
+# (the default host build required GLIBC_2.39). RPM, AppImage and Flatpak are produced later with
+# their real tools (nfpm, appimagetool, flatpak-builder) in CI; see docs/gaps.md R6.2.
 
 set -euo pipefail
 # shellcheck source=../env.sh
@@ -29,7 +30,7 @@ ICONS_DIR="$CARGO_TARGET_DIR/package-icons"
 python3 "$ROOT/packaging/icons.py" "$ICONS_DIR"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release -p coralcraft -p coralcraft-cli --target "$TARGET")
+  (cd "$ROOT" && cargo zigbuild --release --locked -p coralcraft -p coralcraft-cli --target "$TARGET.2.17")
 fi
 
 BIN="$CARGO_TARGET_DIR/$TARGET/release"
@@ -82,7 +83,8 @@ chmod 755 "$STAGE/DEBIAN/postinst"
 
 OUT_DEB="$DIST/$BASENAME.deb"
 rm -f "$OUT_DEB"
-dpkg-deb --build --root-owner-group "$STAGE" "$OUT_DEB" >/dev/null
+# xz, not the newer zstd default: dpkg on Debian 11 / Ubuntu 20.04 cannot read zstd members.
+dpkg-deb -Zxz --build --root-owner-group "$STAGE" "$OUT_DEB" >/dev/null
 echo "wrote $OUT_DEB"
 
 # 3. Build portable .tar.gz with install.sh
@@ -109,50 +111,4 @@ rm -f "$OUT_TAR"
 tar -C "$WORK" -czf "$OUT_TAR" "$BASENAME"
 echo "wrote $OUT_TAR"
 
-# 4. Build self-contained single-file .AppImage bundle (FUSE-free self-extracting AppDir runner)
-APPDIR="$WORK/CoralCraft.AppDir"
-mkdir -p "$APPDIR"
-cp -R "$STAGE/usr" "$APPDIR/usr"
-cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-cp "$ICONS_DIR/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
-cat >"$APPDIR/AppRun" <<'EOF'
-#!/bin/sh
-HERE="$(dirname "$(readlink -f "$0")")"
-exec "$HERE/usr/bin/coralcraft" "$@"
-EOF
-chmod 755 "$APPDIR/AppRun"
-
-APPDIR_TAR="$WORK/appdir.tar.gz"
-tar -C "$APPDIR" -czf "$APPDIR_TAR" .
-OUT_APPIMAGE="$DIST/$BASENAME.AppImage"
-cat >"$OUT_APPIMAGE" <<'EOF'
-#!/usr/bin/env bash
-# CoralCraft Self-Extracting FUSE-Free AppImage Bundle (x86_64-linux)
-set -euo pipefail
-if [ "${1:-}" = "--appimage-extract" ]; then
-  mkdir -p squashfs-root
-  ARCHIVE_LINE="$(awk '/^__APPIMAGE_ARCHIVE_BELOW__$/ {print NR + 1; exit 0; }' "$0")"
-  tail -n +"$ARCHIVE_LINE" "$0" | tar -xz -C squashfs-root
-  echo "Extracted to squashfs-root/"
-  exit 0
-fi
-TMPDIR_RUN="$(mktemp -d "${TMPDIR:-/tmp}/coralcraft-appimage.XXXXXX")"
-trap 'rm -rf "$TMPDIR_RUN"' EXIT
-ARCHIVE_LINE="$(awk '/^__APPIMAGE_ARCHIVE_BELOW__$/ {print NR + 1; exit 0; }' "$0")"
-tail -n +"$ARCHIVE_LINE" "$0" | tar -xz -C "$TMPDIR_RUN"
-exec "$TMPDIR_RUN/AppRun" "$@"
-__APPIMAGE_ARCHIVE_BELOW__
-EOF
-cat "$APPDIR_TAR" >>"$OUT_APPIMAGE"
-chmod 755 "$OUT_APPIMAGE"
-echo "wrote $OUT_APPIMAGE"
-
-# 5. Build Fedora/RHEL/openSUSE .rpm and Flatpak .flatpak bundle
-OUT_RPM="$DIST/$BASENAME.rpm"
-OUT_FLATPAK="$DIST/$BASENAME.flatpak"
-rm -f "$OUT_RPM" "$OUT_FLATPAK"
-python3 "$HERE/build_rpm_flatpak.py" "$STAGE" "$VERSION" "$OUT_RPM" "$OUT_FLATPAK"
-echo "wrote $OUT_RPM"
-echo "wrote $OUT_FLATPAK"
-
-ls -lh "$OUT_DEB" "$OUT_RPM" "$OUT_FLATPAK" "$OUT_TAR" "$OUT_APPIMAGE"
+ls -lh "$OUT_DEB" "$OUT_TAR"

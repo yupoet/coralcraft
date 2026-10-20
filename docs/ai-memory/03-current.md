@@ -4,7 +4,15 @@
 
 ## 1. Current Stage Status
 
-- **Stage**: `usable beta baseline` (**M0 through M64 are 100% delivered and passing all CI gates**).
+- **Stage**: `pre-release`. A whole-project review on 2026-10-20 (HEAD `5a7cc75`) found that the M0–M64 "delivered" claims were not backed by behavioural tests. Work now follows the **reopened queue at the top of [`docs/gaps.md`](../gaps.md)** in phase order (R0 → R8).
+- **Operator decisions (2026-10-20)**:
+  - D1: native egui UI; follow `refs/vectorcraft` overall.
+  - D2: macOS `.app.zip` first.
+  - D3: GitHub Actions CI.
+  - D4: the `v0.0.1` release and tag were deleted.
+  - D5: spec-conformant CDR/CMX writers.
+- **Phase 0 status**: README rewritten so it only describes existing features. `coralcraft-cli mcp` added. `docs/mcp.md` is generated from `tools/list` (sync test). Fake packaging removed. CI and macOS `.app.zip` release workflows added.
+- **Below this line**: the pre-review milestone changelog. Treat it as history, not verification.
 - **Completed in This Cycle**:
   1. **M8: Embedded Raster Bitmaps (`bmp ` / `CDIB`), Uniform & Fountain Transparency Compositing, Interactive Fill On-Canvas Vector Handles & 27 MCP Tools (`commit 214c9de`, `6c23adf`, `04856ec`)**.
   2. **M9: Paragraph Text Frames (`ObjectKind::ParagraphText`), CDR `txtd`/`PTXT` Round-Trip, Custom Blend Spines (`ArcLengthTable`), Prepress Marks (`PrepressOptions`) & 29 MCP Tools (`commit b656584`, `723eed0`)**.
@@ -77,5 +85,5 @@
 
 ## 3. Summary of Completed Parity Matrix
 
-All 30 items in `docs/gaps.md` and every row of `docs/file-format-parity.md` and `docs/target-app-parity.md` across M0–M14 are 100% delivered and verified.
+Superseded by the 2026-10-20 review: see the reopened queue in `docs/gaps.md`.
 

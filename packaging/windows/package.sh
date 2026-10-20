@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build and package CoralCraft for Windows 64-bit (x64 and arm64):
-#   - coralcraft-<version>-windows-x64-setup.exe       Self-extracting x64 Windows GUI installer
 #   - coralcraft-<version>-windows-x64-portable.zip    Portable x64 Windows archive
-#   - coralcraft-<version>-windows-arm64-setup.exe     Self-extracting ARM64 Windows GUI installer
 #   - coralcraft-<version>-windows-arm64-portable.zip  Portable ARM64 Windows archive
+#
+# The self-extracting setup.exe was withdrawn in the 2026-10-20 review (unchecked trailer parsing,
+# no uninstaller). An MSI built with WiX on a windows runner replaces it later (docs/gaps.md R6.2).
 
 set -euo pipefail
 # shellcheck source=../env.sh
@@ -93,30 +94,6 @@ with open(cli_exe, "rb") as f:
     assert subsys == 3, f"Expected console subsystem 3, got {subsys}"
 print(f"Verified PE32+ (0x{expected_machine:X}) headers: coralcraft.exe (GUI=2), coralcraft-cli.exe (CONSOLE=3)")
 PY
-
-  cat >"$stage/install-windows.bat" <<'EOF'
-@echo off
-echo Installing CoralCraft to %LOCALAPPDATA%\Programs\CoralCraft ...
-"%~dp0coralcraft.exe" --install
-echo Done.
-EOF
-
-  local out_setup="$DIST/coralcraft-$VERSION-windows-$win_arch-setup.exe"
-  python3 - "$stage/coralcraft.exe" "$stage/coralcraft-cli.exe" "$out_setup" <<'PY'
-import struct, sys
-
-app_path, cli_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(app_path, "rb") as f:
-    app_bytes = f.read()
-with open(cli_path, "rb") as f:
-    cli_bytes = f.read()
-
-trailer = cli_bytes + struct.pack("<Q", len(cli_bytes)) + b"CCSETUP1"
-with open(out_path, "wb") as f:
-    f.write(app_bytes)
-    f.write(trailer)
-PY
-  echo "wrote $out_setup"
 
   local out_zip="$DIST/coralcraft-$VERSION-windows-$win_arch-portable.zip"
   rm -f "$out_zip"

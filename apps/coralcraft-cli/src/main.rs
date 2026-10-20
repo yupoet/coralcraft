@@ -103,6 +103,20 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run the Model Context Protocol (MCP) server on stdio (newline-delimited JSON-RPC 2.0)
+    Mcp,
+}
+
+/// Runs the stdio MCP server until stdin reaches EOF.
+fn run_mcp() -> ExitCode {
+    let mut server = coralcraft_mcp::McpServer::new();
+    match server.serve_stdio(std::io::stdin().lock(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("mcp: stdio transport error: {err}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 fn print_human_report(file: &str, report: &ProbeReport) {
@@ -600,5 +614,6 @@ fn main() -> ExitCode {
         Command::Export { input, output, page, dpi, json } => run_export(&input, &output, page, dpi, json),
         Command::WorkspacePreview { input, output, page, width, height, json } => run_workspace_preview(&input, &output, page, width, height, json),
         Command::InspectPalette { file, json } => run_inspect_palette(&file, json),
+        Command::Mcp => run_mcp(),
     }
 }

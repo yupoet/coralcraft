@@ -4,7 +4,7 @@ pub mod gui_server;
 
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -25,13 +25,6 @@ fn main() -> ExitCode {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    if let Ok(exe_path) = env::current_exe() {
-        let exe_name = exe_path.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        if exe_name.ends_with("setup.exe") || args.iter().any(|a| a == "--install") {
-            return run_self_installer(&exe_path);
-        }
-    }
-
     let mut mcp_mode = false;
     let mut gui_mode = false;
     let mut gui_port: u16 = 0;
@@ -90,18 +83,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
     if mcp_mode {
         let mut server = McpServer::new();
-        let stdin = io::stdin();
-        let mut stdout = io::stdout().lock();
-        for line in stdin.lock().lines() {
-            let line = line.map_err(|e| e.to_string())?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let resp = server.handle_json_str(&line);
-            writeln!(stdout, "{resp}").map_err(|e| e.to_string())?;
-            stdout.flush().map_err(|e| e.to_string())?;
-        }
-        return Ok(());
+        return server.serve_stdio(io::stdin().lock(), io::stdout().lock()).map_err(|e| e.to_string());
     }
 
     let doc = if let Some(path_str) = &input_path { load_document_from_path(Path::new(path_str))? } else { Document::new_a4_portrait() };
@@ -150,52 +132,6 @@ fn load_document_from_path(path: &Path) -> Result<Document, String> {
     }
     let outcome = parse_document(&bytes).map_err(|e| format!("failed to parse `{}` as CDR/CMX: {e}", path.display()))?;
     Ok(outcome.document)
-}
-
-/// Self-extracting Windows 64-bit installer handler when invoked as `*-setup.exe` or `--install`.
-/// Trailer format: `[coralcraft.exe][coralcraft-cli.exe][cli_len: u64 LE][b"CCSETUP1"]`.
-fn run_self_installer(self_exe: &Path) -> Result<(), String> {
-    let bytes = fs::read(self_exe).map_err(|e| format!("failed to read installer executable: {e}"))?;
-    let install_root =
-        env::var("LOCALAPPDATA").map(|p| Path::new(&p).join("Programs").join("CoralCraft")).unwrap_or_else(|_| env::temp_dir().join("CoralCraft"));
-    fs::create_dir_all(&install_root).map_err(|e| format!("failed to create {}: {e}", install_root.display()))?;
-
-    let (app_bytes, cli_bytes): (&[u8], Option<&[u8]>) = if bytes.len() > 16 && &bytes[bytes.len() - 8..] == b"CCSETUP1" {
-        let mut len_buf = [0u8; 8];
-        len_buf.copy_from_slice(&bytes[bytes.len() - 16..bytes.len() - 8]);
-        let cli_len = u64::from_le_bytes(len_buf) as usize;
-        let trailer_start = bytes.len().saturating_sub(16 + cli_len);
-        if trailer_start > 0 && trailer_start + cli_len <= bytes.len() - 16 {
-            (&bytes[..trailer_start], Some(&bytes[trailer_start..trailer_start + cli_len]))
-        } else {
-            (&bytes[..], None)
-        }
-    } else {
-        (&bytes[..], None)
-    };
-
-    let installed_app = install_root.join(if cfg!(windows) { "coralcraft.exe" } else { "coralcraft" });
-    fs::write(&installed_app, app_bytes).map_err(|e| format!("failed to write {}: {e}", installed_app.display()))?;
-    if let Some(cli) = cli_bytes {
-        let installed_cli = install_root.join(if cfg!(windows) { "coralcraft-cli.exe" } else { "coralcraft-cli" });
-        fs::write(&installed_cli, cli).map_err(|e| format!("failed to write {}: {e}", installed_cli.display()))?;
-    }
-
-    if cfg!(windows) {
-        let ps_script = format!(
-            "$ws = New-Object -ComObject WScript.Shell; \
-             $sm = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\CoralCraft.lnk'; \
-             $s1 = $ws.CreateShortcut($sm); $s1.TargetPath = '{}'; $s1.Save(); \
-             $dt = Join-Path ([Environment]::GetFolderPath('Desktop')) 'CoralCraft.lnk'; \
-             $s2 = $ws.CreateShortcut($dt); $s2.TargetPath = '{}'; $s2.Save()",
-            installed_app.display(),
-            installed_app.display()
-        );
-        let _ = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &ps_script]).status();
-        let _ = std::process::Command::new(&installed_app).arg("--gui").spawn();
-    }
-    println!("Installed CoralCraft to {}", install_root.display());
-    Ok(())
 }
 
 #[cfg(test)]

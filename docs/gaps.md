@@ -3,6 +3,67 @@
 > For agent task selection: pick the first unchecked item from top to bottom. Update this file and [`ROADMAP.md`](../ROADMAP.md) as each item completes.
 > Ordering principle: vertical slices first (probe -> document model -> render -> interactive tools), horizontal breadth second.
 
+## Review 2026-10-20: reopened work queue (top priority)
+
+A whole-project review at `5a7cc75` found that many items in the "historical milestone log" below were checked without behavioural verification. The items here come first, in phase order. Operator decisions:
+- **D1:** native egui UI; follow `refs/vectorcraft` for overall architecture.
+- **D2:** ship a macOS `.app.zip` first.
+- **D3:** CI on GitHub Actions.
+- **D4:** the `v0.0.1` release was deleted.
+- **D5:** invest in spec-conformant CDR/CMX writers.
+
+**Phase 0: correct false claims**
+- [x] R0.1 Withdraw the `v0.0.1` GitHub release and tag. Rewrite `README.md` so it only describes features that exist. Add `coralcraft-cli mcp`. Generate the MCP tool list in [`docs/mcp.md`](mcp.md) from `tools/list`, with a sync test.
+- [x] R0.2 Remove the hand-rolled packaging formats that do not install: Linux `.rpm`/`.flatpak` writers, the Linux-built `.dmg` and `.pkg`, the relabelled FreeBSD binary, and the hollow Web bundle. Add GitHub Actions `ci.yml` and a macOS `.app.zip` `release.yml` modeled on VectorCraft.
+
+**Phase 1: security and crash safety**
+- [ ] R1.1 Close the GUI preview server attack surface: require a per-launch token, check Host and Origin, add timeouts and size caps. It will be removed once R2 lands.
+- [ ] R1.2 CDR parser budgets:
+  - a per-file decompression budget, with nested `cmpr` treated as opaque;
+  - bitmap pixel and byte budgets with `checked_mul`, and no invented placeholder pixels;
+  - checked arithmetic for 32-bit targets.
+- [ ] R1.3 Add `Document::validate()` (at least one page, unique IDs, recomputed `next_id`). Use it on every load and in `EditorEngine::new`. Remove `unreachable!` and unchecked page indexing, and add `catch_unwind` around MCP requests.
+- [ ] R1.4 Fix the SVG import panic on multibyte `#hex` colours. Enable `clippy::indexing_slicing` and `arithmetic_side_effects` for the parser crates. Add `overflow-checks` to the release profile.
+
+**Phase 2: native egui desktop shell (D1)**
+- [ ] R2.1 Build an `eframe`/`egui` 0.36 app shell in `coralcraft-ui-egui`, following VectorCraft's `ui-egui`: canvas, toolbox, property bar, palette, objects docker, and page tabs, driven by `EditorEngine`. Use `rfd` for file dialogs and `arboard` for the clipboard. Remove `gui_server`.
+
+**Phase 3: engine integrity**
+- [ ] R3.1 Make `execute()` transactional, returning `Result`. Failed commands must not touch history. Cap history size, and keep the ID counter outside undo snapshots.
+- [ ] R3.2 Validate the `Selection` type and use one recursive node visitor. Add a document-wide object budget.
+
+**Phase 4: MCP correctness**
+- [ ] R4.1 Protocol: notifications get no response, add `ping`, use -32600/-32602 correctly, negotiate the protocol version, and make the stdio loop byte-safe.
+- [ ] R4.2 Give every tool a typed arguments struct, with a generated `inputSchema`. Return `isError` on engine rejection. Add `delete_selection` and `translate_selection`. Add a table-driven test over all tools.
+
+**Phase 5: geometry and render correctness**
+- [ ] R5.1 Rewrite the boolean engine. Evaluate VectorCraft's `linesweeper` against a clean-room Martinez–Rueda implementation. Add area and point-membership property tests.
+- [ ] R5.2 EPS/DXF: compose group transforms, support even-odd fill, escape names (injection). PDF: image XObject, `/Pattern`, real shadings, opacity.
+- [ ] R5.3 Give raster, SVG and PDF the same gradient semantics and one shared effect-expansion stage. Rasterizer: active-edge table and bbox-limited buffers.
+- [ ] R5.4 Fix the XML palette unit round-trip (1% currently reads back as 100%).
+
+**Phase 6: packaging that installs**
+- [ ] R6.1 macOS universal `.app.zip`: `lipo`, ad-hoc `codesign`, `ditto`, plus a CLI zip. Build it in CI and verify on a real Mac. Add DMG and notarization later.
+- [ ] R6.2 Linux: glibc 2.17 baseline, with `nfpm` `.deb`/`.rpm`, a real AppImage, a Flatpak manifest, and container install tests. Windows: MSI or portable package and the GUI subsystem. FreeBSD: native build. Web: a real wasm egui build.
+
+**Phase 7: format interop and fuzzing (D5)**
+- [ ] R7.1 Rewrite the CDR `loda` and CMX writers to the Photopea/Kaitai specs. Add libcdr `cdr2raw` as a local differential oracle. Return `Err` on truncation instead of silently cutting data.
+- [ ] R7.2 Replace LLM-attributed format citations with public-spec URLs, and add one `docs/reverse` entry per decoder.
+- [ ] R7.3 Inflate: build fixed Huffman tables once, verify Adler-32/CRC-32, add fixed/dynamic test vectors. Add a `fuzz/` crate with nightly CI runs.
+
+**Phase 8: structural refactor**
+- [ ] R8.1 Split `engine/lib.rs` and `mcp/lib.rs` into modules. Deduplicate clipping, quad→cubic elevation, CRC-32, the xref writer and crop marks.
+
+## Historical milestone log (M0–M64, checked before the 2026-10-20 review)
+
+> These boxes were checked as milestones landed, but several are inaccurate. The known corrections:
+> - Item 10: there is no egui shell and no `coralcraft-desktop` crate.
+> - Item 13 / boolean ops: results are wrong for many inputs.
+> - Writer items: the output only round-trips through our own parser.
+> - "64/64 samples passing": that test cannot fail.
+>
+> Treat this list as a changelog, not as verification.
+
 - [x] 1. **[M1] RIFF + ZIP Container Walker** (Task 9 / 9.5): Synthetic fixtures green + hostile-input error paths + 10,000-iteration mutation test.
 - [x] 2. **[M1] `coralcraft-cdr::probe` Green** (Task 10): 22 unit tests green; first entry `REV-0001` in [`docs/reverse/log-format.md`](reverse/log-format.md).
 - [x] 3. **[M1] CLI `probe` Subcommand** (Task 11): Human-readable + `--json` output, exit codes (`0/2/3/4/5`), 4 integration tests green.

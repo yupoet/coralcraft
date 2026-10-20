@@ -21,7 +21,7 @@ commands:
   assets          check that every file in assets/ is attributed in ASSETS.md
   layers          enforce workspace crate dependency layering (L0..L7)
   stats           count Rust files, lines, and #[test] attributes per crate
-  package         build installable release packages for macOS (Intel & M), Windows (64-bit), and Linux (GUI)
+  package         build the release packages this host can produce natively (see packaging/package-all.sh)
 ";
 
 fn main() -> ExitCode {

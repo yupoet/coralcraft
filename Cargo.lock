@@ -136,6 +136,7 @@ dependencies = [
  "coralcraft-doc",
  "coralcraft-engine",
  "coralcraft-geom",
+ "coralcraft-mcp",
  "coralcraft-render",
  "coralcraft-ui-egui",
  "serde",

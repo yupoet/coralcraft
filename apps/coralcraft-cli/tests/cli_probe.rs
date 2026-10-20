@@ -176,3 +176,35 @@ fn cli_export_cdr_to_svg_pdf_png_and_coralcraft() {
     let _ = fs::remove_file(&out_cmx);
     let _ = fs::remove_file(&out_ws_png);
 }
+
+#[test]
+fn cli_mcp_subcommand_serves_stdio_initialize_and_tools_list() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(cli_bin()).arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin
+            .write_all(
+                concat!(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
+                    "\n",
+                    r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+                    "\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+    }
+    drop(child.stdin.take());
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "unexpected stdout: {stdout}");
+    let init: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(init["result"]["serverInfo"]["name"], "coralcraft-mcp");
+    let list: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 240);
+}

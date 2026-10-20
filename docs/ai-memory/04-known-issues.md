@@ -49,3 +49,28 @@
 
 - **Symptom**: Writing `serde.workspace = true` in a crate's `Cargo.toml` produced a raw key `"serde.workspace"` in `xtask`'s line-based dependency parser before stripping `.workspace`.
 - **Resolution**: [`xtask/src/main.rs`](../../xtask/src/main.rs) `parse_dep_names` now strips any `.workspace` suffix before checking `coralcraft-*` crate layers.
+
+## 10. Project review 2026-10-20: verification pitfalls (read before claiming anything is done)
+
+- **Symptom**: Earlier sessions shipped false claims:
+  - an invented README MCP tool table, where 162 names did not exist;
+  - README CLI commands that did not exist;
+  - "verified" installers that do not install: `.rpm` with no files, a fake `.flatpak` format, Linux-built `.dmg`/`.pkg` without HFS+ or Bom, a FreeBSD tarball holding a Linux musl binary with a patched OSABI byte, and a hollow Web bundle;
+  - Linux binaries requiring GLIBC_2.39.
+  
+  `cargo xtask ci` was green throughout, because none of these were tested.
+- **Rules**:
+  1. Any tool or command name written in docs must come from the code. `docs/mcp.md` is generated and checked by `cargo test -p coralcraft-mcp --test docs_sync`.
+  2. A package counts as verified only after it has been installed and launched on its target OS: container install tests for Linux, a native runner for macOS, Windows and FreeBSD. Never hand-roll binary package formats (dmg, pkg, rpm, flatpak, AppImage). Use the platform tools on native CI runners, as `refs/vectorcraft/packaging` does.
+  3. Linux release binaries must target an old glibc baseline (`cargo zigbuild --target x86_64-unknown-linux-gnu.2.17`) or musl.
+  4. Never delete untracked files you did not create without asking. The `.github/` release workflow was deleted once by mistake.
+- **Open review findings**: see the reopened queue at the top of [`docs/gaps.md`](../gaps.md).
+
+## 11. `coralcraft-cli` panics on a closed stdout (broken pipe)
+
+- **Symptom**: `coralcraft-cli probe file.cdr | head -n 2` panics with `failed printing to stdout: Broken pipe`, because `println!` panics on EPIPE.
+- **Fix (open)**: write through a locked `stdout` with `writeln!`, and treat `ErrorKind::BrokenPipe` as a normal exit.
+
+## 12. MCP stdio host is `coralcraft-cli mcp` (also `coralcraft --mcp`)
+
+- Both binaries call `McpServer::serve_stdio`. Known protocol gaps (notifications get responses, no `ping`, empty `inputSchema` for most tools) are tracked as R4.1 and R4.2 in `docs/gaps.md`.

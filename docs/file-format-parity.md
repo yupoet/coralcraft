@@ -1,5 +1,15 @@
 # File Format Parity Matrix
 
+> [!WARNING]
+> **Review 2026-10-20:** the percentages and "delivered" marks in this matrix predate the whole-project review and were not backed by behavioural tests. Known inaccuracies:
+> - boolean operations are wrong for many inputs;
+> - the CDR/CMX writers only round-trip through our own parser;
+> - there is no native desktop UI or egui shell;
+> - the binary `.cpl` functions are `parse_binary_cpl`/`serialize_binary_cpl`.
+>
+> The re-estimated scores are in [`ROADMAP.md`](../ROADMAP.md) and the work queue is in [`gaps.md`](gaps.md).
+
+
 CoralCraft treats CorelDRAW `.cdr` and `.cmx` as first-class citizens alongside our open native `.coralcraft` format and standard vector interchange formats.
 
 All `.cdr` and `.cmx` format knowledge is clean-room derived from public specifications:

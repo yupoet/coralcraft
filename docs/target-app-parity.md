@@ -1,5 +1,15 @@
 # Parity with CorelDRAW (Target Workflow Matrix)
 
+> [!WARNING]
+> **Review 2026-10-20:** the percentages and "delivered" marks in this matrix predate the whole-project review and were not backed by behavioural tests. Known inaccuracies:
+> - boolean operations are wrong for many inputs;
+> - the CDR/CMX writers only round-trip through our own parser;
+> - there is no native desktop UI or egui shell;
+> - the binary `.cpl` functions are `parse_binary_cpl`/`serialize_binary_cpl`.
+>
+> The re-estimated scores are in [`ROADMAP.md`](../ROADMAP.md) and the work queue is in [`gaps.md`](gaps.md).
+
+
 CoralCraft is a clean-room, open-source vector illustration and multi-page layout application targeting CorelDRAW workflow parity (and beyond). All feature descriptions and keyboard/tool conventions below are derived strictly from public documentation (CorelDRAW public user guides, published technical books, and open specifications).
 
 ## Summary Matrix

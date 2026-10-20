@@ -44,3 +44,8 @@ sha256_file() {
     shasum -a 256 "$1" | cut -d' ' -f1
   fi
 }
+
+# Emit a GitHub Actions warning (plain stderr outside Actions).
+warn() {
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::$*"; else echo "warning: $*" >&2; fi
+}

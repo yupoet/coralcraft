@@ -47,11 +47,18 @@ cargo test -p coralcraft-cdr
 ## 3. Running Applications & CLI
 
 ```bash
-# Run desktop application stub
+# Desktop binary: experimental localhost preview (unhardened; replaced by the egui shell in R2.1)
 cargo run -p coralcraft
 
-# Run CLI tool (`probe` subcommand)
+# CLI subcommands
 cargo run -p coralcraft-cli -- --help
-cargo run -p coralcraft-cli -- probe <file.cdr>
-cargo run -p coralcraft-cli -- probe --json <file.cdr>
+cargo run -p coralcraft-cli -- probe [--json] <file.cdr>
+cargo run -p coralcraft-cli -- render <in> -o out.png [--page N] [--scale S] [--transparent] [--json]
+cargo run -p coralcraft-cli -- export <in> -o out.{svg,pdf,eps,dxf,png,cdr,cmx,coralcraft} [--page N] [--dpi D] [--json]
+cargo run -p coralcraft-cli -- workspace-preview <in> -o out.png [--width W] [--height H]
+cargo run -p coralcraft-cli -- inspect-palette [--json] <palette.xml|palette.cpl>
+cargo run -p coralcraft-cli -- mcp            # MCP server on stdio (same as `coralcraft --mcp`)
+
+# Regenerate the MCP tool list in docs/mcp.md (a sync test fails if it is stale)
+CORALCRAFT_BLESS=1 cargo test -p coralcraft-mcp --test docs_sync
 ```

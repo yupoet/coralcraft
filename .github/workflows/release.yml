@@ -1,0 +1,71 @@
+# Release pipeline (modeled on refs/vectorcraft and storytold/craft-common-actions):
+# builds on native runners and uploads artifacts; a `v*` tag also creates a draft GitHub Release.
+#
+# Phase 1 ships only the macOS universal `.app.zip` (+ CLI zip), ad-hoc signed and not notarized
+# (operator decision D2). Signing and notarization use the same env as VectorCraft
+# (MACOS_SIGN_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID) once an Apple Developer ID exists.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-universal:
+    name: macOS universal .app.zip
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos-universal
+      - name: Build, ad-hoc sign and zip
+        run: packaging/macos/package.sh --arch universal
+      - name: Verify the archived app
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          ditto -x -k dist/release/coralcraft-*-macos-universal.app.zip "$tmp"
+          codesign --verify --strict --deep --verbose=2 "$tmp/CoralCraft.app"
+          lipo -info "$tmp/CoralCraft.app/Contents/MacOS/CoralCraft" | grep -q "x86_64 arm64"
+          "$tmp/CoralCraft.app/Contents/MacOS/CoralCraft" --version
+      - name: Checksums
+        run: |
+          cd dist/release
+          shasum -a 256 coralcraft-* > SHA256SUMS-macos.txt
+          cat SHA256SUMS-macos.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-macos-universal
+          path: dist/release/*
+          if-no-files-found: error
+
+  draft-release:
+    name: Draft GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos-universal]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --prerelease \
+            --title "CoralCraft ${GITHUB_REF_NAME}" \
+            --notes "Pre-release. macOS universal .app.zip, ad-hoc signed and not notarized: after unzipping, run \`xattr -dr com.apple.quarantine CoralCraft.app\`. See README for current limitations."
