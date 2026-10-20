@@ -22,12 +22,13 @@ pub mod zip;
 use serde::{Deserialize, Serialize};
 
 pub use crate::error::{ProbeError, ProbeWarning};
-pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, inflate_raw, inflate_zlib};
+pub use crate::inflate::{MAX_DECOMPRESSED_BYTES, deflate_raw, deflate_zlib, inflate_raw, inflate_zlib};
 pub use crate::parse::{
-    ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cdrx_zip, write_cdrx6_zip, write_cmx1,
+    ParseOutcome, decode_fild, decode_outl, decompress_cmpr_payload, parse_document, write_cdr7, write_cdr7_compressed, write_cdrx_zip,
+    write_cdrx6_zip, write_cmx1,
 };
 pub use crate::riff::{ChunkSummary, Endian, RiffInspection};
-pub use crate::zip::{ZipCdrRole, ZipInspection, build_stored_zip, crc32_ieee, extract_zip_primary_riff};
+pub use crate::zip::{ZipCdrRole, ZipInspection, build_stored_zip, build_zip, crc32_ieee, extract_zip_primary_riff};
 
 /// Current JSON schema version for [`ProbeReport`].
 pub const PROBE_SCHEMA_VERSION: u32 = 1;
@@ -2235,5 +2236,131 @@ mod tests {
         assert_eq!(p2_obj.name.as_deref(), Some("Page2Circle"));
         assert_eq!(p2_obj.fill, Some(FillStyle::uniform(Color::rgb8(240, 180, 30))));
         assert!((p2_obj.outline.as_ref().unwrap().width_pt.get() - 3.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn deflate_raw_and_deflate_zlib_and_write_cdr7_compressed_list_cmpr_and_zip_method8_m85() {
+        use std::collections::BTreeMap;
+
+        use coralcraft_color::{Color, PaletteSwatch};
+        use coralcraft_doc::{
+            ArrowheadKind, ChunkTag, Document, FillStyle, Layer, LayerId, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, RawChunk,
+            RawPayload, Residual,
+        };
+        use coralcraft_geom::{CornerKind, F64, Point, PolygonSpec, Rect, RectSpec, Size, Unit};
+
+        // 1. Verify deflate_raw and deflate_zlib across empty, short, highly repetitive (LZ77 back-references), and binary inputs
+        let empty_raw = crate::inflate::deflate_raw(b"");
+        assert_eq!(empty_raw, vec![0x03, 0x00], "empty RFC 1951 fixed-Huffman block must be [0x03, 0x00]");
+        assert_eq!(crate::inflate::inflate_raw(&empty_raw, 1024).unwrap(), b"");
+
+        let empty_zlib = crate::inflate::deflate_zlib(b"");
+        assert_eq!(crate::inflate::inflate_zlib(&empty_zlib, 1024).unwrap(), b"");
+
+        let short_msg = b"AB";
+        assert_eq!(crate::inflate::inflate_zlib(&crate::inflate::deflate_zlib(short_msg), 1024).unwrap(), short_msg);
+
+        let repetitive: Vec<u8> = b"CoralCraft_CleanRoom_FixedHuffman_LZ77_Block_".iter().copied().cycle().take(4096).collect();
+        let compressed_raw = crate::inflate::deflate_raw(&repetitive);
+        assert_eq!((compressed_raw[0] >> 1) & 0x03, 1, "deflate_raw must emit RFC 1951 BTYPE=01 (fixed Huffman)");
+        assert!(
+            compressed_raw.len() < repetitive.len() / 4,
+            "LZ77 back-references must compress repetitive data significantly: {} vs {}",
+            compressed_raw.len(),
+            repetitive.len()
+        );
+        assert_eq!(crate::inflate::inflate_raw(&compressed_raw, 8192).unwrap(), repetitive);
+
+        let compressed_zlib = crate::inflate::deflate_zlib(&repetitive);
+        assert_eq!(crate::inflate::inflate_zlib(&compressed_zlib, 8192).unwrap(), repetitive);
+
+        // 2. Verify write_cdr7_compressed (LIST cmpr with CPng + deflate_zlib + Part2 u32 block-size table)
+        let mut doc = Document::new_a4_portrait();
+        doc.pages[0].size = Size::new(500.0, 400.0).unwrap();
+        doc.title = "Compressed CDR7 M85".to_owned();
+        doc.units = Unit::Mm;
+        doc.palette.swatches.clear();
+        doc.palette.swatches.push(PaletteSwatch { name: "Emerald".to_owned(), color: Color::rgb8(16, 185, 129) });
+        doc.residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"d85c"),
+            flags: 0,
+            slot: 0,
+            payload: RawPayload(vec![0x85, 0x01, 0x02, 0x03]),
+            src_offset: 0,
+        });
+
+        let mut master = Layer::new_normal(LayerId(90), "Master Border");
+        let m_rect = RectSpec::sharp(Rect::new(10.0, 10.0, 490.0, 390.0).unwrap());
+        master.objects.push(ObjectNode::new(
+            ObjectId(91),
+            Some("MasterFrame".to_owned()),
+            ObjectKind::Rect(m_rect),
+            None,
+            Some(OutlineStyle::with_width(Color::rgb8(80, 80, 80), F64::new(1.0).unwrap())),
+        ));
+        doc.master_layers.clear();
+        doc.master_layers.push(master);
+
+        doc.pages[0].name = "Compressed Page 1".to_owned();
+        let poly = PolygonSpec::star(Point::new(250.0, 200.0).unwrap(), 120.0, 55.0, 7, 15.0).unwrap();
+        let mut outl = OutlineStyle::with_width(Color::rgb8(20, 40, 160), F64::new(2.5).unwrap());
+        outl.dash_pattern = vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()];
+        outl.start_arrow = ArrowheadKind::Circle;
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            ObjectId(1),
+            Some("Star7".to_owned()),
+            ObjectKind::Polygon(poly),
+            Some(FillStyle::uniform(Color::rgb8(240, 100, 40))),
+            Some(outl),
+        ));
+
+        let mut layer2 = Layer::new_normal(LayerId(20), "Page 2 Layer");
+        let r2 = RectSpec::uniform(Rect::new(50.0, 50.0, 250.0, 180.0).unwrap(), 12.0, CornerKind::Round).unwrap();
+        layer2.objects.push(ObjectNode::new(
+            ObjectId(2),
+            Some("Page2Rounded".to_owned()),
+            ObjectKind::Rect(r2),
+            Some(FillStyle::uniform(Color::rgb8(40, 160, 220))),
+            None,
+        ));
+        doc.pages.push(Page {
+            id: PageId(2),
+            name: "Compressed Page 2".to_owned(),
+            size: Size::new(500.0, 400.0).unwrap(),
+            bleed: F64::new(6.0).unwrap(),
+            background: None,
+            layers: vec![layer2],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        });
+
+        let cmpr_cdr = crate::write_cdr7_compressed(&doc).expect("write_cdr7_compressed M85");
+        let rep = probe(&cmpr_cdr).expect("probe compressed CDR7");
+        assert!(matches!(rep.container, CdrContainer::Riff { ref version, .. } if version.effective_version == Some(700)));
+        assert!(
+            rep.chunks.iter().any(|c| c.fourcc == "LIST" && c.list_type.as_deref() == Some("cmpr")),
+            "write_cdr7_compressed must emit a top-level LIST cmpr chunk"
+        );
+
+        let parsed = parse_document(&cmpr_cdr).expect("parse_document compressed CDR7");
+        assert!(parsed.parse_warnings.is_empty(), "unexpected warnings: {:?}", parsed.parse_warnings);
+        let pdoc = &parsed.document;
+        assert_eq!(pdoc.title, "Compressed CDR7 M85");
+        assert_eq!(pdoc.units, Unit::Mm);
+        assert_eq!(pdoc.palette.swatches.len(), 1);
+        assert_eq!(pdoc.master_layers.len(), 1);
+        assert_eq!(pdoc.residual.chunks.len(), 1);
+        assert_eq!(pdoc.pages.len(), 2);
+        assert_eq!(pdoc.pages[0].name, "Compressed Page 1");
+        assert_eq!(pdoc.pages[0].layers[0].objects[0].name.as_deref(), Some("Star7"));
+        assert_eq!(pdoc.pages[1].name, "Compressed Page 2");
+        assert_eq!(pdoc.pages[1].layers[0].objects[0].name.as_deref(), Some("Page2Rounded"));
+
+        // 3. Verify write_cdrx6_zip uses Deflate (method = 8) on auxiliary streams while keeping mimetype & root.dat method = 0
+        let x6_zip = crate::write_cdrx6_zip(&doc).expect("write_cdrx6_zip with method=8 auxiliary streams");
+        let x6_parsed = parse_document(&x6_zip).expect("parse_document X6 ZIP with method=8 auxiliary streams");
+        assert_eq!(x6_parsed.document.pages.len(), 2);
+        assert_eq!(x6_parsed.document.pages[0].layers[0].objects[0].name.as_deref(), Some("Star7"));
+        assert_eq!(x6_parsed.document.pages[1].layers[0].objects[0].name.as_deref(), Some("Page2Rounded"));
     }
 }

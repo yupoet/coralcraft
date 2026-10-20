@@ -18,6 +18,11 @@ pub(crate) fn fmt_num(v: f64) -> String {
     if s.is_empty() || s == "-0" { "0".to_owned() } else { s.to_owned() }
 }
 
+/// Formats an exact shortest-roundtrip IEEE-754 decimal for lossless `data-*` metadata attributes.
+fn fmt_num_exact(v: f64) -> String {
+    if !v.is_finite() || v == 0.0 { "0".to_owned() } else { v.to_string() }
+}
+
 /// Escapes special XML characters (`&`, `<`, `>`, `"`, `'`) and strips illegal XML 1.0 C0 control characters.
 fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -225,7 +230,7 @@ fn emit_pattern_def(defs: &mut String, id_suffix: &str, fill: &FillStyle) {
 }
 
 fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox: Rect) {
-    let FillStyle::Fountain { geometry, stops, .. } = fill else {
+    let FillStyle::Fountain { geometry, blend_mode, stops } = fill else {
         return;
     };
     let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
@@ -234,6 +239,23 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
     let bh = bbox.height().max(1e-6);
     let hw = 0.5 * bw;
     let hh = 0.5 * bh;
+
+    let blend_str = match blend_mode {
+        coralcraft_color::FountainBlendMode::RainbowCw => "rainbow-cw",
+        coralcraft_color::FountainBlendMode::RainbowCcw => "rainbow-ccw",
+        coralcraft_color::FountainBlendMode::Direct => "direct",
+    };
+
+    let emit_stops = |defs: &mut String| {
+        for stop in stops {
+            let mid_attr = if (stop.midpoint.get() - 0.5).abs() > 1e-9 {
+                format!(" data-midpoint=\"{}\"", fmt_num_exact(stop.midpoint.get()))
+            } else {
+                String::new()
+            };
+            let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"{mid_attr}/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
+        }
+    };
 
     match *geometry {
         FountainGeometry::Linear { angle_deg, edge_pad } => {
@@ -245,17 +267,16 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
             let y1 = cy - sin_a * half_span;
             let x2 = cx + cos_a * half_span;
             let y2 = cy + sin_a * half_span;
+            let geom_meta = format!("linear,{},{}", fmt_num_exact(angle_deg.get()), fmt_num_exact(edge_pad.get()));
             let _ = writeln!(
                 defs,
-                "    <linearGradient id=\"grad-{id_suffix}\" gradientUnits=\"userSpaceOnUse\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">",
+                "    <linearGradient id=\"grad-{id_suffix}\" data-blend-mode=\"{blend_str}\" data-fountain-geom=\"{geom_meta}\" gradientUnits=\"userSpaceOnUse\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\">",
                 fmt_num(x1),
                 fmt_num(y1),
                 fmt_num(x2),
                 fmt_num(y2)
             );
-            for stop in stops {
-                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
-            }
+            emit_stops(defs);
             defs.push_str("    </linearGradient>\n");
         }
         FountainGeometry::Radial { center_x, center_y, radius, focal_x, focal_y } => {
@@ -264,52 +285,62 @@ fn emit_fountain_def(defs: &mut String, id_suffix: &str, fill: &FillStyle, bbox:
             let rfx = bbox.x0.get() + focal_x.get() * bw;
             let rfy = bbox.y0.get() + focal_y.get() * bh;
             let r = (radius.get() * bw.hypot(bh)).max(1e-6);
+            let geom_meta = format!(
+                "radial,{},{},{},{},{}",
+                fmt_num_exact(center_x.get()),
+                fmt_num_exact(center_y.get()),
+                fmt_num_exact(radius.get()),
+                fmt_num_exact(focal_x.get()),
+                fmt_num_exact(focal_y.get())
+            );
             let _ = writeln!(
                 defs,
-                "    <radialGradient id=\"grad-{id_suffix}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\" fx=\"{}\" fy=\"{}\">",
+                "    <radialGradient id=\"grad-{id_suffix}\" data-blend-mode=\"{blend_str}\" data-fountain-geom=\"{geom_meta}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\" fx=\"{}\" fy=\"{}\">",
                 fmt_num(rcx),
                 fmt_num(rcy),
                 fmt_num(r),
                 fmt_num(rfx),
                 fmt_num(rfy)
             );
-            for stop in stops {
-                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
-            }
+            emit_stops(defs);
             defs.push_str("    </radialGradient>\n");
         }
         FountainGeometry::Conical { center_x, center_y, angle_deg } => {
             let rcx = bbox.x0.get() + center_x.get() * bw;
             let rcy = bbox.y0.get() + center_y.get() * bh;
             let r = (0.5 * bw.hypot(bh)).max(1e-6);
+            let geom_meta = format!("conical,{},{},{}", fmt_num_exact(center_x.get()), fmt_num_exact(center_y.get()), fmt_num_exact(angle_deg.get()));
             let _ = writeln!(
                 defs,
-                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"conical\" data-angle=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
+                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"conical\" data-angle=\"{}\" data-blend-mode=\"{blend_str}\" data-fountain-geom=\"{geom_meta}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
                 fmt_num(angle_deg.get()),
                 fmt_num(rcx),
                 fmt_num(rcy),
                 fmt_num(r),
             );
-            for stop in stops {
-                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
-            }
+            emit_stops(defs);
             defs.push_str("    </radialGradient>\n");
         }
         FountainGeometry::Square { center_x, center_y, radius, angle_deg } => {
             let rcx = bbox.x0.get() + center_x.get() * bw;
             let rcy = bbox.y0.get() + center_y.get() * bh;
             let r = (radius.get() * bw.hypot(bh)).max(1e-6);
+            let geom_meta = format!(
+                "square,{},{},{},{}",
+                fmt_num_exact(center_x.get()),
+                fmt_num_exact(center_y.get()),
+                fmt_num_exact(radius.get()),
+                fmt_num_exact(angle_deg.get())
+            );
             let _ = writeln!(
                 defs,
-                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"square\" data-angle=\"{}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
+                "    <radialGradient id=\"grad-{id_suffix}\" data-fountain-type=\"square\" data-angle=\"{}\" data-blend-mode=\"{blend_str}\" data-fountain-geom=\"{geom_meta}\" gradientUnits=\"userSpaceOnUse\" cx=\"{}\" cy=\"{}\" r=\"{}\">",
                 fmt_num(angle_deg.get()),
                 fmt_num(rcx),
                 fmt_num(rcy),
                 fmt_num(r),
             );
-            for stop in stops {
-                let _ = writeln!(defs, "      <stop offset=\"{}\" stop-color=\"{}\"/>", fmt_num(stop.offset.get()), svg_hex_color(&stop.color));
-            }
+            emit_stops(defs);
             defs.push_str("    </radialGradient>\n");
         }
     }
@@ -507,10 +538,14 @@ fn emit_svg_node(defs: &mut String, body: &mut String, node: &ObjectNode, indent
             let h = (*pixel_height as f64 * 72.0 / dpi_y.get().max(1.0)).max(1.0);
             let png_bytes = crate::png::encode_raw_png_rgba(*pixel_width, *pixel_height, rgba_pixels)?;
             let b64 = crate::png::base64_encode(&png_bytes);
+            let name_attr = node.name.as_deref().map(|n| format!(" data-name=\"{}\"", escape_xml(n))).unwrap_or_default();
+            let locked_attr = if node.locked { " data-locked=\"1\"" } else { "" };
             let _ = writeln!(
                 body,
-                "{indent}<image id=\"obj-{}\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"{transform_attr}{opacity_attr}/>",
+                "{indent}<image id=\"obj-{}\"{name_attr}{locked_attr} data-dpi-x=\"{}\" data-dpi-y=\"{}\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{}\"{transform_attr}{opacity_attr}/>",
                 node.id.0,
+                fmt_num_exact(dpi_x.get()),
+                fmt_num_exact(dpi_y.get()),
                 fmt_num(w),
                 fmt_num(h),
                 b64
@@ -550,14 +585,14 @@ fn format_shape_meta_attr(node: &ObjectNode) -> String {
             });
             format!(
                 " data-rect=\"{},{},{},{},{},{},{},{},{},{},{},{}\"",
-                fmt_num(rs.rect.x0.get()),
-                fmt_num(rs.rect.y0.get()),
-                fmt_num(rs.rect.x1.get()),
-                fmt_num(rs.rect.y1.get()),
-                fmt_num(rs.radii[0].get()),
-                fmt_num(rs.radii[1].get()),
-                fmt_num(rs.radii[2].get()),
-                fmt_num(rs.radii[3].get()),
+                fmt_num_exact(rs.rect.x0.get()),
+                fmt_num_exact(rs.rect.y0.get()),
+                fmt_num_exact(rs.rect.x1.get()),
+                fmt_num_exact(rs.rect.y1.get()),
+                fmt_num_exact(rs.radii[0].get()),
+                fmt_num_exact(rs.radii[1].get()),
+                fmt_num_exact(rs.radii[2].get()),
+                fmt_num_exact(rs.radii[3].get()),
                 ck[0],
                 ck[1],
                 ck[2],
@@ -572,14 +607,36 @@ fn format_shape_meta_attr(node: &ObjectNode) -> String {
             };
             format!(
                 " data-ellipse=\"{},{},{},{},{},{},{}\"",
-                fmt_num(es.rect.x0.get()),
-                fmt_num(es.rect.y0.get()),
-                fmt_num(es.rect.x1.get()),
-                fmt_num(es.rect.y1.get()),
-                fmt_num(es.start_deg.get()),
-                fmt_num(es.end_deg.get()),
+                fmt_num_exact(es.rect.x0.get()),
+                fmt_num_exact(es.rect.y0.get()),
+                fmt_num_exact(es.rect.x1.get()),
+                fmt_num_exact(es.rect.y1.get()),
+                fmt_num_exact(es.start_deg.get()),
+                fmt_num_exact(es.end_deg.get()),
                 mode_code
             )
+        }
+        ObjectKind::Polygon(ps) => {
+            if let Some(ir) = ps.inner_radius {
+                format!(
+                    " data-polygon=\"{},{},{},{},{},{}\"",
+                    fmt_num_exact(ps.center.x.get()),
+                    fmt_num_exact(ps.center.y.get()),
+                    fmt_num_exact(ps.radius.get()),
+                    ps.points,
+                    fmt_num_exact(ps.rotation_deg.get()),
+                    fmt_num_exact(ir.get())
+                )
+            } else {
+                format!(
+                    " data-polygon=\"{},{},{},{},{}\"",
+                    fmt_num_exact(ps.center.x.get()),
+                    fmt_num_exact(ps.center.y.get()),
+                    fmt_num_exact(ps.radius.get()),
+                    ps.points,
+                    fmt_num_exact(ps.rotation_deg.get())
+                )
+            }
         }
         _ => String::new(),
     }

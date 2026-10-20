@@ -1705,4 +1705,127 @@ mod tests {
         let orig_pt = t0.then(rot).unwrap().then(t1).unwrap().apply_point(Point::new(140.0, 260.0).unwrap()).unwrap();
         assert!((probe_pt.x.get() - orig_pt.x.get()).abs() < 1e-3 && (probe_pt.y.get() - orig_pt.y.get()).abs() < 1e-3);
     }
+
+    #[test]
+    fn export_svg_and_import_svg_roundtrip_polygon_fountain_midpoint_blend_and_bitmap_dpi_m85() {
+        use coralcraft_color::{Color, FountainBlendMode, FountainStop};
+        use coralcraft_doc::{Document, FillStyle, FountainGeometry, ObjectId, ObjectKind, ObjectNode, TransparencyStyle};
+        use coralcraft_geom::{Affine2, F64, Point, PolygonSpec, Rect, RectSpec, Size};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.pages.first_mut().unwrap().size = Size::new(500.0, 400.0).unwrap();
+        let objs = &mut doc.pages.first_mut().unwrap().layers.first_mut().unwrap().objects;
+
+        // 1. Star PolygonSpec with non-zero rotation and radial fountain fill (custom midpoint, focal offset, RainbowCw blend)
+        let star = PolygonSpec::star(Point::new(150.0, 140.0).unwrap(), 75.25, 32.5, 6, 22.5).unwrap();
+        let fountain_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Radial {
+                center_x: F64::new(0.4).unwrap(),
+                center_y: F64::new(0.6).unwrap(),
+                radius: F64::new(0.75).unwrap(),
+                focal_x: F64::new(0.25).unwrap(),
+                focal_y: F64::new(0.35).unwrap(),
+            },
+            blend_mode: FountainBlendMode::RainbowCw,
+            stops: vec![
+                FountainStop::with_midpoint(0.0, 0.3, Color::rgb8(0xFF, 0x20, 0x40)).unwrap(),
+                FountainStop::with_midpoint(0.65, 0.7, Color::rgb8(0x20, 0xFF, 0x80)).unwrap(),
+                FountainStop::with_midpoint(1.0, 0.5, Color::rgb8(0x20, 0x40, 0xFF)).unwrap(),
+            ],
+        };
+        let mut star_node =
+            ObjectNode::new(ObjectId(1), Some("RainbowStar".to_owned()), ObjectKind::Polygon(star), Some(fountain_fill.clone()), None);
+        star_node.transparency = Some(TransparencyStyle::Fountain {
+            geometry: FountainGeometry::Linear { angle_deg: F64::new(37.5).unwrap(), edge_pad: F64::new(0.15).unwrap() },
+            blend_mode: FountainBlendMode::RainbowCcw,
+            stops: vec![
+                FountainStop::with_midpoint(0.0, 0.25, Color::rgb8(255, 255, 255)).unwrap(),
+                FountainStop::with_midpoint(1.0, 0.5, Color::rgb8(0, 0, 0)).unwrap(),
+            ],
+        });
+        objs.push(star_node);
+
+        // 2. Regular PolygonSpec with Square fountain fill
+        let reg_poly = PolygonSpec::regular(Point::new(340.0, 140.0).unwrap(), 60.0, 5, 0.0).unwrap();
+        let sq_fill = FillStyle::Fountain {
+            geometry: FountainGeometry::Square {
+                center_x: F64::new(0.35).unwrap(),
+                center_y: F64::new(0.65).unwrap(),
+                radius: F64::new(0.8).unwrap(),
+                angle_deg: F64::new(15.0).unwrap(),
+            },
+            blend_mode: FountainBlendMode::Direct,
+            stops: vec![
+                FountainStop::new(0.0, Color::rgb8(0xAA, 0x33, 0x11)).unwrap(),
+                FountainStop::new(1.0, Color::rgb8(0x11, 0x88, 0xCC)).unwrap(),
+            ],
+        };
+        objs.push(ObjectNode::new(ObjectId(2), Some("RegularPentagon".to_owned()), ObjectKind::Polygon(reg_poly), Some(sq_fill.clone()), None));
+
+        // 3. High-DPI Bitmap (300x150 DPI) with name, locked=true, and translation transform
+        let mut bmp_node = ObjectNode::new(
+            ObjectId(3),
+            Some("HiDpiPhoto".to_owned()),
+            ObjectKind::Bitmap {
+                pixel_width: 4,
+                pixel_height: 2,
+                dpi_x: F64::new(300.0).unwrap(),
+                dpi_y: F64::new(150.0).unwrap(),
+                rgba_pixels: [255, 0, 0, 255].repeat(8),
+            },
+            None,
+            None,
+        );
+        bmp_node.locked = true;
+        bmp_node.transform = Affine2::translation(60.0, 260.0).unwrap();
+        let _ = RectSpec::sharp(Rect::new(0.0, 0.0, 10.0, 10.0).unwrap());
+        objs.push(bmp_node);
+
+        let svg = crate::export_svg(&doc, 0).expect("export_svg M85");
+        assert!(svg.contains("data-polygon="), "export_svg must emit data-polygon metadata: {svg}");
+        assert!(svg.contains("data-fountain-geom="), "export_svg must emit data-fountain-geom metadata: {svg}");
+        assert!(svg.contains("data-blend-mode=\"rainbow-cw\""), "export_svg must emit data-blend-mode: {svg}");
+        assert!(svg.contains("data-midpoint=\"0.3\""), "export_svg must emit stop data-midpoint: {svg}");
+        assert!(svg.contains("data-dpi-x=\"300\""), "export_svg must emit bitmap data-dpi-x: {svg}");
+
+        let reimported = coralcraft_doc::import_svg(&svg).expect("import_svg M85");
+        let robjs = &reimported.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(robjs.len(), 3);
+
+        let r0 = robjs.first().unwrap();
+        assert_eq!(r0.name.as_deref(), Some("RainbowStar"));
+        assert_eq!(r0.kind, ObjectKind::Polygon(star));
+        assert_eq!(r0.fill, Some(fountain_fill));
+        assert_eq!(
+            r0.transparency,
+            Some(TransparencyStyle::Fountain {
+                geometry: FountainGeometry::Linear { angle_deg: F64::new(37.5).unwrap(), edge_pad: F64::new(0.15).unwrap() },
+                blend_mode: FountainBlendMode::RainbowCcw,
+                stops: vec![
+                    FountainStop::with_midpoint(0.0, 0.25, Color::rgb8(255, 255, 255)).unwrap(),
+                    FountainStop::with_midpoint(1.0, 0.5, Color::rgb8(0, 0, 0)).unwrap(),
+                ],
+            })
+        );
+
+        let r1 = robjs.get(1).unwrap();
+        assert_eq!(r1.name.as_deref(), Some("RegularPentagon"));
+        assert_eq!(r1.kind, ObjectKind::Polygon(reg_poly));
+        assert_eq!(r1.fill, Some(sq_fill));
+
+        let r2 = robjs.get(2).unwrap();
+        assert_eq!(r2.name.as_deref(), Some("HiDpiPhoto"));
+        assert!(r2.locked);
+        assert_eq!(r2.transform, Affine2::translation(60.0, 260.0).unwrap());
+        assert_eq!(
+            r2.kind,
+            ObjectKind::Bitmap {
+                pixel_width: 4,
+                pixel_height: 2,
+                dpi_x: F64::new(300.0).unwrap(),
+                dpi_y: F64::new(150.0).unwrap(),
+                rgba_pixels: [255, 0, 0, 255].repeat(8),
+            }
+        );
+    }
 }

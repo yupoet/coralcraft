@@ -473,12 +473,11 @@ fn walk_chunk_sequence(
     out
 }
 
-fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Document, warnings: &mut Vec<String>) {
-    // Pass 1: Collect document-level configuration (`mcfg`), fills (`fild`), and outlines (`outl`)
-    collect_resources_recursive(chunks, ctx, warnings);
-
+fn process_doc_level_chunks(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Document, warnings: &mut Vec<String>) {
     for (slot_idx, ch) in chunks.iter().enumerate() {
-        if &ch.fourcc == b"dmta" {
+        if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"cmpr") {
+            process_doc_level_chunks(&ch.children, ctx, doc, warnings);
+        } else if &ch.fourcc == b"dmta" {
             decode_dmta(&ch.payload, ctx.endian, doc);
         } else if &ch.fourcc == b"plte" {
             if let Ok(pal) = coralcraft_color::load_palette_bytes(&ch.payload) {
@@ -539,6 +538,12 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
             });
         }
     }
+}
+
+fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Document, warnings: &mut Vec<String>) {
+    // Pass 1: Collect document-level configuration (`mcfg`), fills (`fild`), and outlines (`outl`)
+    collect_resources_recursive(chunks, ctx, warnings);
+    process_doc_level_chunks(chunks, ctx, doc, warnings);
 
     // Pass 2: For CMX containers (`cont` + `page` instruction streams), decode CMX `page` chunks directly;
     // otherwise extract `LIST page` chunks into `Page`s.
@@ -3406,6 +3411,97 @@ pub fn write_cdrx6_zip(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     write_cdrx6_zip_document(doc)
 }
 
+/// Writes a [`Document`] into a clean-room `RIFF....CDR7` container whose body chunks (`dmta`, `plte`,
+/// `LIST mstr`, `LIST page`, `fild`, `outl`, and `doc.residual`) are packed inside a compressed
+/// `LIST cmpr` container (`16-byte header` + `"CPng\x01\x00\x04\x00"` + `deflate_zlib(part1)` +
+/// `"CPng\x01\x00\x04\x00"` + `deflate_zlib(part2_block_sizes)`).
+pub fn write_cdr7_compressed(doc: &Document) -> Result<Vec<u8>, ProbeError> {
+    let raw_cdr7 = write_cdr7(doc)?;
+    // Skip the 12-byte `RIFF....CDR7` header and 10-byte top-level `vrsn` chunk (`vrsn` + 4B size=2 + 2B 700u16)
+    let raw_body = raw_cdr7.get(22..).unwrap_or_default();
+    let mut block_sizes: Vec<u32> = Vec::new();
+    let part1_raw = convert_riff_body_to_cmpr_indexed(raw_body, &mut block_sizes);
+    let mut part2_raw = Vec::with_capacity(block_sizes.len().saturating_mul(4));
+    for &sz in &block_sizes {
+        part2_raw.extend_from_slice(&sz.to_le_bytes());
+    }
+
+    let mut cpng1 = b"CPng\x01\x00\x04\x00".to_vec();
+    cpng1.extend_from_slice(&crate::inflate::deflate_zlib(&part1_raw));
+    let mut cpng2 = b"CPng\x01\x00\x04\x00".to_vec();
+    cpng2.extend_from_slice(&crate::inflate::deflate_zlib(&part2_raw));
+
+    let c1 = cpng1.len() as u32;
+    let u1 = part1_raw.len() as u32;
+    let c2 = cpng2.len() as u32;
+    let u2 = part2_raw.len() as u32;
+
+    let mut cmpr_body = Vec::with_capacity(16usize.saturating_add(cpng1.len()).saturating_add(cpng2.len()));
+    cmpr_body.extend_from_slice(&c1.to_le_bytes());
+    cmpr_body.extend_from_slice(&u1.to_le_bytes());
+    cmpr_body.extend_from_slice(&c2.to_le_bytes());
+    cmpr_body.extend_from_slice(&u2.to_le_bytes());
+    cmpr_body.extend_from_slice(&cpng1);
+    cmpr_body.extend_from_slice(&cpng2);
+
+    let mut top_body = Vec::new();
+    append_riff_chunk(&mut top_body, *b"vrsn", &700u16.to_le_bytes());
+    append_riff_list(&mut top_body, *b"cmpr", &cmpr_body);
+
+    let riff_size = 4u32.saturating_add(top_body.len() as u32);
+    let mut out = Vec::with_capacity(8usize.saturating_add(riff_size as usize));
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&riff_size.to_le_bytes());
+    out.extend_from_slice(b"CDR7");
+    out.extend_from_slice(&top_body);
+    Ok(out)
+}
+
+fn convert_riff_body_to_cmpr_indexed(slice: &[u8], block_sizes: &mut Vec<u32>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(slice.len());
+    let mut cursor = 0usize;
+    while cursor.saturating_add(8) <= slice.len() {
+        let Some(fourcc) = slice.get(cursor..cursor.saturating_add(4)).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
+            break;
+        };
+        let chunk_size = read_u32(Endian::Little, slice, cursor.saturating_add(4)).unwrap_or(0) as usize;
+        let payload_start = cursor.saturating_add(8);
+        let payload_end = payload_start.saturating_add(chunk_size).min(slice.len());
+        let payload = slice.get(payload_start..payload_end).unwrap_or_default();
+
+        let size_u32 = payload.len() as u32;
+        let block_idx = if let Some(existing) = block_sizes.iter().position(|&v| v == size_u32) {
+            existing as u32
+        } else {
+            let idx = block_sizes.len() as u32;
+            block_sizes.push(size_u32);
+            idx
+        };
+
+        out.extend_from_slice(&fourcc);
+        out.extend_from_slice(&block_idx.to_le_bytes());
+
+        if &fourcc == b"LIST" && payload.len() >= 4 {
+            let list_type = payload.get(0..4).unwrap_or_default();
+            out.extend_from_slice(list_type);
+            if list_type != b"cmpr" && list_type != b"stlt" {
+                let indexed_children = convert_riff_body_to_cmpr_indexed(payload.get(4..).unwrap_or_default(), block_sizes);
+                out.extend_from_slice(&indexed_children);
+            } else {
+                out.extend_from_slice(payload.get(4..).unwrap_or_default());
+            }
+        } else {
+            out.extend_from_slice(payload);
+        }
+
+        if payload.len() & 1 == 1 {
+            out.push(0);
+        }
+        cursor = payload_end.saturating_add(chunk_size & 1);
+    }
+    out
+}
+
 fn pt_to_cdr_i32(pt: f64) -> i32 {
     let cdr = coralcraft_geom::Pt::new(pt).and_then(coralcraft_geom::Pt::try_to_cdr_ticks).map(|u| u.0).unwrap_or(0);
     cdr.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
@@ -4333,14 +4429,14 @@ fn write_cdrx6_zip_document(doc: &Document) -> Result<Vec<u8>, ProbeError> {
     root_riff.extend_from_slice(&root_body);
 
     let mimetype: &[u8] = b"application/x-vnd.corel.zcf.draw.document+zip";
-    let mut zip_entries: Vec<(&str, &[u8])> = Vec::with_capacity(3usize.saturating_add(page_entries.len()));
-    zip_entries.push(("mimetype", mimetype));
-    zip_entries.push(("content/root.dat", &root_riff));
-    zip_entries.push(("content/dataFileList.dat", data_file_list.as_bytes()));
+    let mut zip_entries: Vec<(&str, u16, &[u8])> = Vec::with_capacity(3usize.saturating_add(page_entries.len()));
+    zip_entries.push(("mimetype", 0, mimetype));
+    zip_entries.push(("content/root.dat", 0, &root_riff));
+    zip_entries.push(("content/dataFileList.dat", 8, data_file_list.as_bytes()));
     for (p_name, p_bytes) in &page_entries {
-        zip_entries.push((p_name.as_str(), p_bytes.as_slice()));
+        zip_entries.push((p_name.as_str(), 8, p_bytes.as_slice()));
     }
-    Ok(crate::zip::build_stored_zip(&zip_entries))
+    Ok(crate::zip::build_zip(&zip_entries))
 }
 
 struct CmxWriteTables {

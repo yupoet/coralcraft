@@ -462,47 +462,65 @@ pub fn crc32_ieee(bytes: &[u8]) -> u32 {
 /// Builds a clean-room Stored (`method = 0`) ZIP archive in memory from `(entry_name, data)` pairs,
 /// populating Local File Headers, Central Directory headers, IEEE 802.3 CRC-32 checksums, and EOCD.
 pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let with_method: Vec<(&str, u16, &[u8])> = entries.iter().map(|&(name, data)| (name, 0u16, data)).collect();
+    build_zip(&with_method)
+}
+
+/// Builds a clean-room ZIP archive in memory from `(entry_name, method, uncompressed_data)` triples,
+/// supporting `method = 0` (`Stored`) and `method = 8` (`Deflate` via `crate::inflate::deflate_raw`),
+/// with IEEE 802.3 CRC-32 computed over the uncompressed payload.
+pub fn build_zip(entries: &[(&str, u16, &[u8])]) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut offsets = Vec::with_capacity(entries.len());
     let mut crcs = Vec::with_capacity(entries.len());
+    let mut comp_sizes = Vec::with_capacity(entries.len());
+    let mut actual_methods = Vec::with_capacity(entries.len());
 
-    for &(name, data) in entries {
+    for &(name, method, data) in entries {
         offsets.push(buf.len() as u32);
         let crc = crc32_ieee(data);
         crcs.push(crc);
         let name_bytes = name.as_bytes();
-        let len = data.len() as u32;
+        let uncomp_len = data.len() as u32;
+        let (eff_method, payload_cow): (u16, std::borrow::Cow<'_, [u8]>) =
+            if method == 8 { (8u16, std::borrow::Cow::Owned(crate::inflate::deflate_raw(data))) } else { (0u16, std::borrow::Cow::Borrowed(data)) };
+        let comp_len = payload_cow.len() as u32;
+        comp_sizes.push(comp_len);
+        actual_methods.push(eff_method);
+
         buf.extend_from_slice(b"PK\x03\x04");
         buf.extend_from_slice(&20u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes()); // Stored (0)
+        buf.extend_from_slice(&eff_method.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&crc.to_le_bytes());
-        buf.extend_from_slice(&len.to_le_bytes());
-        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&comp_len.to_le_bytes());
+        buf.extend_from_slice(&uncomp_len.to_le_bytes());
         buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(name_bytes);
-        buf.extend_from_slice(data);
+        buf.extend_from_slice(&payload_cow);
     }
 
     let cd_offset = buf.len() as u32;
-    for (idx, &(name, data)) in entries.iter().enumerate() {
+    for (idx, &(name, _, data)) in entries.iter().enumerate() {
         let name_bytes = name.as_bytes();
-        let len = data.len() as u32;
+        let uncomp_len = data.len() as u32;
+        let comp_len = comp_sizes.get(idx).copied().unwrap_or(uncomp_len);
+        let eff_method = actual_methods.get(idx).copied().unwrap_or(0);
         let crc = crcs.get(idx).copied().unwrap_or(0);
         let local_off = offsets.get(idx).copied().unwrap_or(0);
         buf.extend_from_slice(b"PK\x01\x02");
         buf.extend_from_slice(&20u16.to_le_bytes());
         buf.extend_from_slice(&20u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
-        buf.extend_from_slice(&0u16.to_le_bytes()); // Stored (0)
+        buf.extend_from_slice(&eff_method.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&crc.to_le_bytes());
-        buf.extend_from_slice(&len.to_le_bytes());
-        buf.extend_from_slice(&len.to_le_bytes());
+        buf.extend_from_slice(&comp_len.to_le_bytes());
+        buf.extend_from_slice(&uncomp_len.to_le_bytes());
         buf.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());
         buf.extend_from_slice(&0u16.to_le_bytes());

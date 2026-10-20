@@ -431,6 +431,196 @@ pub fn inflate_zlib(bytes: &[u8], max_output_len: usize) -> Result<Vec<u8>, Prob
     Ok(out)
 }
 
+struct BitWriter {
+    buf: Vec<u8>,
+    bit_buf: u64,
+    bit_count: u8,
+}
+
+impl BitWriter {
+    fn with_capacity(cap: usize) -> Self {
+        Self { buf: Vec::with_capacity(cap), bit_buf: 0, bit_count: 0 }
+    }
+
+    fn write_bits(&mut self, val: u32, n: u8) {
+        if n == 0 {
+            return;
+        }
+        let mask = 1u64.wrapping_shl(u32::from(n)).wrapping_sub(1);
+        self.bit_buf |= (u64::from(val) & mask).wrapping_shl(u32::from(self.bit_count));
+        self.bit_count = self.bit_count.saturating_add(n);
+        while self.bit_count >= 8 {
+            self.buf.push((self.bit_buf & 0xFF) as u8);
+            self.bit_buf = self.bit_buf.wrapping_shr(8);
+            self.bit_count = self.bit_count.saturating_sub(8);
+        }
+    }
+
+    fn write_huffman_msb(&mut self, canonical_code: u16, len: u8) {
+        let mut rev = 0u32;
+        let mut c = u32::from(canonical_code);
+        for _ in 0..len {
+            rev = (rev << 1) | (c & 1);
+            c >>= 1;
+        }
+        self.write_bits(rev, len);
+    }
+
+    fn flush_zero_pad(&mut self) {
+        if self.bit_count > 0 {
+            self.buf.push((self.bit_buf & 0xFF) as u8);
+            self.bit_buf = 0;
+            self.bit_count = 0;
+        }
+    }
+}
+
+fn emit_fixed_lit_len(writer: &mut BitWriter, sym: u16) {
+    match sym {
+        0..=143 => writer.write_huffman_msb(0x30u16.saturating_add(sym), 8),
+        144..=255 => writer.write_huffman_msb(0x190u16.saturating_add(sym.saturating_sub(144)), 9),
+        256..=279 => writer.write_huffman_msb(sym.saturating_sub(256), 7),
+        _ => writer.write_huffman_msb(0xC0u16.saturating_add(sym.saturating_sub(280)), 8),
+    }
+}
+
+fn emit_fixed_length(writer: &mut BitWriter, length: usize) {
+    if length >= 258 {
+        emit_fixed_lit_len(writer, 285);
+        return;
+    }
+    let mut idx = 0usize;
+    for (i, &base) in LENGTH_BASE.iter().take(28).enumerate() {
+        if usize::from(base) <= length {
+            idx = i;
+        } else {
+            break;
+        }
+    }
+    let sym = (257usize.saturating_add(idx)) as u16;
+    emit_fixed_lit_len(writer, sym);
+    let extra_bits = LENGTH_EXTRA.get(idx).copied().unwrap_or(0);
+    let base_len = usize::from(LENGTH_BASE.get(idx).copied().unwrap_or(3));
+    writer.write_bits(length.saturating_sub(base_len) as u32, extra_bits);
+}
+
+fn emit_fixed_distance(writer: &mut BitWriter, distance: usize) {
+    let mut idx = 0usize;
+    for (i, &base) in DIST_BASE.iter().enumerate() {
+        if usize::from(base) <= distance {
+            idx = i;
+        } else {
+            break;
+        }
+    }
+    writer.write_huffman_msb(idx as u16, 5);
+    let extra_bits = DIST_EXTRA.get(idx).copied().unwrap_or(0);
+    let base_dist = usize::from(DIST_BASE.get(idx).copied().unwrap_or(1));
+    writer.write_bits(distance.saturating_sub(base_dist) as u32, extra_bits);
+}
+
+fn hash3(bytes: &[u8], pos: usize) -> usize {
+    let b0 = u32::from(bytes.get(pos).copied().unwrap_or(0));
+    let b1 = u32::from(bytes.get(pos.saturating_add(1)).copied().unwrap_or(0));
+    let b2 = u32::from(bytes.get(pos.saturating_add(2)).copied().unwrap_or(0));
+    (b0.wrapping_mul(2_654_435_761) ^ b1.wrapping_mul(40_503) ^ b2) as usize & 4095
+}
+
+/// Compresses `bytes` into a raw RFC 1951 DEFLATE stream using fixed Huffman codes (`BTYPE = 01`)
+/// and LZ77 sliding-window back-references (`length 3..=258`, `distance 1..=32768`).
+pub fn deflate_raw(bytes: &[u8]) -> Vec<u8> {
+    let mut writer = BitWriter::with_capacity(bytes.len().saturating_div(2).saturating_add(8));
+    // Single final fixed-Huffman block: BFINAL = 1 (1 bit), BTYPE = 01 (2 bits LSB-first)
+    writer.write_bits(1, 1);
+    writer.write_bits(1, 2);
+
+    if bytes.is_empty() {
+        emit_fixed_lit_len(&mut writer, 256);
+        writer.flush_zero_pad();
+        return writer.buf;
+    }
+
+    let mut head = vec![usize::MAX; 4096];
+    let mut prev = vec![usize::MAX; bytes.len()];
+    let mut pos = 0usize;
+
+    while pos < bytes.len() {
+        let mut best_len = 0usize;
+        let mut best_dist = 0usize;
+
+        if pos.saturating_add(3) <= bytes.len() {
+            let h = hash3(bytes, pos);
+            let mut cand = head.get(h).copied().unwrap_or(usize::MAX);
+            if let Some(p_slot) = prev.get_mut(pos) {
+                *p_slot = cand;
+            }
+            if let Some(h_slot) = head.get_mut(h) {
+                *h_slot = pos;
+            }
+
+            let max_match = bytes.len().saturating_sub(pos).min(258);
+            let mut steps = 0usize;
+            while cand != usize::MAX && steps < 32 {
+                let dist = pos.saturating_sub(cand);
+                if dist == 0 || dist > 32_768 {
+                    break;
+                }
+                let mut mlen = 0usize;
+                while mlen < max_match && bytes.get(cand.saturating_add(mlen)) == bytes.get(pos.saturating_add(mlen)) {
+                    mlen = mlen.saturating_add(1);
+                }
+                if mlen >= 3 && mlen > best_len {
+                    best_len = mlen;
+                    best_dist = dist;
+                    if best_len == 258 {
+                        break;
+                    }
+                }
+                cand = prev.get(cand).copied().unwrap_or(usize::MAX);
+                steps = steps.saturating_add(1);
+            }
+        }
+
+        if best_len >= 3 {
+            emit_fixed_length(&mut writer, best_len);
+            emit_fixed_distance(&mut writer, best_dist);
+            let end_pos = pos.saturating_add(best_len);
+            let mut adv = pos.saturating_add(1);
+            while adv < end_pos {
+                if adv.saturating_add(3) <= bytes.len() {
+                    let h = hash3(bytes, adv);
+                    if let Some(p_slot) = prev.get_mut(adv) {
+                        *p_slot = head.get(h).copied().unwrap_or(usize::MAX);
+                    }
+                    if let Some(h_slot) = head.get_mut(h) {
+                        *h_slot = adv;
+                    }
+                }
+                adv = adv.saturating_add(1);
+            }
+            pos = end_pos;
+        } else {
+            let lit = u16::from(bytes.get(pos).copied().unwrap_or(0));
+            emit_fixed_lit_len(&mut writer, lit);
+            pos = pos.saturating_add(1);
+        }
+    }
+
+    emit_fixed_lit_len(&mut writer, 256);
+    writer.flush_zero_pad();
+    writer.buf
+}
+
+/// Compresses `bytes` into an RFC 1950 ZLIB stream (`0x78 0x9C` header + `deflate_raw` + big-endian `Adler-32`).
+pub fn deflate_zlib(bytes: &[u8]) -> Vec<u8> {
+    let raw = deflate_raw(bytes);
+    let mut out = Vec::with_capacity(raw.len().saturating_add(6));
+    out.extend_from_slice(&[0x78, 0x9C]);
+    out.extend_from_slice(&raw);
+    out.extend_from_slice(&adler32(bytes).to_be_bytes());
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 mod tests {

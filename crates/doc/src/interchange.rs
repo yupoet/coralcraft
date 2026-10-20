@@ -61,7 +61,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     let mut svg_gradients: BTreeMap<String, FillStyle> = BTreeMap::new();
     let mut svg_masks: BTreeMap<String, TransparencyStyle> = BTreeMap::new();
     let mut svg_clip_paths: BTreeMap<String, Path> = BTreeMap::new();
-    let mut active_grad: Option<(String, FountainGeometry, Vec<FountainStop>)> = None;
+    let mut active_grad: Option<(String, FountainGeometry, FountainBlendMode, Vec<FountainStop>)> = None;
     let mut passthrough_g_stack: Vec<bool> = Vec::new();
     let mut group_stack: Vec<SvgGroupFrame> = Vec::new();
     let mut saw_layer_group = false;
@@ -85,41 +85,51 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
 
         if tag_slice.starts_with("<linearGradient ") || tag_slice.starts_with("<linearGradient\t") {
             if let Some(id) = extract_attr_str(tag_slice, "id") {
-                let x1 = parse_svg_coord_or_pct(tag_slice, "x1").unwrap_or(0.0);
-                let y1 = parse_svg_coord_or_pct(tag_slice, "y1").unwrap_or(0.0);
-                let x2 = parse_svg_coord_or_pct(tag_slice, "x2").unwrap_or(1.0);
-                let y2 = parse_svg_coord_or_pct(tag_slice, "y2").unwrap_or(0.0);
-                let dx = x2 - x1;
-                let dy = y2 - y1;
-                let ang = if dx.abs() < 1e-9 && dy.abs() < 1e-9 { 0.0 } else { dy.atan2(dx).to_degrees() };
-                let geom = FountainGeometry::Linear { angle_deg: F64::new(ang).unwrap_or(F64::ZERO), edge_pad: F64::ZERO };
+                let blend = parse_svg_fountain_blend_mode(tag_slice);
+                let geom = if let Some(exact_geom) = parse_svg_fountain_geom(tag_slice) {
+                    exact_geom
+                } else {
+                    let x1 = parse_svg_coord_or_pct(tag_slice, "x1").unwrap_or(0.0);
+                    let y1 = parse_svg_coord_or_pct(tag_slice, "y1").unwrap_or(0.0);
+                    let x2 = parse_svg_coord_or_pct(tag_slice, "x2").unwrap_or(1.0);
+                    let y2 = parse_svg_coord_or_pct(tag_slice, "y2").unwrap_or(0.0);
+                    let dx = x2 - x1;
+                    let dy = y2 - y1;
+                    let ang = if dx.abs() < 1e-9 && dy.abs() < 1e-9 { 0.0 } else { dy.atan2(dx).to_degrees() };
+                    FountainGeometry::Linear { angle_deg: F64::new(ang).unwrap_or(F64::ZERO), edge_pad: F64::ZERO }
+                };
                 if !tag_slice.ends_with("/>") {
-                    active_grad = Some((id.to_owned(), geom, Vec::new()));
+                    active_grad = Some((id.to_owned(), geom, blend, Vec::new()));
                 }
             }
             continue;
         } else if tag_slice.starts_with("<radialGradient ") || tag_slice.starts_with("<radialGradient\t") {
             if let Some(id) = extract_attr_str(tag_slice, "id") {
-                let ftype = extract_attr_str(tag_slice, "data-fountain-type").unwrap_or("radial");
-                let ang = F64::new(parse_attr_f64(tag_slice, "data-angle").unwrap_or(0.0)).unwrap_or(F64::ZERO);
-                let geom = match ftype {
-                    "conical" => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: ang },
-                    "square" => FountainGeometry::Square { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, angle_deg: ang },
-                    _ => FountainGeometry::Radial {
-                        center_x: F64::HALF,
-                        center_y: F64::HALF,
-                        radius: F64::HALF,
-                        focal_x: F64::HALF,
-                        focal_y: F64::HALF,
-                    },
+                let blend = parse_svg_fountain_blend_mode(tag_slice);
+                let geom = if let Some(exact_geom) = parse_svg_fountain_geom(tag_slice) {
+                    exact_geom
+                } else {
+                    let ftype = extract_attr_str(tag_slice, "data-fountain-type").unwrap_or("radial");
+                    let ang = F64::new(parse_attr_f64(tag_slice, "data-angle").unwrap_or(0.0)).unwrap_or(F64::ZERO);
+                    match ftype {
+                        "conical" => FountainGeometry::Conical { center_x: F64::HALF, center_y: F64::HALF, angle_deg: ang },
+                        "square" => FountainGeometry::Square { center_x: F64::HALF, center_y: F64::HALF, radius: F64::HALF, angle_deg: ang },
+                        _ => FountainGeometry::Radial {
+                            center_x: F64::HALF,
+                            center_y: F64::HALF,
+                            radius: F64::HALF,
+                            focal_x: F64::HALF,
+                            focal_y: F64::HALF,
+                        },
+                    }
                 };
                 if !tag_slice.ends_with("/>") {
-                    active_grad = Some((id.to_owned(), geom, Vec::new()));
+                    active_grad = Some((id.to_owned(), geom, blend, Vec::new()));
                 }
             }
             continue;
         } else if (tag_slice.starts_with("<stop ") || tag_slice.starts_with("<stop\t"))
-            && let Some((_, _, stops)) = &mut active_grad
+            && let Some((_, _, _, stops)) = &mut active_grad
         {
             let off_raw = extract_style_or_attr_str(tag_slice, "offset").unwrap_or("0");
             let off_t = off_raw.trim();
@@ -130,12 +140,13 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             }
             .clamp(0.0, 1.0);
             let col = extract_style_or_attr_str(tag_slice, "stop-color").and_then(|s| parse_svg_color(s.trim())).unwrap_or(Color::BLACK);
-            if let Ok(st) = FountainStop::new(off_val, col) {
+            let mid_val = parse_attr_f64(tag_slice, "data-midpoint").unwrap_or(0.5).clamp(0.01, 0.99);
+            if let Ok(st) = FountainStop::with_midpoint(off_val, mid_val, col) {
                 stops.push(st);
             }
             continue;
         } else if tag_slice.starts_with("</linearGradient>") || tag_slice.starts_with("</radialGradient>") {
-            if let Some((id, geometry, mut stops)) = active_grad.take() {
+            if let Some((id, geometry, blend_mode, mut stops)) = active_grad.take() {
                 if stops.len() == 1
                     && let Some(first) = stops.first().cloned()
                     && let Ok(dup) = FountainStop::new(1.0, first.color)
@@ -143,7 +154,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     stops.push(dup);
                 }
                 if stops.len() >= 2 {
-                    svg_gradients.insert(id, FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops });
+                    svg_gradients.insert(id, FillStyle::Fountain { geometry, blend_mode, stops });
                 }
             }
             continue;
@@ -415,7 +426,12 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
             && let Some((node_kind, img_tf)) = parse_svg_image_tag(tag_slice)
         {
             let obj_id = doc.allocate_object_id();
-            let mut node = ObjectNode::new(obj_id, Some("SVG Image".to_owned()), node_kind, None, None);
+            let name = extract_attr_str(tag_slice, "data-name").map(unescape_svg_xml).or_else(|| Some("SVG Image".to_owned()));
+            let mut node = ObjectNode::new(obj_id, name, node_kind, None, None);
+            node.locked = extract_attr_str(tag_slice, "data-locked") == Some("1");
+            if let Some(op) = parse_style_or_attr_f64(tag_slice, "opacity").and_then(|v| F64::new(v.clamp(0.0, 1.0)).ok()) {
+                node.opacity = op;
+            }
             node.transform = img_tf;
             node.transparency = parse_svg_transparency(tag_slice, &svg_masks);
             push_svg_node(&mut doc, &mut group_stack, node);
@@ -1078,6 +1094,43 @@ fn parse_svg_arrow_kind(s: &str) -> Option<ArrowheadKind> {
     }
 }
 
+fn parse_svg_fountain_blend_mode(tag_slice: &str) -> FountainBlendMode {
+    match extract_attr_str(tag_slice, "data-blend-mode").map(str::trim) {
+        Some("rainbow-cw") => FountainBlendMode::RainbowCw,
+        Some("rainbow-ccw") => FountainBlendMode::RainbowCcw,
+        _ => FountainBlendMode::Direct,
+    }
+}
+
+fn parse_svg_fountain_geom(tag_slice: &str) -> Option<FountainGeometry> {
+    let raw = extract_attr_str(tag_slice, "data-fountain-geom")?.trim();
+    let mut parts = raw.split(',');
+    let kind = parts.next()?.trim();
+    let nums: Vec<f64> = parts.filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+    match (kind, nums.as_slice()) {
+        ("linear", [angle_deg, edge_pad]) => {
+            Some(FountainGeometry::Linear { angle_deg: F64::new(*angle_deg).ok()?, edge_pad: F64::new(*edge_pad).ok()? })
+        }
+        ("radial", [cx, cy, r, fx, fy]) => Some(FountainGeometry::Radial {
+            center_x: F64::new(*cx).ok()?,
+            center_y: F64::new(*cy).ok()?,
+            radius: F64::new(*r).ok()?,
+            focal_x: F64::new(*fx).ok()?,
+            focal_y: F64::new(*fy).ok()?,
+        }),
+        ("conical", [cx, cy, angle_deg]) => {
+            Some(FountainGeometry::Conical { center_x: F64::new(*cx).ok()?, center_y: F64::new(*cy).ok()?, angle_deg: F64::new(*angle_deg).ok()? })
+        }
+        ("square", [cx, cy, r, angle_deg]) => Some(FountainGeometry::Square {
+            center_x: F64::new(*cx).ok()?,
+            center_y: F64::new(*cy).ok()?,
+            radius: F64::new(*r).ok()?,
+            angle_deg: F64::new(*angle_deg).ok()?,
+        }),
+        _ => None,
+    }
+}
+
 fn parse_svg_shape_meta_kind(tag_slice: &str) -> Option<ObjectKind> {
     if let Some(el_str) = extract_attr_str(tag_slice, "data-ellipse") {
         let nums: Vec<f64> = el_str.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
@@ -1117,6 +1170,36 @@ fn parse_svg_shape_meta_kind(tag_slice: &str) -> Option<ObjectKind> {
                 ],
                 corner_kinds: [map_ck(*k0), map_ck(*k1), map_ck(*k2), map_ck(*k3)],
             }));
+        }
+    }
+    if let Some(poly_str) = extract_attr_str(tag_slice, "data-polygon") {
+        let nums: Vec<f64> = poly_str.split(',').filter_map(|t| t.trim().parse::<f64>().ok()).collect();
+        match nums.as_slice() {
+            [cx, cy, rad, pts, rot] if *pts >= 3.0 && *rad > 0.0 => {
+                if let (Ok(center), Ok(radius), Ok(rotation_deg)) = (Point::new(*cx, *cy), F64::new(*rad), F64::new(*rot)) {
+                    return Some(ObjectKind::Polygon(coralcraft_geom::PolygonSpec {
+                        center,
+                        radius,
+                        inner_radius: None,
+                        points: (*pts).round().clamp(3.0, 500.0) as u32,
+                        rotation_deg,
+                    }));
+                }
+            }
+            [cx, cy, rad, pts, rot, ir] if *pts >= 3.0 && *rad > 0.0 && *ir > 0.0 => {
+                if let (Ok(center), Ok(radius), Ok(inner_radius), Ok(rotation_deg)) =
+                    (Point::new(*cx, *cy), F64::new(*rad), F64::new(*ir), F64::new(*rot))
+                {
+                    return Some(ObjectKind::Polygon(coralcraft_geom::PolygonSpec {
+                        center,
+                        radius,
+                        inner_radius: Some(inner_radius),
+                        points: (*pts).round().clamp(3.0, 500.0) as u32,
+                        rotation_deg,
+                    }));
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -1295,8 +1378,10 @@ fn parse_svg_image_tag(tag_slice: &str) -> Option<(ObjectKind, Affine2)> {
     let b64_str = href.trim().strip_prefix("data:image/png;base64,")?;
     let png_bytes = decode_svg_base64(b64_str)?;
     let (pixel_width, pixel_height, rgba_pixels) = decode_stored_png_rgba_bytes(&png_bytes)?;
-    let dpi_x = F64::new(((f64::from(pixel_width) * 72.0) / w).max(1.0)).ok()?;
-    let dpi_y = F64::new(((f64::from(pixel_height) * 72.0) / h).max(1.0)).ok()?;
+    let dpi_x_val = parse_attr_f64(tag_slice, "data-dpi-x").filter(|&v| v > 0.0).unwrap_or_else(|| ((f64::from(pixel_width) * 72.0) / w).max(1.0));
+    let dpi_y_val = parse_attr_f64(tag_slice, "data-dpi-y").filter(|&v| v > 0.0).unwrap_or_else(|| ((f64::from(pixel_height) * 72.0) / h).max(1.0));
+    let dpi_x = F64::new(dpi_x_val).ok()?;
+    let dpi_y = F64::new(dpi_y_val).ok()?;
     let x = parse_attr_f64(tag_slice, "x").unwrap_or(0.0);
     let y = parse_attr_f64(tag_slice, "y").unwrap_or(0.0);
     let base_tf = parse_svg_transform(tag_slice);
