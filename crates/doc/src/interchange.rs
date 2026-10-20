@@ -4,7 +4,7 @@
 use coralcraft_color::Color;
 use coralcraft_geom::{Affine2, CornerKind, EllipseSpec, F64, FillRule, Path, Point, Rect, RectSpec, Size};
 
-use crate::model::{DocError, Document, ObjectKind, ObjectNode};
+use crate::model::{DocError, Document, ObjectKind, ObjectNode, TransparencyStyle};
 use crate::style::{FillStyle, LineCap, LineJoin, OutlineStyle};
 
 fn push_to_first_layer(doc: &mut Document, node: ObjectNode) {
@@ -30,8 +30,13 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
     }
     let mut doc = Document::new_a4_portrait();
     if let Some(svg_open) = extract_tag_slice(svg_str, "<svg") {
-        let w = parse_attr_f64(svg_open, "width").unwrap_or(595.276);
-        let h = parse_attr_f64(svg_open, "height").unwrap_or(841.89);
+        let vb_dims = extract_attr_str(svg_open, "viewBox").and_then(|vb| {
+            let nums: Vec<f64> =
+                vb.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
+            if let [_, _, vw, vh] = nums.as_slice() { Some((*vw, *vh)) } else { None }
+        });
+        let w = parse_attr_f64(svg_open, "width").or_else(|| vb_dims.map(|(vw, _)| vw)).unwrap_or(595.276);
+        let h = parse_attr_f64(svg_open, "height").or_else(|| vb_dims.map(|(_, vh)| vh)).unwrap_or(841.89);
         if let Ok(sz) = Size::new(w.max(1.0), h.max(1.0))
             && let Some(page) = doc.pages.first_mut()
         {
@@ -123,6 +128,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Rect".to_owned()), ObjectKind::Rect(rspec), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
+                node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<ellipse ") || tag_slice.starts_with("<circle ") {
@@ -138,6 +144,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Ellipse".to_owned()), ObjectKind::Ellipse(EllipseSpec::full(r)), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
+                node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<line ") || tag_slice.starts_with("<line\t") {
@@ -152,6 +159,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     let obj_id = doc.allocate_object_id();
                     let mut node = ObjectNode::new(obj_id, Some("SVG Line".to_owned()), ObjectKind::Path(path), fill, outline);
                     node.transform = parse_svg_transform(tag_slice);
+                    node.transparency = parse_svg_transparency(tag_slice);
                     push_svg_node(&mut doc, &mut group_stack, node);
                 }
             }
@@ -172,6 +180,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let label = if is_polygon { "SVG Polygon" } else { "SVG Polyline" };
                 let mut node = ObjectNode::new(obj_id, Some(label.to_owned()), ObjectKind::Path(path), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
+                node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<path ") {
@@ -190,6 +199,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                 let obj_id = doc.allocate_object_id();
                 let mut node = ObjectNode::new(obj_id, Some("SVG Path".to_owned()), ObjectKind::Path(path), fill, outline);
                 node.transform = parse_svg_transform(tag_slice);
+                node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         } else if tag_slice.starts_with("<text ")
@@ -213,6 +223,7 @@ pub fn import_svg(svg_str: &str) -> Result<Document, DocError> {
                     outline,
                 );
                 node.transform = parse_svg_transform(tag_slice);
+                node.transparency = parse_svg_transparency(tag_slice);
                 push_svg_node(&mut doc, &mut group_stack, node);
             }
         }
@@ -314,7 +325,7 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
     for ch in d_str.chars() {
-        if ch.is_ascii_alphabetic() {
+        if ch.is_ascii_alphabetic() && ch != 'e' && ch != 'E' {
             if !cur.is_empty() {
                 tokens.push(std::mem::take(&mut cur));
             }
@@ -323,6 +334,9 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
             if !cur.is_empty() {
                 tokens.push(std::mem::take(&mut cur));
             }
+        } else if (ch == '-' || ch == '+') && !cur.is_empty() && !cur.ends_with('e') && !cur.ends_with('E') {
+            tokens.push(std::mem::take(&mut cur));
+            cur.push(ch);
         } else {
             cur.push(ch);
         }
@@ -338,8 +352,18 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
     let mut sub_y = 0.0_f64;
     let mut last_cubic_c2: Option<(f64, f64)> = None;
     let mut last_quad_ctrl: Option<(f64, f64)> = None;
-    while let Some(cmd) = tokens.get(i).map(String::as_str) {
-        i = i.saturating_add(1);
+    let mut active_cmd = "";
+    while i < tokens.len() {
+        let tok = tokens.get(i).map(String::as_str).unwrap_or_default();
+        if matches!(tok, "M" | "m" | "L" | "l" | "H" | "h" | "V" | "v" | "Q" | "q" | "T" | "t" | "C" | "c" | "S" | "s" | "A" | "a" | "Z" | "z") {
+            active_cmd = tok;
+            i = i.saturating_add(1);
+        } else if active_cmd.is_empty() {
+            i = i.saturating_add(1);
+            continue;
+        }
+        let cmd = active_cmd;
+        let prev_i = i;
         if !matches!(cmd, "C" | "c" | "S" | "s") {
             last_cubic_c2 = None;
         }
@@ -358,6 +382,7 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                     sub_y = ny;
                 }
                 i = i.saturating_add(2);
+                active_cmd = if cmd == "m" { "l" } else { "L" };
             }
             "L" | "l" if i.saturating_add(1) < tokens.len() => {
                 if let (Some(dx), Some(dy)) = (token_f64(&tokens, i), token_f64(&tokens, i.saturating_add(1))) {
@@ -487,8 +512,14 @@ fn parse_svg_path_d(d_str: &str) -> Result<Path, coralcraft_geom::GeomError> {
                 path.close()?;
                 cur_x = sub_x;
                 cur_y = sub_y;
+                active_cmd = "";
             }
-            _ => {}
+            _ => {
+                i = i.saturating_add(1);
+            }
+        }
+        if i == prev_i && !active_cmd.is_empty() {
+            i = i.saturating_add(1);
         }
     }
     Ok(path)
@@ -596,20 +627,28 @@ fn parse_svg_points_path(pts_str: &str, close: bool) -> Option<Path> {
 
 fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineStyle>) {
     let fill = match extract_style_or_attr_str(tag_slice, "fill") {
-        Some("none") | None => None,
-        Some(hex) => parse_hex_color(hex.trim()).map(FillStyle::uniform),
+        Some("none") | Some("transparent") | None => None,
+        Some(raw) => parse_svg_color(raw.trim()).map(FillStyle::uniform),
     };
     let outline = match extract_style_or_attr_str(tag_slice, "stroke") {
-        Some("none") | None => None,
-        Some(hex) => parse_hex_color(hex.trim()).map(OutlineStyle::hairline),
+        Some("none") | Some("transparent") | None => None,
+        Some(raw) => parse_svg_color(raw.trim()).map(OutlineStyle::hairline),
     };
-    let mut outline = if fill.is_none() && outline.is_none() { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
+    let has_explicit_stroke_none = matches!(extract_style_or_attr_str(tag_slice, "stroke").map(str::trim), Some("none" | "transparent"));
+    let mut outline =
+        if fill.is_none() && outline.is_none() && !has_explicit_stroke_none { Some(OutlineStyle::hairline(Color::BLACK)) } else { outline };
     if let Some(st) = &mut outline {
         if let Some(w) = parse_style_or_attr_f64(tag_slice, "stroke-width")
             && w > 0.0
             && let Ok(w_f64) = F64::new(w)
         {
             st.width_pt = w_f64;
+        }
+        if let Some(ml) = parse_style_or_attr_f64(tag_slice, "stroke-miterlimit")
+            && ml >= 1.0
+            && let Ok(ml_f64) = F64::new(ml)
+        {
+            st.miter_limit = ml_f64;
         }
         if let Some(cap_str) = extract_style_or_attr_str(tag_slice, "stroke-linecap") {
             st.cap = match cap_str.trim() {
@@ -648,6 +687,26 @@ fn parse_svg_style_attrs(tag_slice: &str) -> (Option<FillStyle>, Option<OutlineS
     (fill, outline)
 }
 
+fn parse_svg_transparency(tag_slice: &str) -> Option<TransparencyStyle> {
+    let parse_op = |s: &str| -> Option<f64> {
+        let t = s.trim();
+        if let Some(pct) = t.strip_suffix('%') {
+            Some((pct.trim().parse::<f64>().ok()? / 100.0).clamp(0.0, 1.0))
+        } else {
+            Some(t.parse::<f64>().ok()?.clamp(0.0, 1.0))
+        }
+    };
+    let op1 = extract_style_or_attr_str(tag_slice, "opacity").and_then(parse_op);
+    let op2 = extract_style_or_attr_str(tag_slice, "fill-opacity").and_then(parse_op);
+    let combined = match (op1, op2) {
+        (Some(a), Some(b)) => Some(a * b),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }?;
+    if combined < 1.0 - 1e-6 { Some(TransparencyStyle::Uniform { opacity: F64::new(combined).ok()? }) } else { None }
+}
+
 fn extract_style_or_attr_str<'a>(tag: &'a str, prop: &str) -> Option<&'a str> {
     if let Some(v) = extract_attr_str(tag, prop) {
         return Some(v);
@@ -669,15 +728,61 @@ fn parse_style_or_attr_f64(tag: &str, prop: &str) -> Option<f64> {
     trimmed.parse::<f64>().ok()
 }
 
-fn parse_hex_color(s: &str) -> Option<Color> {
-    let hex = s.strip_prefix('#')?;
-    // Byte-wise parsing: `len()` counts bytes, so slicing a non-ASCII string could split a char.
-    if let [r1, r2, g1, g2, b1, b2] = hex.as_bytes() {
+fn parse_svg_color(s: &str) -> Option<Color> {
+    if let Some(hex) = s.strip_prefix('#') {
         let digit = |c: &u8| char::from(*c).to_digit(16).and_then(|d| u8::try_from(d).ok());
-        let byte = |hi: &u8, lo: &u8| Some((digit(hi)? << 4) | digit(lo)?);
-        Some(Color::rgb8(byte(r1, r2)?, byte(g1, g2)?, byte(b1, b2)?))
-    } else {
-        None
+        // Byte-wise parsing: `len()` counts bytes, so slicing a non-ASCII string could split a char.
+        if let [r1, r2, g1, g2, b1, b2] = hex.as_bytes() {
+            let byte = |hi: &u8, lo: &u8| Some((digit(hi)? << 4) | digit(lo)?);
+            return Some(Color::rgb8(byte(r1, r2)?, byte(g1, g2)?, byte(b1, b2)?));
+        } else if let [r, g, b] = hex.as_bytes() {
+            let dbl = |n: &u8| {
+                let d = digit(n)?;
+                Some((d << 4) | d)
+            };
+            return Some(Color::rgb8(dbl(r)?, dbl(g)?, dbl(b)?));
+        }
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("rgb(")
+        && let Some(inner) = rest.strip_suffix(')')
+    {
+        let parse_ch = |tok: &str| -> Option<u8> {
+            let t = tok.trim();
+            if let Some(pct) = t.strip_suffix('%') {
+                let p = pct.trim().parse::<f64>().ok()?.clamp(0.0, 100.0);
+                Some((p * 255.0 / 100.0).round() as u8)
+            } else {
+                let v = t.parse::<f64>().ok()?.round().clamp(0.0, 255.0);
+                Some(v as u8)
+            }
+        };
+        let chs: Vec<u8> = inner.split(|c: char| c.is_whitespace() || c == ',').filter(|t| !t.is_empty()).filter_map(parse_ch).collect();
+        if let [r, g, b, ..] = chs.as_slice() {
+            return Some(Color::rgb8(*r, *g, *b));
+        }
+        return None;
+    }
+    match lower.as_str() {
+        "black" => Some(Color::rgb8(0, 0, 0)),
+        "white" => Some(Color::rgb8(255, 255, 255)),
+        "red" => Some(Color::rgb8(255, 0, 0)),
+        "lime" => Some(Color::rgb8(0, 255, 0)),
+        "green" => Some(Color::rgb8(0, 128, 0)),
+        "blue" => Some(Color::rgb8(0, 0, 255)),
+        "yellow" => Some(Color::rgb8(255, 255, 0)),
+        "cyan" | "aqua" => Some(Color::rgb8(0, 255, 255)),
+        "magenta" | "fuchsia" => Some(Color::rgb8(255, 0, 255)),
+        "silver" => Some(Color::rgb8(192, 192, 192)),
+        "gray" | "grey" => Some(Color::rgb8(128, 128, 128)),
+        "maroon" => Some(Color::rgb8(128, 0, 0)),
+        "olive" => Some(Color::rgb8(128, 128, 0)),
+        "purple" => Some(Color::rgb8(128, 0, 128)),
+        "teal" => Some(Color::rgb8(0, 128, 128)),
+        "navy" => Some(Color::rgb8(0, 0, 128)),
+        "orange" => Some(Color::rgb8(255, 165, 0)),
+        _ => None,
     }
 }
 
@@ -928,49 +1033,135 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
         } else if code == 0 && val == "LWPOLYLINE" {
             p = p.saturating_add(1);
             let mut closed = false;
-            let mut xs = Vec::new();
-            let mut ys = Vec::new();
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut verts: Vec<(f64, f64, f64)> = Vec::new();
             while let Some(&(c, v)) = pairs.get(p) {
                 if c == 0 {
                     break;
                 }
                 match c {
                     70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
-                    10 => xs.push(v.parse::<f64>().unwrap_or(0.0)),
-                    20 => ys.push(v.parse::<f64>().unwrap_or(0.0)),
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    10 => verts.push((v.parse::<f64>().unwrap_or(0.0), 0.0, 0.0)),
+                    20 => {
+                        if let Some(last) = verts.last_mut() {
+                            last.1 = v.parse::<f64>().unwrap_or(0.0);
+                        }
+                    }
+                    42 => {
+                        if let Some(last) = verts.last_mut() {
+                            last.2 = v.parse::<f64>().unwrap_or(0.0);
+                        }
+                    }
                     _ => {}
                 }
                 p = p.saturating_add(1);
             }
-            let mut coords = xs.into_iter().zip(ys);
-            if let Some((fx, fy)) = coords.next()
+            if verts.len() >= 2
+                && let Some(&(fx, fy, _)) = verts.first()
                 && let Ok(first) = Point::new(fx, page_h - fy)
             {
                 let mut path = Path::new();
                 let _ = path.move_to(first);
-                let mut count = 1usize;
-                for (kx, ky) in coords {
-                    if let Ok(pt) = Point::new(kx, page_h - ky) {
+                let seg_count = if closed { verts.len() } else { verts.len().saturating_sub(1) };
+                for idx_v in 0..seg_count {
+                    let Some(&(x1_dxf, y1_dxf, bulge_dxf)) = verts.get(idx_v) else {
+                        break;
+                    };
+                    let next_idx = if idx_v.saturating_add(1) < verts.len() { idx_v.saturating_add(1) } else { 0 };
+                    let Some(&(x2_dxf, y2_dxf, _)) = verts.get(next_idx) else {
+                        break;
+                    };
+                    let x1 = x1_dxf;
+                    let y1 = page_h - y1_dxf;
+                    let x2 = x2_dxf;
+                    let y2 = page_h - y2_dxf;
+                    if bulge_dxf.abs() > 1e-6 {
+                        let b = -bulge_dxf;
+                        let d = (x2 - x1).hypot(y2 - y1);
+                        let r = d * (1.0 + b * b) / (4.0 * b.abs()).max(1e-9);
+                        let _ = emit_svg_elliptical_arc(&mut path, x1, y1, r, r, 0.0, b.abs() > 1.0, b > 0.0, x2, y2);
+                    } else if let Ok(pt) = Point::new(x2, y2) {
                         let _ = path.line_to(pt);
-                        count = count.saturating_add(1);
                     }
                 }
-                if count >= 2 {
-                    if closed {
-                        let _ = path.close();
-                    }
-                    let id = doc.allocate_object_id();
-                    push_to_first_layer(
-                        &mut doc,
-                        ObjectNode::new(
-                            id,
-                            Some("DXF LwPolyline".to_owned()),
-                            ObjectKind::Path(path),
-                            None,
-                            Some(OutlineStyle::hairline(Color::BLACK)),
-                        ),
-                    );
+                if closed {
+                    let _ = path.close();
                 }
+                let id = doc.allocate_object_id();
+                let stroke_col = dxf_aci_to_color(aci, truecolor);
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF LwPolyline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(stroke_col))),
+                );
+            }
+        } else if code == 0 && val == "SPLINE" {
+            p = p.saturating_add(1);
+            let mut closed = false;
+            let mut aci: Option<i32> = None;
+            let mut truecolor: Option<i32> = None;
+            let mut ctrl_pts: Vec<(f64, f64)> = Vec::new();
+            let mut fit_pts: Vec<(f64, f64)> = Vec::new();
+            while let Some(&(c, v)) = pairs.get(p) {
+                if c == 0 {
+                    break;
+                }
+                match c {
+                    70 if v.parse::<i32>().unwrap_or(0) & 1 != 0 => closed = true,
+                    62 => aci = v.parse::<i32>().ok(),
+                    420 => truecolor = v.parse::<i32>().ok(),
+                    10 => ctrl_pts.push((v.parse::<f64>().unwrap_or(0.0), 0.0)),
+                    20 => {
+                        if let Some(last) = ctrl_pts.last_mut() {
+                            last.1 = v.parse::<f64>().unwrap_or(0.0);
+                        }
+                    }
+                    11 => fit_pts.push((v.parse::<f64>().unwrap_or(0.0), 0.0)),
+                    21 => {
+                        if let Some(last) = fit_pts.last_mut() {
+                            last.1 = v.parse::<f64>().unwrap_or(0.0);
+                        }
+                    }
+                    _ => {}
+                }
+                p = p.saturating_add(1);
+            }
+            let src = if ctrl_pts.len() >= 2 { &ctrl_pts } else { &fit_pts };
+            let pts: Vec<Point> = src.iter().filter_map(|&(x, y)| Point::new(x, page_h - y).ok()).collect();
+            if let Some(&first) = pts.first()
+                && pts.len() >= 2
+            {
+                let mut path = Path::new();
+                let _ = path.move_to(first);
+                if pts.len() >= 4 && (pts.len().saturating_sub(1)).is_multiple_of(3) {
+                    let mut k = 1usize;
+                    while let (Some(&c1), Some(&c2), Some(&end)) = (pts.get(k), pts.get(k.saturating_add(1)), pts.get(k.saturating_add(2))) {
+                        let _ = path.cubic_to(c1, c2, end);
+                        k = k.saturating_add(3);
+                    }
+                } else {
+                    for idx_p in 0..pts.len().saturating_sub(1) {
+                        if let (Some(&p0), Some(&p1)) = (pts.get(idx_p), pts.get(idx_p.saturating_add(1))) {
+                            let c1 =
+                                Point::new(p0.x.get() + (p1.x.get() - p0.x.get()) / 3.0, p0.y.get() + (p1.y.get() - p0.y.get()) / 3.0).unwrap_or(p0);
+                            let c2 =
+                                Point::new(p0.x.get() + 2.0 * (p1.x.get() - p0.x.get()) / 3.0, p0.y.get() + 2.0 * (p1.y.get() - p0.y.get()) / 3.0)
+                                    .unwrap_or(p1);
+                            let _ = path.cubic_to(c1, c2, p1);
+                        }
+                    }
+                }
+                if closed {
+                    let _ = path.close();
+                }
+                let id = doc.allocate_object_id();
+                let stroke_col = dxf_aci_to_color(aci, truecolor);
+                push_to_first_layer(
+                    &mut doc,
+                    ObjectNode::new(id, Some("DXF Spline".to_owned()), ObjectKind::Path(path), None, Some(OutlineStyle::hairline(stroke_col))),
+                );
             }
         } else if code == 0 && val == "SOLID" {
             p = p.saturating_add(1);
@@ -1064,4 +1255,24 @@ pub fn import_dxf(dxf_str: &str) -> Result<Document, DocError> {
     }
 
     Ok(doc)
+}
+
+fn dxf_aci_to_color(aci: Option<i32>, truecolor: Option<i32>) -> Color {
+    if let Some(rgb) = truecolor {
+        let r = ((rgb >> 16) & 0xFF) as u8;
+        let g = ((rgb >> 8) & 0xFF) as u8;
+        let b = (rgb & 0xFF) as u8;
+        return Color::rgb8(r, g, b);
+    }
+    match aci.unwrap_or(7) {
+        1 => Color::rgb8(255, 0, 0),
+        2 => Color::rgb8(255, 255, 0),
+        3 => Color::rgb8(0, 255, 0),
+        4 => Color::rgb8(0, 255, 255),
+        5 => Color::rgb8(0, 0, 255),
+        6 => Color::rgb8(255, 0, 255),
+        8 => Color::rgb8(128, 128, 128),
+        9 => Color::rgb8(192, 192, 192),
+        _ => Color::BLACK,
+    }
 }

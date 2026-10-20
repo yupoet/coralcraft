@@ -1174,4 +1174,61 @@ mod tests {
             other => panic!("expected Conical Fountain with center=(0.65,0.35) and RainbowCw, got {other:?}"),
         }
     }
+
+    #[test]
+    fn write_cdr7_parametric_rect_ellipse_and_polygon_roundtrip_m74() {
+        use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode};
+        use coralcraft_geom::{CornerKind, EllipseMode, EllipseSpec, F64, Point, PolygonSpec, Rect, RectSpec};
+
+        let mut doc = Document::new_a4_portrait();
+        let rect_spec = RectSpec {
+            rect: Rect::new(20.0, 30.0, 180.0, 130.0).unwrap(),
+            radii: [F64::new(4.0).unwrap(), F64::new(8.0).unwrap(), F64::new(12.0).unwrap(), F64::new(16.0).unwrap()],
+            corner_kinds: [CornerKind::Round, CornerKind::Scalloped, CornerKind::Chamfered, CornerKind::Round],
+        };
+        let pie_spec = EllipseSpec::pie(Rect::new(200.0, 30.0, 340.0, 150.0).unwrap(), 30.0, 210.0).unwrap();
+        let arc_spec = EllipseSpec::arc(Rect::new(200.0, 170.0, 340.0, 290.0).unwrap(), 45.0, 315.0).unwrap();
+        let star_spec = PolygonSpec::star(Point::new(100.0, 250.0).unwrap(), 60.0, 25.0, 7, 37.5).unwrap();
+
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(ObjectId(121), Some("ParamRect".to_owned()), ObjectKind::Rect(rect_spec), None, None));
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(ObjectId(122), Some("ParamPie".to_owned()), ObjectKind::Ellipse(pie_spec), None, None));
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(ObjectId(123), Some("ParamArc".to_owned()), ObjectKind::Ellipse(arc_spec), None, None));
+        doc.pages[0].layers[0].objects.push(ObjectNode::new(ObjectId(124), Some("ParamStar".to_owned()), ObjectKind::Polygon(star_spec), None, None));
+
+        let cdr7 = write_cdr7(&doc).expect("write_cdr7");
+        let parsed = parse_document(&cdr7).expect("parse_document");
+        let objs = &parsed.document.pages[0].layers[0].objects;
+        assert_eq!(objs.len(), 4);
+
+        match &objs[0].kind {
+            ObjectKind::Rect(r) => {
+                assert_eq!(r.radii, rect_spec.radii);
+                assert_eq!(r.corner_kinds, rect_spec.corner_kinds);
+            }
+            other => panic!("expected ObjectKind::Rect, got {other:?}"),
+        }
+        match &objs[1].kind {
+            ObjectKind::Ellipse(e) => {
+                assert_eq!(e.mode, EllipseMode::Pie);
+                assert!((e.start_deg.get() - 30.0).abs() < 1e-6);
+                assert!((e.end_deg.get() - 210.0).abs() < 1e-6);
+            }
+            other => panic!("expected ObjectKind::Ellipse(Pie), got {other:?}"),
+        }
+        match &objs[2].kind {
+            ObjectKind::Ellipse(e) => {
+                assert_eq!(e.mode, EllipseMode::Arc);
+                assert!((e.start_deg.get() - 45.0).abs() < 1e-6);
+                assert!((e.end_deg.get() - 315.0).abs() < 1e-6);
+            }
+            other => panic!("expected ObjectKind::Ellipse(Arc), got {other:?}"),
+        }
+        match &objs[3].kind {
+            ObjectKind::Polygon(p) => {
+                assert_eq!(p.points, 7);
+                assert!((p.rotation_deg.get() - 37.5).abs() < 1e-6);
+            }
+            other => panic!("expected ObjectKind::Polygon, got {other:?}"),
+        }
+    }
 }

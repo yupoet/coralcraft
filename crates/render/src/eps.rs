@@ -1017,4 +1017,50 @@ mod tests {
         assert_eq!(text, "Hello World");
         assert!((size_pt.get() - 14.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn import_svg_colors_opacity_implicit_coords_and_dxf_bulge_spline_aci_m74() {
+        use coralcraft_doc::TransparencyStyle;
+
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 400">
+  <path d="M 10 20 50 20 50 60-40 0 Z" fill="#f80" stroke="rgb(10%, 50%, 90%)" opacity="0.65" stroke-miterlimit="6"/>
+  <rect x="60" y="20" width="40" height="30" fill="teal" stroke="transparent"/>
+</svg>"##;
+        let svg_doc = coralcraft_doc::import_svg(svg).expect("import_svg M74");
+        let page = svg_doc.pages.first().unwrap();
+        assert!((page.size.width.get() - 500.0).abs() < 1e-4 && (page.size.height.get() - 400.0).abs() < 1e-4);
+        let objs = &page.layers.first().unwrap().objects;
+        assert_eq!(objs.len(), 2);
+        let path_obj = objs.first().unwrap();
+        assert_eq!(path_obj.fill, Some(FillStyle::uniform(Color::rgb8(0xFF, 0x88, 0x00))));
+        let outl = path_obj.outline.as_ref().expect("rgb(%) stroke");
+        assert_eq!(outl.color, Color::rgb8(26, 128, 230));
+        assert!((outl.miter_limit.get() - 6.0).abs() < 1e-6);
+        assert_eq!(path_obj.transparency, Some(TransparencyStyle::Uniform { opacity: F64::new(0.65).unwrap() }));
+        let ObjectKind::Path(p) = &path_obj.kind else {
+            panic!("expected ObjectKind::Path");
+        };
+        // M(10,20) -> implicit L(50,20) -> implicit L(50,60) -> implicit L(-40,0) -> Close
+        assert_eq!(p.elements.len(), 5);
+        assert_eq!(objs.get(1).unwrap().fill, Some(FillStyle::uniform(Color::rgb8(0, 128, 128))));
+        assert!(objs.get(1).unwrap().outline.is_none());
+
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n62\n1\n70\n1\n10\n20.0\n20\n100.0\n42\n1.0\n10\n100.0\n20\n100.0\n0\nSPLINE\n420\n33023\n71\n3\n10\n10.0\n20\n200.0\n10\n30.0\n20\n250.0\n10\n70.0\n20\n250.0\n10\n90.0\n20\n200.0\n0\nENDSEC\n0\nEOF\n";
+        let dxf_doc = coralcraft_doc::import_dxf(dxf).expect("import_dxf M74");
+        let dxf_objs = &dxf_doc.pages.first().unwrap().layers.first().unwrap().objects;
+        assert_eq!(dxf_objs.len(), 2, "expected LWPOLYLINE with bulge and SPLINE");
+        let lw_obj = dxf_objs.first().unwrap();
+        assert_eq!(lw_obj.outline.as_ref().unwrap().color, Color::rgb8(255, 0, 0));
+        let ObjectKind::Path(lw_path) = &lw_obj.kind else {
+            panic!("expected ObjectKind::Path for LWPOLYLINE");
+        };
+        assert!(lw_path.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })), "bulge=1.0 must emit cubic arc segments");
+
+        let sp_obj = dxf_objs.get(1).unwrap();
+        assert_eq!(sp_obj.outline.as_ref().unwrap().color, Color::rgb8(0x00, 0x80, 0xFF));
+        let ObjectKind::Path(sp_path) = &sp_obj.kind else {
+            panic!("expected ObjectKind::Path for SPLINE");
+        };
+        assert!(sp_path.elements.iter().any(|e| matches!(e, PathElement::CubicTo { .. })), "SPLINE must emit cubic segments");
+    }
 }

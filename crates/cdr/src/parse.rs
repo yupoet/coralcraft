@@ -1665,6 +1665,23 @@ fn decode_explicit_shape_payload(
                 let rect = bbox_rect
                     .or_else(|| decode_bbox(payload.get(4..).unwrap_or(&[]), endian, version, page_size))
                     .unwrap_or_else(|| Rect::new(36.0, 36.0, 180.0, 120.0).unwrap_or_default());
+                if payload.len() >= 60 && payload.get(20..24) == Some(b"RECT") {
+                    let mut corner_kinds = [coralcraft_geom::CornerKind::Round; 4];
+                    for (i, slot) in corner_kinds.iter_mut().enumerate() {
+                        *slot = match *payload.get(24usize.saturating_add(i)).unwrap_or(&0) {
+                            1 => coralcraft_geom::CornerKind::Scalloped,
+                            2 => coralcraft_geom::CornerKind::Chamfered,
+                            _ => coralcraft_geom::CornerKind::Round,
+                        };
+                    }
+                    let mut radii = [F64::ZERO; 4];
+                    for (i, slot) in radii.iter_mut().enumerate() {
+                        let off = 28usize.saturating_add(i.saturating_mul(8));
+                        let val = read_f64(endian, payload, off).unwrap_or(0.0).max(0.0);
+                        *slot = F64::new(val).unwrap_or(F64::ZERO);
+                    }
+                    return ObjectKind::Rect(RectSpec { rect, radii, corner_kinds });
+                }
                 return ObjectKind::Rect(RectSpec::sharp(rect));
             }
             2 => {
@@ -1672,6 +1689,16 @@ fn decode_explicit_shape_payload(
                 let rect = bbox_rect
                     .or_else(|| decode_bbox(payload.get(4..).unwrap_or(&[]), endian, version, page_size))
                     .unwrap_or_else(|| Rect::new(36.0, 36.0, 160.0, 160.0).unwrap_or_default());
+                if payload.len() >= 44 && payload.get(20..24) == Some(b"ELLP") {
+                    let mode = match *payload.get(24).unwrap_or(&0) {
+                        1 => coralcraft_geom::EllipseMode::Pie,
+                        2 => coralcraft_geom::EllipseMode::Arc,
+                        _ => coralcraft_geom::EllipseMode::Full,
+                    };
+                    let start_deg = F64::new(read_f64(endian, payload, 28).unwrap_or(0.0)).unwrap_or(F64::ZERO);
+                    let end_deg = F64::new(read_f64(endian, payload, 36).unwrap_or(0.0)).unwrap_or(F64::ZERO);
+                    return ObjectKind::Ellipse(EllipseSpec { rect, start_deg, end_deg, mode });
+                }
                 return ObjectKind::Ellipse(EllipseSpec::full(rect));
             }
             3 => {
@@ -1729,13 +1756,14 @@ fn decode_loda_polygon(slice: &[u8], endian: Endian, version: u16, page_size: Si
         let (cy_cdr, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s), version)?;
         let (r_pt, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s.saturating_mul(2)), version)?;
         let (inner_pt, _) = cdr_coord_to_pt(endian, slice, 8usize.saturating_add(s.saturating_mul(3)), version).unwrap_or((0.0, 4));
+        let rot_deg = read_f64(endian, slice, 8usize.saturating_add(s.saturating_mul(4))).unwrap_or(0.0);
         let cx = page_size.width.get() * 0.5 + cx_cdr;
         let cy = page_size.height.get() * 0.5 - cy_cdr;
         let center = Point::new(cx, cy).ok()?;
         if inner_pt > 0.0 && (inner_pt - r_pt).abs() > 1e-4 {
-            return PolygonSpec::star(center, r_pt.abs(), inner_pt.abs(), points, 0.0).ok();
+            return PolygonSpec::star(center, r_pt.abs(), inner_pt.abs(), points, rot_deg).ok();
         }
-        return PolygonSpec::regular(center, r_pt.abs(), points, 0.0).ok();
+        return PolygonSpec::regular(center, r_pt.abs(), points, rot_deg).ok();
     }
     let rect = bbox_rect.unwrap_or_else(|| Rect::new(50.0, 50.0, 150.0, 150.0).unwrap_or_default());
     let center = Point::new(0.5 * (rect.x0.get() + rect.x1.get()), 0.5 * (rect.y0.get() + rect.y1.get())).ok()?;
@@ -2406,20 +2434,33 @@ fn encode_path_to_cdr_points_types(path: &Path, cx: f64, cy: f64) -> Result<CdrC
 fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload: &[u8], meta: &mut Vec<u8>) {
     match &node.kind {
         ObjectKind::Rect(spec) => {
-            if spec.radii.iter().all(|r| r.get() == 0.0) {
-                meta.extend_from_slice(&1u32.to_le_bytes());
-                meta.extend_from_slice(bbox_payload);
-            } else if let Ok(p) = spec.to_path() {
-                encode_path_as_loda_1e(&p, cx, cy, meta);
+            meta.extend_from_slice(&1u32.to_le_bytes());
+            meta.extend_from_slice(bbox_payload);
+            meta.extend_from_slice(b"RECT");
+            for &ck in &spec.corner_kinds {
+                let code = match ck {
+                    coralcraft_geom::CornerKind::Round => 0u8,
+                    coralcraft_geom::CornerKind::Scalloped => 1u8,
+                    coralcraft_geom::CornerKind::Chamfered => 2u8,
+                };
+                meta.push(code);
+            }
+            for &r in &spec.radii {
+                meta.extend_from_slice(&r.get().to_le_bytes());
             }
         }
         ObjectKind::Ellipse(spec) => {
-            if spec.mode == coralcraft_geom::EllipseMode::Full {
-                meta.extend_from_slice(&2u32.to_le_bytes());
-                meta.extend_from_slice(bbox_payload);
-            } else if let Ok(p) = spec.to_path() {
-                encode_path_as_loda_1e(&p, cx, cy, meta);
-            }
+            meta.extend_from_slice(&2u32.to_le_bytes());
+            meta.extend_from_slice(bbox_payload);
+            meta.extend_from_slice(b"ELLP");
+            let mode_code = match spec.mode {
+                coralcraft_geom::EllipseMode::Full => 0u8,
+                coralcraft_geom::EllipseMode::Pie => 1u8,
+                coralcraft_geom::EllipseMode::Arc => 2u8,
+            };
+            meta.extend_from_slice(&[mode_code, 0, 0, 0]);
+            meta.extend_from_slice(&spec.start_deg.get().to_le_bytes());
+            meta.extend_from_slice(&spec.end_deg.get().to_le_bytes());
         }
         ObjectKind::Path(path) => {
             encode_path_as_loda_1e(path, cx, cy, meta);
@@ -2433,6 +2474,7 @@ fn encode_explicit_shape_meta(node: &ObjectNode, cx: f64, cy: f64, bbox_payload:
             meta.extend_from_slice(&pt_to_cdr_i32(spec.radius.get()).to_le_bytes());
             let inner = spec.inner_radius.map(|r| r.get()).unwrap_or(0.0);
             meta.extend_from_slice(&pt_to_cdr_i32(inner).to_le_bytes());
+            meta.extend_from_slice(&spec.rotation_deg.get().to_le_bytes());
         }
         ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
             meta.extend_from_slice(&5u32.to_le_bytes());
