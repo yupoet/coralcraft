@@ -603,9 +603,10 @@ fn open_file(path: &str) -> Result<(), String> {
 /// `packaging/linux/ai.storyteller.vectorcraft.desktop` so Wayland docks find the launcher icon.
 fn app_icon() -> egui::IconData {
     #[cfg(target_os = "macos")]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/vectorcraft-macos-512.png");
+    // CoralCraft: original icon; upstream embeds the VectorCraft dragon here.
+    let png: &[u8] = include_bytes!("../../../assets/app-icon/coralcraft-macos-512.png");
     #[cfg(not(target_os = "macos"))]
-    let png: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png");
+    let png: &[u8] = include_bytes!("../../../assets/app-icon/coralcraft-256.png");
     eframe::icon_data::from_png_bytes(png).unwrap_or_default()
 }
 

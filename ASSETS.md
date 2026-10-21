@@ -10,6 +10,10 @@ The rows below the policy were inherited from the VectorCraft fork base (`a46662
 
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
+| `assets/app-icon/coralcraft.svg` | CoralCraft project | Original artwork; design source of the PNGs below | MIT OR Apache-2.0 | App icon (three coral polyp fingers) |
+| `assets/app-icon/coralcraft-128.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` from the design above | MIT OR Apache-2.0 | UI brand mark (`crates/ui-egui/src/brand.rs`) |
+| `assets/app-icon/coralcraft-256.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Window/taskbar icon, non-macOS |
+| `assets/app-icon/coralcraft-macos-512.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` (full-bleed; macOS applies its own mask) | MIT OR Apache-2.0 | Window icon, macOS |
 | `assets/fonts/Inter-Medium.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |
 | `assets/fonts/Inter-Regular.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |
 | `assets/fonts/Inter-SemiBold.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |

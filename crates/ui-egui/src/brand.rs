@@ -1,11 +1,13 @@
-//! The VectorCraft brand mark: the app icon (the engraved dragon, `assets/app-icon/`, see its
-//! README). The PNG carries the icon's rounded corners; it is decoded once per context into a
-//! mipmapped texture, so it stays crisp from the 18 pt app-bar mark to the About box.
+//! The app brand mark: the CoralCraft icon (three coral polyp fingers, `assets/app-icon/`,
+//! original artwork rendered by `packaging/icons-coral.py`). The PNG carries the icon's rounded
+//! corners; it is decoded once per context into a mipmapped texture, so it stays crisp from the
+//! 18 pt app-bar mark to the About box.
 
 use egui::{Color32, Context, Id, Rect, TextureHandle, TextureOptions, Ui, pos2};
 
 /// 128 px: sharp at 44 pt on a 2× display, and the mipmaps keep 22 pt clean.
-const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.vectorcraft.png");
+// CoralCraft: original icon; upstream embeds the VectorCraft dragon here.
+const ICON_PNG: &[u8] = include_bytes!("../../../assets/app-icon/coralcraft-128.png");
 
 /// The icon's pixels (one transparent pixel if it couldn't be decoded, which a test rules out).
 fn decode() -> egui::ColorImage {

@@ -30,11 +30,7 @@ pub fn run(root: &Path) -> Result<(), String> {
         println!("cleanroom: ok ({} files scanned, no Corel copyright markers or .cdr/.cmx fixtures)", files.len());
         Ok(())
     } else {
-        Err(format!(
-            "{} clean-room violation(s) (AGENTS.md › Clean-Room):\n  {}",
-            offenders.len(),
-            offenders.join("\n  ")
-        ))
+        Err(format!("{} clean-room violation(s) (AGENTS.md › Clean-Room):\n  {}", offenders.len(), offenders.join("\n  ")))
     }
 }
 
@@ -74,14 +70,14 @@ mod tests {
             std::fs::write(path, text).unwrap();
         };
         file("docs/clean.md", "a clean document\n");
-        file("docs/binary.cdr", b"RIFF\x04\x00\x00\x00CDRD".as_slice());
+        std::fs::write(dir.join("docs/binary.cdr"), b"RIFF\x04\x00\x00\x00CDRD").unwrap();
         // Construct the marker at runtime so this test source stays scannable itself.
         file("docs/bad.md", format!("bad: {} (c) {}", "Copyright", "Corel").as_str());
         let files: Vec<String> = ["docs/clean.md", "docs/binary.cdr", "docs/bad.md"].map(String::from).to_vec();
         let offenders = scan(&dir, &files);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(offenders.len(), 2, "{offenders:#?}");
-        assert!(offenders.iter().any(|o| o.contains(".cdr fixture")));
+        assert!(offenders.iter().any(|o| o.contains("binary .cdr/.cmx fixture")));
         assert!(offenders.iter().any(|o| o.contains("copyright marker")));
     }
 

@@ -4,7 +4,24 @@
 
 ## 1. Current Stage Status
 
-- **Phase V in progress. V0.1 DONE (2026-10-21):** VectorCraft `a466625` imported.
+- **Phase V in progress. V0.2 status (2026-10-21):** workspace builds and the upstream test
+  suite pass; `cargo xtask ci` (VectorCraft chain + our cleanroom) runs green locally.
+  - Upstream embeds its brand icon in `crates/ui-egui/src/brand.rs` and
+    `apps/vectorcraft/src/main.rs`; both now point at original CoralCraft icons
+    (`assets/app-icon/coralcraft-*.png`, rendered by `packaging/icons-coral.py`, attributed
+    in `ASSETS.md`). Every edit is marked `// CoralCraft:`.
+  - `xtask/src/layers.rs` registers `coralcraft-cdr` as L3 (format layer); the `wasm` ci step
+    therefore also checks it for wasm32.
+  - `legacy/` builds standalone (`cargo check --manifest-path legacy/Cargo.toml`); its crates
+    reach `crates/cdr` via direct `path = "../../../crates/cdr"` deps because Cargo forbids
+    workspace-dependency paths outside the workspace root. `fuzz/` repointed at
+    `legacy/crates/doc` and its targets run.
+  - `ci.yml`: added the `wasm32-unknown-unknown` toolchain target (the ci chain's `wasm`
+    step); `linux-package-smoke` disabled until V0.3 (upstream packaging still produces
+    vectorcraft-named packages).
+  - `docs/mcp.md` still describes the legacy MCP server's 246 tools; V6.2 regenerates it from
+    the VectorCraft MCP server plus CoralCraft additions.
+- **V0.1 DONE (2026-10-21):** VectorCraft `a466625` imported.
   - Workspace = 24 `vectorcraft-*` crates + `apps/{vectorcraft,vectorcraft-cli,vectorcraft-web}` + `coralcraft-cdr` + merged `xtask`. Root manifest = upstream's plus `# CoralCraft:` divergences (`exclude = ["legacy", "fuzz"]`, our version/repository, `coralcraft-{color,doc,geom}` legacy path deps for `crates/cdr`).
   - `legacy/` is the pre-fork workspace (`cargo build --manifest-path legacy/Cargo.toml` still works); its crates are excluded from the root workspace but stay buildable as path dependencies of `crates/cdr`.
   - `fuzz/` path dep repointed to `../legacy/crates/doc`.

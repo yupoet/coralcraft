@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-coralcraft-cdr = { workspace = true }
+coralcraft-cdr = { path = "../../../crates/cdr" }
 coralcraft-color = { workspace = true }
 coralcraft-doc = { workspace = true }
 coralcraft-engine = { workspace = true }

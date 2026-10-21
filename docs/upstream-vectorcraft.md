@@ -44,6 +44,34 @@ upgrades mergeable at any time.
   `arithmetic_side_effects`, …) because the root workspace now carries VectorCraft's milder
   lint set. Every other VectorCraft-derived crate inherits upstream lints unchanged.
 
+### Source divergences forced by the brand rule (V0.2)
+
+VectorCraft embeds its brand icon in two places; both now point at CoralCraft's original icon
+(`assets/app-icon/coralcraft-*.png`, rendered by `packaging/icons-coral.py`, registered in
+`ASSETS.md`). Each edit is marked `// CoralCraft:`:
+
+- `crates/ui-egui/src/brand.rs` — the 128 px app-bar mark.
+- `apps/vectorcraft/src/main.rs` — the window icon (256 px / macOS 512 px full-bleed).
+
+Other small marked edits: `xtask/src/layers.rs` registers `coralcraft-cdr` (L3, format layer)
+in the dependency table.
+
+### CI divergences
+
+- Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs
+  `cargo xtask ci` on Linux/macOS/Windows; V0.2 adds the `wasm32-unknown-unknown` toolchain
+  target (the ci chain's `wasm` step needs it) and keeps the `libcdr-tools` install (the CDR
+  differential tests still run through `crates/cdr`).
+- `linux-package-smoke` is disabled (`if: false`) until V0.3: upstream `packaging/` still
+  produces vectorcraft-named packages.
+- Upstream workflows copied as-is: `freebsd`, `windows-arm64`, `windows7`, `print`,
+  `packaging-lint`, `affinity-corpus`. Dropped: `nix` (no `flake.nix` at this fork base),
+  upstream `release.yml` (brand + shared craft-common-actions pipeline; V0.3 restores a
+  CoralCraft release pipeline).
+- `legacy/` crates reach `crates/cdr` through direct `path = "../../../crates/cdr"` deps
+  (Cargo forbids workspace-dependency paths outside the workspace root), so the legacy
+  workspace still builds standalone.
+
 ## Sync procedure (before each V-phase)
 
 1. `git -C refs/vectorcraft fetch origin && git log --on-line HEAD..origin/main` — review

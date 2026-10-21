@@ -48,7 +48,7 @@ Rules:
 
 ### V0: Fork import and green build
 - [x] V0.1 Move pre-fork crates to `legacy/` (except `crates/cdr`). Copy VectorCraft `crates/*`, `apps/*`, `xtask` (merged with ours: keep `cleanroom`, `assets`, `layers`), `vendor/`, `assets/` (non-brand only), `packaging/`, and CI workflows. Record `a466625` in `docs/upstream-vectorcraft.md`.
-- [ ] V0.2 Workspace builds; VectorCraft's own test suite passes unchanged; `cargo xtask ci` adapted (cleanroom scan still blocks Corel strings and `.cdr`/`.cmx` binaries).
+- [x] V0.2 Workspace builds; VectorCraft's own test suite passes unchanged; `cargo xtask ci` adapted (cleanroom scan still blocks Corel strings and `.cdr`/`.cmx` binaries).
 - [ ] V0.3 Rebrand `apps/vectorcraft` -> `apps/coralcraft` (binary name, window title, app ID, bundle ID, About box, prefs directory, MCP server name). Add original CoralCraft icon assets.
 - [ ] V0.4 `coralcraft-cli` rebased on `vectorcraft-cli`. Keep the `probe` subcommand from the old CLI.
 

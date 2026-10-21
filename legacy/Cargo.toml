@@ -31,7 +31,6 @@ arboard = { version = "3.6", default-features = false }
 coralcraft-geom = { path = "crates/geom" }
 coralcraft-color = { path = "crates/color" }
 coralcraft-doc = { path = "crates/doc" }
-coralcraft-cdr = { path = "../crates/cdr" }
 coralcraft-render = { path = "crates/render" }
 coralcraft-tools = { path = "crates/tools" }
 coralcraft-engine = { path = "crates/engine" }

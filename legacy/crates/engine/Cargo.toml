@@ -8,7 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-coralcraft-cdr = { path = "../cdr" }
+coralcraft-cdr = { path = "../../../crates/cdr" }
 coralcraft-color = { path = "../color" }
 coralcraft-doc = { path = "../doc" }
 coralcraft-geom = { path = "../geom" }

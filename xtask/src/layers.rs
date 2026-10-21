@@ -63,6 +63,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("plugins", Class::Layer(2)),
     ("affinity", Class::Standalone),
     ("scriptcheck", Class::Standalone),
+    // CoralCraft: the CDR/CMX format crate (full name; it keeps the coralcraft- prefix).
+    // A format-layer crate like svg/pdf/format: depends on color (L0), geom (L0), doc (L1).
+    ("coralcraft-cdr", Class::Layer(3)),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
