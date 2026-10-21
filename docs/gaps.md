@@ -1,7 +1,41 @@
 # CoralCraft Prioritized Gap List
 
 > For agent task selection: pick the first unchecked item from top to bottom. Update this file and [`ROADMAP.md`](../ROADMAP.md) as each item completes.
-> Ordering principle: vertical slices first (probe -> document model -> render -> interactive tools), horizontal breadth second.
+> Ordering principle (2026-10-21): re-base on VectorCraft first, then CorelDRAW extensions. Reuse VectorCraft; never reimplement a subsystem it already has.
+
+## Phase V: VectorCraft fork (top priority, operator decision 2026-10-21)
+
+The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-fork.md`](superpowers/plans/2026-10-21-vectorcraft-fork.md).
+
+- [ ] V0.1 Move pre-fork crates to `legacy/` (keep `crates/cdr`); copy VectorCraft `a466625` crates, apps, xtask pieces, vendor, non-brand assets, packaging, and CI; create `docs/upstream-vectorcraft.md`.
+- [ ] V0.2 Workspace builds; VectorCraft test suite passes; `cargo xtask ci` adapted (cleanroom still blocks Corel strings and `.cdr`/`.cmx` binaries).
+- [ ] V0.3 Rebrand the desktop app to CoralCraft (binary, title, app/bundle ID, About, prefs dir, MCP name, original icons).
+- [ ] V0.4 Rebase `coralcraft-cli` on `vectorcraft-cli`; keep `probe`.
+- [ ] V1.1 Map `coralcraft-cdr` parse output onto the VectorCraft `Document` (`corel-import`), with lossless residuals.
+- [ ] V1.2 `.cdr`/`.cmx` in Open/Place tables and MCP `file.open`.
+- [ ] V1.3 CDR7/CDRX/CMX1 writers on the VectorCraft `Document`; Save As/Export entries.
+- [ ] V1.4 libcdr differential tests and real-sample checks on the new pipeline (correct page/layer/object counts, not "no crash").
+- [ ] V2.1 Compatibility matrix test over every VectorCraft `FORMATS` entry (CI fails on a missing format).
+- [ ] V2.2 `.vectorcraft`/`.drawcraft`/`.vctemplate` lossless; CoralCraft-only data in a namespaced extension block.
+- [ ] V2.3 Legacy `.coralcraft` import converter.
+- [ ] V2.4 Rewrite `docs/file-format-parity.md`.
+- [ ] V3.1 Multi-page documents on VectorCraft artboards (study `refs/designcraft`).
+- [ ] V3.2 Master layers (all/odd/even) and Desktop layer.
+- [ ] V3.3 Page navigator.
+- [ ] V4.1 CorelDRAW workspace preset on VectorCraft docking.
+- [ ] V4.2 CorelDRAW shortcut set (public documentation only).
+- [ ] V4.3 CorelDRAW tool mapping and context-sensitive property bar.
+- [ ] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels.
+- [ ] V5.1 PowerClip.
+- [ ] V5.2 Interactive effects with on-canvas handles (Blend, Contour, Distort, Envelope, Extrude, Drop Shadow, Transparency).
+- [ ] V5.3 Corel `.cpl`/`.xml` palettes in the palette bar and swatches.
+- [ ] V5.4 Smart Fill, Connector, Dimension, PowerTRACE.
+- [ ] V6.1 VectorCraft MCP server plus CoralCraft-only tools; retire duplicates.
+- [ ] V6.2 Regenerate `docs/mcp.md`; keep `coralcraft-cli mcp` / `coralcraft --mcp`.
+- [ ] V7.1 Delete `legacy/` crates as their unique content is ported.
+
+> [!NOTE]
+> Frozen after M89: new milestones that only make CoralCraft's own SVG/DXF/EPS/PDF export re-import into itself. The M-series log below is history.
 
 ## Review 2026-10-20: reopened work queue (top priority)
 

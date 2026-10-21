@@ -74,3 +74,11 @@
 ## 12. MCP stdio host is `coralcraft-cli mcp` (also `coralcraft --mcp`)
 
 - Both binaries call `McpServer::serve_stdio`. Known protocol gaps (notifications get responses, no `ping`, empty `inputSchema` for most tools) are tracked as R4.1 and R4.2 in `docs/gaps.md`.
+
+## 13. VectorCraft fork pitfalls (Phase V, 2026-10-21)
+
+- **Lint mismatch**: our workspace denies `indexing_slicing`, `arithmetic_side_effects`, `unwrap_used`, `expect_used`, `panic` and forbids `unsafe_code`. VectorCraft code does not follow all of these, and some platform modules (macOS window, fonts) may need `unsafe`. Use per-crate `[lints]`: VectorCraft-derived crates keep VectorCraft's settings; CoralCraft-owned crates (`cdr`, `corel-*`, apps) keep the strict set. Do not mass-edit upstream code just to satisfy our lints.
+- **Clean-room scan**: `cargo xtask cleanroom` must keep blocking Corel strings and `.cdr`/`.cmx` binaries. VectorCraft legitimately mentions Adobe/Illustrator; that is not a violation. Adjust the scanner allow-list rather than editing upstream text.
+- **Brand assets**: VectorCraft's logo, splash, and app icons must not ship in CoralCraft. Every remaining file under `assets/` needs an `ASSETS.md` row.
+- **Upstream mergeability**: keep upstream directory and package names (`vectorcraft-*`). Rebrand only user-visible strings, app IDs, and bundle IDs. Put large CorelDRAW features in `corel-*` crates instead of editing upstream files.
+- **Fork base**: `refs/vectorcraft` is a single-commit snapshot (`a466625`), so `git subtree` history is not available. Record the base commit and every later sync in `docs/upstream-vectorcraft.md`.

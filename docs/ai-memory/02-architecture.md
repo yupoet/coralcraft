@@ -23,6 +23,13 @@
 | **D6** | Hostile-Input Hardening (No Panic) | All parsers treat inputs as untrusted, return `Result`, and forbid `unsafe`, `unwrap`, `expect`, and `panic` |
 | **D7** | Agent-Native MCP (`coralcraft-mcp`) | Built-in Model Context Protocol server for AI-driven illustration and automated regression testing |
 | **D8** | External Font Repository | Fonts are never committed to this repo; injected optionally via `CRAFT_FONTS_DIR` |
+| **D9** | **Fork of VectorCraft (2026-10-21)** | Copy `refs/vectorcraft` (`a466625`) into the repo and adapt it. Keep upstream crate/package names for mergeability; mark local divergences with `// CoralCraft:`; log syncs in `docs/upstream-vectorcraft.md` |
+| **D10** | **Mandatory reuse** | Geometry, boolean ops, rendering, text, effects, tracing, file I/O, docking UI, widgets, MCP plumbing, and packaging come from VectorCraft. A from-scratch rewrite of an existing VectorCraft subsystem needs operator approval |
+| **D11** | **VectorCraft file compatibility** | Every VectorCraft `FORMATS` entry opens and saves/exports; `.vectorcraft`/`.drawcraft`/templates round-trip losslessly; CoralCraft-only data goes in a namespaced extension block |
+| **D12** | **CorelDRAW extension scope** | CoralCraft-owned code: `crates/cdr`, `crates/corel-*` (multi-page, workspace, palettes, Corel tools/effects). D1–D3 and D5 now apply on top of the VectorCraft architecture; the pre-fork crates move to `legacy/` and are retired |
+
+> [!NOTE]
+> The crate graph below is the **pre-fork** layout. After Phase V0 the architecture is VectorCraft's (see `refs/vectorcraft/docs/architecture.md`) plus `cdr` and `corel-*`.
 
 ## 3. Crate Dependency Graph (`L0`–`L7`)
 

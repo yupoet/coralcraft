@@ -1,6 +1,17 @@
 # CoralCraft — Instructions for Agents
 
-CoralCraft is a clean-room, open-source, Rust-native vector illustration and multi-page layout application targeting CorelDRAW parity (and beyond). It runs natively on macOS, Windows, and Linux, and compiles to WebAssembly for the Web. Its engineering methodology and workspace architecture align with [storytold/vectorcraft](https://github.com/storytold/vectorcraft) (Illustrator parity) and the ArtCraft family conventions.
+CoralCraft is a **fork of [storytold/vectorcraft](https://github.com/storytold/vectorcraft)** (`MIT OR Apache-2.0`, ArtCraft family) that extends it toward CorelDRAW. It is a clean-room, open-source, Rust-native vector illustration and multi-page layout application that runs natively on macOS, Windows, and Linux, and compiles to WebAssembly for the Web.
+
+## Mission: Reuse VectorCraft, Extend Toward CorelDRAW (operator decision 2026-10-21)
+
+- **Copy, then adapt.** VectorCraft source (`refs/vectorcraft`) is copied into this repository and reshaped. The active plan is [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md) (Phase V).
+- **Reuse is mandatory.** Before writing any subsystem, check whether VectorCraft already has it (geometry, boolean ops, rendering, text, effects, tracing, file I/O, docking UI, widgets, MCP, packaging). If it does, port it. A from-scratch replacement of an existing VectorCraft subsystem needs explicit operator approval.
+- **Our own scope is only the CorelDRAW extension.** That covers CDR/CMX read/write, the CorelDRAW multi-page model (pages, master layers, desktop layer), the CorelDRAW workspace (toolbox, property bar, palette bar, page navigator, dockers), CorelDRAW-specific tools and interactive effects, and Corel palettes.
+- **Every VectorCraft file must work.** CoralCraft opens every format VectorCraft opens (including `.vectorcraft` / `.drawcraft` documents and templates, losslessly) and saves/exports every format VectorCraft saves/exports.
+- **No self-round-trip treadmill.** Do not start milestones whose only effect is making our own SVG/DXF/EPS/PDF export re-import into itself.
+- Keep upstream crate and package names (`vectorcraft-*`) so upstream fixes can be merged. Mark local behaviour changes in VectorCraft-derived files with `// CoralCraft:`. Log upstream syncs in `docs/upstream-vectorcraft.md`.
+- VectorCraft-derived crates keep VectorCraft's lint configuration. CoralCraft-owned crates (`cdr`, `corel-*`, apps) keep the strict lints.
+- VectorCraft brand assets (logo, splash, app icons) are never reused. CoralCraft ships its own, registered in `ASSETS.md`.
 
 ## Start Every Session Here
 
@@ -12,8 +23,8 @@ CoralCraft is a clean-room, open-source, Rust-native vector illustration and mul
    - [`docs/ai-memory/04-known-issues.md`](docs/ai-memory/04-known-issues.md) — Known bugs, pitfalls, and workarounds
    - Read [`docs/ai-memory/05-ref-docs/`](docs/ai-memory/05-ref-docs/) as needed for external format and architecture references.
 2. **Persist Important Findings Back into Memory**: Whenever you make important discoveries, advance task state, encounter new pitfalls, or synthesize external knowledge, persist those findings into `docs/ai-memory/03-current.md`, `04-known-issues.md`, or `05-ref-docs/`.
-3. Read [`ROADMAP.md`](ROADMAP.md) (stage, per-dimension scores, next steps) and [`docs/gaps.md`](docs/gaps.md) (prioritized gap list). Unless the operator assigns a specific task, pick the top unfinished item from `docs/gaps.md`.
-4. Read the active milestone plan under `docs/superpowers/plans/*.md` and execute its tasks in order.
+3. Read [`ROADMAP.md`](ROADMAP.md) (stage, measured gap to VectorCraft, next steps) and [`docs/gaps.md`](docs/gaps.md) (prioritized gap list). Unless the operator assigns a specific task, pick the first unchecked Phase V task.
+4. Read the active plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md) and execute its tasks in order.
 5. Follow the autonomous execution loop: Orient -> Plan -> Failing Test First -> Implement -> Full CI Regression (`cargo xtask ci`) -> Record (sync `docs/ai-memory/`) -> Commit. Do not pause to ask unless a decision is explicitly marked as an operator decision gate.
 
 `plan/` is a git-ignored directory for local session scratch notes.
@@ -38,6 +49,7 @@ CoralCraft is a clean-room, open-source, Rust-native vector illustration and mul
 - **Never** copy GPL/AGPL code (Inkscape, UniConvertor, lib2geom, sK1, etc.). Study public papers/docs only, cite URLs in comments, and write clean-room implementations.
 - `libcdr` is MPL-2.0: it may be read as a format-semantics reference and differential oracle, but **never** copied line-by-line; our implementation is written independently from scratch.
 - All code and original assets in this repository are dual-licensed under `MIT OR Apache-2.0`.
+- VectorCraft (`MIT OR Apache-2.0`), DesignCraft, CadCraft (`Apache-2.0`), and `craft-libs` (`Apache-2.0`) code **may and should** be copied and adapted. Keep their copyright notices and attribute them in `NOTICE`.
 
 ### Assets: Never Use Proprietary Icons or Artwork
 

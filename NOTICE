@@ -1,6 +1,6 @@
 # NOTICE
 
-CoralCraft — Open-source, clean-room vector illustration and multi-page layout application targeting CorelDRAW workflow and workspace parity.
+CoralCraft — Open-source, clean-room vector illustration and multi-page layout application. CoralCraft is a fork of VectorCraft (storytold/vectorcraft, `MIT OR Apache-2.0`, Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors), extended toward CorelDRAW workflow and workspace parity.
 
 - Source code and original assets: `MIT OR Apache-2.0` (see `LICENSE-MIT` and `LICENSE-APACHE`).
 - Portions of the underlying geometry, color, path-operations, rendering, format, and UI infrastructure are derived from or adapted from the ArtCraft open-source family:

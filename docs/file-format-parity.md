@@ -1,5 +1,8 @@
 # File Format Parity Matrix
 
+> [!IMPORTANT]
+> **Target changed 2026-10-21 (decision D7):** CoralCraft must open and save/export **every format VectorCraft supports**: native `.vectorcraft`/`.drawcraft`/templates (lossless), SVG/SVGZ, PDF, AI/AIT, EPS/PS, DXF, EMF/WMF, PNG/JPEG/GIF/WebP/TIFF/BMP/TGA, PSD/PSB, and Affinity `.af`/`.afdesign`/`.afpub` (see `refs/vectorcraft/crates/engine/src/cmd/fileio/mod.rs` `FORMATS`/`OPEN_EXTS`). It must also keep CDR/CMX. This is reached by porting VectorCraft's I/O, not by extending the pre-fork importers below. The matrix below describes the pre-fork state and will be rewritten in task V2.4.
+
 > [!NOTE]
 > **Updated 2026-10-21 (`R0.1`–`R8.1` completed):** All format parsers and writers are backed by behavioural tests, deterministic hostile-input mutation tests, nightly `cargo-fuzz` targets (`fuzz/`), and `libcdr` (`cdr2raw` / `cmx2raw`) differential oracle verification. Re-estimated per-dimension scores are tracked in [`ROADMAP.md`](../ROADMAP.md) and the completed work queue is in [`gaps.md`](gaps.md).
 

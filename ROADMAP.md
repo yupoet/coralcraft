@@ -1,26 +1,41 @@
 # CoralCraft Roadmap
 
-> Stage: **pre-release** · Updated: 2026-10-21 (all R0.1–R8.1 review items completed)
-> Methodology: Dual-track clean-room public specification & format reverse engineering (see [`AGENTS.md`](AGENTS.md)).
-> Architecture and release decisions follow [`refs/vectorcraft`](https://github.com/storytold/vectorcraft): native egui UI, GitHub Actions on native runners, and a macOS `.app.zip` first.
+> Stage: **pre-alpha, re-basing on a VectorCraft fork** · Updated: 2026-10-21
+> Direction (operator decision 2026-10-21): CoralCraft is a **fork of [`storytold/vectorcraft`](https://github.com/storytold/vectorcraft)** extended toward CorelDRAW. Reuse VectorCraft; build only the CorelDRAW extension; open and save every VectorCraft file. See [`AGENTS.md`](AGENTS.md) and the active plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
 
-> [!NOTE]
-> Following the 2026-10-20 whole-project review (`5a7cc75`), all 21 reopened work items (`R0.1`–`R8.1` in [`docs/gaps.md`](docs/gaps.md)) have been completed and verified.
+> [!IMPORTANT]
+> The per-dimension self-scores used until M89 (for example "Tools, panels & interactive UI 80%") were not measured and are withdrawn. The table below is measured against `refs/vectorcraft` @ `a466625`.
 
-| Dimension | Current (re-estimated) | Main gaps |
-| --- | ---: | --- |
-| Workspace & engineering gates | 95% | GitHub Actions CI + i686 + wasm32 + nightly `cargo-fuzz` + `indexing_slicing`/`arithmetic_side_effects` deny enforced across 9 crates (`color`, `cdr`, `doc`, `render`, `geom`, `tools`, `coralcraft`, `coralcraft-cli`, and `xtask`). |
-| CDR format: `probe` | 85% | Hardened walker + CRC-32/Adler-32 validation + `libcdr` `cdr2raw` local differential oracle. |
-| CDR format: `parse` | 86% | Per-file decompression (128 MiB) & bitmap allocation (64 MiB) budgets enforced; Kaitai/Photopea-aligned `loda` header + `LIST grp ` / CMX1 `BeginGroup`/`EndGroup` + `rclr`/`rpen`/`rotl` style preservation + X6+ `content/dataFileList.dat` multi-stream extraction (`extract_zip_data_file_streams`). |
-| CDR/CMX format: `write` | 78% | Kaitai-aligned CDR7 `loda` offset-table, `LIST grp ` hierarchical groups, and CMX1 `BeginGroup`/`EndGroup` + tag-1/tag-2 writers with strict payload bounds checking and `libcdr` `cdr2raw`/`cmx2raw` differential tests. |
-| Document model & `.coralcraft` | 90% | `Document::validate()` enforced on load/engine init; forward-compatible `#[serde(other)]` enum variants; deterministic mutation tests (`import_svg`, `import_dxf`, `load_bytes`); checked 32-bit offsets. |
-| Rendering & vector export | 88% | Unified `apply_deforming_effects` & fountain gradient span across Raster/SVG/PDF/EPS/DXF; PDF `/XObject /Image`, `/ShadingType 2/3`, `/PatternType 1`, `/ExtGState`; `MAX_PDF_EXPORT_BYTES` (128 MiB) budget guard across PDF/SVG/EPS/DXF; EPS PowerClip (`clip`/`eoclip`), `behind_fill`, `scale_with_object`, and `setlinecap`/`setlinejoin`. |
-| Geometry (booleans, offsets, warps) | 82% | Clean-room planar subdivision polygon boolean clipper with canonical `VertexPool`, hole/island support, area-identity and 2D grid-oracle property tests, plus `OffsetJoinKind` (`Miter`, `Round`, `Bevel`) circular arc-fan path offsetting. |
-| Tools, panels & interactive UI | 80% | Native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), `rfd` dialogs, `arboard` clipboard, and WASM web canvas entry point. |
-| Print & prepress | 85% | Deduplicated `emit_crop_and_registration_marks`, ISO 15930 PDF/X-1a `/OutputIntents` (`/S /GTS_PDFX`), N-Up PDF sheet imposition, and native PDF shading/pattern/opacity dictionaries. |
-| MCP / agent automation | 90% | JSON-RPC 2.0 compliant (`ping`, silent notifications, protocol negotiation, `-32600`/`-32602`, 64 MiB stdio cap), generated `inputSchema.properties` for all 246 tools, `isError` on rejection, and table-driven smoke tests over all 246 tools. |
-| Packaging & release | 80% | Universal macOS `.app.zip`, Linux `nfpm` `.deb`/`.rpm` + AppImage + Flatpak manifest, Windows GUI subsystem + Inno Setup `.iss`, FreeBSD native CI, and real `wasm32-unknown-unknown` `trunk` web bundle. |
+## Measured gap to VectorCraft (2026-10-21, pre-fork baseline)
 
+| Metric | CoralCraft | VectorCraft | Ratio |
+|---|---:|---:|---:|
+| Rust lines (all crates + apps) | 53.2k | 577k | 9% |
+| Desktop layer (ui-egui + app + tools + engine) | 11.0k | 318k | 3.5% |
+| Panels / dockers | 2 | ~40 | ~5% |
+| Dialogs | ~0 | 125 source files | ~0% |
+| Working canvas tools | 6 | 89 | ~7% |
+| `#[test]` functions | 165 | 8,275 | 2% |
+| Text engine (fonts, shaping) | none (placeholder glyph outlines) | `text` crate + skrifa/harfrust | ~0% |
+| Formats opened (VectorCraft's `OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 31 extensions | ~13% |
+| **Desktop application overall (weighted estimate)** | | | **~8–10%** |
+
+What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX probe, parse and write** (`crates/cdr`), Corel `.cpl`/`.xml` palettes, and the CorelDRAW-specific MCP tools.
+
+## Phase V: re-base on VectorCraft (active)
+
+| Phase | Goal | Exit criterion |
+|---|---|---|
+| **V0** | Fork import and green build | VectorCraft test suite passes in this repo; app runs as CoralCraft (rebranded) |
+| **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP |
+| **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft` round-trips losslessly |
+| **V3** | CorelDRAW multi-page model | Pages, master layers (all/odd/even), desktop layer, page navigator |
+| **V4** | CorelDRAW workspace | Toolbox, property bar, palette bar, dockers, CorelDRAW shortcut set |
+| **V5** | CorelDRAW-specific features | PowerClip, interactive effects with handles, Corel palettes, Smart Fill, PowerTRACE |
+| **V6** | MCP and CLI | VectorCraft MCP server plus CoralCraft-only tools |
+| **V7** | Retire `legacy/` | Pre-fork crates deleted |
+
+Expected effect: after V2, CoralCraft matches what VectorCraft already does (VectorCraft self-rates ~62% "ready for real work" against Illustrator), plus CDR/CMX. Rough estimate for V0–V2: 40–80 agent hours.
 
 ## Milestone changelog (pre-review; not a verification record)
 
@@ -317,6 +332,7 @@
 
 ## Changelog
 
+- 2026-10-21: **Direction change.** Operator decided to re-base CoralCraft on a copy of VectorCraft (`a466625`), require reuse of VectorCraft subsystems, require compatibility with every VectorCraft file, and limit CoralCraft's own work to the CorelDRAW extension. Format self-round-trip milestones are frozen after M89. Old self-scores were withdrawn and replaced by a measured comparison.
 - 2026-10-21: M89 delivered (EPS `arc`/`arcn` circular arcs & `\ddd` octal escapes, PDF `TJ` kerning arrays, `<hex>` strings, multi-stream `/Contents [...]` & `/Parent` inherited `/MediaBox`, 3,000-iteration SplitMix64 mutation tests & `import_eps`/`import_pdf` fuzz targets, and `import_eps`/`import_pdf_base64` bringing `coralcraft-mcp` to 246 tools).
 - 2026-10-21: M88 delivered (`import_eps` & `export_eps` DSC comment round-trip and third-party `EPSF-3.0` PostScript interpreter, `import_pdf` & `export_pdf` multi-page PDF 1.4 round-trip and content-stream interpreter in `coralcraft-doc` & `coralcraft-render`, and `.eps`/`.pdf` open support in `coralcraft-cli` & `coralcraft-ui-egui`).
 - 2026-10-21: M87 delivered (SVG live `VectorEffect`, `data-hairline`, exact `data-transform`, `data-palette`, `Residual`, `FillStyle::Unknown` & `UnsupportedObject` round-trip in `export_svg` & `import_svg`, and DXF `$CORALCRAFT_DOC`/`$CORALCRAFT_PAGE` header variables, `TABLES` `LAYER` + `1001\nCORALCRAFT` XDATA lossless round-trip in `export_dxf` & `import_dxf`).

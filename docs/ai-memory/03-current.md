@@ -4,6 +4,21 @@
 
 ## 1. Current Stage Status
 
+- **ACTIVE DIRECTION (operator decision 2026-10-21)**: CoralCraft is re-based on a copy of VectorCraft (`refs/vectorcraft` @ `a466625`).
+  - **D6 Copy, then adapt** (not an external dependency).
+  - **D7** Every VectorCraft file works.
+  - **D8** Reuse VectorCraft; never reimplement what it has.
+  - **D9** CoralCraft's own scope is only the CorelDRAW extension.
+  - **D10** No more format self-round-trip milestones.
+  - Active plan: [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](../superpowers/plans/2026-10-21-vectorcraft-fork.md). **Next task: V0.1.**
+- **Measured baseline (2026-10-21)**: the desktop app is about 8–10% of VectorCraft's.
+  - 53k vs 577k lines; 2 vs ~40 panels; 6 vs 89 working canvas tools; 165 vs 8,275 tests.
+  - No real text engine; full-page CPU re-rasterization on every redraw.
+  - Details in `ROADMAP.md`.
+- **Last pre-fork milestone**: M89 (`e897b19`): EPS `arc`/`arcn`, PDF `TJ`/hex strings/multi-stream contents/inherited MediaBox, `import_eps`/`import_pdf_base64` MCP tools (246 tools).
+- **Pre-fork assets to carry forward**: `crates/cdr` (CDR/CMX probe/parse/write, libcdr differential tests), Corel palettes (`crates/color` `.cpl`/`.xml`), CorelDRAW-specific engine commands and MCP tools (port during V5/V6), `docs/reverse/`.
+- Everything below is the pre-fork history (`R0.1`–`R8.1`, M8–M89).
+
 - **Stage**: `pre-release`. Following the whole-project review on 2026-10-20 (HEAD `5a7cc75`), **all 21 reopened review items (`R0.1`–`R8.1` in [`docs/gaps.md`](../gaps.md)) are now 100% completed and verified**.
 - **Operator decisions (2026-10-20)**:
   - D1: native egui UI; follow `refs/vectorcraft` overall.
@@ -158,7 +173,7 @@
   81. **M88: Clean-Room Encapsulated PostScript (`EPSF-3.0`) Vector Importer (`import_eps`) & Lossless `export_eps` <-> `import_eps` Round-Trip, and ISO 32000-1 PDF 1.4 Vector Importer (`import_pdf`) & Multi-Page `export_pdf` <-> `import_pdf` Round-Trip (`commit 17d1ee8`)**:
       - `coralcraft-doc` & `coralcraft-render` (EPS): Implemented clean-room `import_eps` (`%%BoundingBox`/`%%HiResBoundingBox`, `gsave`/`grestore`, `translate`/`scale`/`rotate`/`concat`, `newpath`/`moveto`/`rmoveto`/`lineto`/`rlineto`/`curveto`/`rcurveto`/`closepath`, `rectfill`/`rectstroke`, `fill`/`eofill`/`stroke`, `setrgbcolor`/`setcmykcolor`/`setgray`, `setlinewidth`/`setlinecap`/`setlinejoin`/`setmiterlimit`/`setdash`, `findfont`/`scalefont`/`setfont`/`show`, `/ASCIIHexDecode filter false 3 colorimage`, and `% Layer:`) plus `<= 255`-char DSC continuation comments (`%%CoralCraftDoc:`, `%%CoralCraftPage:`, `% CoralCraftLayer:`, `% CoralCraftNode:`) in `export_eps` for lossless round-trip.
       - `coralcraft-doc`, `coralcraft-render`, `coralcraft-ui-egui` & `coralcraft-cli` (PDF): Implemented clean-room multi-page `import_pdf` (`/Type /Page`, `/MediaBox`, `/TrimBox`, `/Contents`, `q`/`Q`, `cm`, `m`/`l`/`c`/`v`/`y`/`h`/`re`, `S`/`s`/`f`/`F`/`f*`/`B`/`B*`/`b`/`b*`/`n`, `rg`/`RG`/`k`/`K`/`g`/`G`, `w`/`J`/`j`/`M`/`d`, `BT`/`Tf`/`Tm`/`Td`/`TD`/`Tj`/`ET`, `BI`/`ID`/`EI` `/AHx` inline images) plus PDF stream metadata comments in `export_pdf_with_prepress` and `.eps`/`.pdf` open support in `coralcraft-cli` and `CoralCraftApp::open_from_path`.
-  82. **M89: EPS `arc`/`arcn` Circular Arcs & Octal Escapes, PDF `TJ` Kerning Arrays, `<hex>` Strings, Multi-Stream `/Contents [...]` & Inherited `/MediaBox`, Hostile-Input Mutation & Fuzz Targets, and 246 MCP Tools (`import_eps` & `import_pdf_base64`)**:
+  82. **M89: EPS `arc`/`arcn` Circular Arcs & Octal Escapes, PDF `TJ` Kerning Arrays, `<hex>` Strings, Multi-Stream `/Contents [...]` & Inherited `/MediaBox`, Hostile-Input Mutation & Fuzz Targets, and 246 MCP Tools (`import_eps` & `import_pdf_base64`) (`commit e897b19`)**:
       - `coralcraft-doc` & `coralcraft-fuzz`: Added PostScript `arc` (CCW) and `arcn` (CW) circular-arc-to-cubic-Bézier subdivision (`k = (4/3)*tan(d_theta/4)`), `\ddd` octal string escapes, `<...>` hexadecimal strings, PDF `TJ` kerning array operator (`kern <= -180` word-space recovery), multi-stream `/Contents [id1 0 R id2 0 R]` concatenation, `/Parent` inherited `/MediaBox` resolution with 8-hop cycle guard, 3,000-iteration SplitMix64 hostile-input mutation tests (`eps_and_pdf_import_survive_deterministic_mutations`), and `import_eps` / `import_pdf` fuzz targets.
       - `coralcraft-mcp`: Added `import_eps` and `import_pdf_base64` MCP tools (bringing `coralcraft-mcp` to **246 tools**) and regenerated `docs/mcp.md`.
   58. **Interactive Desktop GUI Studio & Multi-Platform Release Packaging (`v0.0.1`)**:
