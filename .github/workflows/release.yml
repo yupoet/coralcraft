@@ -47,7 +47,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist/release
-          shasum -a 256 coralcraft-* vectorcraft-cli-* > SHA256SUMS-macos.txt
+          shasum -a 256 coralcraft-* coralcraft-cli-* > SHA256SUMS-macos.txt
           cat SHA256SUMS-macos.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

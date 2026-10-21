@@ -50,7 +50,7 @@ Rules:
 - [x] V0.1 Move pre-fork crates to `legacy/` (except `crates/cdr`). Copy VectorCraft `crates/*`, `apps/*`, `xtask` (merged with ours: keep `cleanroom`, `assets`, `layers`), `vendor/`, `assets/` (non-brand only), `packaging/`, and CI workflows. Record `a466625` in `docs/upstream-vectorcraft.md`.
 - [x] V0.2 Workspace builds; VectorCraft's own test suite passes unchanged; `cargo xtask ci` adapted (cleanroom scan still blocks Corel strings and `.cdr`/`.cmx` binaries).
 - [x] V0.3 Rebrand `apps/vectorcraft` -> `apps/coralcraft` (binary name, window title, app ID, bundle ID, About box, prefs directory, MCP server name). Add original CoralCraft icon assets.
-- [ ] V0.4 `coralcraft-cli` rebased on `vectorcraft-cli`. Keep the `probe` subcommand from the old CLI.
+- [x] V0.4 `coralcraft-cli` rebased on `vectorcraft-cli`. Keep the `probe` subcommand from the old CLI.
 
 ### V1: CDR/CMX on the VectorCraft document model
 - [ ] V1.1 Port `coralcraft-cdr` `parse_document` output to the VectorCraft `Document` (via a `corel-import` mapping layer). Unsupported CDR objects keep a lossless residual.

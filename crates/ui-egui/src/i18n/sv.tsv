@@ -4236,7 +4236,7 @@ axis	Both	Båda
 @msg	the search couldn't start: try again in a moment	sökningen kunde inte starta: försök igen om en stund
 @msg	searching a folder isn't available on the web	sökning i en mapp är inte tillgänglig på webben
 @msg	every search thread stopped on an internal error (please report this bug)	alla söktrådar stoppades av ett internt fel (rapportera gärna felet)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	VectorCrafts mapp Fonts anges inte här: den anges av skrivbordsappen och vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	VectorCrafts mapp Fonts anges inte här: den anges av skrivbordsappen och coralcraft-cli
 @msg	choose the font files to add	välj de typsnittsfiler som ska läggas till
 @msg	{n} font file(s) are now in {folder}	{n} teckensnittsfil(er) finns nu i {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} teckensnittsfil(er) finns nu i {folder}; {failed} kunde inte läggas till: {reason}

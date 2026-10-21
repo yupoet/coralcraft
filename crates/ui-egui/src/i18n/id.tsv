@@ -4340,7 +4340,7 @@ imageTrace	Outline	Kontur
 @msg	the search couldn't start: try again in a moment	pencarian tidak dapat dimulai: coba lagi sebentar lagi
 @msg	searching a folder isn't available on the web	mencari di folder tidak tersedia di web
 @msg	every search thread stopped on an internal error (please report this bug)	semua utas pencarian berhenti karena kesalahan internal (mohon laporkan bug ini)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	folder Fonts VectorCraft tidak diatur di sini: aplikasi desktop dan vectorcraft-cli yang mengaturnya
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	folder Fonts VectorCraft tidak diatur di sini: aplikasi desktop dan coralcraft-cli yang mengaturnya
 @msg	choose the font files to add	pilih berkas font yang akan ditambahkan
 @msg	{n} font file(s) are now in {folder}	{n} berkas font kini berada di {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} berkas font kini berada di {folder}; {failed} tidak dapat ditambahkan: {reason}

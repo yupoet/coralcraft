@@ -10,7 +10,7 @@
   Per-machine install with a setup wizard that names the version: Welcome, install folder (Program Files\CoralCraft by
   default, remembered for upgrades), Ready, a progress page, and a Finish page with a ticked
   "Launch CoralCraft" box. Installs a Start Menu shortcut and an App Paths entry (so `coralcraft`
-  starts from the Run dialog), plus vectorcraft-cli. A Shortcuts page after the install folder offers
+  starts from the Run dialog), plus coralcraft-cli. A Shortcuts page after the install folder offers
   a desktop shortcut (ticked). `msiexec /qn` still installs silently, with the desktop shortcut
   unless INSTALLDESKTOPSHORTCUT="" is passed.
 -->
@@ -125,7 +125,7 @@
       </Component>
 
       <Component Id="VectorcraftCli">
-        <File Id="VectorcraftCliExe" Source="$(var.BinDir)\vectorcraft-cli.exe" KeyPath="yes" />
+        <File Id="VectorcraftCliExe" Source="$(var.BinDir)\coralcraft-cli.exe" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 

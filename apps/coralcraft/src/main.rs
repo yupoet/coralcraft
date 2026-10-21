@@ -674,8 +674,8 @@ Options:
   --version                      Print the version and exit
   -h, --help                     Print this help and exit
 
-Without a window (converting, scripting, the MCP server), use vectorcraft-cli:
-  vectorcraft-cli --help
+Without a window (converting, scripting, the MCP server), use coralcraft-cli:
+  coralcraft-cli --help
 ";
 
 fn main() -> std::process::ExitCode {
@@ -888,7 +888,7 @@ fn main() -> std::process::ExitCode {
                 prefs_dir::attach_plugin_store(&mut session);
                 let mut app = VectorcraftApp::new(session, services(cc.winit_window().cloned(), cc.egui_ctx.clone()));
                 load_prefs(&mut app, saved);
-                // The saved PDF presets live in their own folder (also read by vectorcraft-cli),
+                // The saved PDF presets live in their own folder (also read by coralcraft-cli),
                 // which takes over from the copy the preferences file used to hold.
                 prefs_dir::attach_pdf_preset_store(&mut app.session);
                 // Fit the window to its monitor, or put it back where it was (still hidden).

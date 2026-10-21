@@ -44,7 +44,7 @@ modules:
     buildsystem: simple
     build-commands:
       - install -Dm755 bin/coralcraft /app/bin/coralcraft
-      - install -Dm755 bin/vectorcraft-cli /app/bin/vectorcraft-cli
+      - install -Dm755 bin/coralcraft-cli /app/bin/coralcraft-cli
       - install -Dm644 share/applications/io.github.yupoet.coralcraft.desktop /app/share/applications/io.github.yupoet.coralcraft.desktop
       - install -Dm644 share/mime/packages/io.github.yupoet.coralcraft.xml /app/share/mime/packages/io.github.yupoet.coralcraft.xml
       # Already has the release's version and date substituted by package.sh.

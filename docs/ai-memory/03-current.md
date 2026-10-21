@@ -4,6 +4,13 @@
 
 ## 1. Current Stage Status
 
+- **V0.4 DONE (2026-10-21): `coralcraft-cli` rebased on `vectorcraft-cli`.**
+  `apps/coralcraft-cli` (package/bin `coralcraft-cli`) keeps the upstream CLI
+  (mcp/run/convert/info/bench/perf) and gains the pre-fork `probe` subcommand
+  (`probe FILE [--json]`, exit 3/5/4/2) over `coralcraft-cdr` (`src/probe.rs`,
+  `tests/cli_probe.rs`, synthetic temp-dir fixtures). All `vectorcraft-cli` references renamed
+  across packaging/workflows/lint table. **V0 is complete; next task: V1.1** (map
+  `coralcraft-cdr` parse output onto the VectorCraft `Document` via a `corel-import` layer).
 - **V0.3 DONE (2026-10-21): desktop app rebranded to CoralCraft.** `cargo xtask ci` green (11/11).
   - `apps/coralcraft` (package/bin `coralcraft`): window title, About, app menu, `--version`,
     log names, prefs folders (`…/CoralCraft`, `~/.config/coralcraft`), portable markers,

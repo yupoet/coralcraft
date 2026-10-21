@@ -3889,7 +3889,7 @@ axis	Both	Ambos
 @msg	the search couldn't start: try again in a moment	não foi possível iniciar a pesquisa: tente novamente em instantes
 @msg	searching a folder isn't available on the web	pesquisar em uma pasta não está disponível na web
 @msg	every search thread stopped on an internal error (please report this bug)	todos os processos de pesquisa pararam por um erro interno (relate este bug)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	A pasta Fontes do VectorCraft não está definida aqui: o aplicativo para desktop e o vectorcraft-cli a definem
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	A pasta Fontes do VectorCraft não está definida aqui: o aplicativo para desktop e o coralcraft-cli a definem
 @msg	choose the font files to add	escolha os arquivos de fonte a adicionar
 @msg	{n} font file(s) are now in {folder}	{n} arquivo(s) de fonte agora está(ão) em {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} arquivo(s) de fonte agora está(ão) em {folder}; {failed} não pôde(puderam) ser adicionado(s): {reason}

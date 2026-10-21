@@ -62,7 +62,7 @@ jobs:
   linux-package-smoke:
     # Build the .deb and install it on an older distribution, so a package that only works on the
     # build host can't pass (docs/ai-memory/04-known-issues.md #10). Re-enabled in V0.3 with the
-    # rebranded packaging; the CLI binary keeps its upstream name vectorcraft-cli until V0.4.
+    # rebranded packaging; the CLI binary keeps its upstream name coralcraft-cli until V0.4.
     name: Linux .deb install smoke test
     runs-on: ubuntu-24.04
     steps:
@@ -83,9 +83,9 @@ jobs:
         run: |
           docker run --rm -v "$PWD/dist/release":/r:ro debian:11 sh -ec '
             dpkg -i /r/coralcraft-*-linux-x86_64.deb
-            vectorcraft-cli --version
+            coralcraft-cli --version
             coralcraft --version
-            printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | vectorcraft-cli mcp | grep -q "\"tools\""
+            printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""
           '
 
   test-32bit:

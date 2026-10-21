@@ -1,5 +1,5 @@
 [package]
-name = "vectorcraft-cli"
+name = "coralcraft-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ publish = false
 description = "VectorCraft command line: MCP server (stdio) and headless batch runs"
 
 [[bin]]
-name = "vectorcraft-cli"
+name = "coralcraft-cli"
 path = "src/main.rs"
 
 [lints]
@@ -17,6 +17,8 @@ workspace = true
 vectorcraft-color = { workspace = true }
 vectorcraft-doc = { workspace = true }
 vectorcraft-engine = { workspace = true }
+# CoralCraft: the probe subcommand's CDR/CMX format layer.
+coralcraft-cdr = { workspace = true }
 vectorcraft-format = { workspace = true }
 vectorcraft-geom = { workspace = true }
 vectorcraft-svg = { workspace = true }

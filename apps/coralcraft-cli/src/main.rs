@@ -1,13 +1,14 @@
-//! `vectorcraft-cli`: VectorCraft from the command line.
+//! `coralcraft-cli`: VectorCraft from the command line.
 //!
 //! ```text
-//! vectorcraft-cli mcp [--connect 127.0.0.1:7979 | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
-//! vectorcraft-cli run [--in FILE] [--cmd id [--params '{json}']]... [--export out.svg]... [--scale 2]
-//! vectorcraft-cli commands
-//! vectorcraft-cli convert IN OUT [--scale 2] [--artboard 0 | --range 1-3,5] [--outline-text] [--decimals N] [--replace-lossy] [--editing-data] [--ai-version 7|pdf] [--hidden-objects layer|omit|visible] [--transparent-images flatten|omit]
-//! vectorcraft-cli info FILE
-//! vectorcraft-cli bench FILE [--size 2880x1800] [--iters 5]
-//! vectorcraft-cli perf [--paths 50000] [--deep]
+//! coralcraft-cli mcp [--connect 127.0.0.1:7979 | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
+//! coralcraft-cli run [--in FILE] [--cmd id [--params '{json}']]... [--export out.svg]... [--scale 2]
+//! coralcraft-cli commands
+//! coralcraft-cli convert IN OUT [--scale 2] [--artboard 0 | --range 1-3,5] [--outline-text] [--decimals N] [--replace-lossy] [--editing-data] [--ai-version 7|pdf] [--hidden-objects layer|omit|visible] [--transparent-images flatten|omit]
+//! coralcraft-cli info FILE
+//! coralcraft-cli probe FILE [--json]
+//! coralcraft-cli bench FILE [--size 2880x1800] [--iters 5]
+//! coralcraft-cli perf [--paths 50000] [--deep]
 //! ```
 // Denied, not forbidden: the font listers shared with the desktop app allow it for their
 // DirectWrite (Windows) and CoreText (macOS) calls, and nothing else may.
@@ -18,7 +19,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 /// `println!` / `print!` that end the program quietly when stdout is closed
-/// (`vectorcraft-cli commands | head`) instead of panicking with "failed printing to stdout:
+/// (`coralcraft-cli commands | head`) instead of panicking with "failed printing to stdout:
 /// Broken pipe (os error 32)".
 macro_rules! outln {
     ($($arg:tt)*) => {{
@@ -42,9 +43,11 @@ macro_rules! out {
 #[path = "../../coralcraft/src/mac_fonts.rs"]
 mod mac_fonts;
 mod perf;
+// CoralCraft: CDR/CMX container inspection (from the pre-fork CLI).
 /// The desktop app's settings folder, shared: exports and MCP read the same Fonts folder.
 #[path = "../../coralcraft/src/prefs_dir.rs"]
 mod prefs_dir;
+mod probe;
 /// The desktop app's DirectWrite font lister, shared: exports and MCP find the same fonts.
 #[cfg(all(windows, not(target_vendor = "win7")))]
 #[path = "../../coralcraft/src/system_fonts.rs"]
@@ -60,15 +63,15 @@ fn stdout_failed(e: std::io::Error) -> ! {
     if e.kind() == std::io::ErrorKind::BrokenPipe {
         std::process::exit(0);
     }
-    eprintln!("vectorcraft-cli: can't write to stdout: {e}");
+    eprintln!("coralcraft-cli: can't write to stdout: {e}");
     std::process::exit(1);
 }
 
 const USAGE: &str = "\
-vectorcraft-cli — VectorCraft automation
+coralcraft-cli — VectorCraft automation
 
 USAGE:
-  vectorcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
+  coralcraft-cli mcp [--connect ADDR | --headless] [--automation-read-root DIR] [--automation-write-root DIR]
       Run the MCP server on stdio. Default: connect to a running app at 127.0.0.1:7979
       (vectorcraft --control 7979), falling back to a headless in-process session.
       --automation-read-root / --automation-write-root confine the files the agent's commands read
@@ -76,16 +79,16 @@ USAGE:
       DIR, links followed; a root left out grants none of its access. They imply --headless: a
       running app enforces its own (vectorcraft --control PORT --automation-read-root DIR …).
 
-  vectorcraft-cli run [--in FILE] [--cmd ID [--params JSON]]... [--export FILE]... [--scale N]
+  coralcraft-cli run [--in FILE] [--cmd ID [--params JSON]]... [--export FILE]... [--scale N]
       Headless batch: open FILE (any readable format) or start a new document, run commands in
       order, export each FILE in the format its extension picks (see Writable formats; a .ait FILE
       is a template, written as file.saveAsTemplate writes it). --scale sizes raster exports
       (pixels per point, default 1); other formats leave it out. Prints one JSON result per step.
 
-  vectorcraft-cli commands
+  coralcraft-cli commands
       Print the command catalogue as JSON.
 
-  vectorcraft-cli convert IN OUT [--scale N] [--artboard I | --range R] [--outline-text] [--decimals N] [--replace-lossy] [--editing-data] [--ai-version 7|pdf] [--hidden-objects layer|omit|visible] [--transparent-images flatten|omit]
+  coralcraft-cli convert IN OUT [--scale N] [--artboard I | --range R] [--outline-text] [--decimals N] [--replace-lossy] [--editing-data] [--ai-version 7|pdf] [--hidden-objects layer|omit|visible] [--transparent-images flatten|omit]
       Open IN (any readable format) and export OUT in the format its extension picks (see Writable
       formats). --scale sizes a raster OUT (pixels per point, default 1); other formats leave it
       out. --artboard is 0-based, --range 1-based (\"1-3,5\"); a PDF gets every artboard
@@ -105,16 +108,16 @@ USAGE:
       visible), --transparent-images (default flatten, with the art under them; omit) and
       --outline-text (type as outlines instead of text).
 
-  vectorcraft-cli info FILE
+  coralcraft-cli info FILE
       Print a JSON summary: the import warnings (what didn't come in as it was, such as an EPS
       read from its preview and why), title, colour mode, units, artboards, object counts by
       kind, fonts.
 
-  vectorcraft-cli bench FILE [--size WxH] [--iters N]
+  coralcraft-cli bench FILE [--size WxH] [--iters N]
       Render FILE (any readable format) fitted to WxH (default 2880x1800) and print ms per frame
       (warm), multithreaded and single-threaded.
 
-  vectorcraft-cli perf [--paths N] [--deep]
+  coralcraft-cli perf [--paths N] [--deep]
       Check the performance budgets (render, pan, hit test, save/load, SVG, Pathfinder, handle
       and segment drags) on a synthetic N-path document (default 50000). Exits non-zero if a
       budget is exceeded, unless the report says the machine is busy. --deep also times work with
@@ -144,12 +147,14 @@ fn main() -> ExitCode {
         Some("info") => info(&args[1..]),
         Some("bench") => bench(&args[1..]),
         Some("perf") => perf::run(&args[1..]),
+        // CoralCraft: CDR/CMX container inspection (distinct exit codes for scripts).
+        Some("probe") => return probe::run(&args[1..]),
         Some("-h" | "--help" | "help") | None => {
             out!("{}", usage());
             Ok(())
         }
         Some("-V" | "--version") => {
-            outln!("vectorcraft-cli {}", env!("CARGO_PKG_VERSION"));
+            outln!("coralcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!("unknown subcommand `{other}`\n\n{}", usage())),
@@ -157,7 +162,7 @@ fn main() -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("vectorcraft-cli: {e}");
+            eprintln!("coralcraft-cli: {e}");
             ExitCode::FAILURE
         }
     }
@@ -209,7 +214,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         // Every thread of this process, not only the server's: nothing reaches past the roots.
         file_access::confine_process(roots.clone());
         let show = |root: Option<&Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-        eprintln!("vectorcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+        eprintln!("coralcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
         Box::new(Headless::with_document().with_automation_roots(Some(roots)))
     } else if headless {
         Box::new(with_stores(Headless::with_document()))
@@ -222,7 +227,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             Err(_) => Box::new(with_stores(Headless::with_document())),
         }
     };
-    eprintln!("vectorcraft-cli: MCP server on stdio ({})", backend.describe());
+    eprintln!("coralcraft-cli: MCP server on stdio ({})", backend.describe());
     // The binary owns the logger, not the library: installing one here keeps an embedder that
     // uses `vectorcraft_mcp` free to bring its own. Silent until a client sends logging/setLevel.
     vectorcraft_mcp::logging::install();

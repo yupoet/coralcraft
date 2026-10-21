@@ -4340,7 +4340,7 @@ imageTrace	Outline	Kontur
 @msg	the search couldn't start: try again in a moment	søgningen kunne ikke starte: prøv igen om et øjeblik
 @msg	searching a folder isn't available on the web	mappesøgning er ikke tilgængelig i webversionen
 @msg	every search thread stopped on an internal error (please report this bug)	alle søgetråde stoppede ved en intern fejl (rapportér venligst denne programfejl)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	VectorCrafts Fonts-mappe er ikke angivet her: skrivebordsprogrammet og vectorcraft-cli angiver den
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	VectorCrafts Fonts-mappe er ikke angivet her: skrivebordsprogrammet og coralcraft-cli angiver den
 @msg	choose the font files to add	vælg de skrifttypefiler, der skal tilføjes
 @msg	{n} font file(s) are now in {folder}	{n} skrifttypefil(er) er nu i {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} skrifttypefil(er) er nu i {folder}; {failed} kunne ikke tilføjes: {reason}

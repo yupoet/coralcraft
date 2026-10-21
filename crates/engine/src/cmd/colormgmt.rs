@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Color Profile…",
             [],
             None,
-            "{path: .icc/.icm file of at most 32 MB} register an ICC profile (native only). The desktop app and vectorcraft-cli keep a copy of the file in the `Color Profiles` folder next to the preferences and register it again at every start (not with VECTORCRAFT_NO_PREFS, or in a confined `mcp --automation-*-root` server: there it lasts until the process ends) → {name, kind, remembered: whether a copy was kept}",
+            "{path: .icc/.icm file of at most 32 MB} register an ICC profile (native only). The desktop app and coralcraft-cli keep a copy of the file in the `Color Profiles` folder next to the preferences and register it again at every start (not with VECTORCRAFT_NO_PREFS, or in a confined `mcp --automation-*-root` server: there it lasts until the process ends) → {name, kind, remembered: whether a copy was kept}",
             always,
             load_profile
         ),

@@ -54,7 +54,8 @@ pub const TABLE: &[(&str, Class)] = &[
     // L7 apps and tooling
     // CoralCraft: the desktop app was renamed from `vectorcraft` in V0.3.
     ("coralcraft", Class::Exempt),
-    ("cli", Class::Exempt),
+    // CoralCraft: the CLI was renamed from vectorcraft-cli in V0.4.
+    ("coralcraft-cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
     // Crates added later (append-only).
@@ -275,7 +276,7 @@ mod tests {
             c("vectorcraft-doc", &[("vectorcraft-geom", Normal, true)]),
             c("vectorcraft-engine", &[("vectorcraft-doc", Normal, true), ("vectorcraft-testkit", Dev, true)]),
             c("vectorcraft-ui-egui", &[("vectorcraft-engine", Normal, true), ("egui", Normal, false)]),
-            c("vectorcraft-cli", &[("vectorcraft-ui-egui", Normal, true)]),
+            c("coralcraft-cli", &[("vectorcraft-ui-egui", Normal, true)]),
         ];
         assert!(check(&g).is_empty(), "{:?}", check(&g));
     }
@@ -340,7 +341,7 @@ mod tests {
 
     #[test]
     fn apps_and_xtask_exempt() {
-        for app in ["coralcraft", "vectorcraft-cli", "vectorcraft-web", "xtask"] {
+        for app in ["coralcraft", "coralcraft-cli", "vectorcraft-web", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("vectorcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

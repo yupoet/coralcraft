@@ -20,7 +20,7 @@ description: |-
   Open-source, native vector illustration app.
   Pen, shape and brush tools, artboards, type, gradients, symbols and live
   effects; opens and saves SVG and PDF.
-  Includes vectorcraft-cli, a headless converter and command runner.
+  Includes coralcraft-cli, a headless converter and command runner.
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
@@ -66,8 +66,8 @@ contents:
   - src: ${STAGE}/usr/bin/coralcraft
     dst: /usr/bin/coralcraft
     file_info: { mode: 0755 }
-  - src: ${STAGE}/usr/bin/vectorcraft-cli
-    dst: /usr/bin/vectorcraft-cli
+  - src: ${STAGE}/usr/bin/coralcraft-cli
+    dst: /usr/bin/coralcraft-cli
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/share/
     dst: /usr/share/

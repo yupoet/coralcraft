@@ -4943,7 +4943,7 @@ imageTrace	Outline	Körvonal
 @msg	VectorCraft doesn't search other apps' or the system's folders: {path}	a VectorCraft nem keres más alkalmazások és a rendszer mappáiban: {path}
 @msg	VectorCraft doesn't search the Shared or Public folder in Users: {path}	a VectorCraft nem keres a Users alatti Shared és Public mappában: {path}
 @msg	VectorCraft failed to start: {e}	A VectorCraft nem tudott elindulni: {e}
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	a VectorCraft Fonts mappája itt nincs beállítva: az asztali alkalmazás és a vectorcraft-cli állítja be
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	a VectorCraft Fonts mappája itt nincs beállítva: az asztali alkalmazás és a coralcraft-cli állítja be
 @msg	version {0} files can't be compressed: only version {COMPRESSED_SINCE} and later open compressed files	ilyen verziójú fájl nem tömöríthető: {0}; tömörített fájlt csak ez a verzió és az újabbak nyitnak meg: {COMPRESSED_SINCE}
 @msg	width and height are at least 1 pixel	a szélesség és a magasság legalább 1 pixel
 @msg	workspace name can't be empty	a munkaterület neve nem lehet üres

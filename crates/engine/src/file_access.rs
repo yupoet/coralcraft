@@ -1,6 +1,6 @@
 //! The folders automation may read and write (#832).
 //!
-//! `vectorcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`, and
+//! `coralcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`, and
 //! `vectorcraft --control <port>` with the same flags, confine the files an agent's commands
 //! reach. [`AutomationRoots`] holds the two folders. While they are in force, every path a command
 //! reads goes through [`check_read`] and every path it writes through [`check_write`]:
@@ -14,7 +14,7 @@
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Roots are in force on a thread inside [`confine`], and in the whole process after
-//! [`confine_process`] (`vectorcraft-cli mcp`, the desktop app with a control port), except inside
+//! [`confine_process`] (`coralcraft-cli mcp`, the desktop app with a control port), except inside
 //! [`unconfined`]: what the person at the keyboard does, and the app's own folders (preferences,
 //! Data Recovery, the library folders, VectorCraft's Fonts folder), which no agent names. Without
 //! roots nothing is checked.

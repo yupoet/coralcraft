@@ -255,7 +255,7 @@ mod tests {
         let bundled = Path::new("/Apps/CoralCraft.app/Contents/MacOS/vectorcraft");
         assert_eq!(install_dir("macos", bundled, &environment), Some("/Apps".into()));
         // A bare executable (the CLI zip) and other platforms: the executable's own folder.
-        assert_eq!(install_dir("macos", Path::new("/Apps/vectorcraft-cli"), &environment), Some("/Apps".into()));
+        assert_eq!(install_dir("macos", Path::new("/Apps/coralcraft-cli"), &environment), Some("/Apps".into()));
         assert_eq!(install_dir("windows", bundled, &environment), Some("/Apps/CoralCraft.app/Contents/MacOS".into()));
         assert_eq!(install_dir("linux", bundled, &environment), Some("/Apps/CoralCraft.app/Contents/MacOS".into()));
     }

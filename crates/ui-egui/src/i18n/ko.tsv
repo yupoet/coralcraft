@@ -4343,7 +4343,7 @@ theme	Appearance	외관
 @msg	the search couldn't start: try again in a moment	검색을 시작할 수 없습니다: 잠시 후 다시 시도하세요
 @msg	searching a folder isn't available on the web	웹에서는 폴더 검색을 사용할 수 없습니다
 @msg	every search thread stopped on an internal error (please report this bug)	내부 오류로 모든 검색 스레드가 중지되었습니다(이 버그를 신고해 주세요)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	여기에는 VectorCraft의 글꼴 폴더가 설정되어 있지 않습니다: 데스크톱 앱과 vectorcraft-cli가 설정합니다
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	여기에는 VectorCraft의 글꼴 폴더가 설정되어 있지 않습니다: 데스크톱 앱과 coralcraft-cli가 설정합니다
 @msg	choose the font files to add	추가할 글꼴 파일을 선택하세요
 @msg	{n} font file(s) are now in {folder}	글꼴 파일 {n}개가 이제 {folder}에 있습니다
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	글꼴 파일 {n}개가 이제 {folder}에 있으며, {failed}개는 추가할 수 없었습니다: {reason}

@@ -120,7 +120,7 @@ fn a_slow_clipboard_is_read_off_the_ui_thread() {
     assert!(frames_until(&mut app, Duration::from_secs(60), |app| app.system_paste), "the probe's verdict never arrived");
     assert!(menus::enabled(&app, "edit.paste"));
     let threads = rec.threads.lock().unwrap().clone();
-    assert!(threads.iter().all(|n| n.as_deref() == Some("vectorcraft-clip")), "checked on: {threads:?}");
+    assert!(threads.iter().all(|n| n.as_deref() == Some("coralcraft-clip")), "checked on: {threads:?}");
 }
 
 #[test]
@@ -152,5 +152,5 @@ fn without_its_thread_the_check_runs_in_line_again() {
     assert!(frames_until(&mut app, Duration::from_secs(60), |app| app.system_paste), "no fallback");
     assert!(app.clipboard_probe.is_none());
     let threads = rec.threads.lock().unwrap().clone();
-    assert_eq!(threads.first().cloned().flatten().as_deref(), Some("vectorcraft-clip"), "{threads:?}");
+    assert_eq!(threads.first().cloned().flatten().as_deref(), Some("coralcraft-clip"), "{threads:?}");
 }

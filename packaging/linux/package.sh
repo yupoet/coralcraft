@@ -48,9 +48,9 @@ echo "==> CoralCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
   if [ -n "${CROSS_TARGET:-}" ]; then
-    (cd "$ROOT" && cargo build --release --locked -p coralcraft -p vectorcraft-cli --target "$CROSS_TARGET")
+    (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli --target "$CROSS_TARGET")
   else
-    (cd "$ROOT" && cargo build --release --locked -p coralcraft -p vectorcraft-cli)
+    (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli)
   fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
@@ -60,8 +60,8 @@ rm -rf "$WORK"
 
 # ---- stage an FHS tree (shared by every format) -------------------------------------------------
 install -Dm755 "$BIN/coralcraft" "$STAGE/usr/bin/coralcraft"
-install -Dm755 "$BIN/vectorcraft-cli" "$STAGE/usr/bin/vectorcraft-cli"
-"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/coralcraft" "$STAGE/usr/bin/vectorcraft-cli" 2>/dev/null || true
+install -Dm755 "$BIN/coralcraft-cli" "$STAGE/usr/bin/coralcraft-cli"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/coralcraft" "$STAGE/usr/bin/coralcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
@@ -145,9 +145,9 @@ if has appimage; then
 fi
 
 if [ -z "${CROSS_TARGET:-}" ]; then
-  "$STAGE/usr/bin/vectorcraft-cli" --version
+  "$STAGE/usr/bin/coralcraft-cli" --version
 elif [ -n "${EMULATOR:-}" ]; then
-  "$EMULATOR" "$STAGE/usr/bin/vectorcraft-cli" --version
+  "$EMULATOR" "$STAGE/usr/bin/coralcraft-cli" --version
 fi
 echo "==> done"
 ls -lh "$DIST"

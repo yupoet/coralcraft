@@ -4352,7 +4352,7 @@ imageTrace	Outline	Contour
 @msg	the search couldn't start: try again in a moment	de zoekopdracht kon niet starten: probeer het over een ogenblik opnieuw
 @msg	searching a folder isn't available on the web	een map doorzoeken is niet beschikbaar op het web
 @msg	every search thread stopped on an internal error (please report this bug)	elke zoekthread is gestopt door een interne fout (meld deze bug)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	de map Lettertypen van VectorCraft is hier niet ingesteld: de desktopapp en vectorcraft-cli stellen die in
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	de map Lettertypen van VectorCraft is hier niet ingesteld: de desktopapp en coralcraft-cli stellen die in
 @msg	choose the font files to add	kies de lettertypebestanden die je wilt toevoegen
 @msg	{n} font file(s) are now in {folder}	er staan nu {n} lettertypebestand(en) in {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	er staan nu {n} lettertypebestand(en) in {folder}; {failed} konden niet worden toegevoegd: {reason}

@@ -16,7 +16,7 @@
 //! written once the file is attached. Writing never panics: a file that can't be created or
 //! written leaves standard error as the only sink.
 //!
-//! This is the desktop app's logger only. `vectorcraft-cli mcp` installs its own
+//! This is the desktop app's logger only. `coralcraft-cli mcp` installs its own
 //! (`vectorcraft_mcp::logging`, MCP `notifications/message`); the two never share a process.
 
 use std::fs::File;

@@ -38,7 +38,7 @@ BASENAME="coralcraft-$VERSION-freebsd-$ARCH"
 echo "==> CoralCraft $VERSION for FreeBSD $ARCH"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p vectorcraft-cli)
+  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli)
 fi
 BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/freebsd-package"
@@ -48,8 +48,8 @@ rm -rf "$WORK"
 # ---- stage a /usr/local-style tree ---------------------------------------------------------------
 mkdir -p "$STAGE/bin" "$STAGE/share/applications" "$STAGE/share/mime/packages" "$STAGE/share/metainfo" \
   "$STAGE/share/icons" "$STAGE/share/doc/coralcraft"
-install -m 755 "$BIN/coralcraft" "$BIN/vectorcraft-cli" "$STAGE/bin/"
-strip "$STAGE/bin/coralcraft" "$STAGE/bin/vectorcraft-cli" 2>/dev/null || true
+install -m 755 "$BIN/coralcraft" "$BIN/coralcraft-cli" "$STAGE/bin/"
+strip "$STAGE/bin/coralcraft" "$STAGE/bin/coralcraft-cli" 2>/dev/null || true
 # The desktop entry, MIME type and metainfo are the freedesktop files the Linux packages use.
 install -m 644 "$LINUX/$APP_ID.desktop" "$STAGE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$STAGE/share/mime/packages/$APP_ID.xml"
@@ -65,6 +65,6 @@ done
 tar -C "$WORK" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
 echo "wrote $DIST/$BASENAME.tar.gz"
 
-"$STAGE/bin/vectorcraft-cli" --version
+"$STAGE/bin/coralcraft-cli" --version
 echo "==> done"
 ls -lh "$DIST"

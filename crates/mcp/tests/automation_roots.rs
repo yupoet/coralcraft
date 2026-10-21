@@ -1,4 +1,4 @@
-//! `vectorcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` (#832): through
+//! `coralcraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>` (#832): through
 //! the MCP protocol, files open only from inside the read root and are saved, exported and
 //! captured only inside the write root; paths that leave a root (`..`, another folder, a sibling
 //! with the same prefix) are refused, and nothing is written outside.

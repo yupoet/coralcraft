@@ -1,4 +1,4 @@
-//! `vectorcraft-cli perf`: the performance budgets (plan §4) measured on a synthetic document.
+//! `coralcraft-cli perf`: the performance budgets (plan §4) measured on a synthetic document.
 //!
 //! Each row is the median of several runs. Timings are wall-clock: on a busy machine (a load
 //! average above three quarters of the cores, or on Windows more than three quarters of the
@@ -483,7 +483,7 @@ mod tests {
     /// also has a `VmRSS` line.
     #[test]
     fn vm_hwm_is_the_peak_resident_set_size() {
-        let status = "Name:\tvectorcraft-cli\nVmPeak:\t 2097152 kB\nVmSize:\t 1572864 kB\nVmHWM:\t  819200 kB\nVmRSS:\t  204800 kB\n";
+        let status = "Name:\tcoralcraft-cli\nVmPeak:\t 2097152 kB\nVmSize:\t 1572864 kB\nVmHWM:\t  819200 kB\nVmRSS:\t  204800 kB\n";
         assert_eq!(vm_hwm_mb(status), Some(800.0));
         // A text without a `VmHWM` line gives no peak.
         assert_eq!(vm_hwm_mb("Name:\tkthreadd\nState:\tS (sleeping)\n"), None);

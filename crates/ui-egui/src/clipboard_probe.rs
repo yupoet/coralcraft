@@ -37,7 +37,7 @@ impl Probe {
         let (wants, wanted_rx) = std::sync::mpsc::channel();
         let (tx, verdicts) = std::sync::mpsc::channel();
         std::thread::Builder::new()
-            .name("vectorcraft-clip".into())
+            .name("coralcraft-clip".into())
             .spawn(move || {
                 let mut clipboard = make();
                 let (mut wanted, mut sent) = (false, None);

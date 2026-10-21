@@ -5,13 +5,13 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-const BIN: &str = env!("CARGO_BIN_EXE_vectorcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_coralcraft-cli");
 
-/// Returns the path of `name` in `vectorcraft-cli-test-<pid>` in the temp folder. The first call removes
+/// Returns the path of `name` in `coralcraft-cli-test-<pid>` in the temp folder. The first call removes
 /// that folder and creates it again empty.
 fn tmp(name: &str) -> std::path::PathBuf {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-    DIR.get_or_init(|| empty_dir(std::env::temp_dir().join(format!("vectorcraft-cli-test-{}", std::process::id())))).join(name)
+    DIR.get_or_init(|| empty_dir(std::env::temp_dir().join(format!("coralcraft-cli-test-{}", std::process::id())))).join(name)
 }
 
 /// Removes `dir` and everything in it, creates it again empty and returns it.
@@ -358,7 +358,7 @@ fn mcp_protocol_over_stdio() {
     assert!(messages > 0, "no log records after logging/setLevel: {notes:?}");
 }
 
-/// `vectorcraft-cli commands | head -1` panicked with "failed printing to
+/// `coralcraft-cli commands | head -1` panicked with "failed printing to
 /// stdout: Broken pipe (os error 32)" and exit status 101.
 #[test]
 fn closed_stdout_ends_quietly() {
@@ -372,7 +372,7 @@ fn closed_stdout_ends_quietly() {
     assert!(out.status.success() && !err.contains("panicked"), "{:?}: {err}", out.status);
 }
 
-/// #1005: `run` whose reader has gone (`vectorcraft-cli run … | true`) ends quietly with status 0,
+/// #1005: `run` whose reader has gone (`coralcraft-cli run … | true`) ends quietly with status 0,
 /// and its later steps still run; a failing step still fails.
 #[test]
 fn run_with_a_closed_stdout_ends_quietly_and_finishes_the_batch() {
@@ -398,7 +398,7 @@ fn config_dir(name: &str) -> std::path::PathBuf {
     dir
 }
 
-/// One `vectorcraft-cli run` with `steps` ((command, params)) against the settings folder `config`;
+/// One `coralcraft-cli run` with `steps` ((command, params)) against the settings folder `config`;
 /// the result of each step.
 fn run_in(config: &std::path::Path, steps: &[(&str, Value)]) -> Vec<Value> {
     let mut cmd = Command::new(BIN);

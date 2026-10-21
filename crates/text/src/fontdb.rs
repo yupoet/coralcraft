@@ -1351,7 +1351,7 @@ pub fn user_font_dirs() -> Vec<PathBuf> {
 static APP_FONT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Have [`system_font_dirs`] read `dir` with its subfolders: VectorCraft's own Fonts folder, which
-/// `text.addFontFiles` copies font files into. The desktop app and `vectorcraft-cli` set it before
+/// `text.addFontFiles` copies font files into. The desktop app and `coralcraft-cli` set it before
 /// the first scan, as they install [`set_platform_font_files`]. A folder that doesn't exist yet is
 /// read once it does. Only the first call counts. Ignored on wasm.
 pub fn set_app_font_dir(dir: PathBuf) {

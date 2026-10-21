@@ -2160,7 +2160,7 @@ file-filter	Templates	範本
 @msg	the search couldn't start: try again in a moment	無法開始搜尋：請稍後再試
 @msg	searching a folder isn't available on the web	網頁版無法搜尋資料夾
 @msg	every search thread stopped on an internal error (please report this bug)	所有搜尋執行緒都因內部錯誤而停止 (請回報此錯誤)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	此處未設定 VectorCraft 的字體資料夾：桌面應用程式和 vectorcraft-cli 會設定它
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	此處未設定 VectorCraft 的字體資料夾：桌面應用程式和 coralcraft-cli 會設定它
 @msg	choose the font files to add	請選擇要加入的字體檔案
 @msg	{n} font file(s) are now in {folder}	{n} 個字體檔案現已位於 {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} 個字體檔案現已位於 {folder}；有 {failed} 個無法加入：{reason}

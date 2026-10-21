@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 # CoralCraft: the pre-fork crates (and their own workspace) and the standalone fuzz workspace stay
 # out of this workspace; crates/cdr is the one CoralCraft-owned member.
 exclude = ["legacy", "fuzz"]
-default-members = ["crates/*", "apps/coralcraft", "apps/vectorcraft-cli", "xtask"]
+default-members = ["crates/*", "apps/coralcraft", "apps/coralcraft-cli", "xtask"]
 
 # CoralCraft: fork of VectorCraft (upstream base a466625, see docs/upstream-vectorcraft.md).
 [workspace.package]
@@ -51,6 +51,8 @@ vectorcraft-scriptcheck = { path = "crates/scriptcheck" }
 coralcraft-color = { path = "legacy/crates/color" }
 coralcraft-doc = { path = "legacy/crates/doc" }
 coralcraft-geom = { path = "legacy/crates/geom" }
+# The CDR/CMX format crate: the only workspace crate the coralcraft-cli probe subcommand needs.
+coralcraft-cdr = { path = "crates/cdr" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

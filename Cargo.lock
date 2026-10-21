@@ -798,6 +798,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "coralcraft-cli"
+version = "0.0.1"
+dependencies = [
+ "coralcraft-cdr",
+ "log",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "serde_json",
+ "vectorcraft-color",
+ "vectorcraft-doc",
+ "vectorcraft-engine",
+ "vectorcraft-format",
+ "vectorcraft-geom",
+ "vectorcraft-mcp",
+ "vectorcraft-render",
+ "vectorcraft-svg",
+ "vectorcraft-testkit",
+ "vectorcraft-text",
+ "windows",
+ "winsafe",
+]
+
+[[package]]
 name = "coralcraft-color"
 version = "0.0.1"
 dependencies = [
@@ -4623,28 +4646,6 @@ dependencies = [
  "vectorcraft-geom",
  "vectorcraft-pathops",
  "vectorcraft-text",
-]
-
-[[package]]
-name = "vectorcraft-cli"
-version = "0.0.1"
-dependencies = [
- "log",
- "objc2-core-foundation",
- "objc2-core-text",
- "serde_json",
- "vectorcraft-color",
- "vectorcraft-doc",
- "vectorcraft-engine",
- "vectorcraft-format",
- "vectorcraft-geom",
- "vectorcraft-mcp",
- "vectorcraft-render",
- "vectorcraft-svg",
- "vectorcraft-testkit",
- "vectorcraft-text",
- "windows",
- "winsafe",
 ]
 
 [[package]]

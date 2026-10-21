@@ -4312,7 +4312,7 @@ axis	Both	Ambos
 @msg	the search couldn't start: try again in a moment	no se pudo iniciar la búsqueda: inténtalo de nuevo en un momento
 @msg	searching a folder isn't available on the web	en la web no se puede buscar en una carpeta
 @msg	every search thread stopped on an internal error (please report this bug)	todos los hilos de búsqueda se detuvieron por un error interno (informa de este error)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	La carpeta Fonts de VectorCraft no está configurada aquí: la configuran la aplicación de escritorio y vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	La carpeta Fonts de VectorCraft no está configurada aquí: la configuran la aplicación de escritorio y coralcraft-cli
 @msg	choose the font files to add	elige los archivos de fuentes que quieres agregar
 @msg	{n} font file(s) are now in {folder}	{n} archivo(s) de fuentes ahora están en {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} archivo(s) de fuentes ahora están en {folder}; no se pudieron agregar {failed}: {reason}

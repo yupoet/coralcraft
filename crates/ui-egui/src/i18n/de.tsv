@@ -4249,7 +4249,7 @@ theme	Appearance	Erscheinungsbild
 @msg	the search couldn't start: try again in a moment	die Suche konnte nicht gestartet werden: Versuchen Sie es gleich noch einmal
 @msg	searching a folder isn't available on the web	das Durchsuchen eines Ordners ist im Web nicht verfügbar
 @msg	every search thread stopped on an internal error (please report this bug)	alle Such-Threads wurden mit einem internen Fehler beendet (bitte melden Sie diesen Fehler)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	der Schriftenordner von VectorCraft ist hier nicht festgelegt: Die Desktop-App und vectorcraft-cli legen ihn fest
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	der Schriftenordner von VectorCraft ist hier nicht festgelegt: Die Desktop-App und coralcraft-cli legen ihn fest
 @msg	choose the font files to add	wählen Sie die Schriftdateien aus, die hinzugefügt werden sollen
 @msg	{n} font file(s) are now in {folder}	{n} Schriftdatei(en) liegen jetzt in {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} Schriftdatei(en) liegen jetzt in {folder}; {failed} konnten nicht hinzugefügt werden: {reason}

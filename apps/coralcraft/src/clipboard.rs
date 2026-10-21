@@ -436,7 +436,7 @@ mod tests {
     use super::*;
 
     fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("vectorcraft-clipboard-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("coralcraft-clipboard-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

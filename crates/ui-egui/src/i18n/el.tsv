@@ -4288,7 +4288,7 @@ theme	Appearance	Εμφάνιση
 @msg	the search couldn't start: try again in a moment	η αναζήτηση δεν μπόρεσε να ξεκινήσει: δοκιμάστε ξανά
 @msg	searching a folder isn't available on the web	η αναζήτηση σε φάκελο δεν υποστηρίζεται στο web
 @msg	every search thread stopped on an internal error (please report this bug)	όλα τα νήματα αναζήτησης σταμάτησαν λόγω εσωτερικού σφάλματος (αναφέρετε το πρόβλημα)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	ο φάκελος γραμματοσειρών του VectorCraft δεν έχει καθοριστεί εδώ: τον ορίζουν η εφαρμογή υπολογιστή και το vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	ο φάκελος γραμματοσειρών του VectorCraft δεν έχει καθοριστεί εδώ: τον ορίζουν η εφαρμογή υπολογιστή και το coralcraft-cli
 @msg	choose the font files to add	επιλέξτε τα αρχεία γραμματοσειρών που θέλετε να προσθέσετε
 @msg	{n} font file(s) are now in {folder}	{n} αρχεία γραμματοσειρών βρίσκονται πλέον στον φάκελο {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} αρχεία γραμματοσειρών βρίσκονται πλέον στον φάκελο {folder}· δεν ήταν δυνατή η προσθήκη {failed}: {reason}

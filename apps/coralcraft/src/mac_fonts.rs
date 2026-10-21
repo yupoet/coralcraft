@@ -1,5 +1,5 @@
 //! macOS: the font files CoreText's font manager lists, scanned with the font folders
-//! (`vectorcraft_text::set_platform_font_files`). The desktop app and `vectorcraft-cli` (exports,
+//! (`vectorcraft_text::set_platform_font_files`). The desktop app and `coralcraft-cli` (exports,
 //! MCP) both install it; the CLI shares this file.
 //!
 //! Apps and font managers can register fonts with the font manager from files in any folder,

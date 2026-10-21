@@ -6,14 +6,14 @@ use std::process::Command;
 
 use serde_json::Value;
 
-const BIN: &str = env!("CARGO_BIN_EXE_vectorcraft-cli");
+const BIN: &str = env!("CARGO_BIN_EXE_coralcraft-cli");
 
-/// Returns the path of `name` in `vectorcraft-cli-fileio-<pid>` in the temp folder. The first call
+/// Returns the path of `name` in `coralcraft-cli-fileio-<pid>` in the temp folder. The first call
 /// removes that folder and creates it again empty.
 fn tmp(name: &str) -> String {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     let dir = DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("vectorcraft-cli-fileio-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("coralcraft-cli-fileio-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -94,7 +94,7 @@ fn help_lists_readable_formats() {
 fn help_lists_perf_deep() {
     let out = ok(&["--help"]);
     assert!(
-        out.contains("vectorcraft-cli perf [--paths N] [--deep]") && out.contains("--deep also times") && out.contains("with the peak so far on"),
+        out.contains("coralcraft-cli perf [--paths N] [--deep]") && out.contains("--deep also times") && out.contains("with the peak so far on"),
         "{out}"
     );
 }

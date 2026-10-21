@@ -10,7 +10,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] V0.1 Move pre-fork crates to `legacy/` (keep `crates/cdr`); copy VectorCraft `a466625` crates, apps, xtask pieces, vendor, non-brand assets, packaging, and CI; create `docs/upstream-vectorcraft.md`.
 - [x] V0.2 Workspace builds; VectorCraft test suite passes; `cargo xtask ci` adapted (cleanroom still blocks Corel strings and `.cdr`/`.cmx` binaries).
 - [x] V0.3 Rebrand the desktop app to CoralCraft (binary, title, app/bundle ID, About, prefs dir, MCP name, original icons).
-- [ ] V0.4 Rebase `coralcraft-cli` on `vectorcraft-cli`; keep `probe`.
+- [x] V0.4 Rebase `coralcraft-cli` on `vectorcraft-cli`; keep `probe`.
 - [ ] V1.1 Map `coralcraft-cdr` parse output onto the VectorCraft `Document` (`corel-import`), with lossless residuals.
 - [ ] V1.2 `.cdr`/`.cmx` in Open/Place tables and MCP `file.open`.
 - [ ] V1.3 CDR7/CDRX/CMX1 writers on the VectorCraft `Document`; Save As/Export entries.

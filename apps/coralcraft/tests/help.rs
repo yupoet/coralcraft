@@ -45,7 +45,7 @@ fn prints_usage(args: &[&str], env: &[(&str, &str)]) {
         assert!(stdout.contains(flag), "{args:?}: usage doesn't mention {flag}: {stdout}");
     }
     // Headless work is the CLI's: the usage says where to go.
-    assert!(stdout.contains("vectorcraft-cli"), "{args:?}: {stdout}");
+    assert!(stdout.contains("coralcraft-cli"), "{args:?}: {stdout}");
 }
 
 #[test]

@@ -42,11 +42,11 @@ try {
   # The ordinary pc-windows-msvc standard library requires Windows 10. Rebuild std for win7.
   [Environment]::SetEnvironmentVariable($FlagName, '-C target-feature=+crt-static')
   $env:CORALCRAFT_REQUIRE_WINRES = '1'
-  $CargoArgs += @('-p', 'coralcraft', '-p', 'vectorcraft-cli')
+  $CargoArgs += @('-p', 'coralcraft', '-p', 'coralcraft-cli')
   Invoke-Checked { cargo "+$Toolchain" build -Z build-std=std,panic_unwind @CargoArgs --release }
   $TargetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
   $Bin = Join-Path $TargetDir "$Target\release"
-  foreach ($Name in 'coralcraft.exe', 'vectorcraft-cli.exe') {
+  foreach ($Name in 'coralcraft.exe', 'coralcraft-cli.exe') {
     $Exe = Join-Path $Bin $Name
     $Bytes = [IO.File]::ReadAllBytes($Exe)
     $Pe = [BitConverter]::ToInt32($Bytes, 0x3c)
@@ -61,10 +61,10 @@ try {
       throw "$Name directly imports a known post-Windows-7 API"
     }
   }
-  Invoke-Checked { & (Join-Path $Bin 'vectorcraft-cli.exe') --version }
+  Invoke-Checked { & (Join-Path $Bin 'coralcraft-cli.exe') --version }
   $Stage = Join-Path $TargetDir ('windows7-portable-' + [Guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Force $Stage | Out-Null
-  Copy-Item (Join-Path $Bin 'coralcraft.exe'), (Join-Path $Bin 'vectorcraft-cli.exe') $Stage
+  Copy-Item (Join-Path $Bin 'coralcraft.exe'), (Join-Path $Bin 'coralcraft-cli.exe') $Stage
   Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE, ASSETS.md $Stage
   Copy-Item -Recurse licenses $Stage
   Copy-Item vendor/windows-link/license-mit (Join-Path $Stage 'LICENSE-windows-link-MIT')

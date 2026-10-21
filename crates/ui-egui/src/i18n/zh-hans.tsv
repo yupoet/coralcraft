@@ -4148,7 +4148,7 @@ imageTrace	Outline	轮廓
 @msg	the search couldn't start: try again in a moment	无法开始搜索：请稍后重试
 @msg	searching a folder isn't available on the web	网页版无法搜索文件夹
 @msg	every search thread stopped on an internal error (please report this bug)	所有搜索线程均因内部错误而停止 (请报告此错误)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	此处未设置 VectorCraft 的字体文件夹：桌面应用和 vectorcraft-cli 会设置该文件夹
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	此处未设置 VectorCraft 的字体文件夹：桌面应用和 coralcraft-cli 会设置该文件夹
 @msg	choose the font files to add	请选择要添加的字体文件
 @msg	{n} font file(s) are now in {folder}	{n} 个字体文件现已位于 {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} 个字体文件现已位于 {folder}；有 {failed} 个无法添加：{reason}

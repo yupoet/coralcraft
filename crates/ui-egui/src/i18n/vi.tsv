@@ -4601,7 +4601,7 @@ theme	Appearance	Giao diện
 @msg	VectorCraft doesn't search other apps' or the system's folders: {path}	VectorCraft không tìm kiếm trong thư mục của ứng dụng khác hoặc hệ thống: {path}
 @msg	VectorCraft doesn't search the Shared or Public folder in Users: {path}	VectorCraft không tìm kiếm thư mục Shared hoặc Public trong Users: {path}
 @msg	VectorCraft failed to start: {e}	VectorCraft khởi động thất bại: {e}
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	Thư mục Phông chữ của VectorCraft chưa được đặt ở đây: ứng dụng máy tính và vectorcraft-cli đặt nó
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	Thư mục Phông chữ của VectorCraft chưa được đặt ở đây: ứng dụng máy tính và coralcraft-cli đặt nó
 @msg	version {0} files can't be compressed: only version {COMPRESSED_SINCE} and later open compressed files	tệp phiên bản {0} không thể nén: chỉ phiên bản {COMPRESSED_SINCE} trở lên mới mở tệp nén
 @msg	width and height are at least 1 pixel	chiều rộng và chiều cao phải ít nhất 1 pixel
 @msg	workspace name can't be empty	tên không gian làm việc không được để trống

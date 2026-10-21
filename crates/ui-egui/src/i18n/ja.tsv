@@ -4411,7 +4411,7 @@ swatch	Bright Violet	ビビッドバイオレット
 @msg	the search couldn't start: try again in a moment	検索を開始できませんでした: しばらくしてからもう一度お試しください
 @msg	searching a folder isn't available on the web	Web 版ではフォルダーを検索できません
 @msg	every search thread stopped on an internal error (please report this bug)	すべての検索スレッドが内部エラーで停止しました (このバグを報告してください)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	この環境では VectorCraft の Fonts フォルダーが設定されていません: デスクトップアプリと vectorcraft-cli が設定します
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	この環境では VectorCraft の Fonts フォルダーが設定されていません: デスクトップアプリと coralcraft-cli が設定します
 @msg	choose the font files to add	追加するフォントファイルを選択してください
 @msg	{n} font file(s) are now in {folder}	{n} 個のフォントファイルが {folder} に入りました
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} 個のフォントファイルが {folder} に入りましたが、{failed} 個は追加できませんでした: {reason}

@@ -4092,7 +4092,7 @@ effect	Regular	ჩვეულებრივი
 @msg	the search couldn't start: try again in a moment	ძიება ვერ დაიწყო: ცოტა ხანში სცადეთ ხელახლა
 @msg	searching a folder isn't available on the web	საქაღალდეში ძიება ვებში მიუწვდომელია
 @msg	every search thread stopped on an internal error (please report this bug)	ძიების ყველა ნაკადი შიდა შეცდომით შეჩერდა (გთხოვთ, შეგვატყობინოთ ეს ხარვეზი)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	VectorCraft-ის შრიფტების საქაღალდე აქ დაყენებული არ არის: მას აყენებს სამაგიდო აპი და vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	VectorCraft-ის შრიფტების საქაღალდე აქ დაყენებული არ არის: მას აყენებს სამაგიდო აპი და coralcraft-cli
 @msg	choose the font files to add	აირჩიეთ დასამატებელი შრიფტის ფაილები
 @msg	{n} font file(s) are now in {folder}	შრიფტის ფაილები ({n}) ახლა აქ არის: {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	შრიფტის ფაილები ({n}) ახლა აქ არის: {folder}; ვერ დაემატა {failed}: {reason}

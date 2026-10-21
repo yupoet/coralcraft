@@ -4335,7 +4335,7 @@ axis	Both	Обидві
 @msg	the search couldn't start: try again in a moment	не вдалося почати пошук: спробуйте ще раз за мить
 @msg	searching a folder isn't available on the web	пошук у папці недоступний у веб-версії
 @msg	every search thread stopped on an internal error (please report this bug)	усі потоки пошуку зупинилися через внутрішню помилку (повідомте про цю помилку)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	Папку Fonts VectorCraft тут не задано: її задають настільна програма та vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	Папку Fonts VectorCraft тут не задано: її задають настільна програма та coralcraft-cli
 @msg	choose the font files to add	виберіть файли шрифтів для додавання
 @msg	{n} font file(s) are now in {folder}	Файлів шрифтів тепер у {folder}: {n}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	Файлів шрифтів тепер у {folder}: {n}; не вдалося додати {failed}: {reason}

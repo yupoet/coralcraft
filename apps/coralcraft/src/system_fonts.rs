@@ -1,5 +1,5 @@
 //! Windows: the font files in DirectWrite's system font collection, scanned with the font folders
-//! (`vectorcraft_text::set_platform_font_files`). The desktop app and `vectorcraft-cli` (exports,
+//! (`vectorcraft_text::set_platform_font_files`). The desktop app and `coralcraft-cli` (exports,
 //! MCP) both install it; the CLI shares this file.
 //!
 //! Font services such as Adobe Fonts load their fonts with GDI at run time, from files in their

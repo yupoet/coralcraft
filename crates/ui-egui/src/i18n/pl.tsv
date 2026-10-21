@@ -4437,7 +4437,7 @@ imageTrace	Outline	Kontur
 @msg	the search couldn't start: try again in a moment	nie udało się rozpocząć wyszukiwania: spróbuj ponownie za chwilę
 @msg	searching a folder isn't available on the web	przeszukiwanie folderu nie jest dostępne w wersji webowej
 @msg	every search thread stopped on an internal error (please report this bug)	wszystkie wątki wyszukiwania zatrzymały się na błędzie wewnętrznym (zgłoś ten błąd)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	folder czcionek VectorCraft nie jest tu ustawiony: ustawia go aplikacja desktopowa i vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	folder czcionek VectorCraft nie jest tu ustawiony: ustawia go aplikacja desktopowa i coralcraft-cli
 @msg	choose the font files to add	wybierz pliki czcionek do dodania
 @msg	{n} font file(s) are now in {folder}	pliki czcionek w {folder}: {n}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	pliki czcionek w {folder}: {n}; nie udało się dodać: {failed} ({reason})

@@ -4534,7 +4534,7 @@ imageTrace	Outline	Ääriviiva
 @msg	the search couldn't start: try again in a moment	hakua ei voitu aloittaa: yritä hetken kuluttua uudelleen
 @msg	searching a folder isn't available on the web	kansion haku ei ole käytettävissä verkossa
 @msg	every search thread stopped on an internal error (please report this bug)	jokainen hakusäie pysähtyi sisäiseen virheeseen (ilmoita tästä virheestä)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	VectorCraftin Fonts-kansiota ei ole määritetty täällä: työpöytäsovellus ja vectorcraft-cli määrittävät sen
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	VectorCraftin Fonts-kansiota ei ole määritetty täällä: työpöytäsovellus ja coralcraft-cli määrittävät sen
 @msg	choose the font files to add	valitse lisättävät fonttitiedostot
 @msg	{n} font file(s) are now in {folder}	{n} fonttitiedosto(a) on nyt kansiossa {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	{n} fonttitiedosto(a) on nyt kansiossa {folder}; {failed} ei voitu lisätä: {reason}

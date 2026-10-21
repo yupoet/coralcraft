@@ -98,6 +98,17 @@ The desktop app is CoralCraft; the library crates stay upstream's. Rename surfac
   break mergeability, which known-issue #13 forbids). CoralCraft-authored crates that replace
   app code (the V0.4 CLI) carry the strict set.
 
+### V0.4 CLI rebase (2026-10-21)
+
+`apps/vectorcraft-cli` → `apps/coralcraft-cli` (package and binary `coralcraft-cli`). The
+upstream CLI is kept as the base (manual arg parsing, mcp/run/convert/info/bench/perf); the
+pre-fork CLI's `probe` subcommand is ported as `apps/coralcraft-cli/src/probe.rs`
+(`coralcraft-cli probe FILE [--json]`, exit 3 = not CDR/CMX, 5 = broken container, 4 = I/O,
+2 = usage), with `coralcraft-cdr` added to the workspace dependencies. Its tests
+(`tests/cli_probe.rs`) build synthetic RIFF/ZIP byte streams in the temp dir, so no binary
+fixtures enter the tree (clean-room). All `vectorcraft-cli` references across the tree follow
+the rename (binary names in packaging, workflows, the layer table, doc comments).
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

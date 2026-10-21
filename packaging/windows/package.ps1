@@ -5,7 +5,7 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     coralcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    coralcraft-<version>-windows-<arch>-portable.zip   coralcraft.exe + vectorcraft-cli.exe + portable.txt
+    coralcraft-<version>-windows-<arch>-portable.zip   coralcraft.exe + coralcraft-cli.exe + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -63,7 +63,7 @@ if (-not $SkipBuild) {
   [Environment]::SetEnvironmentVariable($flagVar, '-C target-feature=+crt-static')
   # Fail the build (rather than warn) if the icon/VERSIONINFO can't be embedded.
   $env:CORALCRAFT_REQUIRE_WINRES = '1'
-  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p coralcraft -p vectorcraft-cli --target $Target }
+  Invoke-Native "cargo build ($Target)" { cargo build --release --locked -p coralcraft -p coralcraft-cli --target $Target }
 }
 
 $Bin = Join-Path $TargetDir "$Target\release"
@@ -78,7 +78,7 @@ function Get-PeHeader([string] $Path) {
   return @{ Machine = [BitConverter]::ToUInt16($bytes, $pe + 4); Subsystem = [BitConverter]::ToUInt16($bytes, $pe + 0x5C) }
 }
 $Machine = switch ($Arch) { 'x64' { 0x8664 } 'x86' { 0x14C } 'arm64' { 0xAA64 } }
-foreach ($check in @(@('coralcraft.exe', 2), @('vectorcraft-cli.exe', 3))) {
+foreach ($check in @(@('coralcraft.exe', 2), @('coralcraft-cli.exe', 3))) {
   $h = Get-PeHeader (Join-Path $Bin $check[0])
   if ($h.Machine -ne $Machine) { throw "$($check[0]) is for machine 0x$('{0:X}' -f $h.Machine), expected 0x$('{0:X}' -f $Machine) ($Arch)" }
   if ($h.Subsystem -ne $check[1]) { throw "$($check[0]) has PE subsystem $($h.Subsystem), expected $($check[1])" }
@@ -87,9 +87,9 @@ foreach ($check in @(@('coralcraft.exe', 2), @('vectorcraft-cli.exe', 3))) {
 $Stage = Join-Path $TargetDir "windows-package\$Arch"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-Copy-Item (Join-Path $Bin 'coralcraft.exe'), (Join-Path $Bin 'vectorcraft-cli.exe') $Stage
+Copy-Item (Join-Path $Bin 'coralcraft.exe'), (Join-Path $Bin 'coralcraft-cli.exe') $Stage
 
-& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'coralcraft.exe') (Join-Path $Stage 'vectorcraft-cli.exe')
+& (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'coralcraft.exe') (Join-Path $Stage 'coralcraft-cli.exe')
 
 # Documentation and dependency licences shared by the MSI and portable ZIP.
 $Docs = Join-Path $Stage 'docs'
@@ -176,8 +176,8 @@ Compress-Archive -Path $Portable -DestinationPath $Zip
 # here; .github/workflows/windows-arm64.yml installs and runs it on ARM64 instead.
 $HostArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
-  Invoke-Native 'vectorcraft-cli --version' { & (Join-Path $Stage 'vectorcraft-cli.exe') --version }
+  Invoke-Native 'coralcraft-cli --version' { & (Join-Path $Stage 'coralcraft-cli.exe') --version }
 } else {
-  Write-Output "skipping vectorcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
+  Write-Output "skipping coralcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
 Get-Item $Msi, $Zip | Format-Table Name, Length

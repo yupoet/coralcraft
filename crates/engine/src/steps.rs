@@ -1,4 +1,4 @@
-//! References between the steps of a batch (`vectorcraft-cli run`, MCP `command_batch`): a
+//! References between the steps of a batch (`coralcraft-cli run`, MCP `command_batch`): a
 //! parameter string that is exactly `$N` or `$N.path` takes that value from the result of step `N`
 //! (0-based, in the order the steps ran), and `$last…` from the step before. A path goes into
 //! objects by key and into arrays by index: `$1.id`, `$2.ids.0`, `$last.ids[0]`. `$$` at the start

@@ -2,7 +2,7 @@
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
 #   $DIST/coralcraft-<version>-macos-<arch>.dmg          CoralCraft.app on a drag-to-Applications DMG
-#   $DIST/vectorcraft-cli-<version>-macos-<arch>.zip      the headless CLI
+#   $DIST/coralcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
@@ -41,7 +41,7 @@ SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
 APP="$WORK/CoralCraft.app"
 DMG="$DIST/coralcraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/vectorcraft-cli-$VERSION-macos-$ARCH.zip"
+CLI_ZIP="$DIST/coralcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
@@ -58,12 +58,12 @@ echo "==> CoralCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: 
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p vectorcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in coralcraft vectorcraft-cli; do
+for bin in coralcraft coralcraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -194,17 +194,17 @@ fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/vectorcraft-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/coralcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/vectorcraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/coralcraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/vectorcraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/vectorcraft-cli"
+sign --options runtime "$CLI_DIR/coralcraft-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/coralcraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
 # A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
 if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
-"$WORK/bin/vectorcraft-cli" --version
+"$WORK/bin/coralcraft-cli" --version
 echo "==> done"
 ls -lh "$DMG" "$CLI_ZIP"

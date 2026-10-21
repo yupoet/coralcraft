@@ -1,5 +1,5 @@
 //! Where CoralCraft keeps its settings, `ui.json`, and next to it folders of the user's own
-//! (Swatches, Graphic Styles, Fonts, Data Recovery, logs). The desktop app and `vectorcraft-cli`
+//! (Swatches, Graphic Styles, Fonts, Data Recovery, logs). The desktop app and `coralcraft-cli`
 //! (which shares this file) read the same Fonts folder.
 
 use std::path::PathBuf;

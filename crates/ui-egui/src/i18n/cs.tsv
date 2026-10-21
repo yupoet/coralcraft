@@ -4612,7 +4612,7 @@ imageTrace	Outline	Obrys
 @msg	the search couldn't start: try again in a moment	hledání nelze spustit: zkuste to za chvíli znovu
 @msg	searching a folder isn't available on the web	prohledávání složky není na webu k dispozici
 @msg	every search thread stopped on an internal error (please report this bug)	všechna vlákna hledání se zastavila na vnitřní chybě (nahlaste prosím tuto chybu)
-@msg	VectorCraft's Fonts folder isn't set here: the desktop app and vectorcraft-cli set it	složka Fonts VectorCraftu zde není nastavena: nastavuje ji desktopová aplikace a vectorcraft-cli
+@msg	VectorCraft's Fonts folder isn't set here: the desktop app and coralcraft-cli set it	složka Fonts VectorCraftu zde není nastavena: nastavuje ji desktopová aplikace a coralcraft-cli
 @msg	choose the font files to add	vyberte soubory písem, které chcete přidat
 @msg	{n} font file(s) are now in {folder}	soubory písem ({n}) jsou nyní ve složce {folder}
 @msg	{n} font file(s) are now in {folder}; {failed} couldn't be added: {reason}	soubory písem ({n}) jsou nyní ve složce {folder}; nepodařilo se přidat {failed}: {reason}
