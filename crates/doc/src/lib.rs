@@ -689,4 +689,71 @@ mod tests {
         assert_eq!(child_outl.color, Color::rgb8(255, 0, 0));
         assert!((ins_node.transform.tx.get() - 50.0).abs() < 1e-3);
     }
+
+    #[test]
+    fn import_eps_arc_arcn_and_import_pdf_tj_hex_multistream_inherited_mediabox_m89() {
+        use coralcraft_geom::PathElement;
+
+        // 1. EPS with `arc` (360-deg full circle) and `arcn` (CW semicircle connected to existing path) + `(atend)` trailer BoundingBox
+        let eps = "\
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: (atend)
+%%EndComments
+newpath
+100 100 40 0 360 arc
+closepath
+fill
+newpath
+20 50 moveto
+60 50 20 180 0 arcn
+stroke
+showpage
+%%Trailer
+%%BoundingBox: 0 0 250 180
+%%EOF
+";
+        let eps_doc = import_eps(eps).expect("import_eps with arc and arcn");
+        assert_eq!(eps_doc.pages[0].size, Size::new(250.0, 180.0).unwrap());
+        let eps_objs = &eps_doc.pages[0].layers[0].objects;
+        assert_eq!(eps_objs.len(), 2);
+        let ObjectKind::Path(circle_path) = &eps_objs[0].kind else {
+            panic!("expected Path for 360-deg arc");
+        };
+        let cubic_count = circle_path.elements.iter().filter(|e| matches!(e, PathElement::CubicTo { .. })).count();
+        assert_eq!(cubic_count, 4, "360-deg arc must subdivide into 4 quarter-circle cubics");
+        let ObjectKind::Path(arcn_path) = &eps_objs[1].kind else {
+            panic!("expected Path for arcn");
+        };
+        assert!(
+            arcn_path.elements.iter().any(|e| matches!(e, PathElement::LineTo(_))),
+            "arcn with existing current point must emit LineTo start of arc"
+        );
+        assert_eq!(arcn_path.elements.iter().filter(|e| matches!(e, PathElement::CubicTo { .. })).count(), 2);
+
+        // 2. PDF 1.4 with inherited `/MediaBox` on `/Type /Pages`, multi-stream `/Contents [5 0 R 6 0 R]`,
+        //    `TJ` kerning array `[(He) -15 (llo) -250 <576F726C64>] TJ`, and octal escape `\050OK\051`
+        let stream1 = "q\n0 0.5 1 rg\n10 20 80 40 re f\n";
+        let stream2 = "BT /F1 14 Tf 1 0 0 1 20 100 Tm [(He) -15 (llo) -250 <576F726C64> ( \\050OK\\051)] TJ ET\nQ\n";
+        let pdf_text = format!(
+            "%PDF-1.4\n\
+1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n\
+2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 320 240] >>\nendobj\n\
+3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n\
+4 0 obj\n<< /Type /Page /Parent 2 0 R /Contents [5 0 R 6 0 R] >>\nendobj\n\
+5 0 obj\n<< /Length {} >>\nstream\n{stream1}endstream\nendobj\n\
+6 0 obj\n<< /Length {} >>\nstream\n{stream2}endstream\nendobj\n\
+%%EOF\n",
+            stream1.len(),
+            stream2.len()
+        );
+        let pdf_doc = import_pdf(pdf_text.as_bytes()).expect("import_pdf with inherited MediaBox, multi-stream Contents, and TJ");
+        assert_eq!(pdf_doc.pages.len(), 1);
+        assert_eq!(pdf_doc.pages[0].size, Size::new(320.0, 240.0).unwrap());
+        let pdf_objs = &pdf_doc.pages[0].layers[0].objects;
+        assert_eq!(pdf_objs.len(), 2);
+        let ObjectKind::ArtisticText { text, .. } = &pdf_objs[1].kind else {
+            panic!("expected ArtisticText from TJ operator, got {:?}", pdf_objs[1].kind);
+        };
+        assert_eq!(text, "Hello World (OK)");
+    }
 }

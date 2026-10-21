@@ -297,7 +297,7 @@ mod tests {
 
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().len();
-        assert_eq!(tools, 244);
+        assert_eq!(tools, 246);
 
         // Add a chamfered rectangle and an ellipse, align, group, ungroup, convert to curves, and export to SVG 1.1, PDF 1.4, and CDR7
         let r1: JsonRpcResponse = serde_json::from_str(
@@ -792,6 +792,40 @@ mod tests {
         });
         let imp_cz_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_cz_req.to_string())).unwrap();
         assert!(imp_cz_resp.result.unwrap()["structuredContent"]["imported_coralcraft"].as_bool().unwrap());
+
+        let exp_eps_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"name":"export_eps","arguments":{}}}"#),
+        )
+        .unwrap();
+        let eps_str = exp_eps_resp.result.unwrap()["structuredContent"]["eps"].as_str().unwrap().to_owned();
+        let imp_eps_req = json!({
+            "jsonrpc": "2.0",
+            "id": 74,
+            "method": "tools/call",
+            "params": {
+                "name": "import_eps",
+                "arguments": { "eps": eps_str }
+            }
+        });
+        let imp_eps_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_eps_req.to_string())).unwrap();
+        assert!(imp_eps_resp.result.unwrap()["structuredContent"]["imported_eps"].as_bool().unwrap());
+
+        let exp_pdf_resp: JsonRpcResponse = serde_json::from_str(
+            &server.handle_json_str(r#"{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"export_pdf_base64","arguments":{}}}"#),
+        )
+        .unwrap();
+        let pdf_b64 = exp_pdf_resp.result.unwrap()["structuredContent"]["pdf_base64"].as_str().unwrap().to_owned();
+        let imp_pdf_req = json!({
+            "jsonrpc": "2.0",
+            "id": 76,
+            "method": "tools/call",
+            "params": {
+                "name": "import_pdf_base64",
+                "arguments": { "pdf_base64": pdf_b64 }
+            }
+        });
+        let imp_pdf_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(&imp_pdf_req.to_string())).unwrap();
+        assert!(imp_pdf_resp.result.unwrap()["structuredContent"]["imported_pdf"].as_bool().unwrap());
     }
 
     #[test]
@@ -859,7 +893,7 @@ mod tests {
         let mut server = McpServer::new();
         let list_resp: JsonRpcResponse = serde_json::from_str(&server.handle_json_str(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)).unwrap();
         let tools = list_resp.result.unwrap()["tools"].as_array().unwrap().clone();
-        assert_eq!(tools.len(), 244);
+        assert_eq!(tools.len(), 246);
 
         for tool in &tools {
             let name = tool["name"].as_str().unwrap();
@@ -917,7 +951,7 @@ mod tests {
         assert_eq!(r_del.result.as_ref().unwrap()["isError"], false);
         assert_eq!(r_del.result.unwrap()["structuredContent"]["deleted"], true);
 
-        // Table-driven smoke test across all 244 registered tools in `tools/list`.
+        // Table-driven smoke test across all 246 registered tools in `tools/list`.
         for (idx, tool) in tools.iter().enumerate() {
             let name = tool["name"].as_str().unwrap();
             let req = json!({

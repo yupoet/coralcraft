@@ -3003,11 +3003,33 @@ const TOOLS_JSON: &str = r#"{
         "type": "object",
         "properties": {}
       }
+    },
+    {
+      "name": "import_eps",
+      "description": "Imports an Encapsulated PostScript (EPSF-3.0) string and replaces the active document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "eps": {"type": "string"}
+        },
+        "required": ["eps"]
+      }
+    },
+    {
+      "name": "import_pdf_base64",
+      "description": "Imports a Base64-encoded ISO 32000-1 PDF 1.4 byte stream and replaces the active multi-page document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "pdf_base64": {"type": "string"}
+        },
+        "required": ["pdf_base64"]
+      }
     }
   ]
 }"#;
 
-/// Returns the cached `tools/list` result payload containing all 244 MCP tool definitions.
+/// Returns the cached `tools/list` result payload containing all 246 MCP tool definitions.
 #[must_use]
 pub fn tools_list_result() -> Value {
     static CACHE: OnceLock<Value> = OnceLock::new();

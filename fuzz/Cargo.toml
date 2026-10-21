@@ -30,3 +30,11 @@ path = "fuzz_targets/import_svg.rs"
 [[bin]]
 name = "import_dxf"
 path = "fuzz_targets/import_dxf.rs"
+
+[[bin]]
+name = "import_eps"
+path = "fuzz_targets/import_eps.rs"
+
+[[bin]]
+name = "import_pdf"
+path = "fuzz_targets/import_pdf.rs"

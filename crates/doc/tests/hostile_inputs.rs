@@ -5,7 +5,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
-use coralcraft_doc::{Document, import_dxf, import_svg, load_bytes, save_json, save_zip};
+use coralcraft_doc::{Document, import_dxf, import_eps, import_pdf, import_svg, load_bytes, save_json, save_zip};
 
 struct SplitMix64(u64);
 
@@ -69,6 +69,19 @@ fn svg_and_dxf_import_survive_deterministic_mutations() {
         let _ = import_svg(&String::from_utf8_lossy(&m));
         let m = mutate(&mut rng, dxf_seed.as_bytes());
         let _ = import_dxf(&String::from_utf8_lossy(&m));
+    }
+}
+
+#[test]
+fn eps_and_pdf_import_survive_deterministic_mutations() {
+    let eps_seed = "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 200 100\ngsave\n1 0 0 setrgbcolor\n10 10 80 40 rectfill\nnewpath 100 50 20 0 180 arc closepath stroke\n/Helvetica findfont 12 scalefont setfont 20 20 moveto (Hi \\101) show\ngrestore\nshowpage\n%%EOF\n";
+    let pdf_seed = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents [4 0 R] >>\nendobj\n4 0 obj\n<< /Length 98 >>\nstream\nq 1 0 0 rg 10 10 50 30 re f BT /F1 12 Tf 1 0 0 1 20 50 Tm [(Hi) -250 <21>] TJ ET Q\nendstream\nendobj\n%%EOF\n";
+    let mut rng = SplitMix64(0xC0FA_1C4A_F7D0_0003);
+    for _ in 0..3_000 {
+        let m_eps = mutate(&mut rng, eps_seed.as_bytes());
+        let _ = import_eps(&String::from_utf8_lossy(&m_eps));
+        let m_pdf = mutate(&mut rng, pdf_seed);
+        let _ = import_pdf(&m_pdf);
     }
 }
 

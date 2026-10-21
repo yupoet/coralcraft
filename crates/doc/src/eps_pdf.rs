@@ -58,7 +58,7 @@ fn remap_imported_node_ids(doc: &mut Document, node: &mut ObjectNode) {
 
 fn unescape_ps_pdf_string(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
+    let mut chars = raw.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
@@ -68,6 +68,23 @@ fn unescape_ps_pdf_string(raw: &str) -> String {
                 Some('(') => out.push('('),
                 Some(')') => out.push(')'),
                 Some('\\') => out.push('\\'),
+                Some('\n') | Some('\r') => {}
+                Some(d0 @ '0'..='7') => {
+                    let mut val = u32::from(d0 as u8).saturating_sub(u32::from(b'0'));
+                    for _ in 0..2 {
+                        if let Some(&dnext) = chars.peek()
+                            && matches!(dnext, '0'..='7')
+                        {
+                            let _ = chars.next();
+                            val = val.saturating_mul(8).saturating_add(u32::from(dnext as u8).saturating_sub(u32::from(b'0')));
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Some(c) = char::from_u32(val & 0xFF) {
+                        out.push(c);
+                    }
+                }
                 Some(other) => out.push(other),
                 None => break,
             }
@@ -76,6 +93,24 @@ fn unescape_ps_pdf_string(raw: &str) -> String {
         }
     }
     out
+}
+
+fn decode_pdf_hex_string(hex_inner: &str) -> String {
+    let mut bytes_out = Vec::with_capacity(hex_inner.len() / 2);
+    let mut high: Option<u8> = None;
+    for &b in hex_inner.as_bytes() {
+        if let Some(nib) = hex_nibble(b) {
+            if let Some(h) = high.take() {
+                bytes_out.push((h << 4) | nib);
+            } else {
+                high = Some(nib);
+            }
+        }
+    }
+    if let Some(h) = high {
+        bytes_out.push(h << 4);
+    }
+    String::from_utf8_lossy(&bytes_out).into_owned()
 }
 
 fn parse_four_floats(s: &str) -> Option<(f64, f64, f64, f64)> {
@@ -203,6 +238,31 @@ fn tokenize_ps_pdf_line(line: &str) -> Vec<PsToken> {
             }
             continue;
         }
+        if b == b'<' {
+            if bytes.get(i.saturating_add(1)) == Some(&b'<') {
+                i = i.saturating_add(2);
+                continue;
+            }
+            i = i.saturating_add(1);
+            let start = i;
+            while let Some(&c) = bytes.get(i) {
+                if c == b'>' {
+                    break;
+                }
+                i = i.saturating_add(1);
+            }
+            if let Some(inner) = line.get(start..i) {
+                tokens.push(PsToken::Str(decode_pdf_hex_string(inner)));
+            }
+            if bytes.get(i) == Some(&b'>') {
+                i = i.saturating_add(1);
+            }
+            continue;
+        }
+        if matches!(b, b')' | b']' | b'>') {
+            i = i.saturating_add(1);
+            continue;
+        }
         if b == b'/' {
             i = i.saturating_add(1);
             let start = i;
@@ -219,7 +279,7 @@ fn tokenize_ps_pdf_line(line: &str) -> Vec<PsToken> {
         }
         let start = i;
         while let Some(&c) = bytes.get(i) {
-            if c.is_ascii_whitespace() || matches!(c, b'/' | b'(' | b')' | b'[' | b']' | b'%') {
+            if c.is_ascii_whitespace() || matches!(c, b'/' | b'(' | b')' | b'[' | b']' | b'<' | b'>' | b'%') {
                 break;
             }
             i = i.saturating_add(1);
@@ -916,8 +976,65 @@ pub fn import_eps(eps_text: &str) -> Result<Document, DocError> {
                             }
                         }
                     }
-                    "clip" | "eoclip" => {
+                    "clip" | "eoclip" | "rectclip" => {
+                        if op == "rectclip" {
+                            let _ = (pop_num(&mut op_stack), pop_num(&mut op_stack), pop_num(&mut op_stack), pop_num(&mut op_stack));
+                        }
                         cur_path = Path::new();
+                    }
+                    "arc" | "arcn" => {
+                        if let (Some(ang2), Some(ang1), Some(r), Some(cy), Some(cx)) =
+                            (pop_num(&mut op_stack), pop_num(&mut op_stack), pop_num(&mut op_stack), pop_num(&mut op_stack), pop_num(&mut op_stack))
+                            && r >= 0.0
+                        {
+                            let ccw = op == "arc";
+                            let raw_diff = if ccw { f64_sub(ang2, ang1) } else { f64_sub(ang1, ang2) };
+                            let sweep_deg = if raw_diff >= 360.0 {
+                                360.0
+                            } else {
+                                let rem = raw_diff.rem_euclid(360.0);
+                                if rem.abs() < 1e-9 && raw_diff > 0.0 { 360.0 } else { rem }
+                            };
+                            let signed_sweep_deg = if ccw { sweep_deg } else { f64_neg(sweep_deg) };
+                            let a1_rad = ang1.to_radians();
+                            let start_ps = Point::new(f64_add(cx, f64_mul(r, a1_rad.cos())), f64_add(cy, f64_mul(r, a1_rad.sin())));
+                            if let Ok(sp) = start_ps
+                                && let Ok(dsp) = map_ps_pt(sp, state.ctm)
+                            {
+                                if cur_path.elements.is_empty() {
+                                    let _ = cur_path.move_to(dsp);
+                                } else {
+                                    let _ = cur_path.line_to(dsp);
+                                }
+                                cur_pt = sp;
+                                if sweep_deg > 1e-6 && r > 1e-6 {
+                                    let n_segs = ((sweep_deg / 90.0).ceil() as usize).clamp(1, 4);
+                                    let d_theta = signed_sweep_deg.to_radians() / (n_segs as f64);
+                                    let k = f64_mul(4.0 / 3.0, f64_mul(0.25, d_theta).tan());
+                                    for seg_i in 0..n_segs {
+                                        let th0 = f64_add(a1_rad, f64_mul(seg_i as f64, d_theta));
+                                        let th1 = f64_add(th0, d_theta);
+                                        let (sin0, cos0) = th0.sin_cos();
+                                        let (sin1, cos1) = th1.sin_cos();
+                                        let p0x = f64_add(cx, f64_mul(r, cos0));
+                                        let p0y = f64_add(cy, f64_mul(r, sin0));
+                                        let p3x = f64_add(cx, f64_mul(r, cos1));
+                                        let p3y = f64_add(cy, f64_mul(r, sin1));
+                                        let c1x = f64_sub(p0x, f64_mul(k, f64_mul(r, sin0)));
+                                        let c1y = f64_add(p0y, f64_mul(k, f64_mul(r, cos0)));
+                                        let c2x = f64_add(p3x, f64_mul(k, f64_mul(r, sin1)));
+                                        let c2y = f64_sub(p3y, f64_mul(k, f64_mul(r, cos1)));
+                                        if let (Ok(c1), Ok(c2), Ok(p3)) = (Point::new(c1x, c1y), Point::new(c2x, c2y), Point::new(p3x, p3y))
+                                            && let (Ok(dc1), Ok(dc2), Ok(dp3)) =
+                                                (map_ps_pt(c1, state.ctm), map_ps_pt(c2, state.ctm), map_ps_pt(p3, state.ctm))
+                                        {
+                                            let _ = cur_path.cubic_to(dc1, dc2, dp3);
+                                            cur_pt = p3;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     "colorimage" => {
                         op_stack.clear();
@@ -952,12 +1069,66 @@ fn extract_pdf_box(dict_str: &str, key: &str) -> Option<PdfBox4> {
     parse_four_floats(inside)
 }
 
-fn extract_pdf_contents_ref(dict_str: &str) -> Option<u32> {
-    let idx = dict_str.find("/Contents")?;
-    let after = dict_str.get(idx.saturating_add("/Contents".len())..)?.trim_start();
-    let trimmed = after.strip_prefix('[').unwrap_or(after).trim_start();
-    let num_str = trimmed.split_whitespace().next()?;
-    num_str.parse::<u32>().ok()
+fn extract_pdf_contents_refs(dict_str: &str) -> Vec<u32> {
+    let Some(idx) = dict_str.find("/Contents") else {
+        return Vec::new();
+    };
+    let Some(after) = dict_str.get(idx.saturating_add("/Contents".len())..) else {
+        return Vec::new();
+    };
+    let trimmed = after.trim_start();
+    if let Some(after_open) = trimmed.strip_prefix('[') {
+        let end_bracket = after_open.find(']').unwrap_or(after_open.len());
+        let inside = after_open.get(..end_bracket).unwrap_or(after_open);
+        let toks: Vec<&str> = inside.split_whitespace().collect();
+        let mut refs = Vec::new();
+        let mut i = 0usize;
+        while let Some(&tok) = toks.get(i) {
+            if toks.get(i.saturating_add(1)) == Some(&"0")
+                && toks.get(i.saturating_add(2)) == Some(&"R")
+                && let Ok(id) = tok.parse::<u32>()
+            {
+                refs.push(id);
+                i = i.saturating_add(3);
+            } else {
+                i = i.saturating_add(1);
+            }
+        }
+        refs
+    } else {
+        trimmed.split_whitespace().next().and_then(|s| s.parse::<u32>().ok()).into_iter().collect()
+    }
+}
+
+fn extract_pdf_parent_ref(dict_str: &str) -> Option<u32> {
+    let idx = dict_str.find("/Parent")?;
+    let after = dict_str.get(idx.saturating_add("/Parent".len())..)?.trim_start();
+    after.split_whitespace().next()?.parse::<u32>().ok()
+}
+
+fn resolve_pdf_media_box(dict_str: &str, objects: &BTreeMap<u32, &[u8]>) -> Option<PdfBox4> {
+    if let Some(mb) = extract_pdf_box(dict_str, "/MediaBox") {
+        return Some(mb);
+    }
+    let mut cur_parent = extract_pdf_parent_ref(dict_str);
+    let mut visited = [0u32; 8];
+    for hop in 0..8usize {
+        let pid = cur_parent?;
+        if visited.get(..hop).is_some_and(|v| v.contains(&pid)) {
+            break;
+        }
+        if let Some(slot) = visited.get_mut(hop) {
+            *slot = pid;
+        }
+        let &pbody = objects.get(&pid)?;
+        let dict_end = find_subslice(pbody, b"stream").unwrap_or(pbody.len());
+        let pdict = String::from_utf8_lossy(pbody.get(..dict_end).unwrap_or(pbody));
+        if let Some(mb) = extract_pdf_box(&pdict, "/MediaBox") {
+            return Some(mb);
+        }
+        cur_parent = extract_pdf_parent_ref(&pdict);
+    }
+    None
 }
 
 fn extract_stream_payload(obj_bytes: &[u8]) -> Option<&[u8]> {
@@ -1019,7 +1190,7 @@ pub fn import_pdf(pdf_bytes: &[u8]) -> Result<Document, DocError> {
         cursor = body_start.saturating_add(end_rel).saturating_add(6);
     }
 
-    let mut page_entries: Vec<(PdfBox4, Option<PdfBox4>, u32)> = Vec::new();
+    let mut page_entries: Vec<(PdfBox4, Option<PdfBox4>, Vec<u32>)> = Vec::new();
     for (&_obj_num, &body) in &objects {
         let dict_end = find_subslice(body, b"stream").unwrap_or(body.len());
         let Some(dict_slice) = body.get(..dict_end) else {
@@ -1029,10 +1200,11 @@ pub fn import_pdf(pdf_bytes: &[u8]) -> Result<Document, DocError> {
         if (dict_str.contains("/Type /Page ") || dict_str.contains("/Type /Page\n") || dict_str.contains("/Type /Page/"))
             && !dict_str.contains("/Type /Pages")
         {
-            let media = extract_pdf_box(&dict_str, "/MediaBox").unwrap_or((0.0, 0.0, 595.275_590_551_181_2, 841.889_763_779_527_6));
+            let media = resolve_pdf_media_box(&dict_str, &objects).unwrap_or((0.0, 0.0, 595.275_590_551_181_2, 841.889_763_779_527_6));
             let trim = extract_pdf_box(&dict_str, "/TrimBox");
-            if let Some(contents_id) = extract_pdf_contents_ref(&dict_str) {
-                page_entries.push((media, trim, contents_id));
+            let contents_ids = extract_pdf_contents_refs(&dict_str);
+            if !contents_ids.is_empty() {
+                page_entries.push((media, trim, contents_ids));
             }
         }
     }
@@ -1045,7 +1217,7 @@ pub fn import_pdf(pdf_bytes: &[u8]) -> Result<Document, DocError> {
     doc.pages.clear();
     let mut imported_count = 0usize;
 
-    for (page_idx, (media, trim, contents_id)) in page_entries.into_iter().enumerate() {
+    for (page_idx, (media, trim, contents_ids)) in page_entries.into_iter().enumerate() {
         let (m_llx, m_lly, m_urx, m_ury) = media;
         let (page_w, page_h, bleed_pt, origin_x, origin_y_top) = if let Some((tx0, ty0, tx1, ty1)) = trim {
             let pw = f64_sub(tx1, tx0).clamp(1.0, 1_000_000.0);
@@ -1072,11 +1244,20 @@ pub fn import_pdf(pdf_bytes: &[u8]) -> Result<Document, DocError> {
         };
         doc.pages.push(page);
 
-        let Some(&content_obj) = objects.get(&contents_id) else {
+        let mut combined_stream_bytes: Vec<u8> = Vec::new();
+        for cid in contents_ids {
+            if let Some(&content_obj) = objects.get(&cid) {
+                let part = extract_stream_payload(content_obj).unwrap_or(content_obj);
+                if !combined_stream_bytes.is_empty() {
+                    combined_stream_bytes.push(b'\n');
+                }
+                combined_stream_bytes.extend_from_slice(part);
+            }
+        }
+        if combined_stream_bytes.is_empty() {
             continue;
-        };
-        let stream_bytes = extract_stream_payload(content_obj).unwrap_or(content_obj);
-        let stream_str = String::from_utf8_lossy(stream_bytes);
+        }
+        let stream_str = String::from_utf8_lossy(&combined_stream_bytes);
 
         let mut saw_custom_layer = false;
         let mut current_target: Option<(LayerRole, String, bool)> = None;
@@ -1526,6 +1707,35 @@ pub fn import_pdf(pdf_bytes: &[u8]) -> Result<Document, DocError> {
                                         None,
                                     );
                                     push_node_to_target(&mut doc, page_idx, &mut saw_custom_layer, &current_target, node);
+                                }
+                            }
+                        }
+                        "TJ" => {
+                            if let Some(PsToken::Array(arr)) = op_stack.pop() {
+                                let mut text = String::new();
+                                for elem in arr {
+                                    match elem {
+                                        PsToken::Str(s) => text.push_str(&s),
+                                        PsToken::Num(kern) if kern <= -180.0 && !text.ends_with(' ') => text.push(' '),
+                                        _ => {}
+                                    }
+                                }
+                                if !text.is_empty()
+                                    && let Ok(dp) = state.ctm.apply_point(text_pos)
+                                    && let Ok(size_pt) = F64::new(state.font_size)
+                                {
+                                    imported_count = imported_count.saturating_add(1);
+                                    if imported_count <= MAX_IMPORTED_OBJECTS {
+                                        let id = doc.allocate_object_id();
+                                        let node = ObjectNode::new(
+                                            id,
+                                            Some("PDF Text".to_owned()),
+                                            ObjectKind::ArtisticText { text, font_family: state.font_family.clone(), size_pt, position: dp },
+                                            Some(FillStyle::uniform(state.color.clone())),
+                                            None,
+                                        );
+                                        push_node_to_target(&mut doc, page_idx, &mut saw_custom_layer, &current_target, node);
+                                    }
                                 }
                             }
                         }

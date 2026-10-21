@@ -1,4 +1,4 @@
-//! MCP `tools/call` handler implementations for all 244 CoralCraft vector authoring & export tools (`R8.1`).
+//! MCP `tools/call` handler implementations for all 246 CoralCraft vector authoring & export tools (`R8.1`).
 
 use coralcraft_cdr::{write_cdr7, write_cdrx_zip, write_cmx1};
 use coralcraft_color::{
@@ -6,7 +6,8 @@ use coralcraft_color::{
 };
 use coralcraft_doc::{
     ArrowheadKind, Document, FillStyle, FountainGeometry, LayerId, LensKind, LineCap, LineJoin, ObjectId, ObjectKind, OutlineStyle,
-    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_svg, load_bytes, save_json, save_zip,
+    ParagraphTextSpec, PatternKind, TextAlignment, TextCaseKind, TransparencyStyle, import_dxf, import_eps, import_pdf, import_svg, load_bytes,
+    save_json, save_zip,
 };
 use coralcraft_engine::{ActivePageTarget, EditorEngine, EngineCommand, PaletteChannel};
 use coralcraft_geom::{
@@ -2711,6 +2712,41 @@ impl McpServer {
             "unlock_all_objects" => {
                 let ok = self.exec(EngineCommand::UnlockAllObjects);
                 Ok(json!({ "unlocked_all": ok }))
+            }
+            "import_eps" => {
+                let eps = args.get("eps").and_then(Value::as_str).ok_or_else(|| "Missing eps string".to_owned())?;
+                let doc = import_eps(eps).map_err(|e| e.to_string())?;
+                let page_count = doc.pages.len();
+                let mut total_objects = 0usize;
+                for page in &doc.pages {
+                    for layer in &page.layers {
+                        total_objects = total_objects.saturating_add(layer.objects.len());
+                    }
+                }
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({
+                    "imported_eps": true,
+                    "page_count": page_count,
+                    "total_object_count": total_objects
+                }))
+            }
+            "import_pdf_base64" => {
+                let b64 = args.get("pdf_base64").and_then(Value::as_str).ok_or_else(|| "Missing pdf_base64 string".to_owned())?;
+                let bytes = base64_decode(b64)?;
+                let doc = import_pdf(&bytes).map_err(|e| e.to_string())?;
+                let page_count = doc.pages.len();
+                let mut total_objects = 0usize;
+                for page in &doc.pages {
+                    for layer in &page.layers {
+                        total_objects = total_objects.saturating_add(layer.objects.len());
+                    }
+                }
+                self.engine = EditorEngine::new(doc);
+                Ok(json!({
+                    "imported_pdf": true,
+                    "page_count": page_count,
+                    "total_object_count": total_objects
+                }))
             }
             other => Err(format!("Unknown tool: {other}")),
         }

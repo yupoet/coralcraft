@@ -39,7 +39,7 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 
 <!-- BEGIN GENERATED TOOL LIST (cargo test -p coralcraft-mcp --test docs_sync) -->
 
-244 tools, sorted by name.
+246 tools, sorted by name.
 
 | Tool | Description |
 |---|---|
@@ -187,6 +187,8 @@ These are tracked in the project review plan and [`docs/ai-memory/04-known-issue
 | `import_coralcraft_zip_base64` | Loads a base64-encoded .coralcraft Stored ZIP container (or raw JSON document) into the active workspace. |
 | `import_cpl_palette_base64` | Parses a base64-encoded CorelDRAW binary .cpl color palette and returns its palette name and swatches. |
 | `import_dxf` | Replaces the active document by importing an AutoCAD ASCII DXF string. |
+| `import_eps` | Imports an Encapsulated PostScript (EPSF-3.0) string and replaces the active document. |
+| `import_pdf_base64` | Imports a Base64-encoded ISO 32000-1 PDF 1.4 byte stream and replaces the active multi-page document. |
 | `import_svg` | Replaces the active document by importing an SVG 1.1 string. |
 | `import_xml_palette` | Parses a CorelDRAW XML palette (<palette>...</palette>) and returns its name and decoded swatches. |
 | `insert_curve_node` | Subdivides a path segment at element_index on an object, inserting a new node at t = 0.5 (Shape Tool -> Add Nodes / +). |
