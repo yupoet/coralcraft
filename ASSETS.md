@@ -14,6 +14,19 @@ The rows below the policy were inherited from the VectorCraft fork base (`a46662
 | `assets/app-icon/coralcraft-128.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` from the design above | MIT OR Apache-2.0 | UI brand mark (`crates/ui-egui/src/brand.rs`) |
 | `assets/app-icon/coralcraft-256.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Window/taskbar icon, non-macOS |
 | `assets/app-icon/coralcraft-macos-512.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` (full-bleed; macOS applies its own mask) | MIT OR Apache-2.0 | Window icon, macOS |
+| `assets/app-icon/coralcraft.ico` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Windows executable icon (`apps/coralcraft/build.rs`) |
+| `assets/app-icon/coralcraft.icns` | CoralCraft project | Rendered by `packaging/icons-coral.py` (PNG ic07/ic08/ic09/ic10 entries) | MIT OR Apache-2.0 | macOS bundle icon |
+| `assets/app-icon/hicolor/16x16/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/24x24/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/32x32/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/48x48/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/64x64/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/96x96/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/128x128/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/256x256/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/512x512/apps/io.github.yupoet.coralcraft.png` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | Linux hicolor icon |
+| `assets/app-icon/hicolor/scalable/apps/io.github.yupoet.coralcraft.svg` | CoralCraft project | Same design as `assets/app-icon/coralcraft.svg` | MIT OR Apache-2.0 | Linux hicolor scalable icon |
+| `packaging/macos/dmg/background.tiff` | CoralCraft project | Rendered by `packaging/icons-coral.py` | MIT OR Apache-2.0 | DMG window background |
 | `assets/fonts/Inter-Medium.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |
 | `assets/fonts/Inter-Regular.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |
 | `assets/fonts/Inter-SemiBold.ttf` | Rasmus Andersson / The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 (`assets/fonts/OFL-Inter.txt`) | Open-source typeface, not product iconography or artwork |

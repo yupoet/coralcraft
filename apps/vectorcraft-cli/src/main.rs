@@ -39,15 +39,15 @@ macro_rules! out {
 
 /// The desktop app's CoreText font lister, shared: exports and MCP find the same fonts.
 #[cfg(target_os = "macos")]
-#[path = "../../vectorcraft/src/mac_fonts.rs"]
+#[path = "../../coralcraft/src/mac_fonts.rs"]
 mod mac_fonts;
 mod perf;
 /// The desktop app's settings folder, shared: exports and MCP read the same Fonts folder.
-#[path = "../../vectorcraft/src/prefs_dir.rs"]
+#[path = "../../coralcraft/src/prefs_dir.rs"]
 mod prefs_dir;
 /// The desktop app's DirectWrite font lister, shared: exports and MCP find the same fonts.
 #[cfg(all(windows, not(target_vendor = "win7")))]
-#[path = "../../vectorcraft/src/system_fonts.rs"]
+#[path = "../../coralcraft/src/system_fonts.rs"]
 mod system_fonts;
 
 use serde_json::{Value, json};
@@ -165,7 +165,7 @@ fn main() -> ExitCode {
 
 /// A headless session that remembers what the user keeps between runs: the PDF presets saved, the
 /// ICC profiles loaded and the plug-ins installed (#2168, #2174, #2541), in the folders next to the preferences that the desktop
-/// app uses too. `VECTORCRAFT_NO_PREFS` and `VECTORCRAFT_CONFIG_DIR` apply as they do there.
+/// app uses too. `CORALCRAFT_NO_PREFS` and `CORALCRAFT_CONFIG_DIR` apply as they do there.
 fn with_stores(mut h: Headless) -> Headless {
     prefs_dir::attach_profile_store(&mut h.session);
     prefs_dir::attach_plugin_store(&mut h.session);

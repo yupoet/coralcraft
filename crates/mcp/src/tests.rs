@@ -135,7 +135,7 @@ fn serve_loop_writes_one_line_per_request() {
     let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["result"]["protocolVersion"], PROTOCOL_VERSION);
-    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "vectorcraft");
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "coralcraft");
     assert!(lines[0]["result"]["capabilities"]["tools"].is_object());
     assert!(lines[0]["result"]["capabilities"]["resources"].is_object());
     assert!(lines[1]["result"]["tools"].as_array().unwrap().len() >= 19);

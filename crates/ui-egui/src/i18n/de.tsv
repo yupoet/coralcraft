@@ -73,7 +73,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Ein niedrigerer Wert folgt dem Strich genauer; ein höherer ergibt weniger Punkte und glattere Kurven.
 	A new preset starting from the selected one	Eine neue Vorgabe auf Grundlage der ausgewählten
 	A saved copy of the selected preset	Eine gespeicherte Kopie der ausgewählten Vorgabe
-	About VectorCraft	Über VectorCraft
+	About CoralCraft	Über CoralCraft
 	above	bei mehr als
 	Absolute Position	Absolute Position
 	Accurate	Genau
@@ -213,8 +213,8 @@
 	Artboard {number}	Zeichenfläche {number}
 	Artboard:	Zeichenfläche:
 	Artboards	Zeichenflächen
-	ArtCraft Website	ArtCraft-Website
-	ArtCraft website	ArtCraft-Website
+	CoralCraft Website	ArtCraft-Website
+	CoralCraft website	ArtCraft-Website
 	Artwork Colors	Farben der Grafik
 	As Multiple Assets	Als mehrere Assets
 	As Single Asset	Als einzelnes Asset
@@ -359,7 +359,7 @@
 	Check Script	Skript prüfen
 	Check Script…	Skript prüfen…
 	Copy Report	Bericht kopieren
-	VectorCraft read this script without running it.	VectorCraft hat dieses Skript gelesen, ohne es auszuführen.
+	CoralCraft read this script without running it.	CoralCraft hat dieses Skript gelesen, ohne es auszuführen.
 	Needs nothing beyond plain JavaScript	Braucht nur einfaches JavaScript
 	Needs the script language's own objects or directives	Braucht eigene Objekte oder Direktiven der Skriptsprache
 	Needs the document model	Braucht das Dokumentmodell
@@ -1582,7 +1582,7 @@ file-filter	Templates	Vorlagen
 	Tools take a single key (optionally with Shift)	Werkzeuge verwenden eine einzelne Taste (optional mit Shift)
 	A later row takes this shortcut	Eine spätere Zeile übernimmt diesen Tastaturbefehl
 	Same item as a later row	Gleiches Element wie eine spätere Zeile
-	Start from VectorCraft Defaults	Von den VectorCraft-Standardwerten ausgehen
+	Start from CoralCraft Defaults	Von den CoralCraft-Standardwerten ausgehen
 	Add to the Current Shortcuts	Zu den aktuellen Tastaturbefehlen hinzufügen
 	Remember My Choices	Meine Auswahl merken
 	{ready} of {total} ready	{ready} von {total} bereit
@@ -2465,7 +2465,7 @@ mark-style	Japanese	Japanisch
 	{count} folder(s) or file(s) couldn't be read	{count} Ordner oder Datei(en) konnten nicht gelesen werden
 	The search stopped at its limit: search a smaller folder.	Die Suche hat ihr Limit erreicht: Durchsuchen Sie einen kleineren Ordner.
 	Copy only fonts you own or are licensed to install.	Kopieren Sie nur Schriften, die Ihnen gehören oder für deren Installation Sie eine Lizenz haben.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopiert die Schriften nach {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopiert die Schriften nach {folder}.
 	Registered Trademark Symbol	Symbol für eingetragene Marke
 	Registration marks	Passermarken
 	Registry name:	Registrierungsname:
@@ -3374,10 +3374,9 @@ effect	Points	Punkte
 	Vector Halftone	Vektor-Halbton
 	Vector Halftone…	Vektor-Halbton…
 	Vector illustration — fast, open, scriptable.	Vektorillustration – schnell, offen, skriptfähig.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft wurde beim letzten Mal nicht normal beendet. Diese Dokumente hatten ungespeicherte Änderungen:
-	VectorCraft Help…	VectorCraft-Hilfe…
-	VectorCraft on getartcraft.com	VectorCraft auf getartcraft.com
-	VectorCraft on GitHub	VectorCraft auf GitHub
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft wurde beim letzten Mal nicht normal beendet. Diese Dokumente hatten ungespeicherte Änderungen:
+	CoralCraft Help…	CoralCraft-Hilfe…
+	CoralCraft on GitHub	CoralCraft auf GitHub
 	Vectors	Vektoren
 	Version {version} — open-source vector illustration in pure Rust.	Version {version} – Open-Source-Vektorillustration in reinem Rust.
 	Version:	Version:

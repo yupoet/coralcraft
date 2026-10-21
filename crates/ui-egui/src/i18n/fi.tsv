@@ -31,7 +31,7 @@
 	Chop Design	Leikkaa malli
 	Scale Design	Skaalaa malli
 	Glowing Edges…	Hehkuvat reunat…
-	About VectorCraft	Tietoja VectorCraftista
+	About CoralCraft	Tietoja CoralCraftista
 	Align to Path	Tasaa polkuun
 	Cut Path at Selected Anchor Points	Leikkaa polku valituista ankkuripisteistä
 	Join Our Discord	Liity Discordiimme
@@ -142,7 +142,7 @@
 	Tools take a single key (optionally with Shift)	Työkaluille annetaan yksi näppäin (valinnaisesti Vaihto-näppäimen kanssa)
 	A later row takes this shortcut	Myöhempi rivi käyttää tätä pikanäppäintä
 	Same item as a later row	Sama kohde kuin myöhemmällä rivillä
-	Start from VectorCraft Defaults	Aloita VectorCraftin oletuksista
+	Start from CoralCraft Defaults	Aloita CoralCraftin oletuksista
 	Add to the Current Shortcuts	Lisää nykyisiin pikanäppäimiin
 	Remember My Choices	Muista valintani
 	{ready} of {total} ready	{ready}/{total} valmiina
@@ -691,11 +691,10 @@
 	Save Swatch Library…	Tallenna värimallikirjasto…
 	Symbol Libraries	Symbolikirjastot
 	Help	Ohje
-	ArtCraft Website	ArtCraft-verkkosivusto
-	VectorCraft on getartcraft.com	VectorCraft getartcraft.comissa
-	VectorCraft on GitHub	VectorCraft GitHubissa
+	CoralCraft Website	ArtCraft-verkkosivusto
+	CoralCraft on GitHub	CoralCraft GitHubissa
 	Search Commands…	Hae komentoja…
-	VectorCraft Help…	VectorCraft-ohje…
+	CoralCraft Help…	CoralCraft-ohje…
 	Auto Color	Automaattinen väri
 	Automatic	Automaattinen
 	Isolate Selected Group	Eristä valittu ryhmä
@@ -2244,7 +2243,7 @@ lighting	Light	Valo
 	{count} folder(s) or file(s) couldn't be read	{count} kansiota tai tiedostoa ei voitu lukea
 	The search stopped at its limit: search a smaller folder.	Haku pysähtyi rajaansa: hae pienemmästä kansiosta.
 	Copy only fonts you own or are licensed to install.	Kopioi vain fontteja, jotka omistat tai joiden asentamiseen sinulla on lisenssi.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopioi fontit kansioon {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopioi fontit kansioon {folder}.
 	Apply to All ({count} more missing)	Käytä kaikkiin ({count} muuta puuttuu)
 	Ignore	Ohita
 	Linked File Not Found	Linkitettyä tiedostoa ei löydy
@@ -2464,7 +2463,7 @@ lighting	Light	Valo
 	3 Color Job	3 värin työ
 	Recover Documents	Palauta asiakirjat
 	Restored documents open unsaved: save them to keep them.	Palautetut asiakirjat avautuvat tallentamattomina: tallenna ne, jos haluat säilyttää ne.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft ei sulkeutunut normaalisti viime kerralla. Näissä asiakirjoissa oli tallentamattomia muutoksia:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft ei sulkeutunut normaalisti viime kerralla. Näissä asiakirjoissa oli tallentamattomia muutoksia:
 	Do you want to save the changes you made to “{name}”?	Haluatko tallentaa asiakirjaan ”{name}” tekemäsi muutokset?
 	Don't Save	Älä tallenna
 	Your changes will be lost if you don't save them.	Muutokset menetetään, jos niitä ei tallenneta.
@@ -2629,7 +2628,7 @@ lighting	Light	Valo
 	Selected Swatches Only (0)	Vain valitut värimallit (0)
 	User Defined Libraries	Käyttäjän määrittämät kirjastot
 	Copy Report	Kopioi raportti
-	VectorCraft read this script without running it.	VectorCraft luki tämän komentosarjan suorittamatta sitä.
+	CoralCraft read this script without running it.	CoralCraft luki tämän komentosarjan suorittamatta sitä.
 	Needs nothing beyond plain JavaScript	Tarvitsee vain tavallista JavaScriptiä
 	Needs the script language's own objects or directives	Tarvitsee komentosarjakielen omia objekteja tai direktiivejä
 	Needs the document model	Tarvitsee asiakirjamallin
@@ -3656,7 +3655,7 @@ effect	Regular	Normaali
 	Recent Files	Viimeisimmät tiedostot
 	Vector illustration — fast, open, scriptable.	Vektorikuvitusta – nopea, avoin, skriptattava.
 	Welcome to VectorCraft	Tervetuloa VectorCraftiin
-	ArtCraft website	ArtCraftin verkkosivusto
+	CoralCraft website	ArtCraftin verkkosivusto
 	Discord	Discord
 	Join our Discord	Liity Discordiimme
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Liity ArtCraft-yhteisöön Discordissa (discord.gg/artcraft)

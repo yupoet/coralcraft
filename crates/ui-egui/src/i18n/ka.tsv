@@ -16,7 +16,7 @@
 # OpenType, the built-in workspace names and the bracketed perspective grid preset names. Keep
 # placeholders, ellipses and the leading/trailing spaces of fragments when editing.
 	Glowing Edges…	მანათობელი კიდეები…
-	About VectorCraft	VectorCraft-ის შესახებ
+	About CoralCraft	CoralCraft-ის შესახებ
 	Align to Path	ტრაექტორიაზე სწორება
 	Cut Path at Selected Anchor Points	ტრაექტორიის გაჭრა მონიშნულ საყრდენ წერტილებზე
 	Join Our Discord	შემოგვიერთდით Discord-ზე
@@ -587,11 +587,10 @@
 	Save Swatch Library…	ფერის ნიმუშების ბიბლიოთეკის შენახვა…
 	Symbol Libraries	სიმბოლოების ბიბლიოთეკები
 	Help	დახმარება
-	ArtCraft Website	ArtCraft-ის ვებსაიტი
-	VectorCraft on getartcraft.com	VectorCraft getartcraft.com-ზე
-	VectorCraft on GitHub	VectorCraft GitHub-ზე
+	CoralCraft Website	ArtCraft-ის ვებსაიტი
+	CoralCraft on GitHub	CoralCraft GitHub-ზე
 	Search Commands…	ბრძანებების ძიება…
-	VectorCraft Help…	VectorCraft-ის დახმარება…
+	CoralCraft Help…	CoralCraft-ის დახმარება…
 	Automatic	ავტომატური
 	Isolate Selected Group	მონიშნული ჯგუფის იზოლირება
 	Exit Isolation Mode	იზოლაციის რეჟიმიდან გამოსვლა
@@ -2007,7 +2006,7 @@ lighting	Light	სინათლე
 	{count} folder(s) or file(s) couldn't be read	ვერ წაიკითხა საქაღალდეები ან ფაილები: {count}
 	The search stopped at its limit: search a smaller folder.	ძიება ზღვარზე შეჩერდა: მოძებნეთ უფრო პატარა საქაღალდეში.
 	Copy only fonts you own or are licensed to install.	დააკოპირეთ მხოლოდ ის შრიფტები, რომლებიც გეკუთვნით ან რომელთა დაყენების ლიცენზია გაქვთ.
-	VectorCraft copies the fonts to {folder}.	VectorCraft შრიფტებს აკოპირებს აქ: {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft შრიფტებს აკოპირებს აქ: {folder}.
 	Apply to All ({count} more missing)	ყველაზე გამოყენება (კიდევ დაკარგული: {count})
 	Ignore	უგულებელყოფა
 	Linked File Not Found	დაკავშირებული ფაილი ვერ მოიძებნა
@@ -2221,7 +2220,7 @@ lighting	Light	სინათლე
 	3 Color Job	3-ფერიანი ბეჭდვა
 	Recover Documents	დოკუმენტების აღდგენა
 	Restored documents open unsaved: save them to keep them.	აღდგენილი დოკუმენტები შეუნახავად იხსნება: შესანარჩუნებლად შეინახეთ ისინი.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft ბოლოს ნორმალურად არ დახურულა. ამ დოკუმენტებს შეუნახავი ცვლილებები ჰქონდა:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft ბოლოს ნორმალურად არ დახურულა. ამ დოკუმენტებს შეუნახავი ცვლილებები ჰქონდა:
 	Do you want to save the changes you made to “{name}”?	შევინახო „{name}“-ში შეტანილი ცვლილებები?
 	Don't Save	არ შეინახო
 	Your changes will be lost if you don't save them.	თუ ცვლილებებს არ შეინახავთ, ისინი დაიკარგება.
@@ -3274,7 +3273,7 @@ effect	Regular	ჩვეულებრივი
 	Recent Files	ბოლოს გახსნილი ფაილები
 	Vector illustration — fast, open, scriptable.	ვექტორული ილუსტრაცია — სწრაფი, ღია, სკრიპტებით მართვადი.
 	Welcome to VectorCraft	კეთილი იყოს თქვენი მობრძანება VectorCraft-ში
-	ArtCraft website	ArtCraft-ის ვებსაიტი
+	CoralCraft website	ArtCraft-ის ვებსაიტი
 	Discord	Discord
 	Join our Discord	შემოგვიერთდით Discord-ზე
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	შემოუერთდით ArtCraft-ის საზოგადოებას Discord-ზე (discord.gg/artcraft)
@@ -4605,7 +4604,7 @@ mark-style	Japanese	იაპონური
 	Check Script	სკრიპტის შემოწმება
 	Check Script…	სკრიპტის შემოწმება…
 	Copy Report	ანგარიშის კოპირება
-	VectorCraft read this script without running it.	VectorCraft-მა ეს სკრიპტი წაიკითხა მისი გაშვების გარეშე.
+	CoralCraft read this script without running it.	CoralCraft-მა ეს სკრიპტი წაიკითხა მისი გაშვების გარეშე.
 	Needs nothing beyond plain JavaScript	საკმარისია ჩვეულებრივი JavaScript
 	Needs the script language's own objects or directives	სჭირდება სკრიპტის ენის საკუთარი ობიექტები ან დირექტივები
 	Needs the document model	სჭირდება დოკუმენტის მოდელი
@@ -4704,7 +4703,7 @@ imageTrace	Outline	კონტური
 	Shortcuts	მალსახმობები
 	Single Corner Radius	კუთხის ერთიანი რადიუსი
 	Softness	სირბილე
-	Start from VectorCraft Defaults	VectorCraft-ის ნაგულისხმევიდან დაწყება
+	Start from CoralCraft Defaults	CoralCraft-ის ნაგულისხმევიდან დაწყება
 	The file is too large to read in full, so only its first part is listed.	ფაილი სრულად წასაკითხად ზედმეტად დიდია, ამიტომ მხოლოდ მისი პირველი ნაწილია ნაჩვენები.
 	The file writes keys and modifiers as codes. Check the proposed meanings and answer the codes that are not known yet.	ფაილი კლავიშებსა და მოდიფიკატორებს კოდებით წერს. შეამოწმეთ შემოთავაზებული მნიშვნელობები და უპასუხეთ ჯერ უცნობ კოდებს.
 	Toolbar: Show Controls	ხელსაწყოთა ზოლი: მართვის ელემენტების ჩვენება

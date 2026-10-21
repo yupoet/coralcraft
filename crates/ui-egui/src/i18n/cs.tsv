@@ -23,7 +23,7 @@
 	Paste Design	Vložit návrh
 	Select Unused	Vybrat nepoužité
 	Glowing Edges…	Zářící okraje…
-	About VectorCraft	O aplikaci VectorCraft
+	About CoralCraft	O aplikaci CoralCraft
 	Align to Path	Zarovnat k cestě
 	Cut Path at Selected Anchor Points	Rozdělit cestu ve vybraných kotevních bodech
 	Join Our Discord	Připojit se k našemu Discordu
@@ -135,7 +135,7 @@
 	Tools take a single key (optionally with Shift)	Nástroje používají jedinou klávesu (volitelně se Shift)
 	A later row takes this shortcut	Tuto zkratku přebírá pozdější řádek
 	Same item as a later row	Stejná položka jako v pozdějším řádku
-	Start from VectorCraft Defaults	Vycházet z výchozích zkratek VectorCraftu
+	Start from CoralCraft Defaults	Vycházet z výchozích zkratek CoralCraftu
 	Add to the Current Shortcuts	Přidat k aktuálním zkratkám
 	Remember My Choices	Zapamatovat si moje volby
 	{ready} of {total} ready	Připraveno {ready} z {total}
@@ -700,11 +700,10 @@
 	Save Swatch Library…	Uložit knihovnu vzorníku…
 	Symbol Libraries	Knihovny symbolů
 	Help	Nápověda
-	ArtCraft Website	Web ArtCraft
-	VectorCraft on getartcraft.com	VectorCraft na getartcraft.com
-	VectorCraft on GitHub	VectorCraft na GitHubu
+	CoralCraft Website	Web ArtCraft
+	CoralCraft on GitHub	CoralCraft na GitHubu
 	Search Commands…	Hledat příkazy…
-	VectorCraft Help…	Nápověda VectorCraft…
+	CoralCraft Help…	Nápověda CoralCraft…
 	Auto Color	Automatická barva
 	Automatic	Automaticky
 	Isolate Selected Group	Izolovat vybranou skupinu
@@ -2289,7 +2288,7 @@ lighting	Light	Světlo
 	{count} folder(s) or file(s) couldn't be read	Nepodařilo se přečíst složek nebo souborů: {count}
 	The search stopped at its limit: search a smaller folder.	Hledání se zastavilo na limitu: prohledejte menší složku.
 	Copy only fonts you own or are licensed to install.	Kopírujte jen písma, která vlastníte nebo máte licenci instalovat.
-	VectorCraft copies the fonts to {folder}.	VectorCraft zkopíruje písma do {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft zkopíruje písma do {folder}.
 	Apply to All ({count} more missing)	Použít na všechny (chybí ještě {count})
 	Ignore	Ignorovat
 	Linked File Not Found	Propojený soubor nebyl nalezen
@@ -2509,7 +2508,7 @@ lighting	Light	Světlo
 	3 Color Job	Zakázka se 3 barvami
 	Recover Documents	Obnovit dokumenty
 	Restored documents open unsaved: save them to keep them.	Obnovené dokumenty se otevřou neuložené: pokud je chcete zachovat, uložte je.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft se minule neukončil normálně. Tyto dokumenty měly neuložené změny:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft se minule neukončil normálně. Tyto dokumenty měly neuložené změny:
 	Do you want to save the changes you made to “{name}”?	Chcete uložit změny provedené v dokumentu „{name}“?
 	Don't Save	Neukládat
 	Your changes will be lost if you don't save them.	Pokud změny neuložíte, budou ztraceny.
@@ -2674,7 +2673,7 @@ lighting	Light	Světlo
 	Selected Swatches Only (0)	Pouze vybrané položky vzorníku (0)
 	User Defined Libraries	Uživatelské knihovny
 	Copy Report	Kopírovat zprávu
-	VectorCraft read this script without running it.	VectorCraft tento skript přečetl, aniž by ho spustil.
+	CoralCraft read this script without running it.	CoralCraft tento skript přečetl, aniž by ho spustil.
 	Needs nothing beyond plain JavaScript	Nepotřebuje nic kromě běžného JavaScriptu
 	Needs the script language's own objects or directives	Potřebuje vlastní objekty nebo direktivy skriptovacího jazyka
 	Needs the document model	Potřebuje model dokumentu
@@ -3723,7 +3722,7 @@ effect	Regular	Pravidelný
 	Recent Files	Nedávné soubory
 	Vector illustration — fast, open, scriptable.	Vektorová ilustrace — rychlá, otevřená, skriptovatelná.
 	Welcome to VectorCraft	Vítejte ve VectorCraftu
-	ArtCraft website	Web ArtCraft
+	CoralCraft website	Web ArtCraft
 	Discord	Discord
 	Join our Discord	Připojit se k našemu Discordu
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Připojte se ke komunitě ArtCraft na Discordu (discord.gg/artcraft)

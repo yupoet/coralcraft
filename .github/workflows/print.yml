@@ -4,9 +4,9 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
-      - "apps/vectorcraft/Cargo.toml"
-      - "apps/vectorcraft/src/printing.rs"
-      - "apps/vectorcraft/src/printing/**"
+      - "apps/coralcraft/Cargo.toml"
+      - "apps/coralcraft/src/printing.rs"
+      - "apps/coralcraft/src/printing/**"
       - "crates/ui-egui/src/print.rs"
       - "crates/ui-egui/src/tests_printps.rs"
       - ".github/workflows/print.yml"
@@ -29,7 +29,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: desktop-print
-      - run: cargo clippy --locked -p vectorcraft --all-targets -- -D warnings
-      - run: cargo test --locked -p vectorcraft
+      - run: cargo clippy --locked -p coralcraft --all-targets -- -D warnings
+      - run: cargo test --locked -p coralcraft
       - name: Check pending submission and queue refusal feedback
         run: cargo test --locked -p vectorcraft-ui-egui tests_printps

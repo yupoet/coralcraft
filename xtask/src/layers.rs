@@ -52,7 +52,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("mcp", Class::Layer(6)),
     ("testkit", Class::Testkit),
     // L7 apps and tooling
-    ("vectorcraft", Class::Exempt),
+    // CoralCraft: the desktop app was renamed from `vectorcraft` in V0.3.
+    ("coralcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
     ("xtask", Class::Exempt),
@@ -339,7 +340,7 @@ mod tests {
 
     #[test]
     fn apps_and_xtask_exempt() {
-        for app in ["vectorcraft", "vectorcraft-cli", "vectorcraft-web", "xtask"] {
+        for app in ["coralcraft", "vectorcraft-cli", "vectorcraft-web", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("vectorcraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

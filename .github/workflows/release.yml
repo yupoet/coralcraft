@@ -1,0 +1,56 @@
+# Release pipeline (operator decision D2: macOS first): builds the universal macOS DMG and CLI
+# zip with packaging/macos/package.sh (ad-hoc signed; set MACOS_SIGN_IDENTITY and Apple
+# notarization secrets for signed releases), plus a plain .app.zip for quick testing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos-universal:
+    name: macOS universal DMG + .app.zip
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: release-macos-universal
+      - name: Build, sign and package
+        run: packaging/macos/package.sh --arch universal
+      - name: Zip the .app for quick testing
+        run: |
+          set -euo pipefail
+          version="$(awk '/^\[/{p=($0=="[workspace.package]");next} p&&$1=="version"{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml)"
+          ditto -c -k --keepParent target/macos-package/CoralCraft.app "dist/release/coralcraft-$version-macos-universal.app.zip"
+      - name: Verify the archived app
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          zip="$(ls dist/release/coralcraft-*-macos-universal.app.zip)"
+          ditto -x -k "$zip" "$tmp"
+          codesign --verify --strict --deep --verbose=2 "$tmp/CoralCraft.app"
+          lipo -info "$tmp/CoralCraft.app/Contents/MacOS/CoralCraft" | grep -q "x86_64 arm64"
+          "$tmp/CoralCraft.app/Contents/MacOS/CoralCraft" --version
+      - name: Checksums
+        run: |
+          cd dist/release
+          shasum -a 256 coralcraft-* vectorcraft-cli-* > SHA256SUMS-macos.txt
+          cat SHA256SUMS-macos.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-macos-universal
+          path: dist/release/*
+          if-no-files-found: error

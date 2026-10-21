@@ -4,6 +4,18 @@
 
 ## 1. Current Stage Status
 
+- **V0.3 DONE (2026-10-21): desktop app rebranded to CoralCraft.** `cargo xtask ci` green (11/11).
+  - `apps/coralcraft` (package/bin `coralcraft`): window title, About, app menu, `--version`,
+    log names, prefs folders (`…/CoralCraft`, `~/.config/coralcraft`), portable markers,
+    recovery/GPU dialogs; app-level env vars are `CORALCRAFT_*`. Library-level env vars and
+    every file-format name (`.vectorcraft` filters, UTI) keep upstream identity.
+  - App/bundle ID `io.github.yupoet.coralcraft` across packaging; original icons
+    (`packaging/icons-coral.py`: PNGs, hicolor set, icns, ico, DMG background) in `ASSETS.md`;
+    fresh Windows MSI GUIDs; help links point at our repo (Discord stays upstream's, labeled).
+  - MCP serverInfo is `coralcraft`/`CoralCraft`; `vectorcraft-cli` keeps its name until V0.4.
+  - CI: `linux-package-smoke` re-enabled (Debian 11 install of the rebranded .deb);
+    `release.yml` restored (universal DMG + .app.zip via `packaging/macos/package.sh`).
+  - Full divergence ledger: `docs/upstream-vectorcraft.md` › V0.3 rebrand.
 - **Phase V in progress. V0.2 status (2026-10-21):** workspace builds and the upstream test
   suite pass; `cargo xtask ci` (VectorCraft chain + our cleanroom) runs green locally.
   - Upstream embeds its brand icon in `crates/ui-egui/src/brand.rs` and

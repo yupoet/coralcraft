@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Repackage a VectorCraft Linux tarball as a single-file Flatpak bundle:
+# Repackage a CoralCraft Linux tarball as a single-file Flatpak bundle:
 #
-#   $DIST/vectorcraft-<version>-linux-<arch>.flatpak
+#   $DIST/coralcraft-<version>-linux-<arch>.flatpak
 #
 # Usage: packaging/linux/flatpak-bundle.sh [--no-test] [TARBALL]
 #
-# TARBALL defaults to $DIST/vectorcraft-<version>-linux-<arch>.tar.gz from package.sh. The bundle
+# TARBALL defaults to $DIST/coralcraft-<version>-linux-<arch>.tar.gz from package.sh. The bundle
 # is built for the host architecture (x86_64 or aarch64), which must match the tarball's.
 # Needs flatpak, flatpak-builder and the SVG pixbuf loader (librsvg2-common) for the host's
 # `appstreamcli compose`; the freedesktop runtime and SDK named in the manifest are
 # installed per-user from Flathub. Unless --no-test, the bundle is then installed per-user and
 # `vectorcraft-cli --version` is run inside the sandbox as a smoke test.
-# Manifest: packaging/linux/flatpak/ai.storyteller.vectorcraft.bundle.yml.
+# Manifest: packaging/linux/flatpak/io.github.yupoet.coralcraft.bundle.yml.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.vectorcraft
+APP_ID=io.github.yupoet.coralcraft
 FLATHUB=https://dl.flathub.org/repo/flathub.flatpakrepo
 
 TEST=1
@@ -36,20 +36,20 @@ case "$ARCH" in
   aarch64 | arm64) ARCH=aarch64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-BASENAME="vectorcraft-$VERSION-linux-$ARCH"
+BASENAME="coralcraft-$VERSION-linux-$ARCH"
 TARBALL="${TARBALL:-$DIST/$BASENAME.tar.gz}"
 [ -f "$TARBALL" ] || { echo "error: $TARBALL not found (run packaging/linux/package.sh --formats tar first)" >&2; exit 1; }
 for tool in flatpak flatpak-builder; do
   command -v "$tool" >/dev/null || { echo "error: $tool not found (apt install flatpak flatpak-builder librsvg2-common)" >&2; exit 1; }
 done
 
-echo "==> VectorCraft $VERSION Flatpak bundle for $ARCH from $(basename "$TARBALL")"
+echo "==> CoralCraft $VERSION Flatpak bundle for $ARCH from $(basename "$TARBALL")"
 
 WORK="$CARGO_TARGET_DIR/flatpak-bundle"
 rm -rf "$WORK"
 mkdir -p "$WORK/stage"
 tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
-[ -x "$WORK/stage/bin/vectorcraft" ] || { echo "error: $TARBALL has no bin/vectorcraft" >&2; exit 1; }
+[ -x "$WORK/stage/bin/coralcraft" ] || { echo "error: $TARBALL has no bin/coralcraft" >&2; exit 1; }
 cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$APP_ID.yml"
 
 flatpak remote-add --user --if-not-exists flathub "$FLATHUB"

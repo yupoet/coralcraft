@@ -4,12 +4,13 @@
 # Clean-room: written from the meaning of VectorCraft's English labels in neutral, international
 # Dutch, using the feature names Dutch speakers of vector illustration software know. No other
 # localisation was copied. Labels use sentence case (only the first word capitalised).
+	CoralCraft	CoralCraft
 	New Design	Nieuw ontwerp
 	Delete Design	Ontwerp verwijderen
 	Paste Design	Ontwerp plakken
 	Select Unused	Ongebruikte selecteren
 	Glowing Edges…	Gloeiende randen…
-	About VectorCraft	Over VectorCraft
+	About CoralCraft	Over CoralCraft
 	Align to Path	Uitlijnen op pad
 	Cut Path at Selected Anchor Points	Pad knippen op geselecteerde ankerpunten
 	Join Our Discord	Word lid van onze Discord
@@ -120,7 +121,7 @@
 	Tools take a single key (optionally with Shift)	Gereedschappen gebruiken één toets (eventueel met Shift)
 	A later row takes this shortcut	Een latere rij gebruikt deze sneltoets
 	Same item as a later row	Zelfde item als een latere rij
-	Start from VectorCraft Defaults	Beginnen met de standaardinstellingen van VectorCraft
+	Start from CoralCraft Defaults	Beginnen met de standaardinstellingen van CoralCraft
 	Add to the Current Shortcuts	Toevoegen aan de huidige sneltoetsen
 	Remember My Choices	Mijn keuzes onthouden
 	{ready} of {total} ready	{ready} van {total} klaar
@@ -658,11 +659,10 @@
 	Save Swatch Library…	Staalenbibliotheek opslaan…
 	Symbol Libraries	Symboolbibliotheken
 	Help	Help
-	ArtCraft Website	ArtCraft-website
-	VectorCraft on getartcraft.com	VectorCraft op getartcraft.com
-	VectorCraft on GitHub	VectorCraft op GitHub
+	CoralCraft Website	ArtCraft-website
+	CoralCraft on GitHub	CoralCraft op GitHub
 	Search Commands…	Opdrachten zoeken…
-	VectorCraft Help…	VectorCraft-help…
+	CoralCraft Help…	CoralCraft-help…
 	Auto Color	Automatische kleur
 	Automatic	Automatisch
 	Isolate Selected Group	Geselecteerde groep isoleren
@@ -2123,7 +2123,7 @@ lighting	Light	Licht
 	{count} folder(s) or file(s) couldn't be read	{count} map(pen) of bestand(en) konden niet worden gelezen
 	The search stopped at its limit: search a smaller folder.	De zoekopdracht is gestopt bij de limiet: doorzoek een kleinere map.
 	Copy only fonts you own or are licensed to install.	Kopieer alleen lettertypen die je bezit of waarvoor je een licentie hebt om ze te installeren.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopieert de lettertypen naar {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopieert de lettertypen naar {folder}.
 	Apply to All ({count} more missing)	Op alles toepassen (er ontbreken nog {count})
 	Ignore	Negeren
 	Linked File Not Found	Gekoppeld bestand niet gevonden
@@ -2343,7 +2343,7 @@ lighting	Light	Licht
 	3 Color Job	Opdracht in 3 kleuren
 	Recover Documents	Documenten herstellen
 	Restored documents open unsaved: save them to keep them.	Herstelde documenten worden onopgeslagen geopend: sla ze op om ze te bewaren.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft is de vorige keer niet normaal afgesloten. Deze documenten hadden niet-opgeslagen wijzigingen:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft is de vorige keer niet normaal afgesloten. Deze documenten hadden niet-opgeslagen wijzigingen:
 	Do you want to save the changes you made to “{name}”?	Wil je de wijzigingen die je in „{name}” hebt aangebracht, opslaan?
 	Don't Save	Niet opslaan
 	Your changes will be lost if you don't save them.	Je wijzigingen gaan verloren als je ze niet opslaat.
@@ -2508,7 +2508,7 @@ lighting	Light	Licht
 	Selected Swatches Only (0)	Alleen geselecteerde stalen (0)
 	User Defined Libraries	Door gebruiker gedefinieerde bibliotheken
 	Copy Report	Rapport kopiëren
-	VectorCraft read this script without running it.	VectorCraft heeft dit script gelezen zonder het uit te voeren.
+	CoralCraft read this script without running it.	CoralCraft heeft dit script gelezen zonder het uit te voeren.
 	Needs nothing beyond plain JavaScript	Heeft alleen gewone JavaScript nodig
 	Needs the script language's own objects or directives	Heeft de eigen objecten of richtlijnen van de scripttaal nodig
 	Needs the document model	Heeft het documentmodel nodig
@@ -3503,7 +3503,7 @@ effect	Regular	Regelmatig
 	Recent Files	Recente bestanden
 	Vector illustration — fast, open, scriptable.	Vectorillustratie — snel, open, scriptbaar.
 	Welcome to VectorCraft	Welkom bij VectorCraft
-	ArtCraft website	Website van ArtCraft
+	CoralCraft website	Website van ArtCraft
 	Discord	Discord
 	Join our Discord	Word lid van onze Discord
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Word lid van de ArtCraft-community op Discord (discord.gg/artcraft)

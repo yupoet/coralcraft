@@ -91,7 +91,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Un valore più basso segue fedelmente il tratto; uno più alto produce meno punti e curve più morbide.
 	A new preset starting from the selected one	Un nuovo preset basato su quello selezionato
 	A saved copy of the selected preset	Una copia salvata del preset selezionato
-	About VectorCraft	Informazioni su VectorCraft
+	About CoralCraft	Informazioni su CoralCraft
 	above	sopra
 	Absolute Position	Posizione assoluta
 	Accurate	Preciso
@@ -231,8 +231,8 @@
 	Artboard {number}	Tavola da disegno {number}
 	Artboard:	Tavola da disegno:
 	Artboards	Tavole da disegno
-	ArtCraft Website	Sito web di ArtCraft
-	ArtCraft website	Sito web di ArtCraft
+	CoralCraft Website	Sito web di ArtCraft
+	CoralCraft website	Sito web di ArtCraft
 	Artwork Colors	Colori della grafica
 	As Multiple Assets	Come più risorse
 	As Single Asset	Come risorsa unica
@@ -377,7 +377,7 @@
 	Check Script	Controlla script
 	Check Script…	Controlla script…
 	Copy Report	Copia rapporto
-	VectorCraft read this script without running it.	VectorCraft ha letto questo script senza eseguirlo.
+	CoralCraft read this script without running it.	CoralCraft ha letto questo script senza eseguirlo.
 	Needs nothing beyond plain JavaScript	Richiede solo JavaScript semplice
 	Needs the script language's own objects or directives	Richiede oggetti o direttive propri del linguaggio dello script
 	Needs the document model	Richiede il modello del documento
@@ -1600,7 +1600,7 @@ file-filter	Templates	Modelli
 	Tools take a single key (optionally with Shift)	Gli strumenti accettano un solo tasto (facoltativamente con Shift)
 	A later row takes this shortcut	Una riga successiva usa questa scelta rapida
 	Same item as a later row	Stessa voce di una riga successiva
-	Start from VectorCraft Defaults	Parti dai valori predefiniti di VectorCraft
+	Start from CoralCraft Defaults	Parti dai valori predefiniti di CoralCraft
 	Add to the Current Shortcuts	Aggiungi alle scelte rapide attuali
 	Remember My Choices	Ricorda le mie scelte
 	{ready} of {total} ready	{ready} su {total} pronti
@@ -2516,7 +2516,7 @@ mark-style	Japanese	Giapponese
 	{count} folder(s) or file(s) couldn't be read	Cartelle o file non leggibili: {count}
 	The search stopped at its limit: search a smaller folder.	La ricerca si è fermata al suo limite: cerca in una cartella più piccola.
 	Copy only fonts you own or are licensed to install.	Copia solo font di tua proprietà o con una licenza che ti consente di installarli.
-	VectorCraft copies the fonts to {folder}.	VectorCraft copia i font in {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft copia i font in {folder}.
 	Registered Trademark Symbol	Simbolo di marchio registrato
 	Registration marks	Segni di registro
 	Registry name:	Nome registro:
@@ -3476,10 +3476,9 @@ mark-style	Japanese	Giapponese
 	Vector Halftone	Retino vettoriale
 	Vector Halftone…	Retino vettoriale…
 	Vector illustration — fast, open, scriptable.	Illustrazione vettoriale — veloce, aperta, programmabile.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft non si è chiuso correttamente l'ultima volta. Questi documenti avevano modifiche non salvate:
-	VectorCraft Help…	Aiuto di VectorCraft…
-	VectorCraft on getartcraft.com	VectorCraft su getartcraft.com
-	VectorCraft on GitHub	VectorCraft su GitHub
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft non si è chiuso correttamente l'ultima volta. Questi documenti avevano modifiche non salvate:
+	CoralCraft Help…	Aiuto di CoralCraft…
+	CoralCraft on GitHub	CoralCraft su GitHub
 	Vectors	Vettori
 	Version {version} — open-source vector illustration in pure Rust.	Versione {version} — illustrazione vettoriale open source in puro Rust.
 	Version:	Versione:

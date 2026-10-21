@@ -27,7 +27,7 @@
 	Paste Design	Wklej projekt
 	Select Unused	Zaznacz nieużywane
 	Glowing Edges…	Świecące krawędzie…
-	About VectorCraft	O programie VectorCraft
+	About CoralCraft	O programie CoralCraft
 	Align to Path	Wyrównaj do ścieżki
 	Cut Path at Selected Anchor Points	Rozetnij ścieżkę w zaznaczonych punktach kontrolnych
 	Join Our Discord	Dołącz do naszego Discorda
@@ -648,11 +648,10 @@
 	Save Swatch Library…	Zapisz bibliotekę próbek…
 	Symbol Libraries	Biblioteki symboli
 	Help	Pomoc
-	ArtCraft Website	Strona ArtCraft
-	VectorCraft on getartcraft.com	VectorCraft w getartcraft.com
-	VectorCraft on GitHub	VectorCraft w serwisie GitHub
+	CoralCraft Website	Strona ArtCraft
+	CoralCraft on GitHub	CoralCraft w serwisie GitHub
 	Search Commands…	Szukaj poleceń…
-	VectorCraft Help…	Pomoc VectorCraft…
+	CoralCraft Help…	Pomoc CoralCraft…
 	Auto Color	Kolor automatyczny
 	Automatic	Automatycznie
 	Isolate Selected Group	Izoluj zaznaczoną grupę
@@ -2203,7 +2202,7 @@ lighting	Light	Światło
 	{count} folder(s) or file(s) couldn't be read	Nie udało się odczytać folderów lub plików: {count}
 	The search stopped at its limit: search a smaller folder.	Wyszukiwanie zatrzymało się na limicie: przeszukaj mniejszy folder.
 	Copy only fonts you own or are licensed to install.	Kopiuj tylko czcionki, które posiadasz lub masz licencję na ich instalację.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopiuje czcionki do {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopiuje czcionki do {folder}.
 	Apply to All ({count} more missing)	Zastosuj do wszystkich (brakuje jeszcze: {count})
 	Ignore	Ignoruj
 	Linked File Not Found	Nie znaleziono połączonego pliku
@@ -2417,7 +2416,7 @@ lighting	Light	Światło
 	3 Color Job	Praca 3-kolorowa
 	Recover Documents	Odzyskaj dokumenty
 	Restored documents open unsaved: save them to keep them.	Odzyskane dokumenty otwierają się jako niezapisane: zapisz je, aby je zachować.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	Ostatnio VectorCraft nie zakończył pracy prawidłowo. Te dokumenty miały niezapisane zmiany:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	Ostatnio CoralCraft nie zakończył pracy prawidłowo. Te dokumenty miały niezapisane zmiany:
 	Do you want to save the changes you made to “{name}”?	Czy zapisać zmiany wprowadzone w „{name}”?
 	Don't Save	Nie zapisuj
 	Your changes will be lost if you don't save them.	Jeśli ich nie zapiszesz, zmiany zostaną utracone.
@@ -2559,7 +2558,7 @@ lighting	Light	Światło
 	Selected Swatches Only	Tylko zaznaczone próbki
 	User Defined Libraries	Biblioteki zdefiniowane przez użytkownika
 	Copy Report	Kopiuj raport
-	VectorCraft read this script without running it.	VectorCraft odczytał ten skrypt, nie uruchamiając go.
+	CoralCraft read this script without running it.	CoralCraft odczytał ten skrypt, nie uruchamiając go.
 	Needs nothing beyond plain JavaScript	Wymaga tylko zwykłego JavaScriptu
 	Needs the script language's own objects or directives	Wymaga własnych obiektów lub dyrektyw języka skryptowego
 	Needs the document model	Wymaga modelu dokumentu
@@ -3562,7 +3561,7 @@ effect	Regular	Normalny
 	Recent Files	Ostatnie pliki
 	Vector illustration — fast, open, scriptable.	Ilustracja wektorowa — szybka, otwarta, skryptowalna.
 	Welcome to VectorCraft	Witamy w VectorCraft
-	ArtCraft website	Strona ArtCraft
+	CoralCraft website	Strona ArtCraft
 	Discord	Discord
 	Join our Discord	Dołącz do naszego Discorda
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Dołącz do społeczności ArtCraft na Discordzie (discord.gg/artcraft)
@@ -4597,7 +4596,7 @@ imageTrace	Outline	Kontur
 	Tools take a single key (optionally with Shift)	Narzędzia przyjmują pojedynczy klawisz (opcjonalnie z Shift)
 	A later row takes this shortcut	Ten skrót przejmuje dalszy wiersz
 	Same item as a later row	Ten sam element co w dalszym wierszu
-	Start from VectorCraft Defaults	Zacznij od domyślnych skrótów VectorCraft
+	Start from CoralCraft Defaults	Zacznij od domyślnych skrótów CoralCraft
 	Add to the Current Shortcuts	Dodaj do bieżących skrótów
 	Remember My Choices	Zapamiętaj moje wybory
 	{ready} of {total} ready	Gotowe: {ready} z {total}

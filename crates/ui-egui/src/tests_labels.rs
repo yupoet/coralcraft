@@ -267,7 +267,7 @@ fn clipboard_preferences_name_the_legacy_format_neutrally() {
 fn shortcut_set_old_name_is_accepted() {
     use crate::shortcut_editor::{PRESETS, import_json};
     let (old, _) = crate::shortcut_editor::LEGACY_PRESETS[0];
-    assert_eq!(PRESETS, ["VectorCraft Defaults", "Classic Defaults"]);
+    assert_eq!(PRESETS, ["CoralCraft Defaults", "Classic Defaults"]);
     // UI preferences saved by an earlier version load (and save again) under the current name.
     let ui: crate::state::UiState = serde_json::from_value(json!({ "shortcut_set": old })).unwrap();
     assert_eq!(ui.shortcut_set, "Classic Defaults");
@@ -281,8 +281,8 @@ fn shortcut_set_old_name_is_accepted() {
     let mut app = app();
     app.run("shortcuts.preset", json!({ "name": old })).unwrap();
     assert_eq!(app.ui.shortcut_set, "Classic Defaults");
-    app.run("shortcuts.preset", json!({ "name": "VectorCraft Defaults" })).unwrap();
-    assert_eq!(app.ui.shortcut_set, "VectorCraft Defaults");
+    app.run("shortcuts.preset", json!({ "name": "CoralCraft Defaults" })).unwrap();
+    assert_eq!(app.ui.shortcut_set, "CoralCraft Defaults");
     assert!(app.run("shortcuts.preset", json!({ "name": "Nope" })).is_err());
     let (set, _) = import_json(&json!({ "set": old, "overrides": {} })).unwrap();
     assert_eq!(set, "Classic Defaults");

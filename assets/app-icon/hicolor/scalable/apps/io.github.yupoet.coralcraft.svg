@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- CoralCraft app icon source (original artwork). Rendered to PNG by packaging/icons-coral.py -->
+  <defs>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgb(7,46,59)"/>
+      <stop offset="1" stop-color="rgb(13,27,42)"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="115" fill="url(#sea)"/>
+  <line x1="72" y1="420" x2="440" y2="420" stroke="rgb(116,82,84)" stroke-width="18" stroke-linecap="round"/>
+  <rect x="160" y="154" width="59" height="282" rx="29.5" fill="rgb(255,111,97)"/>
+  <rect x="251" y="215" width="54" height="221" rx="27" fill="rgb(247,143,113)"/>
+  <rect x="337" y="112" width="46" height="324" rx="23" fill="rgb(250,176,147)"/>
+  <circle cx="194" cy="169" stroke="none" fill="rgb(255,224,204)" r="16"/>
+  <circle cx="223" cy="225" fill="rgb(255,224,204)" r="13"/>
+  <circle cx="286" cy="133" fill="rgb(255,224,204)" r="14"/>
+  <circle cx="364" cy="215" fill="rgb(255,224,204)" r="15"/>
+  <circle cx="386" cy="282" fill="rgb(255,224,204)" r="11"/>
+  <circle cx="154" cy="282" fill="rgb(250,176,147)" r="10"/>
+</svg>

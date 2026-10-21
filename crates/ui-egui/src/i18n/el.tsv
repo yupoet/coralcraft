@@ -71,7 +71,7 @@
 	A File…	Αρχείο…
 	A new preset starting from the selected one	Νέα προεπιλογή με βάση την επιλεγμένη
 	A saved copy of the selected preset	Αποθηκευμένο αντίγραφο της επιλεγμένης προεπιλογής
-	About VectorCraft	Σχετικά με το VectorCraft
+	About CoralCraft	Σχετικά με το CoralCraft
 	above	παραπάνω
 	Absolute Position	Απόλυτη θέση
 	Accurate	Ακριβές
@@ -210,7 +210,7 @@
 	Artboard {number}	Πίνακας σχεδίασης {number}
 	Artboard:	Πίνακας σχεδίασης:
 	Artboards	Πίνακες σχεδίασης
-	ArtCraft Website	Ιστότοπος ArtCraft
+	CoralCraft Website	Ιστότοπος ArtCraft
 	Artwork Colors	Χρώματα γραφικού
 	As Multiple Assets	Ως πολλαπλά στοιχεία
 	As Single Asset	Ως ένα στοιχείο
@@ -349,7 +349,7 @@
 	Check Script	Έλεγχος σεναρίου
 	Check Script…	Έλεγχος σεναρίου…
 	Copy Report	Αντιγραφή αναφοράς
-	VectorCraft read this script without running it.	Το VectorCraft διάβασε αυτό το σενάριο χωρίς να το εκτελέσει.
+	CoralCraft read this script without running it.	Το CoralCraft διάβασε αυτό το σενάριο χωρίς να το εκτελέσει.
 	Needs nothing beyond plain JavaScript	Απαιτεί μόνο απλή JavaScript
 	Needs the document model	Απαιτεί το μοντέλο εγγράφου
 	Needs files	Απαιτεί πρόσβαση σε αρχεία
@@ -1500,7 +1500,7 @@
 	Tools take a single key (optionally with Shift)	Τα εργαλεία χρησιμοποιούν ένα πλήκτρο (προαιρετικά με Shift)
 	A later row takes this shortcut	Μια επόμενη γραμμή χρησιμοποιεί αυτή τη συντόμευση
 	Same item as a later row	Ίδιο στοιχείο με επόμενη γραμμή
-	Start from VectorCraft Defaults	Εκκίνηση από τις προεπιλογές του VectorCraft
+	Start from CoralCraft Defaults	Εκκίνηση από τις προεπιλογές του CoralCraft
 	Add to the Current Shortcuts	Προσθήκη στις τρέχουσες συντομεύσεις
 	Remember My Choices	Απομνημόνευση των επιλογών μου
 	{ready} of {total} ready	{ready} από {total} έτοιμα
@@ -2363,7 +2363,7 @@ theme	Appearance	Εμφάνιση
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Μια μικρότερη τιμή ακολουθεί πιστά το περίγραμμα· μια μεγαλύτερη δημιουργεί λιγότερα σημεία και πιο ομαλές καμπύλες.
 	Applies when the linked file is relinked or updated.	Εφαρμόζεται όταν το συνδεδεμένο αρχείο επανασυνδέεται ή ενημερώνεται.
 	Art using a deleted global swatch keeps its colour.	Τα σχέδια που χρησιμοποιούν διαγραμμένο καθολικό δείγμα διατηρούν το χρώμα τους.
-	ArtCraft website	Ιστότοπος ArtCraft
+	CoralCraft website	Ιστότοπος ArtCraft
 	Built-in presets are read-only: New… starts an editable copy.	Οι ενσωματωμένες προεπιλογές είναι μόνο για ανάγνωση: το Νέο… δημιουργεί επεξεργάσιμο αντίγραφο.
 	Built-in presets don't change: New makes a copy you can edit.	Οι ενσωματωμένες προεπιλογές δεν τροποποιούνται: το Νέο δημιουργεί αντίγραφο για επεξεργασία.
 	Built-in presets don't change: New… starts an editable copy.	Οι ενσωματωμένες προεπιλογές δεν τροποποιούνται: το Νέο… δημιουργεί επεξεργάσιμο αντίγραφο.
@@ -3009,7 +3009,7 @@ theme	Appearance	Εμφάνιση
 	{count} folder(s) or file(s) couldn't be read	Δεν ήταν δυνατή η ανάγνωση {count} φακέλων ή αρχείων
 	The search stopped at its limit: search a smaller folder.	Η αναζήτηση έφτασε στο όριό της: επιλέξτε μικρότερο φάκελο.
 	Copy only fonts you own or are licensed to install.	Αντιγράψτε μόνο γραμματοσειρές που σας ανήκουν ή έχετε άδεια να εγκαταστήσετε.
-	VectorCraft copies the fonts to {folder}.	Το VectorCraft αντιγράφει τις γραμματοσειρές στον φάκελο {folder}.
+	CoralCraft copies the fonts to {folder}.	Το CoralCraft αντιγράφει τις γραμματοσειρές στον φάκελο {folder}.
 	Registered Trademark Symbol	Σύμβολο καταχωρισμένου εμπορικού σήματος
 	Registration marks	Σημάδια ευθυγράμμισης
 	Registry name:	Όνομα καταχώρισης:
@@ -3703,10 +3703,9 @@ theme	Appearance	Εμφάνιση
 	Vector Halftone	Διανυσματικός ημιτονισμός
 	Vector Halftone…	Διανυσματικός ημιτονισμός…
 	Vector illustration — fast, open, scriptable.	Διανυσματική σχεδίαση — γρήγορη, ανοιχτή και αυτοματοποιήσιμη.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	Το VectorCraft δεν τερματίστηκε κανονικά την προηγούμενη φορά. Τα ακόλουθα έγγραφα είχαν μη αποθηκευμένες αλλαγές:
-	VectorCraft Help…	Βοήθεια VectorCraft…
-	VectorCraft on getartcraft.com	VectorCraft στο getartcraft.com
-	VectorCraft on GitHub	VectorCraft στο GitHub
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	Το CoralCraft δεν τερματίστηκε κανονικά την προηγούμενη φορά. Τα ακόλουθα έγγραφα είχαν μη αποθηκευμένες αλλαγές:
+	CoralCraft Help…	Βοήθεια CoralCraft…
+	CoralCraft on GitHub	CoralCraft στο GitHub
 	Vectors	Διανύσματα
 	Version {version} — open-source vector illustration in pure Rust.	Έκδοση {version} — διανυσματική σχεδίαση ανοιχτού κώδικα εξ ολοκλήρου σε Rust.
 	Vertical %	Κατακόρυφα %

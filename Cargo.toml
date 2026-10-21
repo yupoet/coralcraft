@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 # CoralCraft: the pre-fork crates (and their own workspace) and the standalone fuzz workspace stay
 # out of this workspace; crates/cdr is the one CoralCraft-owned member.
 exclude = ["legacy", "fuzz"]
-default-members = ["crates/*", "apps/vectorcraft", "apps/vectorcraft-cli", "xtask"]
+default-members = ["crates/*", "apps/coralcraft", "apps/vectorcraft-cli", "xtask"]
 
 # CoralCraft: fork of VectorCraft (upstream base a466625, see docs/upstream-vectorcraft.md).
 [workspace.package]

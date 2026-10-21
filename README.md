@@ -5,14 +5,14 @@
 </p>
 
 <p align="center">
-  An open-source vector illustration and desktop publishing project targeting <b>CorelDRAW</b> parity (often searched as <i>CoralDraw</i>), with clean-room <code>.cdr</code> and <code>.cmx</code> format support. The goal is native apps on macOS, Windows, Linux and FreeBSD, plus the browser via WebAssembly.
+  A fork of <a href="https://github.com/storytold/vectorcraft"><b>VectorCraft</b></a> (MIT OR Apache-2.0) extended toward <b>CorelDRAW</b> parity (often searched as <i>CoralDraw</i>), with clean-room <code>.cdr</code> and <code>.cmx</code> format support. It keeps every VectorCraft file format working. The goal is native apps on macOS, Windows, Linux and FreeBSD, plus the browser via WebAssembly.
 </p>
 
 <p align="center">
   <img alt="Status: pre-release, in active development" src="https://img.shields.io/badge/status-pre--release-e8573f">
   <img alt="Written in pure Rust" src="https://img.shields.io/badge/pure-Rust-b83a24?logo=rust&logoColor=white">
   <img alt="Target parity: CorelDRAW (.cdr / .cmx)" src="https://img.shields.io/badge/parity-CorelDRAW%20(.cdr%20%C2%B7%20.cmx)-555555">
-  <img alt="MCP server: 240 tools" src="https://img.shields.io/badge/MCP-240%20tools-0969da">
+  <img alt="MCP automation server" src="https://img.shields.io/badge/MCP-automation%20server-0969da">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-555555">
 </p>
 

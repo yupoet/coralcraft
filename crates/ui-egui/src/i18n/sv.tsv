@@ -79,7 +79,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Ett lägre värde följer konturen noga; ett högre ger färre punkter och jämnare kurvor.
 	A new preset starting from the selected one	En ny förinställning baserad på den markerade
 	A saved copy of the selected preset	En sparad kopia av den markerade förinställningen
-	About VectorCraft	Om VectorCraft
+	About CoralCraft	Om CoralCraft
 	above	ovanför
 	Absolute Position	Absolut position
 	Accurate	Exakt
@@ -220,8 +220,8 @@
 	Artboard {number}	Rityta {number}
 	Artboard:	Rityta:
 	Artboards	Ritytor
-	ArtCraft Website	ArtCrafts webbplats
-	ArtCraft website	ArtCrafts webbplats
+	CoralCraft Website	ArtCrafts webbplats
+	CoralCraft website	ArtCrafts webbplats
 	Artwork Colors	Färger i grafiken
 	As Multiple Assets	Som flera tillgångar
 	As Single Asset	Som en enda tillgång
@@ -365,7 +365,7 @@
 	Check Script	Kontrollera skript
 	Check Script…	Kontrollera skript…
 	Copy Report	Kopiera rapport
-	VectorCraft read this script without running it.	VectorCraft läste skriptet utan att köra det.
+	CoralCraft read this script without running it.	CoralCraft läste skriptet utan att köra det.
 	Needs nothing beyond plain JavaScript	Kräver inget utöver vanlig JavaScript
 	Needs the script language's own objects or directives	Kräver skriptspråkets egna objekt eller direktiv
 	Needs the document model	Kräver dokumentmodellen
@@ -1548,7 +1548,7 @@
 	Tools take a single key (optionally with Shift)	Verktyg använder en enda tangent (eventuellt med Shift)
 	A later row takes this shortcut	En senare rad använder detta kortkommando
 	Same item as a later row	Samma objekt som en senare rad
-	Start from VectorCraft Defaults	Utgå från standardvärdena i VectorCraft
+	Start from CoralCraft Defaults	Utgå från standardvärdena i CoralCraft
 	Add to the Current Shortcuts	Lägg till i aktuella kortkommandon
 	Remember My Choices	Kom ihåg mina val
 	{ready} of {total} ready	{ready} av {total} klara
@@ -2440,7 +2440,7 @@
 	{count} folder(s) or file(s) couldn't be read	{count} mapp(ar) eller fil(er) kunde inte läsas
 	The search stopped at its limit: search a smaller folder.	Sökningen stoppades vid sin gräns: sök i en mindre mapp.
 	Copy only fonts you own or are licensed to install.	Kopiera bara typsnitt som du äger eller har licens att installera.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopierar typsnitten till {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopierar typsnitten till {folder}.
 	Registered Trademark Symbol	Symbol för registrerat varumärke
 	Registration marks	Passmärken
 	Registry name:	Registernamn:
@@ -3383,10 +3383,9 @@
 	Vector Halftone	Vektorrastrering
 	Vector Halftone…	Vektorrastrering…
 	Vector illustration — fast, open, scriptable.	Vektorillustration – snabb, öppen, skriptbar.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft avslutades inte normalt förra gången. De här dokumenten hade osparade ändringar:
-	VectorCraft Help…	VectorCraft-hjälp…
-	VectorCraft on getartcraft.com	VectorCraft på getartcraft.com
-	VectorCraft on GitHub	VectorCraft på GitHub
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft avslutades inte normalt förra gången. De här dokumenten hade osparade ändringar:
+	CoralCraft Help…	CoralCraft-hjälp…
+	CoralCraft on GitHub	CoralCraft på GitHub
 	Vectors	Vektorer
 	Version {version} — open-source vector illustration in pure Rust.	Version {version} – vektorillustration med öppen källkod i ren Rust.
 	Version:	Version:

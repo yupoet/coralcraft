@@ -620,7 +620,7 @@ pub fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let current = d.str("start") == "current";
-            if widgets::radio(ui, tl!("Start from VectorCraft Defaults"), !current, true) {
+            if widgets::radio(ui, tl!("Start from CoralCraft Defaults"), !current, true) {
                 d.fields.insert("start".into(), json!("defaults"));
             }
             ui.add_space(12.0);

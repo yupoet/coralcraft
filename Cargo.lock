@@ -749,6 +749,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "coralcraft"
+version = "0.0.1"
+dependencies = [
+ "arboard",
+ "block2 0.6.2",
+ "clipboard-win",
+ "craft-print",
+ "eframe",
+ "egui",
+ "image",
+ "log",
+ "muda",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-text",
+ "objc2-foundation 0.3.2",
+ "pollster 1.0.1",
+ "raw-window-handle",
+ "rfd",
+ "serde_json",
+ "socket2",
+ "vectorcraft-engine",
+ "vectorcraft-text",
+ "vectorcraft-ui-egui",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "webbrowser",
+ "windows",
+ "winit",
+ "winresource",
+ "winsafe",
+ "zbus",
+]
+
+[[package]]
 name = "coralcraft-cdr"
 version = "0.0.1"
 dependencies = [
@@ -4547,43 +4584,6 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "vectorcraft"
-version = "0.0.1"
-dependencies = [
- "arboard",
- "block2 0.6.2",
- "clipboard-win",
- "craft-print",
- "eframe",
- "egui",
- "image",
- "log",
- "muda",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
- "objc2-core-text",
- "objc2-foundation 0.3.2",
- "pollster 1.0.1",
- "raw-window-handle",
- "rfd",
- "serde_json",
- "socket2",
- "vectorcraft-engine",
- "vectorcraft-text",
- "vectorcraft-ui-egui",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "webbrowser",
- "windows",
- "winit",
- "winresource",
- "winsafe",
- "zbus",
 ]
 
 [[package]]

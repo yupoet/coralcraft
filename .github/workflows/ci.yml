@@ -60,11 +60,9 @@ jobs:
           done
 
   linux-package-smoke:
-    # Build the .deb against a glibc 2.17 baseline and install it on an older distribution, so a
-    # package that only works on the build host can't pass (docs/ai-memory/04-known-issues.md #10).
-    # Disabled until V0.3: packaging/ is VectorCraft's and still produces vectorcraft-named
-    # packages; the rebrand (V0.3) restores this job with CoralCraft names.
-    if: false
+    # Build the .deb and install it on an older distribution, so a package that only works on the
+    # build host can't pass (docs/ai-memory/04-known-issues.md #10). Re-enabled in V0.3 with the
+    # rebranded packaging; the CLI binary keeps its upstream name vectorcraft-cli until V0.4.
     name: Linux .deb install smoke test
     runs-on: ubuntu-24.04
     steps:
@@ -73,19 +71,21 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Install zig and cargo-zigbuild
+      - name: Install nfpm
         run: |
-          python3 -m pip install --user ziglang
-          cargo install --locked cargo-zigbuild
+          go_binary="${HOME}/go/bin/nfpm"
+          if [ -x "$go_binary" ]; then echo "$go_binary" >> "$GITHUB_PATH"; exit 0; fi
+          curl -fsSL https://nfpm.goreleaser.com/gosu-nfpm.sh | sh -s -- -b "$HOME/go/bin"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Build .deb and .tar.gz
-        run: bash packaging/linux/package.sh
+        run: bash packaging/linux/package.sh --formats "deb tar"
       - name: Install and run on Debian 11 (glibc 2.31)
         run: |
           docker run --rm -v "$PWD/dist/release":/r:ro debian:11 sh -ec '
             dpkg -i /r/coralcraft-*-linux-x86_64.deb
-            coralcraft-cli --version
+            vectorcraft-cli --version
             coralcraft --version
-            printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""
+            printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | vectorcraft-cli mcp | grep -q "\"tools\""
           '
 
   test-32bit:

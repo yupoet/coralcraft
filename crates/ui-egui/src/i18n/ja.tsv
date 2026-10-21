@@ -14,7 +14,7 @@
 # tested) — and the status and error messages (`@msg` rows at the end, `COMPLETE_MESSAGES`, tested).
 # Left in English on purpose (`MENU_KEEP_AS_IS` in the tests): the product name, language
 # names, OpenType, the built-in workspace names and the bracketed perspective grid preset names.
-	About VectorCraft	VectorCraft について
+	About CoralCraft	CoralCraft について
 	All Scripts	すべての文字
 	Anchors:	アンカー:
 	Any Kind	すべての種類
@@ -683,11 +683,10 @@
 	Save Swatch Library…	スウォッチライブラリを保存…
 	Symbol Libraries	シンボルライブラリ
 	Help	ヘルプ
-	ArtCraft Website	ArtCraft の Web サイト
-	VectorCraft on getartcraft.com	getartcraft.com の VectorCraft
-	VectorCraft on GitHub	GitHub の VectorCraft
+	CoralCraft Website	ArtCraft の Web サイト
+	CoralCraft on GitHub	GitHub の CoralCraft
 	Search Commands…	コマンドを検索…
-	VectorCraft Help…	VectorCraft ヘルプ…
+	CoralCraft Help…	CoralCraft ヘルプ…
 	Preview	プレビュー
 	Show Edges	エッジを表示
 	Show Corner Widget	コーナーウィジェットを表示
@@ -894,7 +893,7 @@
 	Arrange: Bring to Front	重ね順: 最前面へ
 	Arrowheads:	矢印:
 	Art using a deleted global swatch keeps its colour.	削除したグローバルスウォッチを使っているアートは、そのカラーを保持します。
-	ArtCraft website	ArtCraft の Web サイト
+	CoralCraft website	ArtCraft の Web サイト
 	Artboard Options	アートボードオプション
 	Artboard Options…	アートボードオプション…
 	Artboard Tool	アートボードツール
@@ -981,7 +980,7 @@
 	Check Script	スクリプトをチェック
 	Check Script…	スクリプトをチェック…
 	Copy Report	レポートをコピー
-	VectorCraft read this script without running it.	VectorCraft はこのスクリプトを実行せずに読み取りました。
+	CoralCraft read this script without running it.	CoralCraft はこのスクリプトを実行せずに読み取りました。
 	Needs nothing beyond plain JavaScript	通常の JavaScript 以外は不要
 	Needs the script language's own objects or directives	スクリプト言語固有のオブジェクトまたはディレクティブが必要
 	Needs the document model	ドキュメントモデルが必要
@@ -1801,7 +1800,7 @@
 	Tools take a single key (optionally with Shift)	ツールには 1 つのキーのみ割り当てられます (Shift との組み合わせは可)
 	A later row takes this shortcut	後の行がこのショートカットを使用
 	Same item as a later row	後の行と同じ項目
-	Start from VectorCraft Defaults	VectorCraft の初期設定から開始
+	Start from CoralCraft Defaults	CoralCraft の初期設定から開始
 	Add to the Current Shortcuts	現在のショートカットに追加
 	Remember My Choices	選択内容を記憶
 	{ready} of {total} ready	{total} 件中 {ready} 件が適用可能
@@ -2491,7 +2490,7 @@ mark-style	Japanese	日本式
 	{count} folder(s) or file(s) couldn't be read	{count} 個のフォルダーまたはファイルを読み込めませんでした
 	The search stopped at its limit: search a smaller folder.	検索は上限で停止しました。より小さなフォルダーを検索してください。
 	Copy only fonts you own or are licensed to install.	所有しているフォント、またはインストールするライセンスがあるフォントだけをコピーしてください。
-	VectorCraft copies the fonts to {folder}.	VectorCraft はフォントを {folder} にコピーします。
+	CoralCraft copies the fonts to {folder}.	CoralCraft はフォントを {folder} にコピーします。
 	Registry name:	レジストリ名:
 	Release Compound Shape	複合シェイプを解除
 	Release Opacity Mask	不透明マスクを解除
@@ -3092,7 +3091,7 @@ mark-style	Japanese	日本式
 	Variation:	バリエーション:
 	Vector Halftone	ベクトルハーフトーン
 	Vector illustration — fast, open, scriptable.	ベクターイラスト — 高速・オープン・スクリプト対応
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft は前回正常に終了しませんでした。次のドキュメントに未保存の変更があります:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft は前回正常に終了しませんでした。次のドキュメントに未保存の変更があります:
 	Vectors	ベクター
 	Version {version} — open-source vector illustration in pure Rust.	バージョン {version} — Rust だけで書かれたオープンソースのベクターイラストアプリ。
 	Version:	バージョン:

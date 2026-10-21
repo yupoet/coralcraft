@@ -4,12 +4,13 @@
 # Clean-room: written from the meaning of VectorCraft's English labels in neutral, international
 # Indonesian, using the feature names Indonesian speakers of vector illustration software know. No other
 # localisation was copied. Labels use sentence case (only the first word capitalised).
+	CoralCraft	CoralCraft
 	New Design	Desain baru
 	Delete Design	Hapus desain
 	Paste Design	Tempel desain
 	Select Unused	Seleksi yang tidak digunakan
 	Glowing Edges…	Tepi berpendar…
-	About VectorCraft	Tentang VectorCraft
+	About CoralCraft	Tentang CoralCraft
 	Align to Path	Sejajarkan ke jalur
 	Cut Path at Selected Anchor Points	Potong jalur pada titik jangkar terseleksi
 	Join Our Discord	Gabung ke Discord kami
@@ -120,7 +121,7 @@
 	Tools take a single key (optionally with Shift)	Alat menggunakan satu tombol (opsional dengan Shift)
 	A later row takes this shortcut	Baris selanjutnya menggunakan pintasan ini
 	Same item as a later row	Item yang sama dengan baris selanjutnya
-	Start from VectorCraft Defaults	Mulai dari default VectorCraft
+	Start from CoralCraft Defaults	Mulai dari default CoralCraft
 	Add to the Current Shortcuts	Tambahkan ke pintasan saat ini
 	Remember My Choices	Ingat pilihan saya
 	{ready} of {total} ready	{ready} dari {total} siap
@@ -644,11 +645,10 @@
 	Save Swatch Library…	Simpan pustaka sampel warna…
 	Symbol Libraries	Pustaka simbol
 	Help	Bantuan
-	ArtCraft Website	Situs web ArtCraft
-	VectorCraft on getartcraft.com	VectorCraft di getartcraft.com
-	VectorCraft on GitHub	VectorCraft di GitHub
+	CoralCraft Website	Situs web ArtCraft
+	CoralCraft on GitHub	CoralCraft di GitHub
 	Search Commands…	Cari perintah…
-	VectorCraft Help…	Bantuan VectorCraft…
+	CoralCraft Help…	Bantuan CoralCraft…
 	Auto Color	Warna otomatis
 	Automatic	Otomatis
 	Isolate Selected Group	Isolasi grup terseleksi
@@ -2109,7 +2109,7 @@ lighting	Light	Cahaya
 	{count} folder(s) or file(s) couldn't be read	{count} folder atau file tidak dapat dibaca
 	The search stopped at its limit: search a smaller folder.	Pencarian berhenti pada batasnya: cari folder yang lebih kecil.
 	Copy only fonts you own or are licensed to install.	Salin hanya font yang Anda miliki atau yang dilisensikan untuk dipasang.
-	VectorCraft copies the fonts to {folder}.	VectorCraft menyalin font ke {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft menyalin font ke {folder}.
 	Apply to All ({count} more missing)	Terapkan ke semua ({count} lagi hilang)
 	Ignore	Abaikan
 	Linked File Not Found	File tertaut tidak ditemukan
@@ -2329,7 +2329,7 @@ lighting	Light	Cahaya
 	3 Color Job	Pekerjaan 3 warna
 	Recover Documents	Pulihkan dokumen
 	Restored documents open unsaved: save them to keep them.	Dokumen yang dipulihkan terbuka dalam keadaan belum disimpan: simpan untuk mempertahankannya.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft terakhir kali tidak keluar secara normal. Dokumen berikut memiliki perubahan yang belum disimpan:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft terakhir kali tidak keluar secara normal. Dokumen berikut memiliki perubahan yang belum disimpan:
 	Do you want to save the changes you made to “{name}”?	Apakah Anda ingin menyimpan perubahan yang Anda buat pada “{name}”?
 	Don't Save	Jangan Simpan
 	Your changes will be lost if you don't save them.	Perubahan Anda akan hilang jika tidak disimpan.
@@ -2494,7 +2494,7 @@ lighting	Light	Cahaya
 	Selected Swatches Only (0)	Hanya swatch terpilih (0)
 	User Defined Libraries	Pustaka buatan pengguna
 	Copy Report	Salin laporan
-	VectorCraft read this script without running it.	VectorCraft membaca skrip ini tanpa menjalankannya.
+	CoralCraft read this script without running it.	CoralCraft membaca skrip ini tanpa menjalankannya.
 	Needs nothing beyond plain JavaScript	Tidak memerlukan apa pun selain JavaScript biasa
 	Needs the script language's own objects or directives	Memerlukan objek atau direktif milik bahasa skrip itu sendiri
 	Needs the document model	Memerlukan model dokumen
@@ -3489,7 +3489,7 @@ effect	Regular	Reguler
 	Recent Files	File terkini
 	Vector illustration — fast, open, scriptable.	Ilustrasi vektor — cepat, terbuka, mendukung skrip.
 	Welcome to VectorCraft	Selamat datang di VectorCraft
-	ArtCraft website	Situs web ArtCraft
+	CoralCraft website	Situs web ArtCraft
 	Discord	Discord
 	Join our Discord	Gabung ke Discord kami
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Bergabunglah dengan komunitas ArtCraft di Discord (discord.gg/artcraft)

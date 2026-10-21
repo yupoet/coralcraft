@@ -106,7 +106,7 @@ fn request(method: &str, params: Value) -> js_sys::Promise {
         if sent {
             WAITING.with(|w| w.borrow_mut().push((rx, resolve, reject)));
         } else {
-            let _ = reject.call1(&JsValue::NULL, &js_sys::Error::new("VectorCraft is not running yet"));
+            let _ = reject.call1(&JsValue::NULL, &js_sys::Error::new("CoralCraft is not running yet"));
         }
     });
     repaint();

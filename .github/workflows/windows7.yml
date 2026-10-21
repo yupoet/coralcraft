@@ -10,9 +10,9 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
-      - "apps/vectorcraft/Cargo.toml"
-      - "apps/vectorcraft/src/printing.rs"
-      - "apps/vectorcraft/src/printing/**"
+      - "apps/coralcraft/Cargo.toml"
+      - "apps/coralcraft/src/printing.rs"
+      - "apps/coralcraft/src/printing/**"
       - "crates/ui-egui/src/print.rs"
       - "crates/ui-egui/src/tests_printps.rs"
       - "packaging/windows/windows7.ps1"
@@ -49,6 +49,6 @@ jobs:
         run: ./packaging/windows/windows7.ps1 -Test
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: vectorcraft-windows7-x64-portable
-          path: dist/release/vectorcraft-windows7-x64-portable.zip
+          name: coralcraft-windows7-x64-portable
+          path: dist/release/coralcraft-windows7-x64-portable.zip
           if-no-files-found: error

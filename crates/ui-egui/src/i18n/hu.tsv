@@ -155,7 +155,7 @@
 	A5	A5
 	A6	A6
 	About	Névjegy
-	About VectorCraft	A VectorCraft névjegye
+	About CoralCraft	A CoralCraft névjegye
 	above	fölötte
 	Above Text	Szöveg fölött
 	Absolute	Abszolút
@@ -333,8 +333,8 @@
 	Artboard:	Rajztábla:
 	Artboards	Rajztáblák
 	Artboards: {n}	Rajztáblák: {n}
-	ArtCraft Website	Az ArtCraft webhelye
-	ArtCraft website	Az ArtCraft webhelye
+	CoralCraft Website	Az ArtCraft webhelye
+	CoralCraft website	Az ArtCraft webhelye
 	Artwork Colors	Grafika színei
 	As Multiple Assets	Több elemként
 	As Single Asset	Egy elemként
@@ -537,7 +537,7 @@
 	Check Script	Szkript ellenőrzése
 	Check Script…	Szkript ellenőrzése…
 	Copy Report	Jelentés másolása
-	VectorCraft read this script without running it.	A VectorCraft futtatás nélkül olvasta be ezt a szkriptet.
+	CoralCraft read this script without running it.	A CoralCraft futtatás nélkül olvasta be ezt a szkriptet.
 	Needs nothing beyond plain JavaScript	Csak egyszerű JavaScript kell hozzá
 	Needs the script language's own objects or directives	A szkriptnyelv saját objektumai vagy direktívái kellenek hozzá
 	Needs the document model	A dokumentummodell kell hozzá
@@ -1983,7 +1983,7 @@ file-filter	Templates	Sablonok
 	Tools take a single key (optionally with Shift)	Eszközhöz egyetlen billentyű rendelhető (Shifttel vagy anélkül)
 	A later row takes this shortcut	Ezt a billentyűparancsot egy későbbi sor kapja meg
 	Same item as a later row	Ugyanaz az elem, mint egy későbbi sorban
-	Start from VectorCraft Defaults	Kiindulás a VectorCraft-alapértékekből
+	Start from CoralCraft Defaults	Kiindulás a CoralCraft-alapértékekből
 	Add to the Current Shortcuts	Hozzáadás a jelenlegi billentyűparancsokhoz
 	Remember My Choices	Választásaim megjegyzése
 	{ready} of {total} ready	Kész: {ready}/{total}
@@ -4115,15 +4115,14 @@ mark-style	Japanese	Japán
 	Vector Halftone	Vektoros rácspontos raszter
 	Vector Halftone…	Vektoros rácspontos raszter…
 	Vector illustration — fast, open, scriptable.	Vektoros illusztráció – gyors, nyílt, szkriptelhető.
-	VectorCraft copies the fonts to {folder}.	A VectorCraft ide másolja a betűtípusokat: {folder}.
+	CoralCraft copies the fonts to {folder}.	A CoralCraft ide másolja a betűtípusokat: {folder}.
 	VectorCraft Default	VectorCraft alapértelmezés
 	VectorCraft Defaults	VectorCraft-alapértékek
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	A VectorCraft legutóbb nem szabályosan lépett ki. Ezekben a dokumentumokban mentetlen módosítások voltak:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	A CoralCraft legutóbb nem szabályosan lépett ki. Ezekben a dokumentumokban mentetlen módosítások voltak:
 	VectorCraft documents: one locked object, updated when the file changes.	VectorCraft-dokumentumok: egyetlen zárolt objektum, amely a fájl változásakor frissül.
 	VectorCraft Generic CMYK (SWOP-like)	VectorCraft általános CMYK (SWOP-szerű)
-	VectorCraft Help…	VectorCraft súgó…
-	VectorCraft on getartcraft.com	A VectorCraft a getartcraft.com oldalon
-	VectorCraft on GitHub	A VectorCraft a GitHubon
+	CoralCraft Help…	CoralCraft súgó…
+	CoralCraft on GitHub	A CoralCraft a GitHubon
 	VectorCraft Swatches (.vcswatches)	VectorCraft-színminták (.vcswatches)
 	Vectors	Vektorok
 	Version	Verzió

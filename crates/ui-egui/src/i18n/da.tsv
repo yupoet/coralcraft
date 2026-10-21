@@ -4,12 +4,13 @@
 # Clean-room: written from the meaning of VectorCraft's English labels in neutral, international
 # Danish, using the feature names Danish speakers of vector illustration software know. No other
 # localisation was copied. Labels use sentence case (only the first word capitalised).
+	CoralCraft	CoralCraft
 	New Design	Nyt design
 	Delete Design	Slet design
 	Paste Design	Indsæt design
 	Select Unused	Markér ubrugte
 	Glowing Edges…	Glødende kanter…
-	About VectorCraft	Om VectorCraft
+	About CoralCraft	Om CoralCraft
 	Align to Path	Justér til kurve
 	Cut Path at Selected Anchor Points	Klip kurve ved valgte ankerpunkter
 	Join Our Discord	Slut dig til vores Discord
@@ -120,7 +121,7 @@
 	Tools take a single key (optionally with Shift)	Værktøjer bruger en enkelt tast (eventuelt med Shift)
 	A later row takes this shortcut	En senere række bruger denne genvej
 	Same item as a later row	Samme element som en senere række
-	Start from VectorCraft Defaults	Start fra VectorCrafts standarder
+	Start from CoralCraft Defaults	Start fra CoralCrafts standarder
 	Add to the Current Shortcuts	Føj til de aktuelle genveje
 	Remember My Choices	Husk mine valg
 	{ready} of {total} ready	{ready} af {total} klar
@@ -644,11 +645,10 @@
 	Save Swatch Library…	Gem bibliotek med farveprøver…
 	Symbol Libraries	Symbolbiblioteker
 	Help	Hjælp
-	ArtCraft Website	ArtCrafts websted
-	VectorCraft on getartcraft.com	VectorCraft på getartcraft.com
-	VectorCraft on GitHub	VectorCraft på GitHub
+	CoralCraft Website	ArtCrafts websted
+	CoralCraft on GitHub	CoralCraft på GitHub
 	Search Commands…	Søg i kommandoer…
-	VectorCraft Help…	Hjælp til VectorCraft…
+	CoralCraft Help…	Hjælp til CoralCraft…
 	Auto Color	Autofarve
 	Automatic	Automatisk
 	Isolate Selected Group	Isolér valgt gruppe
@@ -2109,7 +2109,7 @@ lighting	Light	Lys
 	{count} folder(s) or file(s) couldn't be read	{count} mappe(r) eller fil(er) kunne ikke læses
 	The search stopped at its limit: search a smaller folder.	Søgningen stoppede ved sin grænse: søg i en mindre mappe.
 	Copy only fonts you own or are licensed to install.	Kopiér kun skrifttyper, du ejer eller har licens til at installere.
-	VectorCraft copies the fonts to {folder}.	VectorCraft kopierer skrifttyperne til {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft kopierer skrifttyperne til {folder}.
 	Apply to All ({count} more missing)	Anvend på alle ({count} flere mangler)
 	Ignore	Ignorér
 	Linked File Not Found	Linket fil blev ikke fundet
@@ -2329,7 +2329,7 @@ lighting	Light	Lys
 	3 Color Job	3-farvejob
 	Recover Documents	Gendan dokumenter
 	Restored documents open unsaved: save them to keep them.	Gendannede dokumenter åbnes uden at være gemt: gem dem for at beholde dem.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft blev ikke lukket normalt sidst. Disse dokumenter havde ugemte ændringer:
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft blev ikke lukket normalt sidst. Disse dokumenter havde ugemte ændringer:
 	Do you want to save the changes you made to “{name}”?	Vil du gemme de ændringer, du har foretaget i »{name}«?
 	Don't Save	Gem ikke
 	Your changes will be lost if you don't save them.	Dine ændringer går tabt, hvis du ikke gemmer dem.
@@ -2494,7 +2494,7 @@ lighting	Light	Lys
 	Selected Swatches Only (0)	Kun valgte farveprøver (0)
 	User Defined Libraries	Brugerdefinerede biblioteker
 	Copy Report	Kopiér rapport
-	VectorCraft read this script without running it.	VectorCraft læste dette script uden at køre det.
+	CoralCraft read this script without running it.	CoralCraft læste dette script uden at køre det.
 	Needs nothing beyond plain JavaScript	Kræver intet ud over ren JavaScript
 	Needs the script language's own objects or directives	Kræver scriptsprogets egne objekter eller direktiver
 	Needs the document model	Kræver dokumentmodellen
@@ -3489,7 +3489,7 @@ effect	Regular	Regular
 	Recent Files	Seneste filer
 	Vector illustration — fast, open, scriptable.	Vektorillustration — hurtig, åben, scriptbar.
 	Welcome to VectorCraft	Velkommen til VectorCraft
-	ArtCraft website	ArtCraft-websted
+	CoralCraft website	ArtCraft-websted
 	Discord	Discord
 	Join our Discord	Deltag i vores Discord
 	Join the ArtCraft community on Discord (discord.gg/artcraft)	Deltag i ArtCraft-fællesskabet på Discord (discord.gg/artcraft)

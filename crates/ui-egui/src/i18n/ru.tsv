@@ -89,7 +89,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Меньшее значение точнее повторяет обводку; большее даёт меньше точек и более гладкие кривые.
 	A new preset starting from the selected one	Новый набор на основе выбранного
 	A saved copy of the selected preset	Сохранённая копия выбранного набора
-	About VectorCraft	О программе VectorCraft
+	About CoralCraft	О программе CoralCraft
 	above	сверху
 	Absolute Position	Абсолютная позиция
 	Accurate	Точный
@@ -229,8 +229,8 @@
 	Artboard {number}	Монтажная область {number}
 	Artboard:	Монтажная область:
 	Artboards	Монтажные области
-	ArtCraft Website	Веб-сайт ArtCraft
-	ArtCraft website	Веб-сайт ArtCraft
+	CoralCraft Website	Веб-сайт ArtCraft
+	CoralCraft website	Веб-сайт ArtCraft
 	Artwork Colors	Цвета рисунка
 	As Multiple Assets	Как несколько ресурсов
 	As Single Asset	Как один ресурс
@@ -375,7 +375,7 @@
 	Check Script	Проверить сценарий
 	Check Script…	Проверить сценарий…
 	Copy Report	Копировать отчёт
-	VectorCraft read this script without running it.	VectorCraft прочитал этот сценарий, не запуская его.
+	CoralCraft read this script without running it.	CoralCraft прочитал этот сценарий, не запуская его.
 	Needs nothing beyond plain JavaScript	Нужен только обычный JavaScript
 	Needs the script language's own objects or directives	Нужны собственные объекты или директивы языка сценариев
 	Needs the document model	Нужна модель документа
@@ -1598,7 +1598,7 @@ file-filter	Templates	Шаблоны
 	Tools take a single key (optionally with Shift)	Инструментам назначается одна клавиша (можно с Shift)
 	A later row takes this shortcut	Это сочетание забирает строка ниже
 	Same item as a later row	Тот же элемент, что и в строке ниже
-	Start from VectorCraft Defaults	Начать со значений VectorCraft по умолчанию
+	Start from CoralCraft Defaults	Начать со значений CoralCraft по умолчанию
 	Add to the Current Shortcuts	Добавить к текущим сочетаниям клавиш
 	Remember My Choices	Запомнить мой выбор
 	{ready} of {total} ready	Готово: {ready} из {total}
@@ -2512,7 +2512,7 @@ mark-style	Japanese	Японский
 	{count} folder(s) or file(s) couldn't be read	Не удалось прочитать папок или файлов: {count}
 	The search stopped at its limit: search a smaller folder.	Поиск остановился на пределе: выберите папку поменьше.
 	Copy only fonts you own or are licensed to install.	Копируйте только шрифты, которые принадлежат вам или которые вы вправе устанавливать по лицензии.
-	VectorCraft copies the fonts to {folder}.	VectorCraft копирует шрифты в {folder}.
+	CoralCraft copies the fonts to {folder}.	CoralCraft копирует шрифты в {folder}.
 	Registered Trademark Symbol	Символ зарегистрированного товарного знака
 	Registration marks	Метки совмещения
 	Registry name:	Имя в реестре:
@@ -3472,10 +3472,9 @@ mark-style	Japanese	Японский
 	Vector Halftone	Векторный полутон
 	Vector Halftone…	Векторный полутон…
 	Vector illustration — fast, open, scriptable.	Векторная иллюстрация — быстрая, открытая, программируемая.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft не завершился нормально в прошлый раз. В этих документах были несохранённые изменения:
-	VectorCraft Help…	Справка VectorCraft…
-	VectorCraft on getartcraft.com	VectorCraft на getartcraft.com
-	VectorCraft on GitHub	VectorCraft на GitHub
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft не завершился нормально в прошлый раз. В этих документах были несохранённые изменения:
+	CoralCraft Help…	Справка CoralCraft…
+	CoralCraft on GitHub	CoralCraft на GitHub
 	Vectors	Векторы
 	Version {version} — open-source vector illustration in pure Rust.	Версия {version} — векторная иллюстрация с открытым исходным кодом на чистом Rust.
 	Version:	Версия:

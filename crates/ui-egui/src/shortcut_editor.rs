@@ -17,7 +17,8 @@ use crate::state::{Dialog, UiState};
 use crate::theme::{self, Tokens};
 use crate::{VectorcraftApp, menus, widgets};
 
-pub const PRESETS: &[&str] = &["VectorCraft Defaults", "Classic Defaults"];
+// CoralCraft: rebranded preset name.
+pub const PRESETS: &[&str] = &["CoralCraft Defaults", "Classic Defaults"];
 pub const CUSTOM: &str = "Custom";
 /// Set names earlier versions saved: (old name, current name).
 pub const LEGACY_PRESETS: &[(&str, &str)] = &[("Illustrator Defaults", "Classic Defaults")]; // brand-ok: legacy preference value
@@ -476,7 +477,7 @@ pub fn run_command(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<Resu
         "shortcuts.export" => {
             let v = export_json(&app.ui.shortcut_set, &app.ui.shortcut_overrides);
             let bytes = serde_json::to_vec_pretty(&v).unwrap_or_default();
-            let pick = crate::FilePick { filters: vec![("Shortcut sets", &["json"])], ..crate::FilePick::named("VectorCraft Shortcuts.json") };
+            let pick = crate::FilePick { filters: vec![("Shortcut sets", &["json"])], ..crate::FilePick::named("CoralCraft Shortcuts.json") };
             let path = s("path").or_else(|| crate::picks::save(app, &pick));
             match path {
                 Some(path) => match app.services.write.as_mut() {
@@ -486,7 +487,7 @@ pub fn run_command(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<Resu
                 // Its save dialog is open: the file is written when it answers.
                 None if app.file_dialog_open() => Err("cancelled".into()),
                 None => match app.services.download.as_mut() {
-                    Some(dl) => dl("VectorCraft Shortcuts.json", &bytes).map(|()| Value::Null),
+                    Some(dl) => dl("CoralCraft Shortcuts.json", &bytes).map(|()| Value::Null),
                     None => Ok(v),
                 },
             }

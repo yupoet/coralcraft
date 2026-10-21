@@ -103,11 +103,106 @@ SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
 """
 
 
+def write_icns(sizes: list[tuple[str, Image.Image]], path: Path) -> None:
+    """A minimal modern .icns: PNG payloads (ic07 128, ic08 256, ic09 512, ic10 1024@2x)."""
+    import struct
+    from io import BytesIO
+
+    blob = bytearray()
+    for code, img in sizes:
+        buf = BytesIO()
+        img.convert("RGBA").save(buf, "PNG")
+        png = buf.getvalue()
+        blob += code.encode("ascii") + struct.pack(">I", len(png) + 8) + png
+    path.write_bytes(b"icns" + struct.pack(">I", len(blob) + 8) + bytes(blob))
+
+
+def draw_dmg_background(path: Path) -> None:
+    """An original, simple DMG window background: the sea gradient and a large coral mark."""
+    w, h = 1300, 800
+    ss = 2
+    img = Image.new("RGB", (w * ss, h * ss))
+    d = ImageDraw.Draw(img)
+    for y in range(h * ss):
+        d.line([(0, y), (w * ss, y)], fill=lerp(BG_TOP, BG_BOTTOM, y / (h * ss)))
+    # A soft large mark on the left, where the app icon sits on the DMG.
+    mark = draw_icon_image(360, True)
+    img.paste(mark, (int(140 * ss), int((h * ss - 360 * ss) / 2)), mark)
+    # Hint text on the right, above where the Applications symlink sits.
+    from PIL import ImageFont
+
+    try:
+        font = ImageFont.load_default(size=int(30 * ss))
+    except TypeError:  # Pillow < 10.1 has no sized default font
+        font = ImageFont.load_default()
+    text = "Drag CoralCraft to Applications"
+    tw = d.textlength(text, font=font)
+    d.text(((w * ss - 360 * ss - int(60 * ss) - tw) // 2 + 360 * ss + int(60 * ss), int((h * ss) / 2 - 15 * ss)), text, font=font, fill=CORAL_LIGHT)
+    img = img.resize((w, h), Image.LANCZOS)
+    img.save(path, "TIFF")
+
+
+def draw_icon_image(size: int, rounded: bool) -> Image.Image:
+    """draw_icon without the file write (reused by the DMG background)."""
+    ss = 4
+    s = size * ss
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    grad = Image.new("RGBA", (s, s))
+    gd = ImageDraw.Draw(grad)
+    for y in range(s):
+        gd.line([(0, y), (s, y)], fill=lerp(BG_TOP, BG_BOTTOM, y / s) + (255,))
+    mask = Image.new("L", (s, s), 0)
+    md = ImageDraw.Draw(mask)
+    radius = int(s * 0.225) if rounded else 0
+    md.rounded_rectangle([0, 0, s - 1, s - 1], radius=radius, fill=255)
+    img.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(img)
+    ground = s * 0.82
+    d.line([(s * 0.14, ground), (s * 0.86, ground)], fill=lerp(BG_BOTTOM, CORAL_MID, 0.35) + (255,), width=int(s * 0.035))
+    w = s * 0.115
+
+    def finger(cx: float, base: float, top: float, fw: float, color) -> None:
+        r = fw / 2
+        d.rounded_rectangle([cx - r, top, cx + r, base], radius=r, fill=color)
+
+    finger(s * 0.38, ground + s * 0.02, s * 0.30, w, CORAL)
+    finger(s * 0.56, ground + s * 0.02, s * 0.22, w * 0.92, CORAL_MID)
+    finger(s * 0.71, ground + s * 0.02, s * 0.38, w * 0.78, CORAL_LIGHT)
+    for (fx, fy, fr, col) in [
+        (0.38, 0.33, 0.032, ACCENT),
+        (0.435, 0.44, 0.026, ACCENT),
+        (0.56, 0.26, 0.028, ACCENT),
+        (0.71, 0.42, 0.030, ACCENT),
+        (0.755, 0.55, 0.022, ACCENT),
+        (0.30, 0.55, 0.020, CORAL_LIGHT),
+    ]:
+        x, y, r = fx * s, fy * s, fr * s
+        d.ellipse([x - r, y - r, x + r, y + r], fill=col + (255,))
+    return img.resize((size, size), Image.LANCZOS)
+
+
 def main() -> None:
     draw_icon(128, True, OUT / "coralcraft-128.png")
     draw_icon(256, True, OUT / "coralcraft-256.png")
     draw_icon(512, False, OUT / "coralcraft-macos-512.png")
     (OUT / "coralcraft.svg").write_text(SVG)
+    # The Linux hicolor set, named by the desktop app ID.
+    for size in (16, 24, 32, 48, 64, 96, 128, 256, 512):
+        d = OUT / f"hicolor/{size}x{size}/apps"
+        d.mkdir(parents=True, exist_ok=True)
+        draw_icon(size, True, d / "io.github.yupoet.coralcraft.png")
+    scalable = OUT / "hicolor/scalable/apps"
+    scalable.mkdir(parents=True, exist_ok=True)
+    (scalable / "io.github.yupoet.coralcraft.svg").write_text(SVG)
+    # Windows .ico (PIL writes the container) and macOS .icns (PNG entries).
+    base = draw_icon_image(256, True)
+    base.save(OUT / "coralcraft.ico", format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    write_icns(
+        [("ic07", draw_icon_image(128, False)), ("ic08", draw_icon_image(256, False)), ("ic09", draw_icon_image(512, False)), ("ic10", draw_icon_image(512, False))],
+        OUT / "coralcraft.icns",
+    )
+    # The DMG window background (original, generated), where packaging/macos/package.sh reads it.
+    draw_dmg_background(Path(__file__).resolve().parent / "macos" / "dmg" / "background.tiff")
     print(f"wrote icons to {OUT}")
 
 

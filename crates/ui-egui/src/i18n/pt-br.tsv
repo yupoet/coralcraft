@@ -107,7 +107,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	Um valor menor segue o traço de perto; um valor maior gera menos pontos e curvas mais suaves.
 	A new preset starting from the selected one	Um novo predefinido a partir do selecionado
 	A saved copy of the selected preset	Uma cópia salva do predefinido selecionado
-	About VectorCraft	Sobre o VectorCraft
+	About CoralCraft	Sobre o CoralCraft
 	Absolute Position	Posição Absoluta
 	Accurate	Preciso
 	Abutting	Contíguo
@@ -226,8 +226,8 @@
 	Arrange: Bring to Front	Organizar: Trazer para Frente
 	Arrowheads:	Pontas de Seta:
 	Art using a deleted global swatch keeps its colour.	A arte que usa uma amostra global excluída mantém sua cor.
-	ArtCraft Website	Site do ArtCraft
-	ArtCraft website	Site do ArtCraft
+	CoralCraft Website	Site do ArtCraft
+	CoralCraft website	Site do ArtCraft
 	Artboard Options	Opções de Mesa de Trabalho
 	Artboard Options…	Opções de Mesa de Trabalho…
 	Artboard Tool	Ferramenta Mesa de Trabalho
@@ -353,7 +353,7 @@
 	Check Script	Verificar Script
 	Check Script…	Verificar Script…
 	Copy Report	Copiar Relatório
-	VectorCraft read this script without running it.	O VectorCraft leu este script sem executá-lo.
+	CoralCraft read this script without running it.	O CoralCraft leu este script sem executá-lo.
 	Needs nothing beyond plain JavaScript	Precisa apenas de JavaScript simples
 	Needs the script language's own objects or directives	Precisa de objetos ou diretivas próprios da linguagem do script
 	Needs the document model	Precisa do modelo de documento
@@ -2068,7 +2068,7 @@
 	{count} folder(s) or file(s) couldn't be read	{count} pasta(s) ou arquivo(s) não puderam ser lidos
 	The search stopped at its limit: search a smaller folder.	A pesquisa parou no limite: pesquise uma pasta menor.
 	Copy only fonts you own or are licensed to install.	Copie apenas fontes que sejam suas ou que você tenha licença para instalar.
-	VectorCraft copies the fonts to {folder}.	O VectorCraft copia as fontes para {folder}.
+	CoralCraft copies the fonts to {folder}.	O CoralCraft copia as fontes para {folder}.
 	Registered Trademark Symbol	Símbolo de Marca Registrada
 	Registry name:	Nome do registro:
 	Release	Liberar
@@ -2808,10 +2808,9 @@
 	Vector Halftone	Meio-tom Vetorial
 	Vector Halftone…	Meio-tom Vetorial…
 	Vector illustration — fast, open, scriptable.	Ilustração vetorial — rápida, aberta, scriptável.
-	VectorCraft Help…	Ajuda do VectorCraft…
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	O VectorCraft não fechou normalmente da última vez. Estes documentos tinham alterações não salvas:
-	VectorCraft on GitHub	VectorCraft no GitHub
-	VectorCraft on getartcraft.com	VectorCraft em getartcraft.com
+	CoralCraft Help…	Ajuda do CoralCraft…
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	O CoralCraft não fechou normalmente da última vez. Estes documentos tinham alterações não salvas:
+	CoralCraft on GitHub	CoralCraft no GitHub
 	Vectors	Vetores
 	Version {version} — open-source vector illustration in pure Rust.	Versão {version} — ilustração vetorial de código aberto em Rust puro.
 	Version:	Versão:
@@ -4229,7 +4228,7 @@ axis	Both	Ambos
 	Tools take a single key (optionally with Shift)	Ferramentas usam uma única tecla (opcionalmente com Shift)
 	A later row takes this shortcut	Uma linha posterior usa este atalho
 	Same item as a later row	Mesmo item de uma linha posterior
-	Start from VectorCraft Defaults	Começar com os Padrões do VectorCraft
+	Start from CoralCraft Defaults	Começar com os Padrões do CoralCraft
 	Add to the Current Shortcuts	Adicionar aos Atalhos Atuais
 	Remember My Choices	Lembrar Minhas Escolhas
 	{ready} of {total} ready	{ready} de {total} prontos

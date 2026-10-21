@@ -1,4 +1,4 @@
-//! Help → About VectorCraft.
+//! Help → About CoralCraft.
 
 use crate::VectorcraftApp;
 use crate::theme;
@@ -9,7 +9,7 @@ pub(super) fn show(app: &mut VectorcraftApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new(tl!("About VectorCraft"))
+    egui::Window::new(tl!("About CoralCraft"))
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
@@ -52,7 +52,7 @@ fn about_tab(app: &mut VectorcraftApp, ui: &mut egui::Ui) {
         let (r, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
         crate::brand::paint_mark(ui, r);
         ui.vertical(|ui| {
-            ui.label(egui::RichText::new("VectorCraft").font(theme::semibold(22.0)));
+            ui.label(egui::RichText::new("CoralCraft").font(theme::semibold(22.0)));
             ui.label(crate::i18n::fmt(
                 tl!("Version {version} — open-source vector illustration in pure Rust."),
                 &[("version", env!("CARGO_PKG_VERSION"))],

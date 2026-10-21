@@ -56,18 +56,61 @@ VectorCraft embeds its brand icon in two places; both now point at CoralCraft's 
 Other small marked edits: `xtask/src/layers.rs` registers `coralcraft-cdr` (L3, format layer)
 in the dependency table.
 
+### V0.3 rebrand (2026-10-21)
+
+The desktop app is CoralCraft; the library crates stay upstream's. Rename surfaces, all marked
+`// CoralCraft:` where non-mechanical:
+
+- `apps/vectorcraft` → `apps/coralcraft`; package and binary `coralcraft`. The CLI keeps the
+  upstream name `vectorcraft-cli` until V0.4; `vectorcraft-web` keeps its upstream name.
+- App identity strings: window title, About box, app menu (`ui-egui` `APP_NAME`), `--version`
+  output, log file name and prefixes, error/recovery dialogs, MCP `serverInfo`
+  (`coralcraft`/`CoralCraft`), the default shortcut preset (`CoralCraft Defaults`), prefs
+  folder (`~/Library/Application Support/CoralCraft`, `%APPDATA%\CoralCraft`,
+  `~/.config/coralcraft`), portable-mode folder (`CoralCraftData`) and markers.
+- App-level env vars: `CORALCRAFT_CONFIG_DIR`, `CORALCRAFT_NO_PREFS`,
+  `CORALCRAFT_CONTROL_PORT`, `CORALCRAFT_AUTOMATION_{READ,WRITE}_ROOT`,
+  `CORALCRAFT_IN_WINDOW_MENUS`, `CORALCRAFT_GPU_SKIP`, `CORALCRAFT_REQUIRE_WINRES`,
+  `CORALCRAFT_{VERSION,BUILD_SHA,BUILD_DATE,MAINTAINER}` (packaging). **Library-level env
+  vars keep upstream names** (`VECTORCRAFT_SYNC_RENDER`, `VECTORCRAFT_LOCALE`,
+  `VECTORCRAFT_SYSTEM_CURSORS`, `VECTORCRAFT_I18N_DUMP*`, `VECTORCRAFT_SYNC_OPEN`,
+  `VECTORCRAFT_TRACE_CAPTURE`): they are upstream tooling interfaces inside library crates.
+- Format identity is untouched: `.vectorcraft`/`.drawcraft`/`.vctemplate` extensions, the
+  "VectorCraft"/"VectorCraft Template" file-filter labels, `application/x-vectorcraft`, and
+  the macOS UTI `ai.storyteller.vectorcraft.document` all stay (D7: they name the upstream
+  file format, which CoralCraft opens and saves).
+- App/bundle ID: `ai.storyteller.vectorcraft` → `io.github.yupoet.coralcraft` (desktop file,
+  metainfo, flatpak manifests, `Info.plist` `CFBundleIdentifier`). The macOS document-type
+  names stay "VectorCraft Document/Template" (format names).
+- `crates/engine/src/cmd/help.rs`: help links point at `github.com/yupoet/coralcraft`;
+  the Discord stays the upstream ArtCraft community, labeled as such.
+- `vectorcraft-mcp` reports itself as `coralcraft`/`CoralCraft` in `initialize`.
+- Icons: original CoralCraft artwork (`packaging/icons-coral.py` renders the 128/256/512 PNGs,
+  the hicolor set as `io.github.yupoet.coralcraft`, `.icns`, `.ico`, and the DMG background);
+  registered in `ASSETS.md`. `packaging/icons.sh` and `check-app-specific.sh` are rewritten for
+  them (upstream's versions rendered VectorCraft's own artwork). The DMG ships without a
+  positioned `.DS_Store` layout for now (background only); Windows MSI GUIDs are fresh ones.
+- `packaging/macos/package.sh` keeps upstream's flow; the `.DS_Store` copy is conditional.
+  `ci.yml` re-enables the Linux `.deb` install smoke test; `release.yml` (D2: macOS first)
+  builds the universal DMG + CLI zip plus a plain `.app.zip` via `packaging/macos/package.sh`.
+- `apps/coralcraft` inherits the **upstream** lint set (the plan's "apps keep strict lints"
+  line predates the import; mass-editing upstream app code to satisfy stricter lints would
+  break mergeability, which known-issue #13 forbids). CoralCraft-authored crates that replace
+  app code (the V0.4 CLI) carry the strict set.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs
   `cargo xtask ci` on Linux/macOS/Windows; V0.2 adds the `wasm32-unknown-unknown` toolchain
   target (the ci chain's `wasm` step needs it) and keeps the `libcdr-tools` install (the CDR
   differential tests still run through `crates/cdr`).
-- `linux-package-smoke` is disabled (`if: false`) until V0.3: upstream `packaging/` still
-  produces vectorcraft-named packages.
-- Upstream workflows copied as-is: `freebsd`, `windows-arm64`, `windows7`, `print`,
-  `packaging-lint`, `affinity-corpus`. Dropped: `nix` (no `flake.nix` at this fork base),
-  upstream `release.yml` (brand + shared craft-common-actions pipeline; V0.3 restores a
-  CoralCraft release pipeline).
+- `linux-package-smoke` was disabled at V0.2 and re-enabled at V0.3 with the rebranded
+  packaging (it installs the `.deb` on Debian 11 and runs both binaries).
+- Upstream workflows copied and rebranded in V0.3 where they name the app: `freebsd`,
+  `windows-arm64` (`app-name: coralcraft`), `windows7`, `print`, `packaging-lint`,
+  `affinity-corpus`. Dropped: `nix` (no `flake.nix` at this fork base), upstream
+  `release.yml` (shared craft-common-actions pipeline builds a "VectorCraft" draft release);
+  our own `release.yml` (D2: macOS first) builds the universal DMG + `.app.zip`.
 - `legacy/` crates reach `crates/cdr` through direct `path = "../../../crates/cdr"` deps
   (Cargo forbids workspace-dependency paths outside the workspace root), so the legacy
   workspace still builds standalone.

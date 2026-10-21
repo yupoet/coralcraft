@@ -9,6 +9,7 @@
 # proprietary localisation resource, string table or product UI may be copied. Product and
 # technology names stay in Latin letters. Full-width punctuation (，。：“”) in sentences, half-width
 # parentheses.
+	CoralCraft	CoralCraft
 	Glowing Edges…	发光边缘…
 	Glowing Edges	发光边缘
 	Edge Width	边缘宽度
@@ -48,7 +49,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	数值较小时紧贴所绘线条，较大时锚点较少、曲线更平滑。
 	A new preset starting from the selected one	以所选预设为基础的新预设
 	A saved copy of the selected preset	所选预设的副本
-	About VectorCraft	关于 VectorCraft
+	About CoralCraft	关于 CoralCraft
 	above	以上
 	Absolute Position	绝对位置
 	Accurate	精确
@@ -185,8 +186,8 @@
 	Artboard {number}	画板 {number}
 	Artboard:	画板：
 	Artboards	画板
-	ArtCraft Website	ArtCraft 网站
-	ArtCraft website	ArtCraft 网站
+	CoralCraft Website	ArtCraft 网站
+	CoralCraft website	ArtCraft 网站
 	Artwork Colors	图稿颜色
 	As Multiple Assets	作为多个资源
 	As Single Asset	作为单一资源
@@ -334,7 +335,7 @@
 	Check Script	检查脚本
 	Check Script…	检查脚本…
 	Copy Report	复制报告
-	VectorCraft read this script without running it.	VectorCraft 读取了此脚本，但没有运行它。
+	CoralCraft read this script without running it.	CoralCraft 读取了此脚本，但没有运行它。
 	Needs nothing beyond plain JavaScript	只需要普通的 JavaScript
 	Needs the script language's own objects or directives	需要脚本语言自身的对象或指令
 	Needs the document model	需要文档模型
@@ -2405,7 +2406,7 @@ mark-style	Japanese	日式
 	{count} folder(s) or file(s) couldn't be read	有 {count} 个文件夹或文件无法读取
 	The search stopped at its limit: search a smaller folder.	搜索已达上限而停止：请搜索较小的文件夹。
 	Copy only fonts you own or are licensed to install.	只复制您拥有或已获得安装许可的字体。
-	VectorCraft copies the fonts to {folder}.	VectorCraft 会将字体复制到 {folder}。
+	CoralCraft copies the fonts to {folder}.	CoralCraft 会将字体复制到 {folder}。
 	Registered Trademark Symbol	注册商标符号
 	Registration marks	对位标记
 	Registry name:	登录名称：
@@ -3332,10 +3333,9 @@ mark-style	Japanese	日式
 	Vector Halftone…	矢量半调…
 	Vector illustration — fast, open, scriptable.	矢量插画　—　快速、开放、可脚本化。
 	VectorCraft	VectorCraft
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft 上次未正常退出。以下文档有未存储的更改：
-	VectorCraft Help…	VectorCraft 说明…
-	VectorCraft on getartcraft.com	getartcraft.com 上的 VectorCraft
-	VectorCraft on GitHub	GitHub 上的 VectorCraft
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft 上次未正常退出。以下文档有未存储的更改：
+	CoralCraft Help…	CoralCraft 说明…
+	CoralCraft on GitHub	GitHub 上的 CoralCraft
 	Vectors	矢量
 	Version {version} — open-source vector illustration in pure Rust.	版本 {version} — 以纯 Rust 打造的开放原始码矢量插画软件。
 	Version:	版本：
@@ -4271,7 +4271,7 @@ imageTrace	Outline	轮廓
 	Tools take a single key (optionally with Shift)	工具只能使用单个键 (可搭配 Shift)
 	A later row takes this shortcut	后面的行会使用此快捷键
 	Same item as a later row	与后面某一行的项目相同
-	Start from VectorCraft Defaults	从 VectorCraft 默认开始
+	Start from CoralCraft Defaults	从 CoralCraft 默认开始
 	Add to the Current Shortcuts	添加到当前快捷键
 	Remember My Choices	记住我的选择
 	{ready} of {total} ready	{total} 个中有 {ready} 个就绪

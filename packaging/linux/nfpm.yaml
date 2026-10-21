@@ -3,7 +3,7 @@
 # exports VERSION and NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
-name: vectorcraft
+name: coralcraft
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
@@ -12,9 +12,9 @@ version_schema: semver
 release: 1
 section: graphics
 priority: optional
-maintainer: ${VECTORCRAFT_MAINTAINER}
-vendor: Learning Machines LLC
-homepage: https://getartcraft.com/apps/vectorcraft
+maintainer: ${CORALCRAFT_MAINTAINER}
+vendor: The CoralCraft project authors
+homepage: https://github.com/yupoet/coralcraft
 license: MIT OR Apache-2.0
 description: |-
   Open-source, native vector illustration app.
@@ -63,8 +63,8 @@ overrides:
       - xdg-desktop-portal
 
 contents:
-  - src: ${STAGE}/usr/bin/vectorcraft
-    dst: /usr/bin/vectorcraft
+  - src: ${STAGE}/usr/bin/coralcraft
+    dst: /usr/bin/coralcraft
     file_info: { mode: 0755 }
   - src: ${STAGE}/usr/bin/vectorcraft-cli
     dst: /usr/bin/vectorcraft-cli

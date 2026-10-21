@@ -68,8 +68,8 @@ pub fn links(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.add_space(8.0);
     let l = app.session.execute("help.links", &serde_json::json!({})).unwrap_or_default();
     let s = |k: &str| l[k].as_str().unwrap_or("").to_string();
-    link(app, ui, "globe", tl!("ArtCraft website"), "help.website", &s("website"));
-    link(app, ui, "external-link", tl!("VectorCraft on getartcraft.com"), "help.appPage", &s("appPage"));
+    link(app, ui, "globe", tl!("CoralCraft website"), "help.website", &s("website"));
+    link(app, ui, "external-link", tl!("CoralCraft website"), "help.appPage", &s("appPage"));
     link(app, ui, "git-branch", tl!("Source code on GitHub"), "help.github", &s("github"));
 }
 
@@ -91,9 +91,9 @@ mod tests {
             *opened.lock().unwrap(),
             [
                 "https://discord.gg/artcraft",
-                "https://getartcraft.com",
-                "https://getartcraft.com/apps/vectorcraft",
-                "https://github.com/storytold/vectorcraft"
+                "https://github.com/yupoet/coralcraft",
+                "https://github.com/yupoet/coralcraft",
+                "https://github.com/yupoet/coralcraft"
             ]
         );
         // The control channel / MCP path returns the URL without opening a browser.

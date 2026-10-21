@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/vectorcraft-<version>-macos-<arch>.dmg          VectorCraft.app on a drag-to-Applications DMG
+#   $DIST/coralcraft-<version>-macos-<arch>.dmg          CoralCraft.app on a drag-to-Applications DMG
 #   $DIST/vectorcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
@@ -39,8 +39,8 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/VectorCraft.app"
-DMG="$DIST/vectorcraft-$VERSION-macos-$ARCH.dmg"
+APP="$WORK/CoralCraft.app"
+DMG="$DIST/coralcraft-$VERSION-macos-$ARCH.dmg"
 CLI_ZIP="$DIST/vectorcraft-cli-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
@@ -52,18 +52,18 @@ else
   warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
 
-echo "==> VectorCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
+echo "==> CoralCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p vectorcraft -p vectorcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p vectorcraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in vectorcraft vectorcraft-cli; do
+for bin in coralcraft vectorcraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
@@ -112,14 +112,14 @@ validate_stapled() {
   exit 1
 }
 
-# ---- VectorCraft.app ----------------------------------------------------------------------------
+# ---- CoralCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
-cp "$WORK/bin/vectorcraft" "$APP/Contents/MacOS/VectorCraft"
-cp "$ROOT/assets/app-icon/vectorcraft.icns" "$APP/Contents/Resources/VectorCraft.icns"
+cp "$WORK/bin/coralcraft" "$APP/Contents/MacOS/CoralCraft"
+cp "$ROOT/assets/app-icon/coralcraft.icns" "$APP/Contents/Resources/CoralCraft.icns"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
-  -e "s/@BUILD_SHA@/${VECTORCRAFT_BUILD_SHA:-unknown}/g" \
+  -e "s/@BUILD_SHA@/${CORALCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
@@ -128,13 +128,13 @@ copy_docs "$APP/Contents/Resources"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
 # Today the only nested code is the main executable; frameworks/helpers would be signed here too.
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/VectorCraft"
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/CoralCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
 if [ "$NOTARIZE" = 1 ]; then
-  ditto -c -k --keepParent "$APP" "$WORK/VectorCraft-notarize.zip"
-  notarize "$WORK/VectorCraft-notarize.zip"
+  ditto -c -k --keepParent "$APP" "$WORK/CoralCraft-notarize.zip"
+  notarize "$WORK/CoralCraft-notarize.zip"
   xcrun stapler staple "$APP"
   validate_stapled "$APP"
   spctl --assess --type execute -vvv "$APP"
@@ -144,12 +144,14 @@ fi
 echo "==> building $DMG"
 STAGE="$WORK/dmg"
 mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/VectorCraft.app"
+ditto "$APP" "$STAGE/CoralCraft.app"
 ln -s /Applications "$STAGE/Applications"
-# Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
+# Finder window layout: background, icon size and positions.
+# CoralCraft: the original generated background ships without a positioned .DS_Store layout yet;
+# when present it is copied so a hand-tuned layout can return.
 mkdir -p "$STAGE/.background"
 cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
-cp "$HERE/dmg/DS_Store" "$STAGE/.DS_Store"
+[ -f "$HERE/dmg/DS_Store" ] && cp "$HERE/dmg/DS_Store" "$STAGE/.DS_Store"
 rm -f "$DMG"
 # `hdiutil create -srcfolder` writes the files as they are. `makehybrid -hfs` gave every file a
 # com.apple.FinderInfo, which `codesign --verify --strict` rejects as "Finder information, or
@@ -170,7 +172,7 @@ hdiutil_retry() {
     sleep $((attempt * 10))
   done
 }
-hdiutil_retry create create -srcfolder "$STAGE" -volname "VectorCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
+hdiutil_retry create create -srcfolder "$STAGE" -volname "CoralCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
 sign "$DMG"
 codesign --verify --strict --verbose=2 "$DMG"
 # The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
@@ -178,7 +180,7 @@ MOUNT="$WORK/dmg-check"
 rm -rf "$MOUNT"
 mkdir -p "$MOUNT"
 hdiutil_retry attach attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
-if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/VectorCraft.app"; then
+if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/CoralCraft.app"; then
   hdiutil_retry detach detach "$MOUNT" >/dev/null || true
   exit 1
 fi

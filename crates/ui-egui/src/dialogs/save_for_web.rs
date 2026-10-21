@@ -204,7 +204,7 @@ const PREVIEW_KEEP: std::time::Duration = std::time::Duration::from_secs(3600);
 /// `VectorCraft Save for Web`.
 #[cfg(not(target_arch = "wasm32"))]
 fn temp_folder() -> Result<String, String> {
-    preview_folder(&std::env::temp_dir().join("VectorCraft Save for Web"), PREVIEW_KEEP)
+    preview_folder(&std::env::temp_dir().join("CoralCraft Save for Web"), PREVIEW_KEEP)
 }
 
 /// A new folder in `root`, named after the process id and a count of the process's previews. A

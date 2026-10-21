@@ -153,7 +153,7 @@ fn a_later_browser_preview_leaves_an_earlier_one_alone() {
     let gif = page(second.run("file.saveForWeb.browser", json!({"format": "gif"})).unwrap());
     let png = page(first.run("file.saveForWeb.browser", json!({"format": "png24"})).unwrap());
     assert!(jpg != gif && jpg != png && gif != png, "{jpg} {gif} {png}");
-    let root = std::env::temp_dir().join("VectorCraft Save for Web").to_string_lossy().replace('\\', "/");
+    let root = std::env::temp_dir().join("CoralCraft Save for Web").to_string_lossy().replace('\\', "/");
     for (page, image) in [(&jpg, "images/Untitled-1.jpg"), (&gif, "images/Untitled-1.gif"), (&png, "images/Untitled-1.png")] {
         assert!(page.starts_with(&root) && page.ends_with("/Untitled-1.html"), "{page}");
         assert!(std::fs::read_to_string(page).unwrap().contains(image), "{page}");

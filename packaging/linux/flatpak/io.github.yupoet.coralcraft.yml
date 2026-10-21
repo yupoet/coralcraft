@@ -1,0 +1,63 @@
+# Flatpak manifest for CoralCraft, ready for a Flathub submission.
+#
+# Flatpak builds run offline, so the crate sources must be vendored first. From the repo root:
+#
+#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+#   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/io.github.yupoet.coralcraft.yml
+#   flatpak run io.github.yupoet.coralcraft
+#
+# For Flathub, replace the `dir` source with a `git` source pinned to a release tag and commit.
+# Release bundles (.flatpak on GitHub Releases) use io.github.yupoet.coralcraft.bundle.yml instead.
+id: io.github.yupoet.coralcraft
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: coralcraft
+finish-args:
+  # Keep identical to io.github.yupoet.coralcraft.bundle.yml (the release bundle); comments there.
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Cursor theme: without the cursor-shape protocol (e.g. GNOME 46) winit loads the theme itself.
+  # The sandbox sets no XCURSOR_PATH and ships no cursor themes, so the pointer would turn invisible
+  # over the window. The host's themes are mounted under /run/host (#2450).
+  - --env=XCURSOR_PATH=/run/host/user-share/icons:/run/host/share/icons
+  # Open/Save dialogs use the file-chooser portal (rfd), and drag-and-drop uses the document
+  # portal, so broad filesystem access isn't needed. Pictures is granted for opening files by
+  # path from the command line.
+  - --filesystem=xdg-pictures
+  - --filesystem=~/.fonts:ro
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: coralcraft
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/coralcraft/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p coralcraft
+      - install -Dm755 target/release/coralcraft /app/bin/coralcraft
+      - install -Dm644 packaging/linux/io.github.yupoet.coralcraft.desktop /app/share/applications/io.github.yupoet.coralcraft.desktop
+      - install -Dm644 packaging/linux/io.github.yupoet.coralcraft.mime.xml /app/share/mime/packages/io.github.yupoet.coralcraft.xml
+      - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/
+      - >-
+        version=$(awk '/^\[/{p=($0=="[workspace.package]");next} p&&$1=="version"{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml);
+        install -d /app/share/metainfo;
+        sed -e "s/@VERSION@/$version/" -e "s/@DATE@/$(date -u +%Y-%m-%d)/"
+        packaging/linux/io.github.yupoet.coralcraft.metainfo.xml.in > /app/share/metainfo/io.github.yupoet.coralcraft.metainfo.xml
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - target
+          - dist
+          - corpus
+          - build-flatpak
+          - .flatpak-builder
+      - cargo-sources.json

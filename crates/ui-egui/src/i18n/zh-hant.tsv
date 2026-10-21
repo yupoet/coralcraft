@@ -17,6 +17,7 @@
 # commands is kept. Full-width punctuation (，。：) inside sentences; half-width parentheses and
 # the " · " separators as in the English. Terms shared with PhotoCraft use the same words as its
 # zh-hant catalog (圖層, 選取, 偏好設定, 混合模式 ...), so the two apps read alike.
+	CoralCraft	CoralCraft
 	Glowing Edges…	發光邊緣…
 	Glowing Edges	發光邊緣
 	Edge Width	邊緣寬度
@@ -56,7 +57,7 @@
 	A lower value follows the stroke closely; a higher one gives fewer points and smoother curves.	數值較小時會貼近筆畫，較大時則錨點較少、曲線較平滑。
 	A new preset starting from the selected one	以所選預設集為基礎建立新預設集
 	A saved copy of the selected preset	所選預設集的已儲存拷貝
-	About VectorCraft	關於 VectorCraft
+	About CoralCraft	關於 CoralCraft
 	above	以上
 	Absolute Position	絕對位置
 	Accurate	精確
@@ -196,8 +197,8 @@
 	Artboard {number}	工作區域 {number}
 	Artboard:	工作區域：
 	Artboards	工作區域
-	ArtCraft Website	ArtCraft 網站
-	ArtCraft website	ArtCraft 網站
+	CoralCraft Website	ArtCraft 網站
+	CoralCraft website	ArtCraft 網站
 	Artwork Colors	圖稿顏色
 	As Multiple Assets	作為多個資產
 	As Single Asset	作為單一資產
@@ -346,7 +347,7 @@
 	Check Script	檢查指令碼
 	Check Script…	檢查指令碼…
 	Copy Report	複製報告
-	VectorCraft read this script without running it.	VectorCraft 已讀取此指令碼，但沒有執行。
+	CoralCraft read this script without running it.	CoralCraft 已讀取此指令碼，但沒有執行。
 	Needs nothing beyond plain JavaScript	只需要一般的 JavaScript
 	Needs the script language's own objects or directives	需要指令碼語言本身的物件或指示詞
 	Needs the document model	需要文件模型
@@ -2300,7 +2301,7 @@ file-filter	Templates	範本
 	Tools take a single key (optionally with Shift)	工具只能指定單一按鍵 (可搭配 Shift)
 	A later row takes this shortcut	後面的列會使用此快速鍵
 	Same item as a later row	與後面某一列的項目相同
-	Start from VectorCraft Defaults	從 VectorCraft 預設值開始
+	Start from CoralCraft Defaults	從 CoralCraft 預設值開始
 	Add to the Current Shortcuts	加入目前的快速鍵
 	Remember My Choices	記住我的選擇
 	{ready} of {total} ready	{total} 個中有 {ready} 個就緒
@@ -3232,7 +3233,7 @@ mark-style	Japanese	日式
 	{count} folder(s) or file(s) couldn't be read	有 {count} 個資料夾或檔案無法讀取
 	The search stopped at its limit: search a smaller folder.	搜尋已達上限而停止：請搜尋較小的資料夾。
 	Copy only fonts you own or are licensed to install.	只複製您擁有或已取得安裝授權的字體。
-	VectorCraft copies the fonts to {folder}.	VectorCraft 會將字體複製到 {folder}。
+	CoralCraft copies the fonts to {folder}.	CoralCraft 會將字體複製到 {folder}。
 	Registered Trademark Symbol	註冊商標符號
 	Registration marks	對位標記
 	Registry name:	登錄名稱：
@@ -4200,10 +4201,9 @@ mark-style	Japanese	日式
 	Vector Halftone…	向量半色調…
 	Vector illustration — fast, open, scriptable.	向量插圖：快速、開放、可用指令碼操控。
 	VectorCraft	VectorCraft
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft 上次未正常結束。下列文件有未儲存的變更：
-	VectorCraft Help…	VectorCraft 說明…
-	VectorCraft on getartcraft.com	getartcraft.com 上的 VectorCraft
-	VectorCraft on GitHub	GitHub 上的 VectorCraft
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft 上次未正常結束。下列文件有未儲存的變更：
+	CoralCraft Help…	CoralCraft 說明…
+	CoralCraft on GitHub	GitHub 上的 CoralCraft
 	Vectors	向量
 	Version {version} — open-source vector illustration in pure Rust.	版本 {version} — 以純 Rust 打造的開放原始碼向量插畫軟體。
 	Version:	版本：

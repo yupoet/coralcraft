@@ -95,7 +95,7 @@ pub fn app_bar(app: &mut VectorcraftApp, ui: &mut Ui) {
                 crate::community::discord_button(app, ui, false);
             }
             if app.services.native_menu.is_some() {
-                let title = ui.painter().layout_no_wrap("VectorCraft".into(), egui::FontId::proportional(13.5), t.text);
+                let title = ui.painter().layout_no_wrap("CoralCraft".into(), egui::FontId::proportional(13.5), t.text);
                 let title_rect = egui::Rect::from_center_size(full.center(), title.size());
                 // Keep the title centered only while the interactive groups leave room for it.
                 if title_rect.left() >= menus_end + 8.0 && title_rect.right() <= ui.min_rect().left() - 8.0 {
@@ -125,7 +125,7 @@ pub fn window_title(app: &VectorcraftApp) -> String {
     app.session
         .active()
         .map(|d| format!("{}{} \u{2014} VectorCraft", if d.is_dirty() { "*" } else { "" }, d.title()))
-        .unwrap_or_else(|| "VectorCraft".into())
+        .unwrap_or_else(|| "CoralCraft".into())
 }
 
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
@@ -1552,7 +1552,7 @@ mod tests {
 
     #[test]
     fn window_title_with_no_document_is_the_app_name() {
-        assert_eq!(super::window_title(&title_test_app(true)), "VectorCraft");
+        assert_eq!(super::window_title(&title_test_app(true)), "CoralCraft");
     }
 
     #[test]
@@ -1596,11 +1596,11 @@ mod tests {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx);
         super::sync_window_title(&mut app, &ctx);
-        assert_eq!(app.last_window_title, "VectorCraft");
+        assert_eq!(app.last_window_title, "CoralCraft");
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         let cmds = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
-        assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "VectorCraft")), "{cmds:?}");
+        assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "CoralCraft")), "{cmds:?}");
         // Same document state again: the cached title stops a repeat command.
         super::sync_window_title(&mut app, &ctx);
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
@@ -2025,12 +2025,12 @@ mod visual_regressions {
                             _ => None,
                         })
                         .collect();
-                    let title = texts.iter().find(|text| text.galley.job.text == "VectorCraft");
+                    let title = texts.iter().find(|text| text.galley.job.text == "CoralCraft");
                     if width >= 1280.0 {
                         assert!(title.is_some(), "the title remains visible when the header has room");
                     }
                     if let Some(title) = title {
-                        for text in texts.iter().filter(|text| text.galley.job.text != "VectorCraft") {
+                        for text in texts.iter().filter(|text| text.galley.job.text != "CoralCraft") {
                             assert!(
                                 !title.visual_bounding_rect().intersects(text.visual_bounding_rect()),
                                 "{width}: title overlaps {:?}",

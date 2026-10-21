@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flathub). Template: package.sh and the Flatpak
+     manifest substitute @VERSION@ and @DATE@ from Cargo.toml and the build date. -->
+<component type="desktop-application">
+  <id>io.github.yupoet.coralcraft</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>CoralCraft</name>
+  <summary>Draw and edit vector illustrations, SVG and PDF</summary>
+  <developer id="io.github.yupoet">
+    <name>The CoralCraft project authors</name>
+  </developer>
+  <description>
+    <p>
+      CoralCraft is an open-source vector illustration app (a fork of VectorCraft). Draw with pen, shape and brush tools,
+      style art with fills, strokes, gradients and live effects, lay out artboards and type, and
+      open and save SVG and PDF.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.yupoet.coralcraft.desktop</launchable>
+  <icon type="stock">io.github.yupoet.coralcraft</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
+  <url type="homepage">https://github.com/yupoet/coralcraft</url>
+  <url type="bugtracker">https://github.com/yupoet/coralcraft/issues</url>
+  <url type="help">https://github.com/yupoet/coralcraft</url>
+  <url type="contact">https://discord.gg/artcraft</url>
+  <categories>
+    <category>Graphics</category>
+    <category>2DGraphics</category>
+    <category>VectorGraphics</category>
+  </categories>
+  <keywords>
+    <keyword>vector</keyword>
+    <keyword>illustration</keyword>
+    <keyword>svg</keyword>
+    <keyword>pdf</keyword>
+    <keyword>drawing</keyword>
+    <keyword>bezier</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#9fd0ff</color>
+    <color type="primary" scheme_preference="dark">#1f64ba</color>
+  </branding>
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>tablet</control>
+  </supports>
+  <provides>
+    <binary>coralcraft</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

@@ -102,7 +102,7 @@
 	A new preset starting from the selected one	Thiết lập sẵn mới bắt đầu từ thiết lập đang chọn
 	A saved copy of the selected preset	Bản sao đã lưu của thiết lập đang chọn
 	About	Giới thiệu
-	About VectorCraft	Giới thiệu VectorCraft
+	About CoralCraft	Giới thiệu CoralCraft
 	above	phía trên
 	Above Text	Phía trên văn bản
 	Absolute	Tuyệt đối
@@ -262,8 +262,8 @@
 	Artboard:	Bảng vẽ:
 	Artboards	Các bảng vẽ
 	Artboards: {n}	Bảng vẽ: {n}
-	ArtCraft Website	Trang web ArtCraft
-	ArtCraft website	Trang web ArtCraft
+	CoralCraft Website	Trang web ArtCraft
+	CoralCraft website	Trang web ArtCraft
 	Artistic	Nghệ thuật
 	Artwork Colors	Màu sắc tác phẩm
 	As Multiple Assets	Thành nhiều asset
@@ -452,7 +452,7 @@
 	Check Script	Kiểm tra script
 	Check Script…	Kiểm tra script…
 	Copy Report	Sao chép báo cáo
-	VectorCraft read this script without running it.	VectorCraft đã đọc script này mà không chạy nó.
+	CoralCraft read this script without running it.	CoralCraft đã đọc script này mà không chạy nó.
 	Needs nothing beyond plain JavaScript	Chỉ cần JavaScript thông thường
 	Needs the script language's own objects or directives	Cần các đối tượng hoặc chỉ thị riêng của ngôn ngữ script
 	Needs the document model	Cần mô hình tài liệu
@@ -1725,7 +1725,7 @@ file-filter	Templates	Mẫu
 	Tools take a single key (optionally with Shift)	Công cụ chỉ nhận một phím đơn (tùy chọn với Shift)
 	A later row takes this shortcut	Một hàng phía sau dùng phím tắt này
 	Same item as a later row	Cùng mục với một hàng phía sau
-	Start from VectorCraft Defaults	Bắt đầu từ mặc định VectorCraft
+	Start from CoralCraft Defaults	Bắt đầu từ mặc định CoralCraft
 	Add to the Current Shortcuts	Thêm vào phím tắt hiện tại
 	Remember My Choices	Ghi nhớ lựa chọn của tôi
 	{ready} of {total} ready	Sẵn sàng {ready} trong {total}
@@ -3803,12 +3803,11 @@ mark-style	Japanese	Kiểu Nhật
 	Vector Halftone	Halftone vector
 	Vector Halftone…	Halftone vector…
 	Vector illustration — fast, open, scriptable.	Minh họa vector — nhanh, mở, có thể lập trình.
-	VectorCraft copies the fonts to {folder}.	VectorCraft sao chép phông chữ vào {folder}.
-	VectorCraft didn't quit normally last time. These documents had unsaved changes:	VectorCraft không thoát bình thường lần trước. Các tài liệu này có thay đổi chưa lưu:
+	CoralCraft copies the fonts to {folder}.	CoralCraft sao chép phông chữ vào {folder}.
+	CoralCraft didn't quit normally last time. These documents had unsaved changes:	CoralCraft không thoát bình thường lần trước. Các tài liệu này có thay đổi chưa lưu:
 	VectorCraft documents: one locked object, updated when the file changes.	Tài liệu VectorCraft: một đối tượng bị khóa, cập nhật khi tệp thay đổi.
-	VectorCraft Help…	Trợ giúp VectorCraft…
-	VectorCraft on getartcraft.com	VectorCraft trên getartcraft.com
-	VectorCraft on GitHub	VectorCraft trên GitHub
+	CoralCraft Help…	Trợ giúp CoralCraft…
+	CoralCraft on GitHub	CoralCraft trên GitHub
 	Vectors	Vector
 	Version	Phiên bản
 	Version {version} — open-source vector illustration in pure Rust.	Phiên bản {version} — minh họa vector mã nguồn mở bằng Rust thuần túy.

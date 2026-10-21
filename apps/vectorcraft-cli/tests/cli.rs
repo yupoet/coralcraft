@@ -108,7 +108,7 @@ fn mcp_headless_over_stdio() {
     assert!(out.status.success());
     let replies: Vec<Value> = String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     assert_eq!(replies.iter().map(|r| r["id"].as_u64().unwrap()).collect::<Vec<_>>(), [1, 2, 3, 4]);
-    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "vectorcraft");
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "coralcraft");
     assert_eq!(replies[2]["result"]["isError"], false);
     assert_eq!(replies[3]["result"]["content"][0]["type"], "image");
 }
@@ -244,7 +244,7 @@ fn mcp_protocol_over_stdio() {
         json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}),
     );
     let r = recv(&mut lines, &mut notes, 1);
-    assert_eq!(r["result"]["serverInfo"]["name"], "vectorcraft");
+    assert_eq!(r["result"]["serverInfo"]["name"], "coralcraft");
     assert!(r["result"]["capabilities"]["prompts"].is_object(), "{r}");
     send(&mut stdin, json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
 
@@ -390,7 +390,7 @@ fn run_with_a_closed_stdout_ends_quietly_and_finishes_the_batch() {
     assert!(!out.status.success());
 }
 
-/// A fresh settings folder for one test (`VECTORCRAFT_CONFIG_DIR`), so no run reads or writes the
+/// A fresh settings folder for one test (`CORALCRAFT_CONFIG_DIR`), so no run reads or writes the
 /// developer's real profile.
 fn config_dir(name: &str) -> std::path::PathBuf {
     let dir = tmp(&format!("config-{name}"));
@@ -402,7 +402,7 @@ fn config_dir(name: &str) -> std::path::PathBuf {
 /// the result of each step.
 fn run_in(config: &std::path::Path, steps: &[(&str, Value)]) -> Vec<Value> {
     let mut cmd = Command::new(BIN);
-    cmd.arg("run").env("VECTORCRAFT_CONFIG_DIR", config).env_remove("VECTORCRAFT_NO_PREFS");
+    cmd.arg("run").env("CORALCRAFT_CONFIG_DIR", config).env_remove("CORALCRAFT_NO_PREFS");
     for (id, params) in steps {
         cmd.args(["--cmd", id, "--params", &params.to_string()]);
     }
@@ -467,15 +467,15 @@ fn saved_pdf_presets_and_loaded_profiles_survive_a_restart() {
     assert!(!profile_names(&r[1]).contains(&"StudioRGB3"));
 }
 
-/// Runs without preferences (`VECTORCRAFT_NO_PREFS`) keep what they save for the run only, and
+/// Runs without preferences (`CORALCRAFT_NO_PREFS`) keep what they save for the run only, and
 /// leave nothing in the settings folder.
 #[test]
 fn runs_without_preferences_remember_nothing() {
     let config = config_dir("noprefs");
     let out = Command::new(BIN)
         .args(["run", "--cmd", "pdf.preset.save", "--params", r#"{"name":"Press"}"#])
-        .env("VECTORCRAFT_CONFIG_DIR", &config)
-        .env("VECTORCRAFT_NO_PREFS", "1")
+        .env("CORALCRAFT_CONFIG_DIR", &config)
+        .env("CORALCRAFT_NO_PREFS", "1")
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));

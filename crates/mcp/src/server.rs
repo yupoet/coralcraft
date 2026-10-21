@@ -418,7 +418,7 @@ impl Server {
                         "completions": {},
                         "logging": {},
                     },
-                    "serverInfo": {"name": "vectorcraft", "title": "VectorCraft", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "coralcraft", "title": "CoralCraft", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
                 }))
             }
