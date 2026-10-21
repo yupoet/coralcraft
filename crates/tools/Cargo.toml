@@ -1,17 +1,25 @@
 [package]
-name = "coralcraft-tools"
-description = "Interactive tool and panel state machines: Pick, Shape, Pen, Text"
+name = "vectorcraft-tools"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
-
-[dependencies]
-coralcraft-color = { path = "../color" }
-coralcraft-doc = { path = "../doc" }
-coralcraft-geom = { path = "../geom" }
-serde.workspace = true
+description = "VectorCraft tool state machines: pointer events in, commands and overlays out"
 
 [lints]
 workspace = true
+
+[dependencies]
+vectorcraft-geom = { workspace = true }
+vectorcraft-color = { workspace = true }
+vectorcraft-doc = { workspace = true }
+vectorcraft-pathops = { workspace = true }
+vectorcraft-effects = { workspace = true }
+vectorcraft-text = { workspace = true }
+kurbo = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+# The tests lay type out in the bundled fonts (the workspace leaves turning them on to the engine).
+vectorcraft-text = { workspace = true, features = ["test-fonts", "bundled-fonts"] }

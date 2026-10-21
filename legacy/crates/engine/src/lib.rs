@@ -1,0 +1,5476 @@
+//! Core application engine (`EditorEngine`) combining multi-page document state,
+//! tool gestures, undo/redo command history, hit-testing, and Property Bar snapshots (L5).
+
+use coralcraft_color::Color;
+use coralcraft_doc::{
+    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, ParagraphTextSpec, Residual,
+    TextAlignment, VectorEffect, apply_text_case,
+};
+use coralcraft_geom::{
+    Affine2, ArcLengthTable, BooleanOp, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, boolean_paths, break_path_at_node,
+    build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path,
+    dash_path_to_open_subpaths, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle,
+    expand_tapered_stroke_profile, fit_circle_to_path_points, flatten_path_to_polylines, hatch_path_region, insert_curve_node_at,
+    interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
+    medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, pinch_punch_warp_path, project_path_axonometric,
+    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, shear_warp_path_along_axis, simplify_path_nodes,
+    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments,
+    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
+};
+use coralcraft_tools::{
+    AlignMode, DistributeMode, KeyShortcut, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp, build_property_bar_schema,
+    combined_selection_bounds,
+};
+use std::collections::BTreeMap;
+
+pub mod commands;
+pub mod traversal;
+
+use commands::UndoEntry;
+pub use commands::{ActivePageTarget, EngineCommand, EngineError, MAX_DOCUMENT_OBJECTS, MAX_UNDO_HISTORY, PaletteChannel, StatusBarSnapshot};
+use traversal::{
+    collect_selected_recursive, count_nodes_recursive, flatten_group_recursive, object_to_path, powerclip_subtree_depth,
+    reallocate_object_ids_recursive,
+};
+
+/// Core stateful application engine (`coralcraft-engine`, L5).
+#[derive(Debug, Clone)]
+pub struct EditorEngine {
+    pub document: Document,
+    pub active_target: ActivePageTarget,
+    pub selection: Vec<ObjectId>,
+    pub tool_state: ToolState,
+    pub default_fill: Option<FillStyle>,
+    pub default_outline: Option<OutlineStyle>,
+    pub cursor_pt: Point,
+    pub zoom: F64,
+    pub pan_pt: Point,
+    pub snap_to_objects: bool,
+    pub snap_to_page: bool,
+    undo_stack: Vec<UndoEntry>,
+    redo_stack: Vec<UndoEntry>,
+    pub(crate) fallback_layer: Layer,
+}
+
+impl Default for EditorEngine {
+    fn default() -> Self {
+        Self::new(Document::new_a4_portrait())
+    }
+}
+
+impl EditorEngine {
+    /// Creates an engine initialized with `document`, `Page 1` active, and standard CorelDRAW
+    /// creation defaults (No Fill, Black Hairline Outline).
+    #[must_use]
+    pub fn new(mut document: Document) -> Self {
+        Self::ensure_minimum_structure(&mut document);
+        Self {
+            document,
+            active_target: ActivePageTarget::Page(0),
+            selection: Vec::new(),
+            tool_state: ToolState::default(),
+            default_fill: None,
+            default_outline: Some(OutlineStyle::hairline(Color::BLACK)),
+            cursor_pt: Point::ZERO,
+            zoom: F64::ONE,
+            pan_pt: Point::ZERO,
+            snap_to_objects: true,
+            snap_to_page: true,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            fallback_layer: Layer::new_normal(LayerId(0), "Fallback"),
+        }
+    }
+
+    /// Repairs the invariants the engine relies on: at least one page, a `next_id` above every
+    /// existing ID. Documents from files are already checked by `Document::validate`; this keeps
+    /// programmatically built documents from crashing the engine.
+    fn ensure_minimum_structure(document: &mut Document) {
+        // Ignore the error: an empty document is repaired below, and duplicate IDs cannot be
+        // repaired here (loaders reject them first).
+        let _ = document.validate();
+        if document.pages.is_empty()
+            && let Some(mut page) = Document::new_a4_portrait().pages.into_iter().next()
+        {
+            page.id = PageId(document.allocate_object_id().0);
+            for layer in &mut page.layers {
+                layer.id = LayerId(document.allocate_object_id().0);
+                layer.objects.clear();
+            }
+            document.pages.push(page);
+        }
+    }
+
+    /// Returns the 0-based index of the currently viewed page (`0` when viewing `MasterPage` or `Desktop`).
+    #[must_use]
+    pub fn current_page_index(&self) -> usize {
+        match self.active_target {
+            ActivePageTarget::Page(idx) => idx.min(self.document.pages.len().saturating_sub(1)),
+            ActivePageTarget::MasterPage | ActivePageTarget::Desktop => 0,
+        }
+    }
+
+    /// Returns a reference to the currently viewed [`Page`].
+    #[must_use]
+    pub fn current_page(&self) -> &Page {
+        static FALLBACK_PAGE: std::sync::OnceLock<Page> = std::sync::OnceLock::new();
+        let idx = self.current_page_index();
+        self.document.pages.get(idx).unwrap_or_else(|| {
+            FALLBACK_PAGE.get_or_init(|| Page {
+                id: PageId(1),
+                name: "Page 1".to_owned(),
+                size: Size { width: F64::ONE, height: F64::ONE },
+                bleed: F64::ZERO,
+                background: Some(FillStyle::uniform(Color::WHITE)),
+                layers: Vec::new(),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            })
+        })
+    }
+
+    /// Switches the active tab in the bottom Page Navigator Bar (`Page 1..N`, `Master Page`, `Desktop`).
+    pub fn set_active_target(&mut self, target: ActivePageTarget) {
+        let valid = match target {
+            ActivePageTarget::Page(idx) if idx < self.document.pages.len() => ActivePageTarget::Page(idx),
+            ActivePageTarget::Page(_) => ActivePageTarget::Page(self.document.pages.len().saturating_sub(1)),
+            other => other,
+        };
+        if self.active_target != valid {
+            self.active_target = valid;
+            self.selection.clear();
+        }
+    }
+
+    /// Collects references to all currently selected [`ObjectNode`]s in z-order.
+    #[must_use]
+    pub fn selected_nodes(&self) -> Vec<&ObjectNode> {
+        if self.selection.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for page in &self.document.pages {
+            for layer in &page.layers {
+                collect_selected_recursive(&layer.objects, &self.selection, &mut out);
+            }
+        }
+        for layer in &self.document.master_layers {
+            collect_selected_recursive(&layer.objects, &self.selection, &mut out);
+        }
+        out
+    }
+
+    /// Computes the context-sensitive CorelDRAW Property Bar schema for the current state.
+    #[must_use]
+    pub fn property_bar_schema(&self) -> PropertyBarSchema {
+        let selected = self.selected_nodes();
+        build_property_bar_schema(&selected, self.current_page(), self.document.units, &self.tool_state)
+    }
+
+    /// Computes the bottom CorelDRAW Status Bar snapshot (`cursor x, y`, selection summary, Fill/Outline chips).
+    #[must_use]
+    pub fn status_bar_snapshot(&self) -> StatusBarSnapshot {
+        let selected = self.selected_nodes();
+        let selection_summary = match selected.as_slice() {
+            [] => "No selection".to_owned(),
+            [single] => match &single.kind {
+                ObjectKind::Rect(_) => "Rectangle on Layer".to_owned(),
+                ObjectKind::Ellipse(_) => "Ellipse on Layer".to_owned(),
+                ObjectKind::Polygon(p) if p.inner_radius.is_some() => "Star on Layer".to_owned(),
+                ObjectKind::Polygon(_) => "Polygon on Layer".to_owned(),
+                ObjectKind::Path(_) => "Curve on Layer".to_owned(),
+                ObjectKind::ArtisticText { .. } => "Artistic Text".to_owned(),
+                ObjectKind::ParagraphText(_) => "Paragraph Text on Layer".to_owned(),
+                ObjectKind::Group { children } => format!("Group of {} objects", children.len()),
+                ObjectKind::Bitmap { pixel_width, pixel_height, .. } => format!("Bitmap ({pixel_width}x{pixel_height}) on Layer"),
+                ObjectKind::Unsupported(_) => "Unsupported CDR Object".to_owned(),
+            },
+            many => format!("{} objects selected", many.len()),
+        };
+
+        let fill_source = selected.first().map_or(self.default_fill.as_ref(), |n| n.fill.as_ref());
+        let outline_source = selected.first().map_or(self.default_outline.as_ref(), |n| n.outline.as_ref());
+
+        let fill_chip = match fill_source {
+            Some(FillStyle::Uniform { color }) => Some(color.clone()),
+            Some(FillStyle::Fountain { stops, .. }) => stops.first().map(|s| s.color.clone()),
+            Some(FillStyle::TwoColorPattern { fg_color, .. }) => Some(fg_color.clone()),
+            Some(FillStyle::Unknown { .. }) | None => None,
+        };
+        let outline_chip = outline_source.map(|o| o.color.clone());
+
+        StatusBarSnapshot { cursor_pt: self.cursor_pt, units: self.document.units, selection_summary, fill_chip, outline_chip }
+    }
+
+    /// Applies a keyboard shortcut (`F5`, `F6`, `F7`, `F8`, `F10`, `Y`, `Z`, `G`, `Escape`).
+    pub fn handle_shortcut(&mut self, shortcut: KeyShortcut) -> bool {
+        self.tool_state.apply_shortcut(shortcut)
+    }
+
+    /// Performs top-to-bottom hit-testing at `pt` (in page coordinates) against effective visible,
+    /// unlocked layers of the current page.
+    #[must_use]
+    pub fn hit_test_point(&self, pt: Point) -> Option<ObjectId> {
+        let layers = self.document.effective_layers_for_page(self.current_page_index(), false).ok()?;
+        for layer in layers.into_iter().rev() {
+            if layer.locked || !layer.visible {
+                continue;
+            }
+            for obj in layer.objects.iter().rev() {
+                if obj.locked || !obj.visible {
+                    continue;
+                }
+                let bbox = combined_selection_bounds(&[obj]);
+                let pad = 2.0;
+                if pt.x.get() >= bbox.x0.get() - pad
+                    && pt.x.get() <= bbox.x1.get() + pad
+                    && pt.y.get() >= bbox.y0.get() - pad
+                    && pt.y.get() <= bbox.y1.get() + pad
+                {
+                    return Some(obj.id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Handles a primary pointer down on the canvas at `pt` (in page coordinates).
+    pub fn pointer_down(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
+        self.cursor_pt = pt;
+        match self.tool_state.active_tool {
+            ToolKind::Pick => {
+                if let Some(hit_id) = self.hit_test_point(pt) {
+                    if shift_modifier {
+                        if let Some(pos) = self.selection.iter().position(|&id| id == hit_id) {
+                            self.selection.remove(pos);
+                        } else {
+                            self.selection.push(hit_id);
+                        }
+                    } else if !self.selection.contains(&hit_id) {
+                        self.selection = vec![hit_id];
+                    }
+                    self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
+                } else if !shift_modifier {
+                    self.selection.clear();
+                }
+            }
+            ToolKind::ArtisticText => {
+                let size_pt = self.tool_state.default_font_size_pt;
+                let font_family = self.tool_state.default_font_family.clone();
+                self.execute(EngineCommand::AddObject {
+                    name: Some("Artistic Text".to_owned()),
+                    kind: ObjectKind::ArtisticText { text: "Text".to_owned(), font_family, size_pt, position: pt },
+                });
+            }
+            ToolKind::Zoom => {
+                let factor = if alt_modifier { 0.5 } else { 2.0 };
+                if let Ok(new_zoom) = F64::new((self.zoom.get() * factor).clamp(0.05, 64.0)) {
+                    self.zoom = new_zoom;
+                }
+            }
+            ToolKind::InteractiveFill => {
+                if self.selection.is_empty()
+                    && let Some(hit_id) = self.hit_test_point(pt)
+                {
+                    self.selection = vec![hit_id];
+                }
+                self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
+            }
+            _ => {
+                self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
+            }
+        }
+    }
+
+    /// Updates pointer coordinates during a canvas move/drag.
+    pub fn pointer_move(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
+        self.cursor_pt = pt;
+        self.tool_state.update_drag(pt, shift_modifier, alt_modifier);
+    }
+
+    /// Completes an active canvas drag gesture, committing shape creation or object movement
+    /// as a single undo step.
+    pub fn pointer_up(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
+        self.cursor_pt = pt;
+        self.tool_state.update_drag(pt, shift_modifier, alt_modifier);
+
+        if let Some(coralcraft_tools::GestureState::DragMoveSelection { start, current }) = self.tool_state.gesture.clone() {
+            self.tool_state.gesture = None;
+            let dx = current.x.get() - start.x.get();
+            let dy = current.y.get() - start.y.get();
+            if (dx.abs() > 1e-6 || dy.abs() > 1e-6)
+                && !self.selection.is_empty()
+                && let (Ok(dx_pt), Ok(dy_pt)) = (F64::new(dx), F64::new(dy))
+            {
+                self.execute(EngineCommand::TranslateSelection { dx_pt, dy_pt });
+            }
+            return;
+        }
+
+        if let Some(coralcraft_tools::GestureState::DragInteractiveFill { start, current }) = self.tool_state.gesture.clone() {
+            self.tool_state.gesture = None;
+            let dx = current.x.get() - start.x.get();
+            let dy = current.y.get() - start.y.get();
+            if (dx.abs() > 1e-6 || dy.abs() > 1e-6) && !self.selection.is_empty() {
+                let angle_deg = dy.atan2(dx).to_degrees();
+                let (c0, c1) = self.current_target_objects().iter().find(|o| self.selection.contains(&o.id)).map_or(
+                    (Color::rgb8(0, 120, 215), Color::WHITE),
+                    |o| match &o.fill {
+                        Some(FillStyle::Fountain { stops, .. }) if stops.len() >= 2 => {
+                            if let (Some(first), Some(last)) = (stops.first(), stops.last()) {
+                                (first.color.clone(), last.color.clone())
+                            } else {
+                                (Color::rgb8(0, 120, 215), Color::WHITE)
+                            }
+                        }
+                        Some(FillStyle::Uniform { color }) => (color.clone(), Color::WHITE),
+                        _ => (Color::rgb8(0, 120, 215), Color::WHITE),
+                    },
+                );
+                let mut stops = Vec::with_capacity(2);
+                if let Ok(st0) = coralcraft_color::FountainStop::new(0.0, c0) {
+                    stops.push(st0);
+                }
+                if let Ok(st1) = coralcraft_color::FountainStop::new(1.0, c1) {
+                    stops.push(st1);
+                }
+                let fill = FillStyle::Fountain {
+                    geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
+                    blend_mode: coralcraft_color::FountainBlendMode::Direct,
+                    stops,
+                };
+                self.execute(EngineCommand::SetFill { fill: Some(fill) });
+            }
+            return;
+        }
+
+        if let Some(kind) = self.tool_state.finish_create_shape() {
+            let name = match &kind {
+                ObjectKind::Rect(_) => Some("Rectangle".to_owned()),
+                ObjectKind::Ellipse(_) => Some("Ellipse".to_owned()),
+                ObjectKind::Polygon(p) if p.inner_radius.is_some() => Some("Star".to_owned()),
+                ObjectKind::Polygon(_) => Some("Polygon".to_owned()),
+                _ => None,
+            };
+            self.execute(EngineCommand::AddObject { name, kind });
+        }
+    }
+
+    /// Executes an atomic [`EngineCommand`] transactionally and pushes the previous state onto the undo stack.
+    pub fn execute(&mut self, cmd: EngineCommand) -> bool {
+        self.try_execute(cmd).is_ok()
+    }
+
+    /// Executes an atomic [`EngineCommand`] transactionally, rolling back and preserving undo/redo history on error.
+    pub fn try_execute(&mut self, cmd: EngineCommand) -> Result<(), EngineError> {
+        let current_total = self.total_object_count();
+        let estimated_added = match &cmd {
+            EngineCommand::AddObject { kind, .. } => 1usize.saturating_add(match kind {
+                ObjectKind::Group { children } => count_nodes_recursive(children),
+                ObjectKind::Unsupported(u) => count_nodes_recursive(&u.children),
+                _ => 0,
+            }),
+            EngineCommand::StepAndRepeat { count, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                weight.saturating_mul((*count).min(100) as usize)
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                let cells = ((*rows).clamp(1, 20) as usize).saturating_mul((*cols).clamp(1, 20) as usize).saturating_sub(1);
+                weight.saturating_mul(cells)
+            }
+            EngineCommand::CircularDuplicateSelection { count, .. } => {
+                let sel_nodes = self.selected_nodes();
+                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
+                weight.saturating_mul((*count).clamp(1, 72) as usize)
+            }
+            _ => 0,
+        };
+        if current_total.saturating_add(estimated_added) > MAX_DOCUMENT_OBJECTS {
+            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
+        }
+
+        let before = self.capture_snapshot();
+        if !self.apply_command(cmd) {
+            self.restore_snapshot(before);
+            return Err(EngineError::CommandRejected);
+        }
+        if self.total_object_count() > MAX_DOCUMENT_OBJECTS {
+            self.restore_snapshot(before);
+            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
+        }
+        self.sanitize_selection();
+        if self.undo_stack.len() >= MAX_UNDO_HISTORY {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(before);
+        self.redo_stack.clear();
+        Ok(())
+    }
+
+    fn apply_command(&mut self, cmd: EngineCommand) -> bool {
+        match &cmd {
+            EngineCommand::DeletePage { page_index } if self.document.pages.len() <= 1 || *page_index >= self.document.pages.len() => {
+                return false;
+            }
+            EngineCommand::RenamePage { page_index, .. } | EngineCommand::DuplicatePage { page_index }
+                if *page_index >= self.document.pages.len() =>
+            {
+                return false;
+            }
+            EngineCommand::DeleteSelection if self.selection.is_empty() => {
+                return false;
+            }
+            EngineCommand::TranslateSelection { dx_pt, dy_pt }
+                if self.selection.is_empty() || Affine2::translation(dx_pt.get(), dy_pt.get()).is_err() =>
+            {
+                return false;
+            }
+            EngineCommand::SetPageSetup { width_pt, height_pt, .. } if Size::new(width_pt.get(), height_pt.get()).is_err() => {
+                return false;
+            }
+            EngineCommand::GroupSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::UngroupSelection => {
+                let sel = &self.selection;
+                let has_group =
+                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
+                if !has_group {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertToCurves => {
+                let has_convertible = self.selected_nodes().into_iter().any(|o| {
+                    !o.locked
+                        && matches!(
+                            o.kind,
+                            ObjectKind::Rect(_)
+                                | ObjectKind::Ellipse(_)
+                                | ObjectKind::Polygon(_)
+                                | ObjectKind::ArtisticText { .. }
+                                | ObjectKind::ParagraphText(_)
+                        )
+                });
+                if !has_convertible {
+                    return false;
+                }
+            }
+            EngineCommand::BooleanSelection { .. } => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::ApplyContour { object_id, .. }
+            | EngineCommand::AddDropShadow { object_id, .. }
+            | EngineCommand::AddExtrude { object_id, .. }
+            | EngineCommand::ApplyEnvelope { object_id, .. }
+            | EngineCommand::ApplyPerspective { object_id, .. }
+            | EngineCommand::ApplyDistortion { object_id, .. }
+            | EngineCommand::FilletPathCorners { object_id, .. }
+            | EngineCommand::ApplyArtisticBrush { object_id, .. }
+            | EngineCommand::ExpandEffects { object_id } => {
+                if self.selected_or_all_node(*object_id).is_none_or(|o| o.locked) {
+                    return false;
+                }
+            }
+            EngineCommand::CreateBlend { start_id, end_id, .. } => {
+                let has_start = self.selected_or_all_node(*start_id).is_some_and(|o| !o.locked);
+                let has_end = self.selected_or_all_node(*end_id).is_some_and(|o| !o.locked);
+                if !has_start || !has_end || start_id == end_id {
+                    return false;
+                }
+            }
+            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
+                let has_blend = self
+                    .selected_or_all_node(*blend_object_id)
+                    .is_some_and(|o| !o.locked && o.effects.iter().any(|e| matches!(e, VectorEffect::Blend { .. })));
+                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
+                if !has_blend || !has_spine || blend_object_id == spine_object_id {
+                    return false;
+                }
+            }
+            EngineCommand::FitTextToPath { text_object_id, spine_object_id, .. } => {
+                let has_text =
+                    self.selected_or_all_node(*text_object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. }));
+                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
+                if !has_text || !has_spine || text_object_id == spine_object_id {
+                    return false;
+                }
+            }
+            EngineCommand::StepAndRepeat { count, .. } => {
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if *count == 0 || !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
+                if (!*copy_fill && !*copy_outline && !*copy_effects) || self.selected_or_all_node(*source_id).is_none() {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_target = self.current_target_objects().iter().any(|o| !o.locked && o.id != *source_id && sel.contains(&o.id));
+                if !has_target {
+                    return false;
+                }
+            }
+            EngineCommand::CombineSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::BreakApartSelection => {
+                let sel = &self.selection;
+                let has_compound = self.current_target_objects().iter().any(|o| {
+                    !o.locked
+                        && sel.contains(&o.id)
+                        && matches!(&o.kind, ObjectKind::Path(p) if p.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count() >= 2)
+                });
+                if !has_compound {
+                    return false;
+                }
+            }
+            EngineCommand::AdjustBitmap { object_id, .. } | EngineCommand::TraceBitmap { object_id, .. } => {
+                let is_bmp = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::Bitmap { .. }));
+                if !is_bmp {
+                    return false;
+                }
+            }
+            EngineCommand::MirrorSelection { horizontal, vertical, .. } => {
+                if !*horizontal && !*vertical {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::CreateBoundary => {
+                let sel = &self.selection;
+                let has_path = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some());
+                if !has_path {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertOutlineToObject => {
+                let sel = &self.selection;
+                let has_outlined = self
+                    .current_target_objects()
+                    .iter()
+                    .any(|o| !o.locked && sel.contains(&o.id) && o.outline.is_some() && object_to_path(o).is_some());
+                if !has_outlined {
+                    return false;
+                }
+            }
+            EngineCommand::RotateSelection { angle_deg, origin_index, .. } => {
+                if *origin_index > 8 || angle_deg.get().abs() <= 1e-9 {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, .. } => {
+                if *origin_index > 8 || scale_x.get().abs() <= 1e-6 || scale_y.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, .. } => {
+                let sx = skew_x_deg.get();
+                let sy = skew_y_deg.get();
+                if *origin_index > 8
+                    || sx.abs() >= 85.0
+                    || sy.abs() >= 85.0
+                    || (sx.abs() <= 1e-9 && sy.abs() <= 1e-9)
+                    || Affine2::skew_deg(sx, sy).is_err_and(|_| true)
+                {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
+                if Affine2::translation(offset_x_pt.get(), offset_y_pt.get()).is_err() {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ReversePathDirection { object_id } | EngineCommand::CloseOpenSubpaths { object_id } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
+                if tolerance_pt.get() < 0.0 {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::UngroupAllSelection => {
+                let sel = &self.selection;
+                let has_group =
+                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
+                if !has_group {
+                    return false;
+                }
+            }
+            EngineCommand::MovePage { from_index, to_index } => {
+                let len = self.document.pages.len();
+                if *from_index >= len || *to_index >= len || *from_index == *to_index {
+                    return false;
+                }
+            }
+            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
+                if tolerance_pt.get() < 0.0 {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
+                if *origin_index > 8 || (x_pt.is_none() && y_pt.is_none() && width_pt.is_none() && height_pt.is_none()) {
+                    return false;
+                }
+                if width_pt.is_some_and(|w| w.get() <= 1e-6) || height_pt.is_some_and(|h| h.get() <= 1e-6) {
+                    return false;
+                }
+                let sel = &self.selection;
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::AddLayer { name } => {
+                if name.trim().is_empty() || self.document.pages.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
+                if visible.is_none() && locked.is_none() && printable.is_none() && opacity.is_none() {
+                    return false;
+                }
+                let exists = self.document.pages.iter().flat_map(|p| &p.layers).chain(&self.document.master_layers).any(|l| l.id == *layer_id);
+                if !exists {
+                    return false;
+                }
+            }
+            EngineCommand::ClearTransformations => {
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ToggleTextKind { object_id } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::FindAndReplaceText { find, .. } => {
+                if find.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::ChangeTextCase { object_id, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::InsertCurveNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| insert_curve_node_at(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::DeleteCurveNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_curve_node_at(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_line(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_curve(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetPageBackground { page_index, .. } | EngineCommand::SetPageBleed { page_index, .. } => {
+                if *page_index >= self.document.pages.len() {
+                    return false;
+                }
+            }
+            EngineCommand::DeleteLayer { layer_id } => {
+                let can_delete = self.document.pages.iter().any(|p| p.layers.len() > 1 && p.layers.iter().any(|l| l.id == *layer_id));
+                if !can_delete {
+                    return false;
+                }
+            }
+            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
+                let valid = self
+                    .document
+                    .pages
+                    .get(*page_index)
+                    .is_some_and(|p| *from_index < p.layers.len() && *to_index < p.layers.len() && *from_index != *to_index);
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
+                if width_pt.is_none() && behind_fill.is_none() && scale_with_object.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::SetDocumentTitle { title } => {
+                if title.trim().is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| twirl_path_around_point(&p, *center, radius_pt.get(), angle_deg.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| radial_push_path_around_point(&p, *center, radius_pt.get(), strength.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| smear_path_from_point(&p, *origin, radius_pt.get(), dx_pt.get(), dy_pt.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetParagraphTextLayout { object_id, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| roughen_path_segments(&p, tooth_height_pt.get(), *frequency).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetArtisticTextProperties { object_id, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o)
+                            .is_some_and(|p| smooth_path_around_point(&p, *center, radius_pt.get(), strength.get(), *iterations).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| knife_cut_path_by_line(&p, *line_start, *line_end, gap_pt.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CropToRect { rect } => {
+                if rect.width() <= 0.0 || rect.height() <= 0.0 {
+                    return false;
+                }
+                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && o.visible);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
+                let page = self.current_page();
+                let dst_ok = page.layers.iter().any(|l| l.id == *target_layer_id && !l.locked);
+                let src_ok =
+                    page.layers.iter().any(|l| l.id != *target_layer_id && !l.locked && l.objects.iter().any(|o| o.id == *object_id && !o.locked));
+                if !dst_ok || !src_ok {
+                    return false;
+                }
+            }
+            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| erase_path_within_circle(&p, *center, radius_pt.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
+                if snap_to_objects.is_none() && snap_to_page.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_segment_at_index(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SmartFillAtPoint { point, .. } => {
+                let px = point.x.get();
+                let py = point.y.get();
+                let has_enclosing = self.current_target_objects().iter().any(|o| {
+                    !o.locked
+                        && o.visible
+                        && object_to_path(o)
+                            .and_then(|p| p.transform(o.transform).ok())
+                            .and_then(|wp| wp.bounds())
+                            .is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get())
+                });
+                if !has_enclosing {
+                    return false;
+                }
+            }
+            EngineCommand::OffsetObjectPath { object_id, distance_pt, .. } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| offset_open_or_closed_path(&p, distance_pt.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SetPathFillRule { object_id, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SwapObjectPositions { first_id, second_id } => {
+                if first_id == second_id {
+                    return false;
+                }
+                let ok1 = self.selected_or_all_node(*first_id).is_some_and(|o| !o.locked);
+                let ok2 = self.selected_or_all_node(*second_id).is_some_and(|o| !o.locked);
+                if !ok1 || !ok2 {
+                    return false;
+                }
+            }
+            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
+                if !horizontal && !vertical {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| smooth_curve_node_at(&p, *element_index, tension.get()).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
+                if *rows == 0 || *cols == 0 || (*rows == 1 && *cols == 1) {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::AddGuideline { position_pt, .. } => {
+                if !position_pt.get().is_finite() {
+                    return false;
+                }
+            }
+            EngineCommand::ClearGuidelines => {
+                let has_guides = self.current_page().layers.iter().any(|l| l.role == LayerRole::Guides && !l.objects.is_empty());
+                if !has_guides {
+                    return false;
+                }
+            }
+            EngineCommand::CircularDuplicateSelection { count, total_angle_deg, .. } => {
+                if *count == 0 || total_angle_deg.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::FitPageToSelection { margin_pt } => {
+                if margin_pt.get() < 0.0 || !margin_pt.get().is_finite() {
+                    return false;
+                }
+                let has_targets = if self.selection.is_empty() {
+                    self.current_target_objects().iter().any(|o| !o.locked && o.visible)
+                } else {
+                    self.selected_nodes().iter().any(|o| !o.locked)
+                };
+                if !has_targets {
+                    return false;
+                }
+            }
+            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
+                if cap.is_none() && join.is_none() && miter_limit.is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
+                if element_indices.len() < 2 || (!horizontal && !vertical) {
+                    return false;
+                }
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o).is_some_and(|p| {
+                            element_indices.iter().all(|&idx| p.elements.get(idx).is_some_and(|el| !matches!(el, PathElement::Close)))
+                        })
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
+                if hue_delta_deg.get().abs() <= 1e-6 && saturation_delta.get().abs() <= 1e-6 && brightness_delta.get().abs() <= 1e-6 {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::SubdividePathSegments { object_id } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| subdivide_all_path_segments(&p).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
+                if !invert && !grayscale {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && object_to_path(o)
+                            .is_some_and(|p| transform_curve_nodes(&p, element_indices, scale_x.get(), scale_y.get(), rotate_deg.get()).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::SelectByColor { match_fill, match_outline, .. } => {
+                if !match_fill && !match_outline {
+                    return false;
+                }
+            }
+            EngineCommand::BreakPathAtNode { object_id, element_index } => {
+                let valid = self
+                    .selected_or_all_node(*object_id)
+                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| break_path_at_node(&p, *element_index).is_ok()));
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
+                if !match_width && !match_height {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
+                if start_id == end_id || !(0.0..=1.0).contains(&t.get()) || *sample_count < 3 {
+                    return false;
+                }
+                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
+                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
+                if !valid_a || !valid_b {
+                    return false;
+                }
+            }
+            EngineCommand::DistributeExactGap { gap_pt, .. } => {
+                if !gap_pt.get().is_finite() {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::DivideSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::DistributeSelectionAlongPath { spine_object_id, .. } => {
+                let valid_spine = self
+                    .selected_or_all_node(*spine_object_id)
+                    .and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                    .and_then(|p| ArcLengthTable::from_path(&p).ok())
+                    .is_some_and(|lut| lut.total_length() > 1e-6);
+                let has_targets = self.selected_nodes().iter().any(|o| !o.locked && o.id != *spine_object_id);
+                if !valid_spine || !has_targets {
+                    return false;
+                }
+            }
+            EngineCommand::RecolorArtwork { selection_only, .. } => {
+                if *selection_only && self.selected_nodes().iter().all(|o| o.locked) {
+                    return false;
+                }
+            }
+            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked && object_to_path(o).is_some_and(|p| hatch_path_region(&p, angle_deg.get(), spacing_pt.get(), *cross_hatch).is_ok())
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
+                if start_id == end_id || *steps == 0 || *sample_count < 3 {
+                    return false;
+                }
+                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
+                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
+                if !valid_a || !valid_b {
+                    return false;
+                }
+            }
+            EngineCommand::ProjectSelectionAxonometric { .. } => {
+                let has_valid = self.selected_nodes().iter().any(|o| !o.locked && object_to_path(o).is_some());
+                if !has_valid {
+                    return false;
+                }
+            }
+            EngineCommand::PackSelectionInGrid { cols, gap_pt, .. } => {
+                if *cols == 0 || !gap_pt.get().is_finite() {
+                    return false;
+                }
+                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
+                if !has_unlocked {
+                    return false;
+                }
+            }
+            EngineCommand::ExcludeSelection => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
+                if count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
+                if *iterations == 0 || min_gap_pt.get() < 0.0 || !min_gap_pt.get().is_finite() {
+                    return false;
+                }
+                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
+                if unlocked_count < 2 {
+                    return false;
+                }
+            }
+            EngineCommand::ClearEffects { object_id } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked);
+                if !valid {
+                    return false;
+                }
+            }
+            EngineCommand::CloneEffectsFrom { source_id } => {
+                let has_src = self.selected_or_all_node(*source_id).is_some();
+                let has_target = self.selected_nodes().iter().any(|o| !o.locked && o.id != *source_id);
+                if !has_src || !has_target {
+                    return false;
+                }
+            }
+            EngineCommand::SetObjectLocked { object_id, .. }
+            | EngineCommand::SetObjectOpacity { object_id, .. }
+            | EngineCommand::SetObjectVisible { object_id, .. }
+            | EngineCommand::RenameObject { object_id, .. } => {
+                if self.selected_or_all_node(*object_id).is_none() {
+                    return false;
+                }
+            }
+            EngineCommand::UnlockAllObjects => {
+                let mut any_locked = false;
+                for page in &self.document.pages {
+                    for layer in &page.layers {
+                        if layer.objects.iter().any(|o| o.locked) {
+                            any_locked = true;
+                        }
+                    }
+                }
+                for layer in &self.document.master_layers {
+                    if layer.objects.iter().any(|o| o.locked) {
+                        any_locked = true;
+                    }
+                }
+                if !any_locked {
+                    return false;
+                }
+            }
+            EngineCommand::ReorderSelection { .. } if self.selection.is_empty() => {
+                return false;
+            }
+            EngineCommand::AlignSelection { mode } => {
+                let min_required = if *mode == AlignMode::CenterToPage { 1 } else { 2 };
+                if self.selection.len() < min_required {
+                    return false;
+                }
+            }
+            EngineCommand::DistributeSelection { .. } => {
+                let sel = &self.selection;
+                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
+                if count < 3 {
+                    return false;
+                }
+            }
+            EngineCommand::PlaceInsidePowerClip { container_id } => {
+                let sel = &self.selection;
+                let objs = self.current_target_objects();
+                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
+                    return false;
+                };
+                let candidates: Vec<&ObjectNode> = objs.iter().filter(|o| !o.locked && o.id != *container_id && sel.contains(&o.id)).collect();
+                if candidates.is_empty() {
+                    return false;
+                }
+                for c in candidates {
+                    if powerclip_subtree_depth(container).max(powerclip_subtree_depth(c).saturating_add(1)) > 3 {
+                        return false;
+                    }
+                }
+            }
+            EngineCommand::ExtractPowerClip { container_id } => {
+                let objs = self.current_target_objects();
+                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
+                    return false;
+                };
+                if container.powerclip_children.is_empty() {
+                    return false;
+                }
+            }
+            EngineCommand::MoveBezierNode { object_id, element_index, .. } => {
+                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
+                    !o.locked
+                        && match &o.kind {
+                            ObjectKind::Path(p) => {
+                                p.elements.get(*element_index).is_some_and(|el| !matches!(el, coralcraft_geom::PathElement::Close))
+                            }
+                            _ => false,
+                        }
+                });
+                if !valid {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+
+        match cmd {
+            EngineCommand::AddObject { name, kind } => {
+                let id = self.document.allocate_object_id();
+                let node = ObjectNode::new(id, name, kind, self.default_fill.clone(), self.default_outline.clone());
+                self.target_layer_mut().objects.push(node);
+                self.selection = vec![id];
+            }
+            EngineCommand::DeleteSelection => {
+                let sel = self.selection.clone();
+                for page in &mut self.document.pages {
+                    for layer in &mut page.layers {
+                        if !layer.locked {
+                            layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
+                        }
+                    }
+                }
+                for layer in &mut self.document.master_layers {
+                    if !layer.locked {
+                        layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
+                    }
+                }
+                self.selection.clear();
+            }
+            EngineCommand::TranslateSelection { dx_pt, dy_pt } => {
+                let Ok(t) = Affine2::translation(dx_pt.get(), dy_pt.get()) else {
+                    return false;
+                };
+                self.for_each_selected_mut(|obj| {
+                    if let Ok(composed) = obj.transform.then(t) {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ApplyPaletteSwatch { channel, color } => match channel {
+                PaletteChannel::Fill => {
+                    let fill = color.map(FillStyle::uniform);
+                    if self.selection.is_empty() {
+                        self.default_fill = fill;
+                    } else {
+                        self.for_each_selected_mut(|obj| {
+                            obj.fill = fill.clone();
+                        });
+                    }
+                }
+                PaletteChannel::Outline => {
+                    if self.selection.is_empty() {
+                        self.default_outline = color.map(|c| {
+                            let mut style = self.default_outline.clone().unwrap_or_else(|| OutlineStyle::hairline(c.clone()));
+                            style.color = c;
+                            style
+                        });
+                    } else {
+                        self.for_each_selected_mut(|obj| {
+                            obj.outline = color.clone().map(|c| {
+                                let mut style = obj.outline.clone().unwrap_or_else(|| OutlineStyle::hairline(c.clone()));
+                                style.color = c;
+                                style
+                            });
+                        });
+                    }
+                }
+            },
+            EngineCommand::SetFill { fill } => {
+                if self.selection.is_empty() {
+                    self.default_fill = fill;
+                } else {
+                    self.for_each_selected_mut(|obj| obj.fill = fill.clone());
+                }
+            }
+            EngineCommand::SetOutline { outline } => {
+                if self.selection.is_empty() {
+                    self.default_outline = outline;
+                } else {
+                    self.for_each_selected_mut(|obj| obj.outline = outline.clone());
+                }
+            }
+            EngineCommand::SetPageSetup { width_pt, height_pt, units } => {
+                self.document.units = units;
+                let idx = self.current_page_index();
+                if let Some(page) = self.document.pages.get_mut(idx)
+                    && let Ok(size) = Size::new(width_pt.get(), height_pt.get())
+                {
+                    page.size = size;
+                }
+            }
+            EngineCommand::UpdateRectCorners { corner_kind, radii, corners_locked } => {
+                self.tool_state.default_rect_corner_kind = corner_kind;
+                self.tool_state.default_rect_uniform_radius_pt = radii[0];
+                self.tool_state.default_rect_corners_locked = corners_locked;
+                self.for_each_selected_mut(|obj| {
+                    if let ObjectKind::Rect(spec) = &mut obj.kind {
+                        spec.corner_kinds = [corner_kind; 4];
+                        spec.radii = if corners_locked { [radii[0]; 4] } else { radii };
+                    }
+                });
+            }
+            EngineCommand::UpdateEllipseParameters { mode, start_deg, end_deg } => {
+                self.tool_state.default_ellipse_mode = mode;
+                self.tool_state.default_ellipse_start_deg = start_deg;
+                self.tool_state.default_ellipse_end_deg = end_deg;
+                self.for_each_selected_mut(|obj| {
+                    if let ObjectKind::Ellipse(spec) = &mut obj.kind {
+                        spec.mode = mode;
+                        spec.start_deg = start_deg;
+                        spec.end_deg = end_deg;
+                    }
+                });
+            }
+            EngineCommand::UpdatePolygonParameters { mode, points, inner_radius_pt } => {
+                let pts = points.max(3);
+                self.tool_state.polygon_mode = mode;
+                self.tool_state.default_polygon_points = pts;
+                self.for_each_selected_mut(|obj| {
+                    if let ObjectKind::Polygon(spec) = &mut obj.kind {
+                        spec.points = pts;
+                        spec.inner_radius = match mode {
+                            PolygonSubMode::Polygon => None,
+                            PolygonSubMode::Star => inner_radius_pt.or_else(|| F64::new(spec.radius.get() * 0.5).ok()),
+                        };
+                    }
+                });
+            }
+            EngineCommand::AddPageAfterActive => {
+                let insert_after = self.current_page_index();
+                let template_size = self.current_page().size;
+                let page_id = PageId(self.document.allocate_object_id().0);
+                let layer_id = LayerId(self.document.allocate_object_id().0);
+                let new_num = self.document.pages.len().saturating_add(1);
+                let new_page = Page {
+                    id: page_id,
+                    name: format!("Page {new_num}"),
+                    size: template_size,
+                    bleed: F64::ZERO,
+                    background: Some(FillStyle::uniform(Color::WHITE)),
+                    layers: vec![Layer::new_normal(layer_id, "Layer 1")],
+                    residual: Residual::default(),
+                    extra: BTreeMap::new(),
+                };
+                let new_idx = insert_after.saturating_add(1).min(self.document.pages.len());
+                self.document.pages.insert(new_idx, new_page);
+                self.active_target = ActivePageTarget::Page(new_idx);
+                self.selection.clear();
+            }
+            EngineCommand::DuplicatePage { page_index } => {
+                let idx = page_index.min(self.document.pages.len().saturating_sub(1));
+                let Some(mut cloned) = self.document.pages.get(idx).cloned() else {
+                    return false;
+                };
+                cloned.id = PageId(self.document.allocate_object_id().0);
+                cloned.name = format!("{} Copy", cloned.name);
+                for layer in &mut cloned.layers {
+                    layer.id = LayerId(self.document.allocate_object_id().0);
+                    for obj in &mut layer.objects {
+                        reallocate_object_ids_recursive(obj, &mut self.document);
+                    }
+                }
+                let new_idx = idx.saturating_add(1).min(self.document.pages.len());
+                self.document.pages.insert(new_idx, cloned);
+                self.active_target = ActivePageTarget::Page(new_idx);
+                self.selection.clear();
+            }
+            EngineCommand::RenamePage { page_index, name } => {
+                if let Some(page) = self.document.pages.get_mut(page_index) {
+                    page.name = name;
+                }
+            }
+            EngineCommand::DeletePage { page_index } => {
+                if self.document.pages.len() > 1 && page_index < self.document.pages.len() {
+                    self.document.pages.remove(page_index);
+                    let clamped = page_index.min(self.document.pages.len().saturating_sub(1));
+                    self.active_target = ActivePageTarget::Page(clamped);
+                    self.selection.clear();
+                }
+            }
+            EngineCommand::GroupSelection => {
+                let sel = self.selection.clone();
+                let group_id = self.document.allocate_object_id();
+                let layer = self.target_layer_mut();
+                let mut children = Vec::new();
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                let mut insert_idx = 0usize;
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        insert_idx = remaining.len();
+                        children.push(obj);
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                let group_node = ObjectNode::new(group_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
+                remaining.insert(insert_idx.min(remaining.len()), group_node);
+                layer.objects = remaining;
+                self.selection = vec![group_id];
+            }
+            EngineCommand::UngroupSelection => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut new_selection = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        if let ObjectKind::Group { children } = obj.kind {
+                            let group_tf = obj.transform;
+                            for mut child in children {
+                                if let Ok(composed) = child.transform.then(group_tf) {
+                                    child.transform = composed;
+                                }
+                                new_selection.push(child.id);
+                                new_objects.push(child);
+                            }
+                        } else {
+                            new_objects.push(obj);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = new_selection;
+            }
+            EngineCommand::ConvertToCurves => {
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(path) = object_to_path(obj) {
+                        obj.kind = ObjectKind::Path(path);
+                    }
+                });
+            }
+            EngineCommand::ReorderSelection { op } => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                match op {
+                    ZOrderOp::ToFront => {
+                        let mut unselected = Vec::with_capacity(layer.objects.len());
+                        let mut selected = Vec::new();
+                        for obj in layer.objects.drain(..) {
+                            if !obj.locked && sel.contains(&obj.id) {
+                                selected.push(obj);
+                            } else {
+                                unselected.push(obj);
+                            }
+                        }
+                        unselected.extend(selected);
+                        layer.objects = unselected;
+                    }
+                    ZOrderOp::ToBack => {
+                        let mut selected = Vec::new();
+                        let mut unselected = Vec::with_capacity(layer.objects.len());
+                        for obj in layer.objects.drain(..) {
+                            if !obj.locked && sel.contains(&obj.id) {
+                                selected.push(obj);
+                            } else {
+                                unselected.push(obj);
+                            }
+                        }
+                        selected.extend(unselected);
+                        layer.objects = selected;
+                    }
+                    ZOrderOp::ForwardOne => {
+                        let len = layer.objects.len();
+                        if len >= 2 {
+                            for i in (0..len.saturating_sub(1)).rev() {
+                                let next_idx = i.saturating_add(1);
+                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
+                                let next_sel = layer.objects.get(next_idx).is_some_and(|o| sel.contains(&o.id));
+                                if is_sel && !next_sel {
+                                    layer.objects.swap(i, next_idx);
+                                }
+                            }
+                        }
+                    }
+                    ZOrderOp::BackwardOne => {
+                        let len = layer.objects.len();
+                        if len >= 2 {
+                            for i in 1..len {
+                                let prev_idx = i.saturating_sub(1);
+                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
+                                let prev_sel = layer.objects.get(prev_idx).is_some_and(|o| sel.contains(&o.id));
+                                if is_sel && !prev_sel {
+                                    layer.objects.swap(prev_idx, i);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EngineCommand::AlignSelection { mode } => {
+                if mode == AlignMode::CenterToPage {
+                    let ps = self.current_page().size;
+                    let nodes = self.selected_nodes();
+                    let sb = combined_selection_bounds(&nodes);
+                    let dx = ps.width.get() * 0.5 - (sb.x0.get() + sb.x1.get()) * 0.5;
+                    let dy = ps.height.get() * 0.5 - (sb.y0.get() + sb.y1.get()) * 0.5;
+                    if let Ok(t) = Affine2::translation(dx, dy) {
+                        self.for_each_selected_mut(|obj| {
+                            if !obj.locked
+                                && let Ok(composed) = obj.transform.then(t)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                } else if let Some(&anchor_id) = self.selection.last()
+                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
+                {
+                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                    let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
+                    let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
+                    self.for_each_selected_mut(|obj| {
+                        if obj.locked || obj.id == anchor_id {
+                            return;
+                        }
+                        let bbox = combined_selection_bounds(&[obj]);
+                        let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
+                        let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
+                        let (dx, dy) = match mode {
+                            AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
+                            AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
+                            AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
+                            AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
+                            AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
+                            AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
+                            AlignMode::CenterToPage => (0.0, 0.0),
+                        };
+                        if let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::DistributeSelection { mode } => {
+                let sel = &self.selection;
+                let mut items: Vec<(ObjectId, Rect)> = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| !o.locked && sel.contains(&o.id))
+                    .map(|o| (o.id, combined_selection_bounds(&[o])))
+                    .collect();
+                let n = items.len();
+                if n >= 3 {
+                    let is_horizontal = matches!(
+                        mode,
+                        DistributeMode::Left | DistributeMode::CenterHorizontal | DistributeMode::Right | DistributeMode::SpacingHorizontal
+                    );
+                    if is_horizontal {
+                        items.sort_by_key(|a| a.1.x0);
+                    } else {
+                        items.sort_by_key(|a| a.1.y0);
+                    }
+                    let (Some(&(_, first_b)), Some(&(_, last_b))) = (items.first(), items.last()) else {
+                        return false;
+                    };
+                    let mut deltas = BTreeMap::new();
+                    let n_minus_1 = n.saturating_sub(1);
+                    let denom = n_minus_1 as f64;
+                    match mode {
+                        DistributeMode::Left => {
+                            let start = first_b.x0.get();
+                            let span = last_b.x0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x0.get(), 0.0));
+                            }
+                        }
+                        DistributeMode::CenterHorizontal => {
+                            let start = (first_b.x0.get() + first_b.x1.get()) * 0.5;
+                            let end = (last_b.x0.get() + last_b.x1.get()) * 0.5;
+                            let span = end - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                let cur = (b.x0.get() + b.x1.get()) * 0.5;
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - cur, 0.0));
+                            }
+                        }
+                        DistributeMode::Right => {
+                            let start = first_b.x1.get();
+                            let span = last_b.x1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x1.get(), 0.0));
+                            }
+                        }
+                        DistributeMode::SpacingHorizontal => {
+                            let min_x = first_b.x0.get();
+                            let max_x = last_b.x1.get();
+                            let total_w: f64 = items.iter().map(|(_, b)| b.width()).sum();
+                            let gap = (max_x - min_x - total_w) / denom;
+                            let mut cur_x = min_x + first_b.width() + gap;
+                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
+                                cur_x += b.width() + gap;
+                            }
+                        }
+                        DistributeMode::Top => {
+                            let start = first_b.y0.get();
+                            let span = last_b.y0.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y0.get()));
+                            }
+                        }
+                        DistributeMode::CenterVertical => {
+                            let start = (first_b.y0.get() + first_b.y1.get()) * 0.5;
+                            let end = (last_b.y0.get() + last_b.y1.get()) * 0.5;
+                            let span = end - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                let cur = (b.y0.get() + b.y1.get()) * 0.5;
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - cur));
+                            }
+                        }
+                        DistributeMode::Bottom => {
+                            let start = first_b.y1.get();
+                            let span = last_b.y1.get() - start;
+                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y1.get()));
+                            }
+                        }
+                        DistributeMode::SpacingVertical => {
+                            let min_y = first_b.y0.get();
+                            let max_y = last_b.y1.get();
+                            let total_h: f64 = items.iter().map(|(_, b)| b.height()).sum();
+                            let gap = (max_y - min_y - total_h) / denom;
+                            let mut cur_y = min_y + first_b.height() + gap;
+                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
+                                deltas.insert(*id, (0.0, cur_y - b.y0.get()));
+                                cur_y += b.height() + gap;
+                            }
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::PlaceInsidePowerClip { container_id } => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut extracted = Vec::new();
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && obj.id != container_id && sel.contains(&obj.id) {
+                        extracted.push(obj);
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                if let Some(container) = remaining.iter_mut().find(|o| o.id == container_id) {
+                    container.powerclip_children.extend(extracted);
+                }
+                layer.objects = remaining;
+                self.selection = vec![container_id];
+            }
+            EngineCommand::ExtractPowerClip { container_id } => {
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut extracted_ids = Vec::new();
+                for mut obj in layer.objects.drain(..) {
+                    if obj.id == container_id && !obj.locked {
+                        let children: Vec<ObjectNode> = std::mem::take(&mut obj.powerclip_children);
+                        new_objects.push(obj);
+                        for child in children {
+                            extracted_ids.push(child.id);
+                            new_objects.push(child);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = extracted_ids;
+            }
+            EngineCommand::MoveBezierNode { object_id, element_index, new_pt } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    let inv = obj.transform.invert().unwrap_or(Affine2::IDENTITY);
+                    let Ok(local_pt) = inv.apply_point(new_pt) else {
+                        return;
+                    };
+                    if let ObjectKind::Path(path) = &mut obj.kind
+                        && let Some(el) = path.elements.get_mut(element_index)
+                    {
+                        match el {
+                            coralcraft_geom::PathElement::MoveTo(pt) | coralcraft_geom::PathElement::LineTo(pt) => {
+                                *pt = local_pt;
+                            }
+                            coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
+                                let dx = local_pt.x.get() - end.x.get();
+                                let dy = local_pt.y.get() - end.y.get();
+                                if let Ok(new_ctrl) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
+                                    *ctrl = new_ctrl;
+                                }
+                                *end = local_pt;
+                            }
+                            coralcraft_geom::PathElement::CubicTo { c2, end, .. } => {
+                                let dx = local_pt.x.get() - end.x.get();
+                                let dy = local_pt.y.get() - end.y.get();
+                                if let Ok(new_c2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
+                                    *c2 = new_c2;
+                                }
+                                *end = local_pt;
+                            }
+                            coralcraft_geom::PathElement::Close => {}
+                        }
+                    }
+                });
+            }
+            EngineCommand::BooleanSelection { op } => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut sel_indices: Vec<usize> = Vec::new();
+                for (idx, obj) in layer.objects.iter().enumerate() {
+                    if !obj.locked && sel.contains(&obj.id) {
+                        sel_indices.push(idx);
+                    }
+                }
+                if sel_indices.len() < 2 {
+                    return false;
+                }
+
+                let Some(&first_idx) = sel_indices.first() else {
+                    return false;
+                };
+                let anchor_idx = *sel_indices.last().unwrap_or(&first_idx);
+                let Some(anchor_obj) = layer.objects.get(anchor_idx) else {
+                    return false;
+                };
+                let anchor_style_fill = anchor_obj.fill.clone();
+                let anchor_style_outline = anchor_obj.outline.clone();
+
+                let Some(mut combined_path) = layer.objects.get(first_idx).and_then(object_to_path) else {
+                    return false;
+                };
+
+                for &idx in sel_indices.iter().skip(1) {
+                    if let Some(p) = layer.objects.get(idx).and_then(object_to_path)
+                        && let Ok(merged) = boolean_paths(&combined_path, &p, op)
+                    {
+                        combined_path = merged;
+                    }
+                }
+
+                let new_node = ObjectNode::new(
+                    new_id,
+                    Some(format!("{:?} Result", op)),
+                    ObjectKind::Path(combined_path),
+                    anchor_style_fill,
+                    anchor_style_outline,
+                );
+
+                match op {
+                    BooleanOp::Trim => {
+                        if let Some(slot) = layer.objects.get_mut(anchor_idx) {
+                            *slot = new_node;
+                        }
+                        self.selection = vec![new_id];
+                    }
+                    _ => {
+                        let mut remaining = Vec::with_capacity(layer.objects.len());
+                        let mut inserted = false;
+                        for (idx, obj) in layer.objects.drain(..).enumerate() {
+                            if sel_indices.contains(&idx) {
+                                if !inserted {
+                                    remaining.push(new_node.clone());
+                                    inserted = true;
+                                }
+                            } else {
+                                remaining.push(obj);
+                            }
+                        }
+                        layer.objects = remaining;
+                        self.selection = vec![new_id];
+                    }
+                }
+            }
+            EngineCommand::ApplyContour { object_id, steps, offset_pt, inside } => {
+                let effect = VectorEffect::Contour { steps, offset_pt, inside };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AddDropShadow { object_id, offset_x, offset_y, opacity, color } => {
+                let effect = VectorEffect::DropShadow { offset_x, offset_y, opacity, color };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AddExtrude { object_id, depth_pt, angle_deg } => {
+                let effect = VectorEffect::Extrude { depth_pt, angle_deg };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::CreateBlend { start_id, end_id, steps } => {
+                let effect = VectorEffect::Blend { target_id: end_id, steps, spine: None };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == start_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
+                let Some(spine_path) =
+                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                else {
+                    return false;
+                };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == blend_object_id && !obj.locked {
+                        for effect in &mut obj.effects {
+                            if let VectorEffect::Blend { spine, .. } = effect {
+                                *spine = Some(spine_path.clone());
+                            }
+                        }
+                    }
+                });
+            }
+            EngineCommand::ApplyEnvelope { object_id, corners } => {
+                let effect = VectorEffect::Envelope { corners };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::ApplyPerspective { object_id, corners } => {
+                let effect = VectorEffect::Perspective { corners };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::FilletPathCorners { object_id, radius_pt, corner_kind } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(modified) = coralcraft_geom::fillet_path_corners(&base_path, radius_pt.get(), corner_kind)
+                    {
+                        obj.kind = ObjectKind::Path(modified);
+                    }
+                });
+            }
+            EngineCommand::ApplyArtisticBrush { object_id, start_width_pt, end_width_pt } => {
+                let effect = VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::FitTextToPath { text_object_id, spine_object_id, offset_pt } => {
+                let Some(spine_path) =
+                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                else {
+                    return false;
+                };
+                let effect = VectorEffect::TextOnPath { spine: spine_path, offset_pt };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == text_object_id && !obj.locked {
+                        obj.effects.retain(|e| !matches!(e, VectorEffect::TextOnPath { .. }));
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::StepAndRepeat { count, offset_x_pt, offset_y_pt } => {
+                let sel = self.selection.clone();
+                let clamped_count = count.min(100);
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for step in 1..=clamped_count {
+                    let dx = f64::from(step) * offset_x_pt.get();
+                    let dy = f64::from(step) * offset_y_pt.get();
+                    let Ok(step_tf) = Affine2::translation(dx, dy) else {
+                        continue;
+                    };
+                    for orig in &templates {
+                        let mut copy = orig.clone();
+                        reallocate_object_ids_recursive(&mut copy, &mut self.document);
+                        if let Ok(composed) = copy.transform.then(step_tf) {
+                            copy.transform = composed;
+                        }
+                        new_selection.push(copy.id);
+                        self.target_layer_mut().objects.push(copy);
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
+            EngineCommand::ExpandEffects { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked && !obj.effects.is_empty() {
+                        if let Some(mut base_path) = object_to_path(obj) {
+                            for effect in &obj.effects {
+                                match effect {
+                                    VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
+                                        if let Ok(p) =
+                                            coralcraft_geom::expand_artistic_brush_stroke(&base_path, start_width_pt.get(), end_width_pt.get())
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::Envelope { corners } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::warp_path_bilinear(&base_path, bbox, *corners)
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::Perspective { corners } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::warp_path_perspective(&base_path, bbox, *corners)
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::Distortion { kind, amplitude, frequency } => {
+                                        if let Some(bbox) = base_path.bounds()
+                                            && let Ok(p) = coralcraft_geom::distort_path(&base_path, bbox, *kind, amplitude.get(), frequency.get())
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    VectorEffect::TextOnPath { spine, offset_pt } => {
+                                        if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &obj.kind
+                                            && let Ok(p) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
+                                        {
+                                            base_path = p;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            obj.kind = ObjectKind::Path(base_path);
+                        }
+                        obj.effects.clear();
+                    }
+                });
+            }
+            EngineCommand::SetTransparency { transparency } => {
+                self.for_each_selected_mut(|obj| {
+                    obj.transparency = transparency.clone();
+                });
+            }
+            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
+                let Some(src) = self.selected_or_all_node(source_id).cloned() else {
+                    return false;
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.id != source_id {
+                        if copy_fill {
+                            obj.fill = src.fill.clone();
+                        }
+                        if copy_outline {
+                            obj.outline = src.outline.clone();
+                        }
+                        if copy_effects {
+                            obj.effects = src.effects.clone();
+                        }
+                    }
+                });
+            }
+            EngineCommand::CombineSelection => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut combined_elements = Vec::new();
+                let mut anchor_fill = None;
+                let mut anchor_outline = None;
+                let mut sel_indices = Vec::new();
+                for (idx, obj) in layer.objects.iter().enumerate() {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let Some(local_p) = object_to_path(obj)
+                        && let Ok(world_p) = local_p.transform(obj.transform)
+                    {
+                        combined_elements.extend(world_p.elements);
+                        anchor_fill = obj.fill.clone();
+                        anchor_outline = obj.outline.clone();
+                        sel_indices.push(idx);
+                    }
+                }
+                if sel_indices.len() < 2 {
+                    return false;
+                }
+                let combined_path = Path { elements: combined_elements, fill_rule: FillRule::EvenOdd };
+                let new_node =
+                    ObjectNode::new(new_id, Some("Combined Path".to_owned()), ObjectKind::Path(combined_path), anchor_fill, anchor_outline);
+                let mut remaining = Vec::with_capacity(layer.objects.len());
+                let mut inserted = false;
+                for (idx, obj) in layer.objects.drain(..).enumerate() {
+                    if sel_indices.contains(&idx) {
+                        if !inserted {
+                            remaining.push(new_node.clone());
+                            inserted = true;
+                        }
+                    } else {
+                        remaining.push(obj);
+                    }
+                }
+                layer.objects = remaining;
+                self.selection = vec![new_id];
+            }
+            EngineCommand::BreakApartSelection => {
+                let sel = self.selection.clone();
+                let mut next_id_val = self.document.next_id;
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len().saturating_add(4));
+                let mut new_sel = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let ObjectKind::Path(ref path) = obj.kind
+                    {
+                        let mut subpaths: Vec<Vec<PathElement>> = Vec::new();
+                        for &el in &path.elements {
+                            if matches!(el, PathElement::MoveTo(_)) || subpaths.is_empty() {
+                                subpaths.push(vec![el]);
+                            } else if let Some(last) = subpaths.last_mut() {
+                                last.push(el);
+                            }
+                        }
+                        if subpaths.len() >= 2 {
+                            for (k, elems) in subpaths.into_iter().enumerate() {
+                                let part_id = ObjectId(next_id_val);
+                                next_id_val = next_id_val.saturating_add(1);
+                                let mut part_node = obj.clone();
+                                part_node.id = part_id;
+                                part_node.name = Some(format!("Subpath {}", k.saturating_add(1)));
+                                part_node.kind = ObjectKind::Path(Path { elements: elems, fill_rule: FillRule::NonZero });
+                                new_objects.push(part_node);
+                                new_sel.push(part_id);
+                            }
+                            continue;
+                        }
+                    }
+                    new_objects.push(obj);
+                }
+                layer.objects = new_objects;
+                self.document.next_id = next_id_val;
+                if !new_sel.is_empty() {
+                    self.selection = new_sel;
+                }
+            }
+            EngineCommand::AdjustBitmap { object_id, brightness, contrast, grayscale, invert } => {
+                let b_adj = brightness.get().clamp(-1.0, 1.0);
+                let c_adj = contrast.get().clamp(-0.99, 0.99);
+                let c_factor = (1.0 + c_adj) / (1.0 - c_adj);
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::Bitmap { rgba_pixels, .. } = &mut obj.kind
+                    {
+                        for [pr, pg, pb, _] in rgba_pixels.as_chunks_mut::<4>().0 {
+                            let mut r = f64::from(*pr) / 255.0;
+                            let mut g = f64::from(*pg) / 255.0;
+                            let mut b = f64::from(*pb) / 255.0;
+                            if grayscale {
+                                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                                r = lum;
+                                g = lum;
+                                b = lum;
+                            }
+                            r = (c_factor * (r + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            g = (c_factor * (g + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            b = (c_factor * (b + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
+                            if invert {
+                                r = 1.0 - r;
+                                g = 1.0 - g;
+                                b = 1.0 - b;
+                            }
+                            *pr = (r * 255.0).round().clamp(0.0, 255.0) as u8;
+                            *pg = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+                            *pb = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+                        }
+                    }
+                });
+            }
+            EngineCommand::ApplyDistortion { object_id, kind, amplitude, frequency } => {
+                let effect = VectorEffect::Distortion { kind, amplitude, frequency };
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.retain(|e| !matches!(e, VectorEffect::Distortion { .. }));
+                        obj.effects.push(effect.clone());
+                    }
+                });
+            }
+            EngineCommand::TraceBitmap { object_id, threshold } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } = &obj.kind
+                        && let Ok(traced_path) = trace_bitmap_to_path(*pixel_width, *pixel_height, dpi_x.get(), dpi_y.get(), rgba_pixels, threshold)
+                    {
+                        obj.kind = ObjectKind::Path(traced_path);
+                        if obj.fill.is_none() {
+                            obj.fill = Some(FillStyle::uniform(Color::BLACK));
+                        }
+                    }
+                });
+            }
+            EngineCommand::MirrorSelection { horizontal, vertical, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(center) = bounds.center() else {
+                    return false;
+                };
+                let sx = if horizontal { -1.0 } else { 1.0 };
+                let sy = if vertical { -1.0 } else { 1.0 };
+                let Ok(t_to_origin) = Affine2::translation(-center.x.get(), -center.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(center.x.get(), center.y.get()) else {
+                    return false;
+                };
+                let Ok(mirror_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+
+                if copy {
+                    let sel = self.selection.clone();
+                    let templates: Vec<ObjectNode> =
+                        self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                    let mut new_selection = Vec::new();
+                    for mut dup in templates {
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        if let Ok(composed) = dup.transform.then(mirror_tf) {
+                            dup.transform = composed;
+                        }
+                        new_selection.push(dup.id);
+                        self.target_layer_mut().objects.push(dup);
+                    }
+                    if !new_selection.is_empty() {
+                        self.selection = new_selection;
+                    }
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if let Ok(composed) = obj.transform.then(mirror_tf) {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::CreateBoundary => {
+                let new_id = self.document.allocate_object_id();
+                let sel = self.selection.clone();
+                let default_outline = self.default_outline.clone();
+                let layer = self.target_layer_mut();
+                let mut boundary_path: Option<Path> = None;
+                let mut boundary_outline = None;
+                for obj in &layer.objects {
+                    if !obj.locked
+                        && sel.contains(&obj.id)
+                        && let Some(local_p) = object_to_path(obj)
+                        && let Ok(world_p) = local_p.transform(obj.transform)
+                    {
+                        boundary_outline = obj.outline.clone();
+                        boundary_path = Some(match boundary_path {
+                            None => world_p,
+                            Some(acc) => boolean_paths(&acc, &world_p, BooleanOp::Weld).unwrap_or(acc),
+                        });
+                    }
+                }
+                let Some(final_path) = boundary_path else {
+                    return false;
+                };
+                let outline = boundary_outline.or(default_outline).or_else(|| Some(OutlineStyle::hairline(Color::BLACK)));
+                let new_node = ObjectNode::new(new_id, Some("Boundary".to_owned()), ObjectKind::Path(final_path), None, outline);
+                layer.objects.push(new_node);
+                self.selection = vec![new_id];
+            }
+            EngineCommand::ConvertOutlineToObject => {
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(outline) = obj.outline.clone()
+                        && let Some(base_path) = object_to_path(obj)
+                    {
+                        let w = outline.width_pt.get().max(0.25);
+                        if let Ok(stroke_path) = coralcraft_geom::expand_artistic_brush_stroke(&base_path, w, w) {
+                            obj.kind = ObjectKind::Path(stroke_path);
+                            obj.fill = Some(FillStyle::uniform(outline.color));
+                            obj.outline = None;
+                        }
+                    }
+                });
+            }
+            EngineCommand::RotateSelection { angle_deg, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_rot) = Affine2::rotation_deg(angle_deg.get()) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(rot_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(rot_tf, copy);
+            }
+            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(scale_x.get(), scale_y.get()) else {
+                    return false;
+                };
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(scale_tf, copy);
+            }
+            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, copy } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_skew) = Affine2::skew_deg(skew_x_deg.get(), skew_y_deg.get()) else {
+                    return false;
+                };
+                if t_skew.determinant().abs() <= 1e-6 {
+                    return false;
+                }
+                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(skew_tf) = t_to_origin.then(t_skew).and_then(|m| m.then(t_back)) else {
+                    return false;
+                };
+                self.apply_selection_transform(skew_tf, copy);
+            }
+            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
+                let Ok(tf) = Affine2::translation(offset_x_pt.get(), offset_y_pt.get()) else {
+                    return false;
+                };
+                self.apply_selection_transform(tf, true);
+            }
+            EngineCommand::ReversePathDirection { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(rev) = reverse_path_direction(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(rev);
+                    }
+                });
+            }
+            EngineCommand::CloseOpenSubpaths { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(closed) = close_open_subpaths(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(closed);
+                    }
+                });
+            }
+            EngineCommand::SetObjectLocked { object_id, locked } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.locked = locked;
+                    }
+                });
+            }
+            EngineCommand::UnlockAllObjects => {
+                self.for_each_node_mut(|obj| {
+                    obj.locked = false;
+                });
+            }
+            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(joined) = join_open_subpaths(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(joined);
+                    }
+                });
+            }
+            EngineCommand::UngroupAllSelection => {
+                let sel = self.selection.clone();
+                let layer = self.target_layer_mut();
+                let mut new_objects = Vec::with_capacity(layer.objects.len());
+                let mut new_selection = Vec::new();
+                for obj in layer.objects.drain(..) {
+                    if !obj.locked && sel.contains(&obj.id) && matches!(obj.kind, ObjectKind::Group { .. }) {
+                        let mut leaves = Vec::new();
+                        flatten_group_recursive(obj, &mut leaves);
+                        for leaf in leaves {
+                            new_selection.push(leaf.id);
+                            new_objects.push(leaf);
+                        }
+                    } else {
+                        new_objects.push(obj);
+                    }
+                }
+                layer.objects = new_objects;
+                self.selection = new_selection;
+            }
+            EngineCommand::MovePage { from_index, to_index } => {
+                let page = self.document.pages.remove(from_index);
+                self.document.pages.insert(to_index, page);
+                self.active_target = ActivePageTarget::Page(to_index);
+                self.selection.clear();
+            }
+            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(reduced) = simplify_path_nodes(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(reduced);
+                    }
+                });
+            }
+            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
+                let sel_nodes = self.selected_nodes();
+                let bounds = combined_selection_bounds(&sel_nodes);
+                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
+                    return false;
+                };
+                let cur_w = bounds.width().max(1e-6);
+                let cur_h = bounds.height().max(1e-6);
+                let sx = width_pt.map_or(1.0, |w| (w.get() / cur_w).max(1e-6));
+                let sy = height_pt.map_or(1.0, |h| (h.get() / cur_h).max(1e-6));
+                let target_x = x_pt.map_or(pivot.x.get(), F64::get);
+                let target_y = y_pt.map_or(pivot.y.get(), F64::get);
+
+                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
+                    return false;
+                };
+                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
+                    return false;
+                };
+                let Ok(t_to_target) = Affine2::translation(target_x, target_y) else {
+                    return false;
+                };
+                let Ok(tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_to_target)) else {
+                    return false;
+                };
+                self.apply_selection_transform(tf, false);
+            }
+            EngineCommand::AddLayer { name } => {
+                let id_raw = self.document.allocate_object_id().0;
+                let page_idx = self.current_page_index();
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    page.layers.push(Layer::new_normal(LayerId(id_raw), name.trim()));
+                }
+            }
+            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
+                for page in &mut self.document.pages {
+                    for layer in &mut page.layers {
+                        if layer.id == layer_id {
+                            if let Some(v) = visible {
+                                layer.visible = v;
+                            }
+                            if let Some(lk) = locked {
+                                layer.locked = lk;
+                            }
+                            if let Some(pr) = printable {
+                                layer.printable = pr;
+                            }
+                            if let Some(op) = opacity
+                                && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
+                            {
+                                layer.opacity = clamped;
+                            }
+                        }
+                    }
+                }
+                for layer in &mut self.document.master_layers {
+                    if layer.id == layer_id {
+                        if let Some(v) = visible {
+                            layer.visible = v;
+                        }
+                        if let Some(lk) = locked {
+                            layer.locked = lk;
+                        }
+                        if let Some(pr) = printable {
+                            layer.printable = pr;
+                        }
+                        if let Some(op) = opacity
+                            && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
+                        {
+                            layer.opacity = clamped;
+                        }
+                    }
+                }
+            }
+            EngineCommand::ClearTransformations => {
+                self.for_each_selected_mut(|obj| {
+                    obj.transform = Affine2::IDENTITY;
+                });
+            }
+            EngineCommand::ToggleTextKind { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &obj.kind {
+                        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
+                            let w = (text.chars().count().max(4) as f64) * size_pt.get() * 0.65;
+                            let h = size_pt.get() * 3.0;
+                            if let Ok(spec) = ParagraphTextSpec::new(
+                                *position,
+                                w.max(72.0),
+                                h.max(36.0),
+                                text.clone(),
+                                font_family.clone(),
+                                size_pt.get(),
+                                1.2,
+                                TextAlignment::Left,
+                                1,
+                                12.0,
+                            ) {
+                                obj.kind = ObjectKind::ParagraphText(Box::new(spec));
+                            }
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            obj.kind = ObjectKind::ArtisticText {
+                                text: spec.text.clone(),
+                                font_family: spec.font_family.clone(),
+                                size_pt: spec.font_size_pt,
+                                position: spec.position,
+                            };
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::FindAndReplaceText { find, replace } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text, .. } if text.contains(&find) => {
+                            *text = text.replace(&find, &replace);
+                        }
+                        ObjectKind::ParagraphText(spec) if spec.text.contains(&find) => {
+                            spec.text = spec.text.replace(&find, &replace);
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::ChangeTextCase { object_id, case_kind } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text, .. } => {
+                            *text = apply_text_case(text, case_kind);
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            spec.text = apply_text_case(&spec.text, case_kind);
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::InsertCurveNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = insert_curve_node_at(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::DeleteCurveNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = delete_curve_node_at(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = convert_segment_to_line(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = convert_segment_to_curve(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetPageBackground { page_index, background } => {
+                if let Some(page) = self.document.pages.get_mut(page_index) {
+                    page.background = background;
+                }
+            }
+            EngineCommand::SetPageBleed { page_index, bleed_pt } => {
+                if let Some(page) = self.document.pages.get_mut(page_index)
+                    && let Ok(clamped) = F64::new(bleed_pt.get().max(0.0))
+                {
+                    page.bleed = clamped;
+                }
+            }
+            EngineCommand::SetObjectOpacity { object_id, opacity } => {
+                if self.selected_or_all_node(object_id).is_none_or(|o| o.locked) {
+                    return false;
+                }
+                if let Ok(clamped) = F64::new(opacity.get().clamp(0.0, 1.0)) {
+                    self.for_each_node_mut(|obj| {
+                        if obj.id == object_id && !obj.locked {
+                            obj.opacity = clamped;
+                        }
+                    });
+                }
+            }
+            EngineCommand::SetObjectVisible { object_id, visible } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.visible = visible;
+                    }
+                });
+            }
+            EngineCommand::RenameObject { object_id, name } => {
+                if self.selected_or_all_node(object_id).is_none() {
+                    return false;
+                }
+                let normalized = name.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id {
+                        obj.name = normalized.clone();
+                    }
+                });
+            }
+            EngineCommand::DeleteLayer { layer_id } => {
+                let mut removed_ids = Vec::new();
+                for page in &mut self.document.pages {
+                    if page.layers.len() > 1
+                        && let Some(pos) = page.layers.iter().position(|l| l.id == layer_id)
+                    {
+                        let removed = page.layers.remove(pos);
+                        for obj in removed.objects {
+                            removed_ids.push(obj.id);
+                        }
+                    }
+                }
+                self.selection.retain(|id| !removed_ids.contains(id));
+            }
+            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
+                if let Some(page) = self.document.pages.get_mut(page_index) {
+                    let layer = page.layers.remove(from_index);
+                    page.layers.insert(to_index, layer);
+                }
+            }
+            EngineCommand::InvertSelection => {
+                let cur = self.selection.clone();
+                self.selection =
+                    self.current_target_objects().iter().filter(|o| !o.locked && o.visible && !cur.contains(&o.id)).map(|o| o.id).collect();
+            }
+            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
+                let update_outline = |opt: &mut Option<OutlineStyle>| {
+                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
+                    if let Some(w) = width_pt
+                        && let Ok(clamped) = F64::new(w.get().max(0.0))
+                    {
+                        st.width_pt = clamped;
+                    }
+                    if let Some(bf) = behind_fill {
+                        st.behind_fill = bf;
+                    }
+                    if let Some(swo) = scale_with_object {
+                        st.scale_with_object = swo;
+                    }
+                    *opt = Some(st);
+                };
+                if self.selection.is_empty() {
+                    update_outline(&mut self.default_outline);
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked {
+                            update_outline(&mut obj.outline);
+                        }
+                    });
+                }
+            }
+            EngineCommand::SelectByKind { kind } => {
+                let k = kind.trim().to_ascii_lowercase();
+                self.selection = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| {
+                        !o.locked
+                            && o.visible
+                            && match k.as_str() {
+                                "rect" | "rectangle" => matches!(o.kind, ObjectKind::Rect(_)),
+                                "ellipse" => matches!(o.kind, ObjectKind::Ellipse(_)),
+                                "polygon" | "star" => matches!(o.kind, ObjectKind::Polygon(_)),
+                                "path" | "curve" => matches!(o.kind, ObjectKind::Path(_)),
+                                "text" => matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)),
+                                "bitmap" | "image" => matches!(o.kind, ObjectKind::Bitmap { .. }),
+                                "group" => matches!(o.kind, ObjectKind::Group { .. }),
+                                _ => false,
+                            }
+                    })
+                    .map(|o| o.id)
+                    .collect();
+            }
+            EngineCommand::SetDocumentTitle { title } => {
+                self.document.title = title.trim().to_owned();
+            }
+            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
+                let r = radius_pt.get();
+                let deg = angle_deg.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = twirl_path_around_point(&base_path, center, r, deg)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ClearEffects { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id && !obj.locked {
+                        obj.effects.clear();
+                    }
+                });
+            }
+            EngineCommand::CloneEffectsFrom { source_id } => {
+                let Some(src_effects) = self.selected_or_all_node(source_id).map(|o| o.effects.clone()) else {
+                    return false;
+                };
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked && obj.id != source_id {
+                        obj.effects = src_effects.clone();
+                    }
+                });
+            }
+            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
+                let r = radius_pt.get();
+                let s = strength.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = radial_push_path_around_point(&base_path, center, r, s)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
+                let r = radius_pt.get();
+                let dx = dx_pt.get();
+                let dy = dy_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smear_path_from_point(&base_path, origin, r, dx, dy)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetParagraphTextLayout { object_id, columns, gutter_pt, line_spacing, alignment } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let ObjectKind::ParagraphText(spec) = &mut obj.kind
+                    {
+                        if let Some(cols) = columns {
+                            spec.columns = cols.clamp(1, 8);
+                        }
+                        if let Some(g) = gutter_pt
+                            && let Ok(clamped) = F64::new(g.get().max(0.0))
+                        {
+                            spec.gutter_pt = clamped;
+                        }
+                        if let Some(ls) = line_spacing
+                            && let Ok(clamped) = F64::new(ls.get().clamp(0.5, 5.0))
+                        {
+                            spec.line_spacing_multiplier = clamped;
+                        }
+                        if let Some(align) = alignment {
+                            spec.alignment = align;
+                        }
+                    }
+                });
+            }
+            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
+                let h = tooth_height_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = roughen_path_segments(&base_path, h, frequency)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetArtisticTextProperties { object_id, text, font_family, size_pt } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    match &mut obj.kind {
+                        ObjectKind::ArtisticText { text: t, font_family: ff, size_pt: sz, .. } => {
+                            if let Some(new_t) = &text {
+                                *t = new_t.clone();
+                            }
+                            if let Some(new_ff) = &font_family {
+                                *ff = new_ff.clone();
+                            }
+                            if let Some(new_sz) = size_pt
+                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
+                            {
+                                *sz = clamped;
+                            }
+                        }
+                        ObjectKind::ParagraphText(spec) => {
+                            if let Some(new_t) = &text {
+                                spec.text = new_t.clone();
+                            }
+                            if let Some(new_ff) = &font_family {
+                                spec.font_family = new_ff.clone();
+                            }
+                            if let Some(new_sz) = size_pt
+                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
+                            {
+                                spec.font_size_pt = clamped;
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
+                let r = radius_pt.get();
+                let s = strength.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smooth_path_around_point(&base_path, center, r, s, iterations)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
+                let g = gap_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = knife_cut_path_by_line(&base_path, line_start, line_end, g)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::CropToRect { rect } => {
+                let Ok(clip_path) = RectSpec::sharp(rect).to_path() else {
+                    return false;
+                };
+                let sel = self.selection.clone();
+                let filter_sel = !sel.is_empty();
+                let layer = self.target_layer_mut();
+                let mut cropped_objs = Vec::with_capacity(layer.objects.len());
+                for mut obj in layer.objects.drain(..) {
+                    if obj.locked || !obj.visible || (filter_sel && !sel.contains(&obj.id)) {
+                        cropped_objs.push(obj);
+                        continue;
+                    }
+                    if let Some(world_path) = object_to_path(&obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(inter) = boolean_paths(&world_path, &clip_path, BooleanOp::Intersect)
+                    {
+                        if !inter.elements.is_empty() {
+                            obj.kind = ObjectKind::Path(inter);
+                            obj.transform = Affine2::IDENTITY;
+                            cropped_objs.push(obj);
+                        }
+                    } else {
+                        cropped_objs.push(obj);
+                    }
+                }
+                layer.objects = cropped_objs;
+                let remaining_ids: Vec<ObjectId> = layer.objects.iter().map(|o| o.id).collect();
+                self.selection.retain(|id| remaining_ids.contains(id));
+            }
+            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
+                let page_idx = self.current_page_index();
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    let mut extracted: Option<ObjectNode> = None;
+                    for layer in &mut page.layers {
+                        if let Some(pos) = layer.objects.iter().position(|o| o.id == object_id && !o.locked) {
+                            extracted = Some(layer.objects.remove(pos));
+                            break;
+                        }
+                    }
+                    if let Some(node) = extracted
+                        && let Some(dst) = page.layers.iter_mut().find(|l| l.id == target_layer_id)
+                    {
+                        dst.objects.push(node);
+                    }
+                }
+            }
+            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
+                let r = radius_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = erase_path_within_circle(&base_path, center, r)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
+                if let Some(so) = snap_to_objects {
+                    self.snap_to_objects = so;
+                }
+                if let Some(sp) = snap_to_page {
+                    self.snap_to_page = sp;
+                }
+            }
+            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = delete_segment_at_index(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SmartFillAtPoint { point, fill, outline } => {
+                let px = point.x.get();
+                let py = point.y.get();
+                let hits: Vec<Path> = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| !o.locked && o.visible)
+                    .filter_map(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
+                    .filter(|wp| wp.bounds().is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get()))
+                    .collect();
+                if let Some(first) = hits.first() {
+                    let mut region = first.clone();
+                    for other in hits.iter().skip(1) {
+                        if let Ok(inter) = boolean_paths(&region, other, BooleanOp::Intersect)
+                            && !inter.elements.is_empty()
+                        {
+                            region = inter;
+                        }
+                    }
+                    let id = self.document.allocate_object_id();
+                    let node = ObjectNode::new(id, Some("Smart Fill".to_owned()), ObjectKind::Path(region), Some(fill), outline);
+                    self.target_layer_mut().objects.push(node);
+                    self.selection = vec![id];
+                }
+            }
+            EngineCommand::OffsetObjectPath { object_id, distance_pt, copy } => {
+                let d = distance_pt.get();
+                if copy {
+                    if let Some(src) = self.selected_or_all_node(object_id).cloned()
+                        && let Some(base_path) = object_to_path(&src)
+                        && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
+                    {
+                        let mut dup = src;
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        dup.kind = ObjectKind::Path(updated);
+                        let new_id = dup.id;
+                        self.target_layer_mut().objects.push(dup);
+                        self.selection = vec![new_id];
+                    }
+                } else {
+                    self.for_each_node_mut(|obj| {
+                        if obj.id == object_id
+                            && !obj.locked
+                            && let Some(base_path) = object_to_path(obj)
+                            && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
+                        {
+                            obj.kind = ObjectKind::Path(updated);
+                        }
+                    });
+                }
+            }
+            EngineCommand::SetPathFillRule { object_id, fill_rule } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(mut base_path) = object_to_path(obj)
+                    {
+                        base_path.fill_rule = fill_rule;
+                        obj.kind = ObjectKind::Path(base_path);
+                    }
+                });
+            }
+            EngineCommand::SwapObjectPositions { first_id, second_id } => {
+                let c1 = self.selected_or_all_node(first_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
+                let c2 = self.selected_or_all_node(second_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
+                if let (Some(p1), Some(p2)) = (c1, c2) {
+                    let dx = p2.x.get() - p1.x.get();
+                    let dy = p2.y.get() - p1.y.get();
+                    let tf1 = Affine2::translation(dx, dy).unwrap_or(Affine2::IDENTITY);
+                    let tf2 = Affine2::translation(-dx, -dy).unwrap_or(Affine2::IDENTITY);
+                    self.for_each_node_mut(|obj| {
+                        if !obj.locked {
+                            if obj.id == first_id {
+                                if let Ok(composed) = obj.transform.then(tf1) {
+                                    obj.transform = composed;
+                                }
+                            } else if obj.id == second_id
+                                && let Ok(composed) = obj.transform.then(tf2)
+                            {
+                                obj.transform = composed;
+                            }
+                        }
+                    });
+                }
+            }
+            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if let Ok(sel_center) = combined_selection_bounds(&sel_nodes).center() {
+                    let page_size = self.current_page().size;
+                    let dx = if horizontal { 0.5 * page_size.width.get() - sel_center.x.get() } else { 0.0 };
+                    let dy = if vertical { 0.5 * page_size.height.get() - sel_center.y.get() } else { 0.0 };
+                    if let Ok(tf) = Affine2::translation(dx, dy) {
+                        self.for_each_selected_mut(|obj| {
+                            if !obj.locked
+                                && let Ok(composed) = obj.transform.then(tf)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                }
+            }
+            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
+                let t = tension.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = smooth_curve_node_at(&base_path, element_index, t)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ArrayDuplicateSelection { rows, cols, spacing_x_pt, spacing_y_pt } => {
+                let r_count = rows.clamp(1, 20);
+                let c_count = cols.clamp(1, 20);
+                let sx = spacing_x_pt.get();
+                let sy = spacing_y_pt.get();
+                let sel = self.selection.clone();
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for r in 0..r_count {
+                    for c in 0..c_count {
+                        if r == 0 && c == 0 {
+                            continue;
+                        }
+                        let dx = f64::from(c) * sx;
+                        let dy = f64::from(r) * sy;
+                        let Ok(tf) = Affine2::translation(dx, dy) else {
+                            continue;
+                        };
+                        for mut dup in templates.clone() {
+                            reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                            if let Ok(composed) = dup.transform.then(tf) {
+                                dup.transform = composed;
+                            }
+                            new_selection.push(dup.id);
+                            self.target_layer_mut().objects.push(dup);
+                        }
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
+            EngineCommand::AddGuideline { horizontal, position_pt } => {
+                let page_idx = self.current_page_index();
+                let Some(page_size) = self.document.pages.get(page_idx).map(|p| p.size) else {
+                    return false;
+                };
+                let pos = position_pt.get();
+                let (p0, p1, label) = if horizontal {
+                    (Point::new(0.0, pos), Point::new(page_size.width.get(), pos), format!("Horizontal Guide ({pos:.1} pt)"))
+                } else {
+                    (Point::new(pos, 0.0), Point::new(pos, page_size.height.get()), format!("Vertical Guide ({pos:.1} pt)"))
+                };
+                if let (Ok(a), Ok(b)) = (p0, p1)
+                    && let Ok(path) = Path::from_elements(vec![PathElement::MoveTo(a), PathElement::LineTo(b)], FillRule::NonZero)
+                {
+                    let obj_id = self.document.allocate_object_id();
+                    let mut outline = OutlineStyle::hairline(Color::rgb8(0, 85, 229));
+                    if let (Ok(d1), Ok(d2)) = (F64::new(4.0), F64::new(3.0)) {
+                        outline.dash_pattern = vec![d1, d2];
+                    }
+                    let node = ObjectNode::new(obj_id, Some(label), ObjectKind::Path(path), None, Some(outline));
+                    let has_guide_layer = self.document.pages.get(page_idx).is_some_and(|p| p.layers.iter().any(|l| l.role == LayerRole::Guides));
+                    if has_guide_layer {
+                        if let Some(guide_layer) =
+                            self.document.pages.get_mut(page_idx).and_then(|p| p.layers.iter_mut().find(|l| l.role == LayerRole::Guides))
+                        {
+                            guide_layer.objects.push(node);
+                        }
+                    } else {
+                        let layer_id = LayerId(self.document.allocate_object_id().0);
+                        if let Some(page) = self.document.pages.get_mut(page_idx) {
+                            page.layers.push(Layer {
+                                id: layer_id,
+                                name: "Guides".to_owned(),
+                                role: LayerRole::Guides,
+                                visible: true,
+                                printable: false,
+                                locked: false,
+                                master_in_front: true,
+                                opacity: F64::ONE,
+                                objects: vec![node],
+                                residual: Residual::default(),
+                                extra: BTreeMap::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            EngineCommand::ClearGuidelines => {
+                let page_idx = self.current_page_index();
+                let mut removed_ids = Vec::new();
+                if let Some(page) = self.document.pages.get_mut(page_idx) {
+                    for layer in &mut page.layers {
+                        if layer.role == LayerRole::Guides {
+                            for obj in layer.objects.drain(..) {
+                                removed_ids.push(obj.id);
+                            }
+                        }
+                    }
+                }
+                self.selection.retain(|id| !removed_ids.contains(id));
+            }
+            EngineCommand::CircularDuplicateSelection { count, center, total_angle_deg, rotate_objects } => {
+                let n = count.clamp(1, 72);
+                let step_deg = total_angle_deg.get() / f64::from(n);
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let sel = self.selection.clone();
+                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                let mut new_selection = Vec::new();
+                for k in 1..=n {
+                    let angle_rad = (f64::from(k) * step_deg).to_radians();
+                    for mut dup in templates.clone() {
+                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                        if rotate_objects {
+                            if let Ok(t1) = Affine2::translation(-cx, -cy)
+                                && let Ok(rot) = Affine2::rotation_rad(angle_rad)
+                                && let Ok(t2) = Affine2::translation(cx, cy)
+                                && let Ok(around_center) = t1.then(rot).and_then(|m| m.then(t2))
+                                && let Ok(composed) = dup.transform.then(around_center)
+                            {
+                                dup.transform = composed;
+                            }
+                        } else if let Ok(obj_center) = combined_selection_bounds(&[&dup]).center() {
+                            let vx = obj_center.x.get() - cx;
+                            let vy = obj_center.y.get() - cy;
+                            let cos_a = angle_rad.cos();
+                            let sin_a = angle_rad.sin();
+                            let nx = cx + vx * cos_a - vy * sin_a;
+                            let ny = cy + vx * sin_a + vy * cos_a;
+                            if let Ok(tf) = Affine2::translation(nx - obj_center.x.get(), ny - obj_center.y.get())
+                                && let Ok(composed) = dup.transform.then(tf)
+                            {
+                                dup.transform = composed;
+                            }
+                        }
+                        new_selection.push(dup.id);
+                        self.target_layer_mut().objects.push(dup);
+                    }
+                }
+                if !new_selection.is_empty() {
+                    self.selection = new_selection;
+                }
+            }
+            EngineCommand::FitPageToSelection { margin_pt } => {
+                let m = margin_pt.get().max(0.0);
+                let bounds = if self.selection.is_empty() {
+                    let refs: Vec<&ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).collect();
+                    combined_selection_bounds(&refs)
+                } else {
+                    let refs: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                    combined_selection_bounds(&refs)
+                };
+                let new_w = (bounds.width() + 2.0 * m).max(1.0);
+                let new_h = (bounds.height() + 2.0 * m).max(1.0);
+                let dx = m - bounds.x0.get();
+                let dy = m - bounds.y0.get();
+                let page_idx = self.current_page_index();
+                if let Ok(sz) = Size::new(new_w, new_h)
+                    && let Ok(tf) = Affine2::translation(dx, dy)
+                    && let Some(page) = self.document.pages.get_mut(page_idx)
+                {
+                    page.size = sz;
+                    for layer in &mut page.layers {
+                        if !layer.locked {
+                            for obj in &mut layer.objects {
+                                if !obj.locked
+                                    && let Ok(composed) = obj.transform.then(tf)
+                                {
+                                    obj.transform = composed;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
+                let update_outline = |opt: &mut Option<OutlineStyle>| {
+                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
+                    if let Some(c) = cap {
+                        st.cap = c;
+                    }
+                    if let Some(j) = join {
+                        st.join = j;
+                    }
+                    if let Some(ml) = miter_limit
+                        && let Ok(clamped) = F64::new(ml.get().clamp(1.0, 100.0))
+                    {
+                        st.miter_limit = clamped;
+                    }
+                    *opt = Some(st);
+                };
+                if self.selection.is_empty() {
+                    update_outline(&mut self.default_outline);
+                } else {
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked {
+                            update_outline(&mut obj.outline);
+                        }
+                    });
+                }
+            }
+            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id != object_id || obj.locked {
+                        return;
+                    }
+                    let Some(mut path) = object_to_path(obj) else {
+                        return;
+                    };
+                    let elem_end = |el: &PathElement| -> Option<Point> {
+                        match *el {
+                            PathElement::MoveTo(p)
+                            | PathElement::LineTo(p)
+                            | PathElement::QuadTo { end: p, .. }
+                            | PathElement::CubicTo { end: p, .. } => Some(p),
+                            PathElement::Close => None,
+                        }
+                    };
+                    let Some(ref_pt) = element_indices.first().and_then(|&i| path.elements.get(i)).and_then(elem_end) else {
+                        return;
+                    };
+                    for &idx in element_indices.iter().skip(1) {
+                        let Some(cur_pt) = path.elements.get(idx).and_then(elem_end) else {
+                            continue;
+                        };
+                        let nx = if vertical { ref_pt.x.get() } else { cur_pt.x.get() };
+                        let ny = if horizontal { ref_pt.y.get() } else { cur_pt.y.get() };
+                        let dx = nx - cur_pt.x.get();
+                        let dy = ny - cur_pt.y.get();
+                        let Ok(new_end) = Point::new(nx, ny) else {
+                            continue;
+                        };
+                        if let Some(el) = path.elements.get_mut(idx) {
+                            match el {
+                                PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
+                                PathElement::QuadTo { ctrl, end } => {
+                                    if let Ok(nc) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
+                                        *ctrl = nc;
+                                    }
+                                    *end = new_end;
+                                }
+                                PathElement::CubicTo { c2, end, .. } => {
+                                    if let Ok(nc2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
+                                        *c2 = nc2;
+                                    }
+                                    *end = new_end;
+                                }
+                                PathElement::Close => {}
+                            }
+                        }
+                        if let Some(PathElement::CubicTo { c1, .. }) = path.elements.get_mut(idx.saturating_add(1))
+                            && let Ok(nc1) = Point::new(c1.x.get() + dx, c1.y.get() + dy)
+                        {
+                            *c1 = nc1;
+                        }
+                    }
+                    obj.kind = ObjectKind::Path(path);
+                });
+            }
+            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
+                let dh = hue_delta_deg.get();
+                let ds = saturation_delta.get();
+                let db = brightness_delta.get();
+                let shift_color = |c: &Color| -> Color {
+                    let [r, g, b] = c.to_srgb8();
+                    let [h, s, v] = coralcraft_color::srgb8_to_hsb(r, g, b);
+                    let [nr, ng, nb] = coralcraft_color::hsb_to_srgb8((h + dh).rem_euclid(360.0), (s + ds).clamp(0.0, 1.0), (v + db).clamp(0.0, 1.0));
+                    Color::rgb8(nr, ng, nb)
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => *color = shift_color(color),
+                            FillStyle::Fountain { stops, .. } => {
+                                for stop in stops {
+                                    stop.color = shift_color(&stop.color);
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                *fg_color = shift_color(fg_color);
+                                *bg_color = shift_color(bg_color);
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(outline) = &mut obj.outline {
+                        outline.color = shift_color(&outline.color);
+                    }
+                });
+            }
+            EngineCommand::SubdividePathSegments { object_id } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = subdivide_all_path_segments(&base_path)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
+                let convert_color = |c: &Color| -> Color {
+                    let [mut r, mut g, mut b] = c.to_srgb8();
+                    if invert {
+                        r = 255u8.saturating_sub(r);
+                        g = 255u8.saturating_sub(g);
+                        b = 255u8.saturating_sub(b);
+                    }
+                    if grayscale {
+                        let lum = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round().clamp(0.0, 255.0) as u8;
+                        r = lum;
+                        g = lum;
+                        b = lum;
+                    }
+                    Color::rgb8(r, g, b)
+                };
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => *color = convert_color(color),
+                            FillStyle::Fountain { stops, .. } => {
+                                for stop in stops {
+                                    stop.color = convert_color(&stop.color);
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                *fg_color = convert_color(fg_color);
+                                *bg_color = convert_color(bg_color);
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(outline) = &mut obj.outline {
+                        outline.color = convert_color(&outline.color);
+                    }
+                });
+            }
+            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
+                let sx = scale_x.get();
+                let sy = scale_y.get();
+                let rot = rotate_deg.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = transform_curve_nodes(&base_path, &element_indices, sx, sy, rot)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::SelectByColor { color, match_fill, match_outline, tolerance_u8 } => {
+                let [tr, tg, tb] = color.to_srgb8();
+                let matches_c = |c: &Color| -> bool {
+                    let [r, g, b] = c.to_srgb8();
+                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
+                };
+                self.selection = self
+                    .current_target_objects()
+                    .iter()
+                    .filter(|o| {
+                        if o.locked || !o.visible {
+                            return false;
+                        }
+                        let fill_ok = match_fill
+                            && o.fill.as_ref().is_some_and(|f| match f {
+                                FillStyle::Uniform { color: fc } => matches_c(fc),
+                                FillStyle::Fountain { stops, .. } => stops.iter().any(|s| matches_c(&s.color)),
+                                FillStyle::TwoColorPattern { fg_color, bg_color, .. } => matches_c(fg_color) || matches_c(bg_color),
+                                FillStyle::Unknown { .. } => false,
+                            });
+                        let outline_ok = match_outline && o.outline.as_ref().is_some_and(|ol| matches_c(&ol.color));
+                        fill_ok || outline_ok
+                    })
+                    .map(|o| o.id)
+                    .collect();
+            }
+            EngineCommand::BreakPathAtNode { object_id, element_index } => {
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(updated) = break_path_at_node(&base_path, element_index)
+                    {
+                        obj.kind = ObjectKind::Path(updated);
+                    }
+                });
+            }
+            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
+                if let Some(&anchor_id) = self.selection.last()
+                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
+                {
+                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                    let target_w = anchor_bbox.width();
+                    let target_h = anchor_bbox.height();
+                    if target_w > 1e-6 && target_h > 1e-6 {
+                        self.for_each_selected_mut(|obj| {
+                            if obj.locked || obj.id == anchor_id {
+                                return;
+                            }
+                            let bbox = combined_selection_bounds(&[obj]);
+                            let cur_w = bbox.width();
+                            let cur_h = bbox.height();
+                            if cur_w <= 1e-6 || cur_h <= 1e-6 {
+                                return;
+                            }
+                            let sx = if match_width { target_w / cur_w } else { 1.0 };
+                            let sy = if match_height { target_h / cur_h } else { 1.0 };
+                            let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
+                            let cy = 0.5 * (bbox.y0.get() + bbox.y1.get());
+                            if let Ok(t1) = Affine2::translation(-cx, -cy)
+                                && let Ok(sc) = Affine2::scaling(sx, sy)
+                                && let Ok(t2) = Affine2::translation(cx, cy)
+                                && let Ok(step1) = t1.then(sc)
+                                && let Ok(tf) = step1.then(t2)
+                                && let Ok(composed) = obj.transform.then(tf)
+                            {
+                                obj.transform = composed;
+                            }
+                        });
+                    }
+                }
+            }
+            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
+                let src_a = self.selected_or_all_node(start_id).cloned();
+                let src_b = self.selected_or_all_node(end_id).cloned();
+                if let (Some(a), Some(b)) = (src_a, src_b)
+                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
+                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
+                    && let Ok(morphed) = morph_paths_linear(&pa, &pb, t.get(), sample_count)
+                {
+                    let new_id = self.document.allocate_object_id();
+                    let node =
+                        ObjectNode::new(new_id, Some("Morphed Curve".to_owned()), ObjectKind::Path(morphed), a.fill.clone(), a.outline.clone());
+                    self.target_layer_mut().objects.push(node);
+                    self.selection = vec![new_id];
+                }
+            }
+            EngineCommand::DistributeExactGap { horizontal, gap_pt } => {
+                let gap = gap_pt.get();
+                let mut items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                if items.len() >= 2 {
+                    if horizontal {
+                        items.sort_by_key(|a| a.1.x0);
+                    } else {
+                        items.sort_by_key(|a| a.1.y0);
+                    }
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
+                    let mut deltas = BTreeMap::new();
+                    if horizontal {
+                        let mut cur_x = first_b.x1.get() + gap;
+                        for (id, b) in items.iter().skip(1) {
+                            deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
+                            cur_x += b.width() + gap;
+                        }
+                    } else {
+                        let mut cur_y = first_b.y1.get() + gap;
+                        for (id, b) in items.iter().skip(1) {
+                            deltas.insert(*id, (0.0, cur_y - b.y0.get()));
+                            cur_y += b.height() + gap;
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(tf) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(tf)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::DivideSelection => {
+                let sel = self.selection.clone();
+                let candidates: Vec<ObjectNode> =
+                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                if let [cand0, cand1, ..] = candidates.as_slice()
+                    && let Some(pa) = object_to_path(cand0).and_then(|p| p.transform(cand0.transform).ok())
+                    && let Some(pb) = object_to_path(cand1).and_then(|p| p.transform(cand1.transform).ok())
+                    && let Ok(regions) = divide_overlapping_paths(&pa, &pb)
+                {
+                    let id_a = cand0.id;
+                    let id_b = cand1.id;
+                    let mut new_ids = Vec::with_capacity(regions.len());
+                    let mut new_nodes = Vec::with_capacity(regions.len());
+                    for (idx, reg) in regions.into_iter().enumerate() {
+                        let new_id = self.document.allocate_object_id();
+                        let src = if idx == 2 { cand1 } else { cand0 };
+                        let node = ObjectNode::new(
+                            new_id,
+                            Some(format!("Divided Region {}", idx.saturating_add(1))),
+                            ObjectKind::Path(reg),
+                            src.fill.clone(),
+                            src.outline.clone(),
+                        );
+                        new_ids.push(new_id);
+                        new_nodes.push(node);
+                    }
+                    let layer = self.target_layer_mut();
+                    layer.objects.retain(|o| o.id != id_a && o.id != id_b);
+                    layer.objects.extend(new_nodes);
+                    self.selection = new_ids;
+                }
+            }
+            EngineCommand::DistributeSelectionAlongPath { spine_object_id, rotate_to_tangent } => {
+                if let Some(spine_obj) = self.selected_or_all_node(spine_object_id).cloned()
+                    && let Some(spine_path) = object_to_path(&spine_obj).and_then(|p| p.transform(spine_obj.transform).ok())
+                    && let Ok(lut) = ArcLengthTable::from_path(&spine_path)
+                {
+                    let targets: Vec<(ObjectId, Point)> = self
+                        .selected_nodes()
+                        .into_iter()
+                        .filter(|o| !o.locked && o.id != spine_object_id)
+                        .filter_map(|o| combined_selection_bounds(&[o]).center().ok().map(|c| (o.id, c)))
+                        .collect();
+                    let n = targets.len();
+                    let mut transforms = BTreeMap::new();
+                    for (idx, (id, cur_c)) in targets.into_iter().enumerate() {
+                        let u = if n <= 1 { 0.5 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
+                        if let Some(sample) = lut.sample_normalized(u) {
+                            let dx = sample.point.x.get() - cur_c.x.get();
+                            let dy = sample.point.y.get() - cur_c.y.get();
+                            if rotate_to_tangent {
+                                if let Ok(t1) = Affine2::translation(-cur_c.x.get(), -cur_c.y.get())
+                                    && let Ok(rot) = Affine2::rotation_rad(sample.angle_deg.to_radians())
+                                    && let Ok(t2) = Affine2::translation(sample.point.x.get(), sample.point.y.get())
+                                    && let Ok(s1) = t1.then(rot)
+                                    && let Ok(tf) = s1.then(t2)
+                                {
+                                    transforms.insert(id, tf);
+                                }
+                            } else if let Ok(tf) = Affine2::translation(dx, dy) {
+                                transforms.insert(id, tf);
+                            }
+                        }
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&tf) = transforms.get(&obj.id)
+                            && let Ok(composed) = obj.transform.then(tf)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::RecolorArtwork { from_color, to_color, tolerance_u8, selection_only } => {
+                let [tr, tg, tb] = from_color.to_srgb8();
+                let matches_c = |c: &Color| -> bool {
+                    let [r, g, b] = c.to_srgb8();
+                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
+                };
+                let recolor_node = |obj: &mut ObjectNode| {
+                    if obj.locked {
+                        return;
+                    }
+                    if let Some(fill) = &mut obj.fill {
+                        match fill {
+                            FillStyle::Uniform { color } => {
+                                if matches_c(color) {
+                                    *color = to_color.clone();
+                                }
+                            }
+                            FillStyle::Fountain { stops, .. } => {
+                                for s in stops {
+                                    if matches_c(&s.color) {
+                                        s.color = to_color.clone();
+                                    }
+                                }
+                            }
+                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
+                                if matches_c(fg_color) {
+                                    *fg_color = to_color.clone();
+                                }
+                                if matches_c(bg_color) {
+                                    *bg_color = to_color.clone();
+                                }
+                            }
+                            FillStyle::Unknown { .. } => {}
+                        }
+                    }
+                    if let Some(ol) = &mut obj.outline
+                        && matches_c(&ol.color)
+                    {
+                        ol.color = to_color.clone();
+                    }
+                };
+                if selection_only {
+                    self.for_each_selected_mut(recolor_node);
+                } else {
+                    self.for_each_node_mut(recolor_node);
+                }
+            }
+            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
+                let ang = angle_deg.get();
+                let sp = spacing_pt.get();
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(hatched) = hatch_path_region(&base_path, ang, sp, cross_hatch)
+                    {
+                        obj.kind = ObjectKind::Path(hatched);
+                        if obj.outline.is_none() {
+                            obj.outline = Some(OutlineStyle::hairline(Color::BLACK));
+                        }
+                    }
+                });
+            }
+            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
+                let n_steps = steps.clamp(1, 32);
+                let src_a = self.selected_or_all_node(start_id).cloned();
+                let src_b = self.selected_or_all_node(end_id).cloned();
+                if let (Some(a), Some(b)) = (src_a, src_b)
+                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
+                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
+                {
+                    let ca = a.fill.as_ref().and_then(|f| match f {
+                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
+                        _ => None,
+                    });
+                    let cb = b.fill.as_ref().and_then(|f| match f {
+                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
+                        _ => None,
+                    });
+                    let mut new_ids = Vec::with_capacity(n_steps as usize);
+                    for k in 1..=n_steps {
+                        let t = f64::from(k) / f64::from(n_steps.saturating_add(1));
+                        if let Ok(morphed) = morph_paths_linear(&pa, &pb, t, sample_count) {
+                            let new_id = self.document.allocate_object_id();
+                            let fill = if let (Some([r0, g0, b0]), Some([r1, g1, b1])) = (ca, cb) {
+                                let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
+                                let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
+                                let bl = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
+                                Some(FillStyle::uniform(Color::rgb8(r, g, bl)))
+                            } else {
+                                a.fill.clone()
+                            };
+                            let node = ObjectNode::new(new_id, Some(format!("Blend Step {k}")), ObjectKind::Path(morphed), fill, a.outline.clone());
+                            new_ids.push(new_id);
+                            self.target_layer_mut().objects.push(node);
+                        }
+                    }
+                    if !new_ids.is_empty() {
+                        self.selection = new_ids;
+                    }
+                }
+            }
+            EngineCommand::ProjectSelectionAxonometric { plane } => {
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(projected) = project_path_axonometric(&world_path, plane)
+                    {
+                        obj.kind = ObjectKind::Path(projected);
+                        obj.transform = Affine2::IDENTITY;
+                    }
+                });
+            }
+            EngineCommand::PackSelectionInGrid { origin, cols, gap_pt } => {
+                let c_count = cols.clamp(1, 32) as usize;
+                let gap = gap_pt.get();
+                let items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                let mut deltas = BTreeMap::new();
+                let mut cur_x = origin.x.get();
+                let mut cur_y = origin.y.get();
+                let mut row_h = 0.0_f64;
+                for (idx, (id, b)) in items.into_iter().enumerate() {
+                    if idx > 0 && idx.checked_rem(c_count) == Some(0) {
+                        cur_x = origin.x.get();
+                        cur_y += row_h + gap;
+                        row_h = 0.0;
+                    }
+                    deltas.insert(id, (cur_x - b.x0.get(), cur_y - b.y0.get()));
+                    cur_x += b.width() + gap;
+                    row_h = row_h.max(b.height());
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ExcludeSelection => {
+                let sel = self.selection.clone();
+                let candidates: Vec<ObjectNode> =
+                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+                if candidates.len() >= 2
+                    && let Some(first_cand) = candidates.first()
+                    && let Some(first_path) = object_to_path(first_cand).and_then(|p| p.transform(first_cand.transform).ok())
+                {
+                    let mut acc = first_path;
+                    for cand in candidates.iter().skip(1) {
+                        if let Some(wp) = object_to_path(cand).and_then(|p| p.transform(cand.transform).ok())
+                            && let Ok(excluded) = boolean_paths(&acc, &wp, BooleanOp::Exclude)
+                        {
+                            acc = excluded;
+                        }
+                    }
+                    let anchor = candidates.last().unwrap_or(first_cand);
+                    let new_id = self.document.allocate_object_id();
+                    let new_node =
+                        ObjectNode::new(new_id, Some("Excluded Path".to_owned()), ObjectKind::Path(acc), anchor.fill.clone(), anchor.outline.clone());
+                    let remove_ids: Vec<ObjectId> = candidates.iter().map(|c| c.id).collect();
+                    let layer = self.target_layer_mut();
+                    layer.objects.retain(|o| !remove_ids.contains(&o.id));
+                    layer.objects.push(new_node);
+                    self.selection = vec![new_id];
+                }
+            }
+            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
+                let gap = min_gap_pt.get().max(0.0);
+                let iters = iterations.clamp(1, 200);
+                let mut boxes: Vec<(ObjectId, f64, f64, f64, f64, f64, f64)> = self
+                    .selected_nodes()
+                    .into_iter()
+                    .filter(|o| !o.locked)
+                    .map(|o| {
+                        let b = combined_selection_bounds(&[o]);
+                        (o.id, b.x0.get(), b.y0.get(), b.width(), b.height(), b.x0.get(), b.y0.get())
+                    })
+                    .collect();
+                let n = boxes.len();
+                for _ in 0..iters {
+                    let mut any_moved = false;
+                    for i in 0..n {
+                        for j in i.saturating_add(1)..n {
+                            let (Some(&(_, xi, yi, wi, hi, _, _)), Some(&(_, xj, yj, wj, hj, _, _))) = (boxes.get(i), boxes.get(j)) else {
+                                continue;
+                            };
+                            let cxi = xi + 0.5 * wi;
+                            let cyi = yi + 0.5 * hi;
+                            let cxj = xj + 0.5 * wj;
+                            let cyj = yj + 0.5 * hj;
+                            let req_dx = 0.5 * (wi + wj) + gap;
+                            let req_dy = 0.5 * (hi + hj) + gap;
+                            let dx = cxj - cxi;
+                            let dy = cyj - cyi;
+                            let pen_x = req_dx - dx.abs();
+                            let pen_y = req_dy - dy.abs();
+                            if pen_x > 1e-6 && pen_y > 1e-6 {
+                                any_moved = true;
+                                if pen_x <= pen_y {
+                                    let dir = if dx.abs() > 1e-6 { dx.signum() } else { 1.0 };
+                                    let push = 0.5 * pen_x * dir;
+                                    if let Some(bi) = boxes.get_mut(i) {
+                                        bi.1 -= push;
+                                    }
+                                    if let Some(bj) = boxes.get_mut(j) {
+                                        bj.1 += push;
+                                    }
+                                } else {
+                                    let dir = if dy.abs() > 1e-6 { dy.signum() } else { 1.0 };
+                                    let push = 0.5 * pen_y * dir;
+                                    if let Some(bi) = boxes.get_mut(i) {
+                                        bi.2 -= push;
+                                    }
+                                    if let Some(bj) = boxes.get_mut(j) {
+                                        bj.2 += push;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !any_moved {
+                        break;
+                    }
+                }
+                let mut deltas = BTreeMap::new();
+                for (id, x, y, _, _, orig_x, orig_y) in boxes {
+                    deltas.insert(id, (x - orig_x, y - orig_y));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ApplyVariableWidthStroke { object_id, widths_pt } => {
+                if widths_pt.len() < 2 {
+                    return false;
+                }
+                let raw_widths: Vec<f64> = widths_pt.iter().map(|w| w.get()).collect();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(ribbon) = expand_tapered_stroke_profile(&base_path, &raw_widths)
+                    {
+                        if obj.fill.is_none() {
+                            let color = obj.outline.as_ref().map_or_else(|| Color::rgb8(31, 41, 55), |o| o.color.clone());
+                            obj.fill = Some(FillStyle::Uniform { color });
+                        }
+                        obj.kind = ObjectKind::Path(ribbon);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ChaikinSmoothObjectPath { object_id, iterations } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(smoothed) = chaikin_smooth_path(&base_path, iterations)
+                    {
+                        obj.kind = ObjectKind::Path(smoothed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::WaveDistortObjectPath { object_id, amplitude_pt, frequency, phase_deg } => {
+                let amp = amplitude_pt.get();
+                let freq = frequency.get();
+                let phase = phase_deg.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(waved) = wave_distort_path(&base_path, amp, freq, phase)
+                    {
+                        obj.kind = ObjectKind::Path(waved);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::RadialScaleSelectionPositions { center, radial_scale, twist_deg } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let scale = radial_scale.get();
+                let twist_rad = twist_deg.get().to_radians();
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let vx = oc.x.get() - cx;
+                    let vy = oc.y.get() - cy;
+                    let r = vx.hypot(vy);
+                    if r > 1e-6 {
+                        let theta = vy.atan2(vx) + twist_rad;
+                        let r_new = r * scale;
+                        let nx = cx + r_new * theta.cos();
+                        let ny = cy + r_new * theta.sin();
+                        deltas.insert(obj.id, (nx - oc.x.get(), ny - oc.y.get()));
+                    }
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ApplyDihedralSymmetry { object_id, center, folds, reflect } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(sym) = build_dihedral_symmetry_path(&world_path, center, folds, reflect)
+                    {
+                        obj.kind = ObjectKind::Path(sym);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelectionByDistance { center, min_scale, max_scale, falloff_radius_pt } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let s_min = min_scale.get().max(0.05);
+                let s_max = max_scale.get().max(0.05);
+                let r_falloff = falloff_radius_pt.get().max(1e-6);
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut scales = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let d = (oc.x.get() - cx).hypot(oc.y.get() - cy);
+                    let t = (d / r_falloff).clamp(0.0, 1.0);
+                    let s = s_max + (s_min - s_max) * t;
+                    scales.insert(obj.id, (oc, s));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, s)) = scales.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(s, s)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(scale_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::DashObjectPath { object_id, dash_pattern_pt } => {
+                if dash_pattern_pt.is_empty() {
+                    return false;
+                }
+                let raw_pat: Vec<f64> = dash_pattern_pt.iter().map(|d| d.get()).collect();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(dashed) = dash_path_to_open_subpaths(&base_path, &raw_pat)
+                    {
+                        obj.kind = ObjectKind::Path(dashed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::QuantizeSelectionPositions { grid_x_pt, grid_y_pt } => {
+                let gx = grid_x_pt.get();
+                let gy = grid_y_pt.get();
+                if gx <= 0.0 || gy <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let x0 = wb.x0.get();
+                    let y0 = wb.y0.get();
+                    let sx = (x0 / gx).round() * gx;
+                    let sy = (y0 / gy).round() * gy;
+                    deltas.insert(obj.id, (sx - x0, sy - y0));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                        && let Ok(tf) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ConvexHullSelection => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut agg = Path::new();
+                let mut first_fill = self.default_fill.clone();
+                let mut first_outline = self.default_outline.clone();
+                for (i, obj) in sel_nodes.into_iter().enumerate() {
+                    if i == 0 {
+                        first_fill = obj.fill.clone();
+                        first_outline = obj.outline.clone();
+                    }
+                    if let Some(wp) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok()) {
+                        agg.elements.extend(wp.elements);
+                    }
+                }
+                let Ok(hull) = convex_hull_of_path(&agg) else {
+                    return false;
+                };
+                let new_id = self.document.allocate_object_id();
+                let new_node = ObjectNode::new(new_id, Some("Convex Hull".to_owned()), ObjectKind::Path(hull), first_fill, first_outline);
+                self.target_layer_mut().objects.push(new_node);
+                self.selection = vec![new_id];
+            }
+            EngineCommand::ArrangeSelectionOnCircle { center, radius_pt, start_angle_deg, rotate_to_tangent } => {
+                let r = radius_pt.get();
+                if r <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let start_rad = start_angle_deg.get().to_radians();
+                let mut placements = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let theta = start_rad + std::f64::consts::TAU * (idx as f64) / (n as f64);
+                    let tx = cx + r * theta.cos();
+                    let ty = cy + r * theta.sin();
+                    let rot_rad = if rotate_to_tangent { theta + std::f64::consts::FRAC_PI_2 } else { 0.0 };
+                    placements.insert(obj.id, (oc, tx, ty, rot_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, tx, ty, rot_rad)) = placements.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_to_target) = Affine2::translation(tx, ty)
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_to_target))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ExtractPathSkeleton { object_id, sample_steps } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(skel) = medial_chord_skeleton_of_path(&base_path, sample_steps)
+                    {
+                        obj.kind = ObjectKind::Path(skel);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::JitterSelectionTransforms { dx_max_pt, dy_max_pt, angle_max_deg, scale_max_pct, seed } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let mut state = seed;
+                let mut next_signed_unit = || -> f64 {
+                    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                    let mut z = state;
+                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                    z ^= z >> 31;
+                    ((z >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64)) * 2.0 - 1.0
+                };
+                let dx_m = dx_max_pt.get().max(0.0);
+                let dy_m = dy_max_pt.get().max(0.0);
+                let ang_m = angle_max_deg.get().max(0.0);
+                let sc_m = (scale_max_pct.get() / 100.0).clamp(0.0, 0.9);
+                let mut jitters = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = next_signed_unit() * dx_m;
+                    let dy = next_signed_unit() * dy_m;
+                    let rot_rad = (next_signed_unit() * ang_m).to_radians();
+                    let scale = (1.0 + next_signed_unit() * sc_m).clamp(0.1, 10.0);
+                    jitters.insert(obj.id, (oc, dx, dy, rot_rad, scale));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, dx, dy, rot_rad, scale)) = jitters.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(scale, scale)
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get() + dx, oc.y.get() + dy)
+                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_rot)).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::DensifyObjectPath { object_id, max_len_pt } => {
+                let max_l = max_len_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(dense) = subdivide_path_by_max_segment_length(&base_path, max_l)
+                    {
+                        obj.kind = ObjectKind::Path(dense);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::AlignSelectionToKeyObject { key_object_id, mode } => {
+                let Some(anchor_node) = self.selected_or_all_node(key_object_id) else {
+                    return false;
+                };
+                let anchor_bbox = combined_selection_bounds(&[anchor_node]);
+                let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
+                let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
+                let mut any_moved = false;
+                self.for_each_selected_mut(|obj| {
+                    if obj.locked || obj.id == key_object_id {
+                        return;
+                    }
+                    let bbox = combined_selection_bounds(&[obj]);
+                    let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
+                    let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
+                    let (dx, dy) = match mode {
+                        AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
+                        AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
+                        AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
+                        AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
+                        AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
+                        AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
+                        AlignMode::CenterToPage => (ax_mid - bx_mid, ay_mid - by_mid),
+                    };
+                    if let Ok(t) = Affine2::translation(dx, dy)
+                        && let Ok(composed) = obj.transform.then(t)
+                    {
+                        obj.transform = composed;
+                        any_moved = true;
+                    }
+                });
+                if !any_moved {
+                    return false;
+                }
+            }
+            EngineCommand::SphericalWarpObjectPath { object_id, center, radius_pt, magnification } => {
+                let r_lens = radius_pt.get();
+                let mag = magnification.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(warped) = spherical_fisheye_warp_path(&world_path, center, r_lens, mag)
+                    {
+                        obj.kind = ObjectKind::Path(warped);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ColorizeSelectionByGradient { start_color, end_color, apply_to_fill, apply_to_outline } => {
+                if !apply_to_fill && !apply_to_outline {
+                    return false;
+                }
+                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
+                if sel_ids.is_empty() {
+                    return false;
+                }
+                let n = sel_ids.len();
+                let [r0, g0, b0] = start_color.to_srgb8();
+                let [r1, g1, b1] = end_color.to_srgb8();
+                let mut color_map = BTreeMap::new();
+                for (idx, id) in sel_ids.into_iter().enumerate() {
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
+                    let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
+                    let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
+                    let b = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
+                    color_map.insert(id, Color::rgb8(r, g, b));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(c) = color_map.get(&obj.id)
+                    {
+                        if apply_to_fill {
+                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
+                        }
+                        if apply_to_outline {
+                            if let Some(ol) = &mut obj.outline {
+                                ol.color = c.clone();
+                            } else {
+                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
+                            }
+                        }
+                    }
+                });
+            }
+            EngineCommand::RelaxObjectPath { object_id, iterations, lambda } => {
+                let lam = lambda.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(relaxed) = laplacian_relax_closed_path(&base_path, iterations, lam)
+                    {
+                        obj.kind = ObjectKind::Path(relaxed);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ApplyPaletteSwatchesToSelection { colors, apply_to_fill, apply_to_outline } => {
+                if colors.is_empty() || (!apply_to_fill && !apply_to_outline) {
+                    return false;
+                }
+                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
+                if sel_ids.is_empty() {
+                    return false;
+                }
+                let mut color_map = BTreeMap::new();
+                for (idx, id) in sel_ids.into_iter().enumerate() {
+                    if let Some(c) = idx.checked_rem(colors.len()).and_then(|rem| colors.get(rem)) {
+                        color_map.insert(id, c.clone());
+                    }
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(c) = color_map.get(&obj.id)
+                    {
+                        if apply_to_fill {
+                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
+                        }
+                        if apply_to_outline {
+                            if let Some(ol) = &mut obj.outline {
+                                ol.color = c.clone();
+                            } else {
+                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
+                            }
+                        }
+                    }
+                });
+            }
+            EngineCommand::FitCircleToObjectPath { object_id } => {
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(circle_path) = fit_circle_to_path_points(&world_path)
+                    {
+                        obj.kind = ObjectKind::Path(circle_path);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::SnapSelectionToCircleRadius { center, radius_pt } => {
+                let r = radius_pt.get();
+                if r <= 0.0 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let mut deltas = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = oc.x.get() - cx;
+                    let dy = oc.y.get() - cy;
+                    let dist = dx.hypot(dy);
+                    let (ux, uy) = if dist > 1e-6 { (dx / dist, dy / dist) } else { (1.0, 0.0) };
+                    let target_x = cx + ux * r;
+                    let target_y = cy + uy * r;
+                    deltas.insert(obj.id, (target_x - oc.x.get(), target_y - oc.y.get()));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(tx, ty)) = deltas.get(&obj.id)
+                        && let Ok(t) = Affine2::translation(tx, ty)
+                        && let Ok(composed) = obj.transform.then(t)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::SmoothPolylineToCubicBeziers { object_id, tension } => {
+                let tau = tension.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(smooth) = interpolate_smooth_cubic_path(&base_path, tau)
+                    {
+                        obj.kind = ObjectKind::Path(smooth);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::OrientSelectionToCenter { center, angle_offset_deg } => {
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let cx = center.x.get();
+                let cy = center.y.get();
+                let off_rad = angle_offset_deg.get().to_radians();
+                let mut rotations = BTreeMap::new();
+                for obj in sel_nodes {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let dx = oc.x.get() - cx;
+                    let dy = oc.y.get() - cy;
+                    let target_rad = dy.atan2(dx) + off_rad;
+                    rotations.insert(obj.id, (oc, target_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, rot_rad)) = rotations.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::PinchPunchObjectPath { object_id, center, radius_pt, strength } => {
+                let r_max = radius_pt.get();
+                let s = strength.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                        && let Ok(warped) = pinch_punch_warp_path(&world_path, center, r_max, s)
+                    {
+                        obj.kind = ObjectKind::Path(warped);
+                        obj.transform = Affine2::IDENTITY;
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::StackSelection { horizontal, gap_pt } => {
+                let gap = gap_pt.get();
+                let mut items: Vec<(ObjectId, Rect)> =
+                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
+                if items.len() < 2 {
+                    return false;
+                }
+                if horizontal {
+                    items.sort_by_key(|a| a.1.x0);
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
+                    let mut cursor = first_b.x0.get();
+                    let mut deltas = BTreeMap::new();
+                    for (id, bbox) in items {
+                        let dx = cursor - bbox.x0.get();
+                        deltas.insert(id, (dx, 0.0));
+                        cursor += bbox.width() + gap;
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                } else {
+                    items.sort_by_key(|a| a.1.y0);
+                    let Some(&(_, first_b)) = items.first() else {
+                        return false;
+                    };
+                    let mut cursor = first_b.y0.get();
+                    let mut deltas = BTreeMap::new();
+                    for (id, bbox) in items {
+                        let dy = cursor - bbox.y0.get();
+                        deltas.insert(id, (0.0, dy));
+                        cursor += bbox.height() + gap;
+                    }
+                    self.for_each_selected_mut(|obj| {
+                        if !obj.locked
+                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
+                            && let Ok(t) = Affine2::translation(dx, dy)
+                            && let Ok(composed) = obj.transform.then(t)
+                        {
+                            obj.transform = composed;
+                        }
+                    });
+                }
+            }
+            EngineCommand::FlattenObjectPathToPolylines { object_id, tolerance_pt } => {
+                let tol = tolerance_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(base_path) = object_to_path(obj)
+                        && let Ok(flat) = flatten_path_to_polylines(&base_path, tol)
+                    {
+                        obj.kind = ObjectKind::Path(flat);
+                        changed = true;
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::ScaleSelectionProgressively { start_scale, end_scale } => {
+                let s0 = start_scale.get();
+                let s1 = end_scale.get();
+                if s0 <= 0.05 || s1 <= 0.05 {
+                    return false;
+                }
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let mut scales = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
+                    let sc = (1.0 - t) * s0 + t * s1;
+                    scales.insert(obj.id, (oc, sc));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, sc)) = scales.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_scale) = Affine2::scaling(sc, sc)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+            EngineCommand::ShearWarpObjectPath { object_id, shear_x_pt, shear_y_pt } => {
+                let sx = shear_x_pt.get();
+                let sy = shear_y_pt.get();
+                let mut changed = false;
+                self.for_each_node_mut(|obj| {
+                    if obj.id == object_id
+                        && !obj.locked
+                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
+                    {
+                        let wb = combined_selection_bounds(&[obj]);
+                        if let Ok(warped) = shear_warp_path_along_axis(&world_path, wb, sx, sy) {
+                            obj.kind = ObjectKind::Path(warped);
+                            obj.transform = Affine2::IDENTITY;
+                            changed = true;
+                        }
+                    }
+                });
+                if !changed {
+                    return false;
+                }
+            }
+            EngineCommand::RotateSelectionProgressively { start_angle_deg, end_angle_deg } => {
+                let a0 = start_angle_deg.get();
+                let a1 = end_angle_deg.get();
+                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
+                if sel_nodes.is_empty() {
+                    return false;
+                }
+                let n = sel_nodes.len();
+                let mut angles = BTreeMap::new();
+                for (idx, obj) in sel_nodes.into_iter().enumerate() {
+                    let wb = combined_selection_bounds(&[obj]);
+                    let Ok(oc) = wb.center() else {
+                        continue;
+                    };
+                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
+                    let ang_rad = ((1.0 - t) * a0 + t * a1).to_radians();
+                    angles.insert(obj.id, (oc, ang_rad));
+                }
+                self.for_each_selected_mut(|obj| {
+                    if !obj.locked
+                        && let Some(&(oc, ang_rad)) = angles.get(&obj.id)
+                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
+                        && let Ok(t_rot) = Affine2::rotation_rad(ang_rad)
+                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
+                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
+                        && let Ok(composed) = obj.transform.then(step_tf)
+                    {
+                        obj.transform = composed;
+                    }
+                });
+            }
+        }
+        true
+    }
+
+    fn apply_selection_transform(&mut self, tf: Affine2, copy: bool) {
+        if copy {
+            let sel = self.selection.clone();
+            let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
+            let mut new_selection = Vec::new();
+            for mut dup in templates {
+                reallocate_object_ids_recursive(&mut dup, &mut self.document);
+                if let Ok(composed) = dup.transform.then(tf) {
+                    dup.transform = composed;
+                }
+                new_selection.push(dup.id);
+                self.target_layer_mut().objects.push(dup);
+            }
+            if !new_selection.is_empty() {
+                self.selection = new_selection;
+            }
+        } else {
+            self.for_each_selected_mut(|obj| {
+                if let Ok(composed) = obj.transform.then(tf) {
+                    obj.transform = composed;
+                }
+            });
+        }
+    }
+
+    /// Replaces the current selection list, deduplicating and dropping any IDs not present in the document.
+    pub fn set_selection(&mut self, selection: Vec<ObjectId>) {
+        self.selection = selection;
+        self.sanitize_selection();
+    }
+
+    fn sanitize_selection(&mut self) {
+        let mut valid = Vec::with_capacity(self.selection.len());
+        for &id in &self.selection {
+            if !valid.contains(&id) && self.selected_or_all_node(id).is_some() {
+                valid.push(id);
+            }
+        }
+        self.selection = valid;
+    }
+
+    /// Returns the total number of [`ObjectNode`]s across all pages, master layers, groups, and PowerClips.
+    #[must_use]
+    pub fn total_object_count(&self) -> usize {
+        let mut total = 0usize;
+        for page in &self.document.pages {
+            for layer in &page.layers {
+                total = total.saturating_add(count_nodes_recursive(&layer.objects));
+            }
+        }
+        for layer in &self.document.master_layers {
+            total = total.saturating_add(count_nodes_recursive(&layer.objects));
+        }
+        total
+    }
+
+    /// Selects all unlocked, visible objects on the active target layer (`Edit -> Select All -> Objects` / `Ctrl+A`).
+    pub fn select_all(&mut self) {
+        self.selection = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).map(|o| o.id).collect();
+    }
+
+    /// Computes `(length_pt, signed_area_sq_pt)` of the world-space contour of `object_id` (`Object Properties -> Curve`).
+    pub fn measure_object_geometry(&self, object_id: ObjectId) -> Option<(f64, f64)> {
+        let obj = self.selected_or_all_node(object_id)?;
+        let local_path = object_to_path(obj)?;
+        let world_path = local_path.transform(obj.transform).ok()?;
+        measure_path_length_and_area(&world_path).ok()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+mod tests {
+    use super::*;
+    use coralcraft_doc::{LineCap, LineJoin, TextCaseKind};
+    use coralcraft_geom::AxonometricPlane;
+    use coralcraft_tools::PropertyContext;
+
+    #[test]
+    fn engine_repairs_a_document_without_pages_instead_of_panicking() {
+        let mut doc = Document::new_a4_portrait();
+        doc.pages.clear();
+        let mut engine = EditorEngine::new(doc);
+        assert_eq!(engine.document.pages.len(), 1, "engine must guarantee at least one page");
+        let _ = engine.current_page();
+        assert!(engine.current_target_objects().is_empty());
+        // Every target kind must yield a layer without panicking, even with no master layers.
+        engine.document.master_layers.clear();
+        for target in [ActivePageTarget::MasterPage, ActivePageTarget::Desktop, ActivePageTarget::Page(0)] {
+            engine.set_active_target(target);
+            engine.select_all();
+            let _ = engine.target_layer_mut();
+        }
+        let mut ids: Vec<u64> = engine.document.pages.iter().flat_map(|p| p.layers.iter().map(|l| l.id.0)).collect();
+        ids.extend(engine.document.master_layers.iter().map(|l| l.id.0));
+        let before = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), before, "repaired layers must get unique ids");
+    }
+
+    #[test]
+    fn palette_left_right_click_and_no_color_swatch_update_selection_and_defaults_with_undo() {
+        let mut engine = EditorEngine::default();
+        assert_eq!(engine.status_bar_snapshot().selection_summary, "No selection");
+
+        // 1. With empty selection, left-click on Red swatch sets default fill for next object
+        let red = Color::rgb8(230, 40, 40);
+        let blue = Color::rgb8(30, 80, 220);
+        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color: Some(red.clone()) });
+        assert_eq!(engine.status_bar_snapshot().fill_chip, Some(red.clone()));
+
+        // 2. Drag-create a rectangle with F6 -> inherits default Red fill
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(50.0, 60.0).unwrap(), false, false);
+        engine.pointer_move(Point::new(150.0, 120.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(150.0, 120.0).unwrap(), false, false);
+        assert_eq!(engine.selection.len(), 1);
+        assert_eq!(engine.selected_nodes()[0].fill, Some(FillStyle::uniform(red.clone())));
+        assert_eq!(engine.property_bar_schema().context, PropertyContext::Rectangle);
+
+        // 3. Right-click on Blue swatch sets Outline on selected rectangle
+        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Outline, color: Some(blue.clone()) });
+        assert_eq!(engine.status_bar_snapshot().outline_chip, Some(blue));
+
+        // 4. Left-click on `[X]` No-Color swatch clears Fill on selected rectangle
+        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color: None });
+        assert_eq!(engine.selected_nodes()[0].fill, None);
+
+        // 5. Undo restores the Red fill, Redo clears it again
+        assert!(engine.undo());
+        assert_eq!(engine.selected_nodes()[0].fill, Some(FillStyle::uniform(red)));
+        assert!(engine.redo());
+        assert_eq!(engine.selected_nodes()[0].fill, None);
+    }
+
+    #[test]
+    fn page_navigator_add_duplicate_rename_delete_and_master_desktop_targets() {
+        let mut engine = EditorEngine::default();
+        assert_eq!(engine.document.pages.len(), 1);
+
+        // Cannot delete the sole remaining numbered page
+        assert!(!engine.execute(EngineCommand::DeletePage { page_index: 0 }));
+        assert_eq!(engine.document.pages.len(), 1);
+
+        // `+` adds Page 2 after Page 1
+        assert!(engine.execute(EngineCommand::AddPageAfterActive));
+        assert_eq!(engine.document.pages.len(), 2);
+        assert_eq!(engine.active_target, ActivePageTarget::Page(1));
+        assert_eq!(engine.current_page().name, "Page 2");
+
+        // Rename Page 2 -> "Back Cover"
+        assert!(engine.execute(EngineCommand::RenamePage { page_index: 1, name: "Back Cover".to_owned() }));
+        assert_eq!(engine.document.pages[1].name, "Back Cover");
+
+        // Switch to Master Page and place an object -> visible across all pages
+        engine.set_active_target(ActivePageTarget::MasterPage);
+        engine.handle_shortcut(KeyShortcut::F7);
+        engine.pointer_down(Point::new(20.0, 20.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(80.0, 80.0).unwrap(), false, false);
+        let eff_p1 = engine.document.effective_layers_for_page(0, true).unwrap();
+        let eff_p2 = engine.document.effective_layers_for_page(1, true).unwrap();
+        assert!(eff_p1.iter().any(|l| l.role == LayerRole::MasterAllPages && !l.objects.is_empty()));
+        assert!(eff_p2.iter().any(|l| l.role == LayerRole::MasterAllPages && !l.objects.is_empty()));
+
+        // Switch to Desktop pasteboard and place an object -> visible on screen, non-printing in export
+        engine.set_active_target(ActivePageTarget::Desktop);
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(-100.0, 50.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(-20.0, 120.0).unwrap(), false, false);
+        let screen_layers = engine.document.effective_layers_for_page(0, false).unwrap();
+        let print_layers = engine.document.effective_layers_for_page(0, true).unwrap();
+        assert!(screen_layers.iter().any(|l| l.role == LayerRole::Desktop && !l.objects.is_empty()));
+        assert!(!print_layers.iter().any(|l| l.role == LayerRole::Desktop));
+    }
+
+    #[test]
+    fn pick_tool_hit_testing_and_drag_move_selection() {
+        let mut engine = EditorEngine::default();
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(100.0, 100.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(200.0, 180.0).unwrap(), false, false);
+        let id = engine.selection[0];
+
+        // Return to Pick tool (`Escape`), click inside rectangle, and drag by (+30, +40)
+        engine.handle_shortcut(KeyShortcut::Escape);
+        assert_eq!(engine.hit_test_point(Point::new(150.0, 140.0).unwrap()), Some(id));
+        engine.pointer_down(Point::new(150.0, 140.0).unwrap(), false, false);
+        engine.pointer_move(Point::new(180.0, 180.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(180.0, 180.0).unwrap(), false, false);
+
+        let moved = engine.selected_nodes()[0];
+        assert!((moved.transform.tx.get() - 30.0).abs() < 1e-9);
+        assert!((moved.transform.ty.get() - 40.0).abs() < 1e-9);
+
+        // Undo restores identity transform
+        assert!(engine.undo());
+        let restored = engine.selected_nodes()[0];
+        assert!((restored.transform.tx.get()).abs() < 1e-9);
+        assert!((restored.transform.ty.get()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn group_ungroup_convert_to_curves_zorder_align_powerclip_and_node_edit() {
+        let mut engine = EditorEngine::default();
+
+        // Create two rectangles A and B
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(10.0, 20.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(50.0, 60.0).unwrap(), false, false);
+        let id_a = engine.selection[0];
+
+        engine.pointer_down(Point::new(100.0, 120.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(160.0, 180.0).unwrap(), false, false);
+        let id_b = engine.selection[0];
+
+        // 1. Align A's left edge to B (anchor = last selected = id_b)
+        engine.set_selection(vec![id_a, id_b]);
+        assert!(engine.execute(EngineCommand::AlignSelection { mode: AlignMode::Left }));
+        let node_a = engine.selected_or_all_node(id_a).unwrap();
+        assert!((node_a.transform.tx.get() - 90.0).abs() < 1e-9);
+
+        // 2. Group A and B -> single Group node, then translate group by (+10, +5), then Ungroup
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        assert_eq!(engine.selection.len(), 1);
+        let group_id = engine.selection[0];
+        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Group { .. }));
+        assert!(engine.execute(EngineCommand::TranslateSelection { dx_pt: F64::new(10.0).unwrap(), dy_pt: F64::new(5.0).unwrap() }));
+        assert_ne!(group_id, id_a);
+        assert!(engine.execute(EngineCommand::UngroupSelection));
+        assert_eq!(engine.selection, vec![id_a, id_b]);
+        let node_a_after = engine.selected_or_all_node(id_a).unwrap();
+        assert!((node_a_after.transform.tx.get() - 100.0).abs() < 1e-9);
+        assert!((node_a_after.transform.ty.get() - 5.0).abs() < 1e-9);
+
+        // 3. Reorder selection: move id_b to back, then id_b to front
+        engine.set_selection(vec![id_b]);
+        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToBack }));
+        assert_eq!(engine.document.pages[0].layers[0].objects[0].id, id_b);
+        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToFront }));
+        assert_eq!(engine.document.pages[0].layers[0].objects[1].id, id_b);
+
+        // 4. PowerClip: place id_a inside container id_b, then extract
+        engine.set_selection(vec![id_a]);
+        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: id_b }));
+        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 1);
+        assert_eq!(engine.document.pages[0].layers[0].objects[0].powerclip_children.len(), 1);
+        assert!(engine.execute(EngineCommand::ExtractPowerClip { container_id: id_b }));
+        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 2);
+        assert_eq!(engine.selection, vec![id_a]);
+
+        // 5. ConvertToCurves (`Ctrl+Q`) on id_a and MoveBezierNode (`F10` Shape Tool)
+        assert!(engine.execute(EngineCommand::ConvertToCurves));
+        assert!(matches!(engine.selected_or_all_node(id_a).unwrap().kind, ObjectKind::Path(_)));
+        assert!(engine.execute(EngineCommand::MoveBezierNode { object_id: id_a, element_index: 0, new_pt: Point::new(125.0, 35.0).unwrap() }));
+        if let ObjectKind::Path(p) = &engine.selected_or_all_node(id_a).unwrap().kind {
+            assert_eq!(p.elements[0], coralcraft_geom::PathElement::MoveTo(Point::new(25.0, 30.0).unwrap()));
+        } else {
+            panic!("expected Path after ConvertToCurves");
+        }
+    }
+
+    #[test]
+    fn boolean_selection_and_vector_effects_with_undo() {
+        let mut engine = EditorEngine::default();
+
+        // 1. Create two overlapping rectangles
+        engine.handle_shortcut(KeyShortcut::F6);
+        engine.pointer_down(Point::new(0.0, 0.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(60.0, 60.0).unwrap(), false, false);
+        let id1 = engine.selection[0];
+
+        engine.pointer_down(Point::new(40.0, 0.0).unwrap(), false, false);
+        engine.pointer_up(Point::new(100.0, 60.0).unwrap(), false, false);
+        let id2 = engine.selection[0];
+
+        // 2. Boolean Weld
+        engine.set_selection(vec![id1, id2]);
+        assert!(engine.execute(EngineCommand::BooleanSelection { op: BooleanOp::Weld }));
+        assert_eq!(engine.selection.len(), 1);
+        let welded_id = engine.selection[0];
+        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Path(_)));
+
+        // 3. Undo Weld restores both original rectangles
+        assert!(engine.undo());
+        assert_eq!(engine.current_target_objects().len(), 2);
+        assert!(engine.redo());
+        assert_eq!(engine.current_target_objects().len(), 1);
+
+        // 4. Non-destructive Contour effect on the welded object
+        assert!(engine.execute(EngineCommand::ApplyContour { object_id: welded_id, steps: 3, offset_pt: F64::new(4.0).unwrap(), inside: false }));
+        let obj = engine.selected_or_all_node(welded_id).unwrap();
+        assert_eq!(obj.effects.len(), 1);
+        assert!(matches!(obj.effects[0], VectorEffect::Contour { steps: 3, .. }));
+
+        // 5. Non-destructive DropShadow effect
+        assert!(engine.execute(EngineCommand::AddDropShadow {
+            object_id: welded_id,
+            offset_x: F64::new(5.0).unwrap(),
+            offset_y: F64::new(5.0).unwrap(),
+            opacity: F64::new(0.6).unwrap(),
+            color: Color::BLACK,
+        }));
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
+
+        // 6. ExpandEffects bakes effects into static geometry and clears live effect stack
+        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
+        assert!(engine.selected_or_all_node(welded_id).unwrap().effects.is_empty());
+
+        // 7. Undo restores both live effects
+        assert!(engine.undo());
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
+
+        // 8. Convert ArtisticText to curves
+        let text_id = engine.document.allocate_object_id();
+        let text_node = ObjectNode::new(
+            text_id,
+            Some("Text".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CORAL".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(24.0).unwrap(),
+                position: Point::new(10.0, 100.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        );
+        engine.target_layer_mut().objects.push(text_node);
+        engine.set_selection(vec![text_id]);
+        assert!(engine.execute(EngineCommand::ConvertToCurves));
+        assert!(matches!(engine.selected_or_all_node(text_id).unwrap().kind, ObjectKind::Path(_)));
+
+        // 9. ApplyEnvelope and ExpandEffects bake warped corner coordinates on welded_id
+        let corners =
+            [Point::new(10.0, 10.0).unwrap(), Point::new(150.0, 20.0).unwrap(), Point::new(160.0, 90.0).unwrap(), Point::new(0.0, 80.0).unwrap()];
+        assert!(engine.execute(EngineCommand::ApplyEnvelope { object_id: welded_id, corners }));
+        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
+        if let ObjectKind::Path(warped_path) = &engine.selected_or_all_node(welded_id).unwrap().kind {
+            let wb = warped_path.bounds().unwrap();
+            assert!((wb.x0.get() - 0.0).abs() < 1e-3);
+            assert!((wb.x1.get() - 160.0).abs() < 1e-3);
+        } else {
+            panic!("expected baked Path");
+        }
+        assert!(engine.execute(EngineCommand::ApplyArtisticBrush {
+            object_id: text_id,
+            start_width_pt: F64::new(12.0).unwrap(),
+            end_width_pt: F64::new(2.0).unwrap(),
+        }));
+        assert_eq!(engine.selected_or_all_node(text_id).unwrap().effects.len(), 1);
+
+        // 10. Step and Repeat creates 3 offset duplicates and supports undo
+        engine.set_selection(vec![welded_id]);
+        let before_count = engine.current_target_objects().len();
+        assert!(engine.execute(EngineCommand::StepAndRepeat {
+            count: 3,
+            offset_x_pt: F64::new(25.0).unwrap(),
+            offset_y_pt: F64::new(15.0).unwrap(),
+        }));
+        assert_eq!(engine.current_target_objects().len(), before_count + 3);
+        assert_eq!(engine.selection.len(), 3);
+        let dup_ids = engine.selection.clone();
+        assert!(engine.execute(EngineCommand::DistributeSelection { mode: DistributeMode::SpacingHorizontal }));
+        assert_eq!(engine.selection, dup_ids);
+        assert!(engine.undo());
+        assert!(engine.undo());
+        assert_eq!(engine.current_target_objects().len(), before_count);
+
+        // 11. CopyPropertiesFrom copies fill, outline, and effects from text_id to welded_id
+        engine.set_selection(vec![welded_id]);
+        assert!(engine.execute(EngineCommand::CopyPropertiesFrom { source_id: text_id, copy_fill: true, copy_outline: true, copy_effects: true }));
+        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 1);
+
+        // 12. CombineSelection (Ctrl+L) and BreakApartSelection (Ctrl+K)
+        engine.set_selection(vec![welded_id, text_id]);
+        assert!(engine.execute(EngineCommand::CombineSelection));
+        assert!(engine.execute(EngineCommand::BreakApartSelection));
+        assert!(engine.selection.len() >= 2);
+
+        // 13. CreateBoundary (non-destructive union silhouette) & ConvertOutlineToObject (Ctrl+Shift+Q)
+        let count_before_boundary = engine.current_target_objects().len();
+        assert!(engine.execute(EngineCommand::CreateBoundary));
+        assert_eq!(engine.current_target_objects().len(), count_before_boundary + 1);
+        let boundary_id = engine.selection[0];
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().outline.is_some());
+        assert!(engine.execute(EngineCommand::ConvertOutlineToObject));
+        let converted = engine.selected_or_all_node(boundary_id).unwrap();
+        assert!(converted.outline.is_none());
+        assert!(converted.fill.is_some());
+
+        // 14. RotateSelection & ScaleSelection around 9-point Object Origin (origin_index = 4 center)
+        assert!(engine.execute(EngineCommand::RotateSelection { angle_deg: F64::new(45.0).unwrap(), origin_index: 4, copy: false }));
+        assert!(engine.execute(EngineCommand::ScaleSelection {
+            scale_x: F64::new(1.5).unwrap(),
+            scale_y: F64::new(1.5).unwrap(),
+            origin_index: 0,
+            copy: true,
+        }));
+        assert!(engine.execute(EngineCommand::SkewSelection {
+            skew_x_deg: F64::new(15.0).unwrap(),
+            skew_y_deg: F64::ZERO,
+            origin_index: 4,
+            copy: false,
+        }));
+        assert!(engine.execute(EngineCommand::DuplicateSelection { offset_x_pt: F64::new(18.0).unwrap(), offset_y_pt: F64::new(18.0).unwrap() }));
+        engine.select_all();
+        assert!(engine.selection.len() >= 3);
+
+        // 15. ReversePathDirection, CloseOpenSubpaths, SetObjectLocked, and UnlockAllObjects
+        assert!(engine.execute(EngineCommand::ReversePathDirection { object_id: boundary_id }));
+        assert!(engine.execute(EngineCommand::CloseOpenSubpaths { object_id: boundary_id }));
+        assert!(engine.execute(EngineCommand::SetObjectLocked { object_id: boundary_id, locked: true }));
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().locked);
+        assert!(engine.execute(EngineCommand::UnlockAllObjects));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().locked);
+
+        // 16. JoinOpenSubpaths, UngroupAllSelection, and MovePage
+        assert!(engine.execute(EngineCommand::JoinOpenSubpaths { object_id: boundary_id, tolerance_pt: F64::new(5.0).unwrap() }));
+        engine.select_all();
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        assert!(engine.execute(EngineCommand::UngroupAllSelection));
+        assert!(engine.selection.len() >= 2);
+        assert!(engine.execute(EngineCommand::AddPageAfterActive));
+        assert_eq!(engine.document.pages.len(), 2);
+        assert!(engine.execute(EngineCommand::MovePage { from_index: 1, to_index: 0 }));
+        assert_eq!(engine.current_page_index(), 0);
+
+        // 17. ReducePathNodes, SetSelectionBounds, AddLayer, and SetLayerProperties
+        engine.set_active_target(ActivePageTarget::Page(1));
+        assert!(engine.execute(EngineCommand::ReducePathNodes { object_id: boundary_id, tolerance_pt: F64::new(1.5).unwrap() }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::SetSelectionBounds {
+            x_pt: Some(F64::new(100.0).unwrap()),
+            y_pt: Some(F64::new(100.0).unwrap()),
+            width_pt: Some(F64::new(80.0).unwrap()),
+            height_pt: Some(F64::new(50.0).unwrap()),
+            origin_index: 4,
+        }));
+        let layers_before = engine.document.pages[1].layers.len();
+        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 2".to_owned() }));
+        assert_eq!(engine.document.pages[1].layers.len(), layers_before + 1);
+        let new_layer_id = engine.document.pages[1].layers.last().unwrap().id;
+        assert!(engine.execute(EngineCommand::SetLayerProperties {
+            layer_id: new_layer_id,
+            visible: Some(false),
+            locked: Some(true),
+            printable: Some(false),
+            opacity: Some(F64::new(0.5).unwrap()),
+        }));
+        let updated_layer = engine.document.pages[1].layers.last().unwrap();
+        assert!(!updated_layer.visible && updated_layer.locked && !updated_layer.printable);
+        assert!(engine.undo());
+        assert!(engine.undo());
+
+        // 18. ClearTransformations, ToggleTextKind (Ctrl+F8), and FindAndReplaceText
+        assert!(engine.execute(EngineCommand::ClearTransformations));
+        let art_id = engine.document.allocate_object_id();
+        engine.target_layer_mut().objects.push(ObjectNode::new(
+            art_id,
+            Some("Headline".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Hello Corel".to_owned(),
+                font_family: "Sans".to_owned(),
+                size_pt: F64::new(18.0).unwrap(),
+                position: Point::new(20.0, 40.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        ));
+        assert!(engine.execute(EngineCommand::FindAndReplaceText { find: "Corel".to_owned(), replace: "CoralCraft".to_owned() }));
+        assert!(engine.execute(EngineCommand::ToggleTextKind { object_id: art_id }));
+        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
+            assert_eq!(pt.text, "Hello CoralCraft");
+        } else {
+            panic!("expected ParagraphText after ToggleTextKind");
+        }
+
+        // 19. ChangeTextCase (Shift+F3), InsertCurveNode (+), and DeleteCurveNode (-)
+        assert!(engine.execute(EngineCommand::ChangeTextCase { object_id: art_id, case_kind: TextCaseKind::Uppercase }));
+        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
+            assert_eq!(pt.text, "HELLO CORALCRAFT");
+        } else {
+            panic!("expected ParagraphText after ChangeTextCase");
+        }
+        assert!(engine.execute(EngineCommand::InsertCurveNode { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::DeleteCurveNode { object_id: boundary_id, element_index: 1 }));
+
+        // 20. ConvertSegmentToCurve, ConvertSegmentToLine, SetPageBackground, and SetPageBleed
+        assert!(engine.execute(EngineCommand::ConvertSegmentToCurve { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::ConvertSegmentToLine { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::SetPageBackground { page_index: 0, background: Some(FillStyle::uniform(Color::rgb8(245, 245, 240))) }));
+        assert!(engine.execute(EngineCommand::SetPageBleed { page_index: 0, bleed_pt: F64::new(9.0).unwrap() }));
+        assert_eq!(engine.document.pages[0].bleed, F64::new(9.0).unwrap());
+
+        // 21. SetObjectOpacity, SetObjectVisible, and RenameObject
+        assert!(engine.execute(EngineCommand::SetObjectOpacity { object_id: boundary_id, opacity: F64::new(0.75).unwrap() }));
+        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().opacity, F64::new(0.75).unwrap());
+        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: false }));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().visible);
+        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: true }));
+        assert!(engine.execute(EngineCommand::RenameObject { object_id: boundary_id, name: Some("Custom Silhouette".to_owned()) }));
+        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().name.as_deref(), Some("Custom Silhouette"));
+
+        // 22. InvertSelection, AddLayer + MoveLayer + DeleteLayer
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::InvertSelection));
+        assert!(!engine.selection.contains(&boundary_id));
+        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 3".to_owned() }));
+        let l3_id = engine.document.pages[1].layers.last().unwrap().id;
+        assert!(engine.execute(EngineCommand::MoveLayer { page_index: 1, from_index: 1, to_index: 0 }));
+        assert!(engine.execute(EngineCommand::DeleteLayer { layer_id: l3_id }));
+        assert_eq!(engine.document.pages[1].layers.len(), 1);
+
+        // 23. SetOutlineProperties, SelectByKind, and SetDocumentTitle
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::SetOutlineProperties {
+            width_pt: Some(F64::new(3.0).unwrap()),
+            behind_fill: Some(true),
+            scale_with_object: Some(true),
+        }));
+        let outl = engine.selected_or_all_node(boundary_id).unwrap().outline.as_ref().unwrap();
+        assert!(outl.behind_fill && outl.scale_with_object);
+        assert!(engine.execute(EngineCommand::SelectByKind { kind: "path".to_owned() }));
+        assert!(engine.selection.contains(&boundary_id));
+        assert!(engine.execute(EngineCommand::SetDocumentTitle { title: "CoralCraft Masterpiece".to_owned() }));
+        assert_eq!(engine.document.title, "CoralCraft Masterpiece");
+
+        // 24. TwirlObjectPath, CloneEffectsFrom, and ClearEffects
+        assert!(engine.execute(EngineCommand::TwirlObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            angle_deg: F64::new(45.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ApplyContour { object_id: art_id, steps: 1, offset_pt: F64::new(2.0).unwrap(), inside: false }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::CloneEffectsFrom { source_id: art_id }));
+        assert!(!engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
+        assert!(engine.execute(EngineCommand::ClearEffects { object_id: boundary_id }));
+        assert!(engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
+
+        // 25. AttractRepelObjectPath, SmearObjectPath, and SetParagraphTextLayout
+        assert!(engine.execute(EngineCommand::AttractRepelObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            strength: F64::new(0.4).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SmearObjectPath {
+            object_id: boundary_id,
+            origin: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            dx_pt: F64::new(12.0).unwrap(),
+            dy_pt: F64::new(-8.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SetParagraphTextLayout {
+            object_id: art_id,
+            columns: Some(2),
+            gutter_pt: Some(F64::new(14.0).unwrap()),
+            line_spacing: Some(F64::new(1.5).unwrap()),
+            alignment: Some(TextAlignment::Justify),
+        }));
+        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
+            assert_eq!(pt.columns, 2);
+            assert_eq!(pt.alignment, TextAlignment::Justify);
+        } else {
+            panic!("expected ParagraphText");
+        }
+
+        // 26. RoughenObjectPath and SetArtisticTextProperties
+        assert!(engine.execute(EngineCommand::RoughenObjectPath { object_id: boundary_id, tooth_height_pt: F64::new(2.0).unwrap(), frequency: 3 }));
+        assert!(engine.execute(EngineCommand::SetArtisticTextProperties {
+            object_id: art_id,
+            text: Some("UPDATED CORALCRAFT".to_owned()),
+            font_family: Some("Helvetica".to_owned()),
+            size_pt: Some(F64::new(20.0).unwrap()),
+        }));
+        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
+            assert_eq!(pt.text, "UPDATED CORALCRAFT");
+            assert_eq!(pt.font_family, "Helvetica");
+        } else {
+            panic!("expected ParagraphText");
+        }
+        assert!(engine.execute(EngineCommand::SmoothObjectPath {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            strength: F64::new(0.5).unwrap(),
+            iterations: 3,
+        }));
+        assert!(engine.execute(EngineCommand::KnifeCutObject {
+            object_id: boundary_id,
+            line_start: Point::new(0.0, 80.0).unwrap(),
+            line_end: Point::new(200.0, 80.0).unwrap(),
+            gap_pt: F64::new(2.0).unwrap(),
+        }));
+        engine.set_selection(vec![boundary_id]);
+        assert!(engine.execute(EngineCommand::CropToRect { rect: Rect::new(0.0, 0.0, 300.0, 300.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::EraseObjectCircle {
+            object_id: boundary_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            radius_pt: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SetSnapSettings { snap_to_objects: Some(false), snap_to_page: Some(true) }));
+        assert!(!engine.snap_to_objects && engine.snap_to_page);
+        assert!(engine.execute(EngineCommand::VirtualSegmentDelete { object_id: boundary_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::SmartFillAtPoint {
+            point: Point::new(100.0, 100.0).unwrap(),
+            fill: FillStyle::uniform(Color::rgb8(0, 180, 120)),
+            outline: None,
+        }));
+        let sf_id = engine.selection[0];
+        assert!(engine.execute(EngineCommand::OffsetObjectPath { object_id: sf_id, distance_pt: F64::new(5.0).unwrap(), copy: true }));
+        let off_id = engine.selection[0];
+        assert!(engine.execute(EngineCommand::SetPathFillRule { object_id: sf_id, fill_rule: FillRule::EvenOdd }));
+        assert!(engine.execute(EngineCommand::SwapObjectPositions { first_id: sf_id, second_id: off_id }));
+        engine.set_selection(vec![sf_id]);
+        assert!(engine.execute(EngineCommand::CenterSelectionToPage { horizontal: true, vertical: true }));
+        assert!(engine.measure_object_geometry(sf_id).is_some());
+        assert!(engine.execute(EngineCommand::SmoothCurveNode { object_id: sf_id, element_index: 1, tension: F64::new(0.35).unwrap() }));
+        assert!(engine.execute(EngineCommand::ArrayDuplicateSelection {
+            rows: 2,
+            cols: 2,
+            spacing_x_pt: F64::new(20.0).unwrap(),
+            spacing_y_pt: F64::new(20.0).unwrap(),
+        }));
+        assert_eq!(engine.selection.len(), 3);
+        assert!(engine.execute(EngineCommand::AddGuideline { horizontal: true, position_pt: F64::new(120.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::ClearGuidelines));
+        assert!(engine.execute(EngineCommand::CircularDuplicateSelection {
+            count: 3,
+            center: Point::new(100.0, 100.0).unwrap(),
+            total_angle_deg: F64::new(360.0).unwrap(),
+            rotate_objects: true,
+        }));
+        assert!(engine.execute(EngineCommand::SetOutlineCapAndJoin {
+            cap: Some(LineCap::Round),
+            join: Some(LineJoin::Round),
+            miter_limit: Some(F64::new(8.0).unwrap()),
+        }));
+        assert!(engine.execute(EngineCommand::FitPageToSelection { margin_pt: F64::new(10.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::AlignCurveNodes { object_id: sf_id, element_indices: vec![0, 1], horizontal: true, vertical: false }));
+        assert!(engine.execute(EngineCommand::ShiftSelectionColors {
+            hue_delta_deg: F64::new(45.0).unwrap(),
+            saturation_delta: F64::new(0.1).unwrap(),
+            brightness_delta: F64::new(-0.05).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SubdividePathSegments { object_id: sf_id }));
+        assert!(engine.execute(EngineCommand::ConvertSelectionColors { invert: true, grayscale: true }));
+        assert!(engine.execute(EngineCommand::TransformCurveNodes {
+            object_id: sf_id,
+            element_indices: vec![0, 1],
+            scale_x: F64::new(1.2).unwrap(),
+            scale_y: F64::new(0.8).unwrap(),
+            rotate_deg: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::SelectByColor {
+            color: Color::rgb8(128, 128, 128),
+            match_fill: true,
+            match_outline: true,
+            tolerance_u8: 255,
+        }));
+        assert!(!engine.selection.is_empty());
+        assert!(engine.execute(EngineCommand::BreakPathAtNode { object_id: sf_id, element_index: 1 }));
+        assert!(engine.execute(EngineCommand::EqualizeSelectionSize { match_width: true, match_height: true }));
+        assert!(engine.execute(EngineCommand::DistributeExactGap { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::MorphBetweenObjects { start_id: sf_id, end_id: off_id, t: F64::new(0.5).unwrap(), sample_count: 16 }));
+        let morph_id = engine.selection[0];
+        engine.set_selection(vec![sf_id, off_id]);
+        assert!(engine.execute(EngineCommand::DistributeSelectionAlongPath { spine_object_id: morph_id, rotate_to_tangent: true }));
+        assert!(engine.execute(EngineCommand::RecolorArtwork {
+            from_color: Color::rgb8(128, 128, 128),
+            to_color: Color::rgb8(20, 140, 220),
+            tolerance_u8: 255,
+            selection_only: false,
+        }));
+        engine.set_selection(vec![sf_id, off_id]);
+        assert!(engine.execute(EngineCommand::DivideSelection));
+        let div_ids = engine.selection.clone();
+        assert!(engine.execute(EngineCommand::CreateIntermediateBlendPaths { start_id: div_ids[0], end_id: div_ids[1], steps: 2, sample_count: 16 }));
+        assert_eq!(engine.selection.len(), 2);
+        assert!(engine.execute(EngineCommand::HatchObjectPath {
+            object_id: div_ids[0],
+            angle_deg: F64::new(45.0).unwrap(),
+            spacing_pt: F64::new(6.0).unwrap(),
+            cross_hatch: true,
+        }));
+        assert!(engine.execute(EngineCommand::ProjectSelectionAxonometric { plane: AxonometricPlane::IsometricTop }));
+        assert!(engine.execute(EngineCommand::PackSelectionInGrid {
+            origin: Point::new(30.0, 30.0).unwrap(),
+            cols: 2,
+            gap_pt: F64::new(10.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt: F64::new(16.0).unwrap(), iterations: 10 }));
+        assert!(engine.execute(EngineCommand::ExcludeSelection));
+        let xor_id = engine.selection[0];
+        assert!(engine.execute(EngineCommand::ChaikinSmoothObjectPath { object_id: xor_id, iterations: 2 }));
+        assert!(engine.execute(EngineCommand::ApplyVariableWidthStroke {
+            object_id: xor_id,
+            widths_pt: vec![F64::new(2.0).unwrap(), F64::new(10.0).unwrap(), F64::new(4.0).unwrap()],
+        }));
+        assert!(engine.execute(EngineCommand::WaveDistortObjectPath {
+            object_id: xor_id,
+            amplitude_pt: F64::new(3.0).unwrap(),
+            frequency: F64::new(4.0).unwrap(),
+            phase_deg: F64::new(0.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::RadialScaleSelectionPositions {
+            center: Point::new(100.0, 100.0).unwrap(),
+            radial_scale: F64::new(1.25).unwrap(),
+            twist_deg: F64::new(15.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ApplyDihedralSymmetry {
+            object_id: xor_id,
+            center: Point::new(100.0, 100.0).unwrap(),
+            folds: 4,
+            reflect: true,
+        }));
+        assert!(engine.execute(EngineCommand::ScaleSelectionByDistance {
+            center: Point::new(100.0, 100.0).unwrap(),
+            min_scale: F64::new(0.5).unwrap(),
+            max_scale: F64::new(1.5).unwrap(),
+            falloff_radius_pt: F64::new(120.0).unwrap(),
+        }));
+        assert!(
+            engine
+                .execute(EngineCommand::DashObjectPath { object_id: xor_id, dash_pattern_pt: vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()] })
+        );
+        assert!(engine.execute(EngineCommand::QuantizeSelectionPositions { grid_x_pt: F64::new(10.0).unwrap(), grid_y_pt: F64::new(10.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::ConvexHullSelection));
+        let hull_id = engine.selection[0];
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::ArrangeSelectionOnCircle {
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(50.0).unwrap(),
+            start_angle_deg: F64::new(0.0).unwrap(),
+            rotate_to_tangent: true,
+        }));
+        assert!(engine.execute(EngineCommand::ExtractPathSkeleton { object_id: hull_id, sample_steps: 24 }));
+        assert!(engine.execute(EngineCommand::JitterSelectionTransforms {
+            dx_max_pt: F64::new(5.0).unwrap(),
+            dy_max_pt: F64::new(5.0).unwrap(),
+            angle_max_deg: F64::new(10.0).unwrap(),
+            scale_max_pct: F64::new(15.0).unwrap(),
+            seed: 42,
+        }));
+        assert!(engine.execute(EngineCommand::DensifyObjectPath { object_id: xor_id, max_len_pt: F64::new(8.0).unwrap() }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::AlignSelectionToKeyObject { key_object_id: xor_id, mode: AlignMode::CenterToPage }));
+        assert!(engine.execute(EngineCommand::SphericalWarpObjectPath {
+            object_id: xor_id,
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(60.0).unwrap(),
+            magnification: F64::new(1.5).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::ColorizeSelectionByGradient {
+            start_color: Color::rgb8(240, 60, 40),
+            end_color: Color::rgb8(40, 120, 240),
+            apply_to_fill: true,
+            apply_to_outline: true,
+        }));
+        assert!(engine.execute(EngineCommand::RelaxObjectPath { object_id: xor_id, iterations: 3, lambda: F64::new(0.45).unwrap() }));
+        assert!(engine.execute(EngineCommand::ApplyPaletteSwatchesToSelection {
+            colors: vec![Color::rgb8(220, 40, 60), Color::rgb8(40, 180, 90), Color::rgb8(50, 90, 220)],
+            apply_to_fill: true,
+            apply_to_outline: false,
+        }));
+        assert!(engine.execute(EngineCommand::FitCircleToObjectPath { object_id: xor_id }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(
+            engine.execute(EngineCommand::SnapSelectionToCircleRadius {
+                center: Point::new(120.0, 120.0).unwrap(),
+                radius_pt: F64::new(65.0).unwrap(),
+            })
+        );
+        assert!(engine.execute(EngineCommand::SmoothPolylineToCubicBeziers { object_id: hull_id, tension: F64::new(1.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::OrientSelectionToCenter {
+            center: Point::new(120.0, 120.0).unwrap(),
+            angle_offset_deg: F64::new(90.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::PinchPunchObjectPath {
+            object_id: hull_id,
+            center: Point::new(120.0, 120.0).unwrap(),
+            radius_pt: F64::new(70.0).unwrap(),
+            strength: F64::new(-0.4).unwrap(),
+        }));
+        engine.set_selection(vec![xor_id, hull_id]);
+        assert!(engine.execute(EngineCommand::StackSelection { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
+        assert!(engine.execute(EngineCommand::FlattenObjectPathToPolylines { object_id: xor_id, tolerance_pt: F64::new(0.5).unwrap() }));
+        assert!(
+            engine.execute(EngineCommand::ScaleSelectionProgressively { start_scale: F64::new(0.8).unwrap(), end_scale: F64::new(1.25).unwrap() })
+        );
+        assert!(engine.execute(EngineCommand::ShearWarpObjectPath {
+            object_id: xor_id,
+            shear_x_pt: F64::new(10.0).unwrap(),
+            shear_y_pt: F64::new(-5.0).unwrap(),
+        }));
+        assert!(engine.execute(EngineCommand::RotateSelectionProgressively {
+            start_angle_deg: F64::new(-15.0).unwrap(),
+            end_angle_deg: F64::new(45.0).unwrap(),
+        }));
+    }
+
+    #[test]
+    fn transactional_execute_monotonic_ids_history_cap_selection_validation_and_recursive_visitors() {
+        let mut engine = EditorEngine::default();
+
+        // 1. Create an object, undo, and create another object -> IDs must be strictly monotonic across undo!
+        let r_spec = RectSpec::sharp(Rect::new(10.0, 10.0, 50.0, 40.0).unwrap());
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("First".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let first_id = engine.selection[0];
+        assert!(engine.undo());
+        assert!(engine.can_redo());
+
+        // 2. A command that fails inside execute (e.g. ApplyVariableWidthStroke with < 2 widths)
+        // must NOT push an undo snapshot and must NOT clear the redo stack!
+        assert!(!engine.execute(EngineCommand::ApplyVariableWidthStroke { object_id: first_id, widths_pt: vec![F64::ONE] }));
+        assert!(!engine.can_undo(), "failed command must not push to undo_stack");
+        assert!(engine.can_redo(), "failed command must not clear redo_stack");
+
+        // 3. Allocating a new object after undo must not reuse `first_id`.
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Second".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let second_id = engine.selection[0];
+        assert!(second_id.0 > first_id.0, "object IDs must be monotonic across undo ({second_id:?} vs {first_id:?})");
+
+        // 4. `set_selection` deduplicates and drops non-existent IDs.
+        engine.set_selection(vec![second_id, ObjectId(999_999), second_id]);
+        assert_eq!(engine.selection, vec![second_id]);
+
+        // 5. Recursive visitor finds and mutates objects inside Group and PowerClip containers.
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Third".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let third_id = engine.selection[0];
+        engine.set_selection(vec![second_id, third_id]);
+        assert!(engine.execute(EngineCommand::GroupSelection));
+        let group_id = engine.selection[0];
+        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside Group");
+        assert!(engine.execute(EngineCommand::RenameObject { object_id: second_id, name: Some("Nested Renamed".to_owned()) }));
+        assert_eq!(engine.inspect_object(second_id).unwrap().name.as_deref(), Some("Nested Renamed"));
+
+        // Place group inside a new container via PowerClip and inspect deeply nested child
+        assert!(engine.execute(EngineCommand::AddObject { name: Some("Frame".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        let frame_id = engine.selection[0];
+        engine.set_selection(vec![group_id]);
+        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: frame_id }));
+        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside PowerClip->Group");
+
+        // 6. Undo history is capped at MAX_UNDO_HISTORY.
+        for i in 0..(MAX_UNDO_HISTORY + 20) {
+            assert!(engine.execute(EngineCommand::SetDocumentTitle { title: format!("Title {i}") }));
+        }
+        let mut undo_count = 0;
+        while engine.undo() {
+            undo_count += 1;
+        }
+        assert_eq!(undo_count, MAX_UNDO_HISTORY);
+
+        // 7. Document-wide object budget rejects exponential duplication past MAX_DOCUMENT_OBJECTS.
+        let mut budget_engine = EditorEngine::default();
+        assert!(budget_engine.execute(EngineCommand::AddObject { name: Some("Seed".to_owned()), kind: ObjectKind::Rect(r_spec) }));
+        // 1 -> 101 objects
+        assert!(budget_engine.execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ZERO }));
+        budget_engine.select_all();
+        assert_eq!(budget_engine.total_object_count(), 101);
+        // 101 * 100 = 10,100 > MAX_DOCUMENT_OBJECTS (8,192) -> rejected with ObjectBudgetExceeded!
+        assert_eq!(
+            budget_engine.try_execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ONE }),
+            Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS })
+        );
+        assert_eq!(budget_engine.total_object_count(), 101);
+    }
+}

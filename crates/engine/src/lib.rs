@@ -1,5476 +1,2384 @@
-//! Core application engine (`EditorEngine`) combining multi-page document state,
-//! tool gestures, undo/redo command history, hit-testing, and Property Bar snapshots (L5).
+//! The VectorCraft engine façade.
+//!
+//! Every user-visible action is a command with a stable id (`object.group`, `select.same.fillColor`,
+//! `shape.rectangle`…) and JSON parameters. The egui UI, the CLI, the control channel and the MCP
+//! server all go through [`Session::execute`]. Tools (pointer gestures) are hosted here too and
+//! reduce to commands, so every gesture is journaled and replayable.
+#![forbid(unsafe_code)]
 
-use coralcraft_color::Color;
-use coralcraft_doc::{
-    Document, FillStyle, Layer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, OutlineStyle, Page, PageId, ParagraphTextSpec, Residual,
-    TextAlignment, VectorEffect, apply_text_case,
-};
-use coralcraft_geom::{
-    Affine2, ArcLengthTable, BooleanOp, F64, FillRule, Path, PathElement, Point, Rect, RectSpec, Size, boolean_paths, break_path_at_node,
-    build_dihedral_symmetry_path, chaikin_smooth_path, close_open_subpaths, convert_segment_to_curve, convert_segment_to_line, convex_hull_of_path,
-    dash_path_to_open_subpaths, delete_curve_node_at, delete_segment_at_index, divide_overlapping_paths, erase_path_within_circle,
-    expand_tapered_stroke_profile, fit_circle_to_path_points, flatten_path_to_polylines, hatch_path_region, insert_curve_node_at,
-    interpolate_smooth_cubic_path, join_open_subpaths, knife_cut_path_by_line, laplacian_relax_closed_path, measure_path_length_and_area,
-    medial_chord_skeleton_of_path, morph_paths_linear, offset_open_or_closed_path, pinch_punch_warp_path, project_path_axonometric,
-    radial_push_path_around_point, reference_point, reverse_path_direction, roughen_path_segments, shear_warp_path_along_axis, simplify_path_nodes,
-    smear_path_from_point, smooth_curve_node_at, smooth_path_around_point, spherical_fisheye_warp_path, subdivide_all_path_segments,
-    subdivide_path_by_max_segment_length, trace_bitmap_to_path, transform_curve_nodes, twirl_path_around_point, wave_distort_path,
-};
-use coralcraft_tools::{
-    AlignMode, DistributeMode, KeyShortcut, PolygonSubMode, PropertyBarSchema, ToolKind, ToolState, ZOrderOp, build_property_bar_schema,
-    combined_selection_bounds,
-};
-use std::collections::BTreeMap;
+pub mod cmd;
+pub mod file_access;
+pub mod guard;
+pub mod inspect;
+pub mod journal;
+pub mod link_watch;
+pub mod namematch;
+pub mod steps;
+pub mod store;
+mod tooling;
+pub mod units;
 
-pub mod commands;
-pub mod traversal;
+use std::sync::Arc;
 
-use commands::UndoEntry;
-pub use commands::{ActivePageTarget, EngineCommand, EngineError, MAX_DOCUMENT_OBJECTS, MAX_UNDO_HISTORY, PaletteChannel, StatusBarSnapshot};
-use traversal::{
-    collect_selected_recursive, count_nodes_recursive, flatten_group_recursive, object_to_path, powerclip_subtree_depth,
-    reallocate_object_ids_recursive,
-};
+use serde_json::Value;
+use vectorcraft_color::{Color, GradientPaint, Paint};
+use vectorcraft_doc::{Document, NodeId, NodeKind, Selection};
+use vectorcraft_geom::Affine;
+use vectorcraft_tools::{PaintDefaults, Tool};
 
-/// Core stateful application engine (`coralcraft-engine`, L5).
-#[derive(Debug, Clone)]
-pub struct EditorEngine {
-    pub document: Document,
-    pub active_target: ActivePageTarget,
-    pub selection: Vec<ObjectId>,
-    pub tool_state: ToolState,
-    pub default_fill: Option<FillStyle>,
-    pub default_outline: Option<OutlineStyle>,
-    pub cursor_pt: Point,
-    pub zoom: F64,
-    pub pan_pt: Point,
-    pub snap_to_objects: bool,
-    pub snap_to_page: bool,
-    undo_stack: Vec<UndoEntry>,
-    redo_stack: Vec<UndoEntry>,
-    pub(crate) fallback_layer: Layer,
+pub use cmd::EyedropperOptions;
+pub use cmd::clipboard::Clipboard;
+pub use cmd::distortcmds::perspective_click;
+pub use cmd::params::{check_keys, check_params};
+pub use cmd::rasterfx::{export_pdf, flatten_raster_effects};
+pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command};
+pub use journal::Journal;
+pub use tooling::{UiRequest, ViewInfo};
+pub use vectorcraft_doc as doc;
+pub use vectorcraft_doc::cancel;
+pub use vectorcraft_tools as tools;
+
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    #[error("unknown command `{0}`")]
+    UnknownCommand(String),
+    #[error("command `{0}` is not available right now: {1}")]
+    Disabled(String, String),
+    #[error("invalid parameters for `{cmd}`: {msg}")]
+    BadParams { cmd: String, msg: String },
+    #[error("no active document")]
+    NoDocument,
+    #[error("no such object {0}")]
+    NoNode(NodeId),
+    #[error("{0}")]
+    Other(String),
+    /// The caller asked for the command to stop ([`cancel`]). It changed nothing.
+    #[error("cancelled; nothing was changed")]
+    Cancelled,
+    /// A bug: the command panicked. The document was rolled back to its state before the command.
+    #[error("internal error in `{cmd}`: {msg} (the document was left as it was before; please report this bug)")]
+    Internal { cmd: String, msg: String },
 }
 
-impl Default for EditorEngine {
+impl From<cancel::Cancelled> for EngineError {
+    fn from(_: cancel::Cancelled) -> Self {
+        EngineError::Cancelled
+    }
+}
+
+impl From<vectorcraft_doc::DocError> for EngineError {
+    fn from(e: vectorcraft_doc::DocError) -> Self {
+        EngineError::Other(e.to_string())
+    }
+}
+
+pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// One undo step.
+#[derive(Clone, Debug)]
+pub struct HistoryEntry {
+    pub label: String,
+    /// The document as it was. It keeps no lookup cache ([`Document::drop_lookup_cache`]): a
+    /// table per step would add up, and undoing builds it again once.
+    pub doc: Arc<Document>,
+    /// The selection as it was, shared with the neighbouring steps that have the same one.
+    pub selection: Arc<Selection>,
+    /// Roughly the memory this step keeps of its own: what of `doc` the step after it (or the
+    /// document now) doesn't share ([`Document::retained_bytes`]).
+    pub bytes: usize,
+    /// The same the other way round: what that next state keeps that `doc` doesn't share. Undoing
+    /// (redoing) this step makes a step that keeps the next state: this is its `bytes`.
+    next_bytes: usize,
+    /// Which document the figures were taken against (its address): the next state.
+    next: usize,
+    /// The template and name `label` was made from ([`Session::edit_named`]).
+    named: Option<NamedStep>,
+}
+
+/// A step name made by filling the `{name}` placeholder of a template with a name
+/// ([`Session::edit_named`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamedStep {
+    /// The English template, with one `{name}` placeholder (`Apply {name}`).
+    pub template: &'static str,
+    /// The name in the placeholder, as the document holds it (a style's name).
+    pub name: String,
+    /// The name is one VectorCraft gives (`[Normal Character Style]`), not one the user typed.
+    pub built_in: bool,
+}
+
+impl NamedStep {
+    /// The step name: the template with the name in its placeholder.
+    pub fn label(&self) -> String {
+        self.template.replace("{name}", &self.name)
+    }
+}
+
+impl HistoryEntry {
+    /// A step keeping `doc` and `selection`, as they were before the edit that made `next`.
+    pub(crate) fn kept(label: String, doc: Arc<Document>, selection: Arc<Selection>, next: &Document) -> Self {
+        doc.drop_lookup_cache();
+        let (bytes, next_bytes) = doc.retained_bytes_each(next);
+        HistoryEntry { label, doc, selection, bytes, next_bytes, next: std::ptr::from_ref(next) as usize, named: None }
+    }
+
+    /// The template and name the step's label was made from, while the label is still the one
+    /// they make: `None` for a step named any other way, and for one whose label was changed
+    /// since it was recorded.
+    pub fn named(&self) -> Option<&NamedStep> {
+        self.named.as_ref().filter(|n| n.label() == self.label)
+    }
+
+    /// The step that undoing (redoing) the step `costs` came from makes: it keeps `doc`, the
+    /// document before the undo, whose next state is now `now` (that step's document). Its figures
+    /// are that step's the other way round when `doc` is still the document they were taken
+    /// against (nothing replaced it since), so undo and redo needn't walk the documents again. A
+    /// change made to it in place without an undo step (a setting, a refresh) goes unnoticed: a
+    /// small error, for an estimate.
+    pub(crate) fn turned(label: String, doc: Arc<Document>, selection: Arc<Selection>, now: &Arc<Document>, costs: StepCosts) -> Self {
+        if costs.next != Arc::as_ptr(&doc) as usize {
+            return Self::kept(label, doc, selection, now);
+        }
+        doc.drop_lookup_cache();
+        HistoryEntry { label, doc, selection, bytes: costs.next_bytes, next_bytes: costs.bytes, next: Arc::as_ptr(now) as usize, named: None }
+    }
+
+    /// The figures [`HistoryEntry::turned`] reuses.
+    pub(crate) fn costs(&self) -> StepCosts {
+        StepCosts { bytes: self.bytes, next_bytes: self.next_bytes, next: self.next }
+    }
+}
+
+/// A step's memory figures ([`HistoryEntry::costs`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct StepCosts {
+    bytes: usize,
+    next_bytes: usize,
+    next: usize,
+}
+
+/// The undo history of a document: bounded by a number of steps (Preferences › Performance ›
+/// History States) and by the memory the steps keep ([`History::byte_budget`]).
+#[derive(Clone, Debug)]
+pub struct History {
+    pub undo: Vec<HistoryEntry>,
+    pub redo: Vec<HistoryEntry>,
+    /// Maximum undo depth (Illustrator has no hard limit; snapshots are cheap here).
+    pub limit: usize,
+    /// About the most memory the steps may keep ([`HistoryEntry::bytes`]): past it the oldest
+    /// steps go, but never the last [`History::MIN_STEPS`] undo (and redo) steps.
+    pub byte_budget: usize,
+}
+
+impl Default for History {
     fn default() -> Self {
-        Self::new(Document::new_a4_portrait())
+        History { undo: vec![], redo: vec![], limit: 0, byte_budget: default_history_budget() }
     }
 }
 
-impl EditorEngine {
-    /// Creates an engine initialized with `document`, `Page 1` active, and standard CorelDRAW
-    /// creation defaults (No Fill, Black Hairline Outline).
-    #[must_use]
-    pub fn new(mut document: Document) -> Self {
-        Self::ensure_minimum_structure(&mut document);
+impl History {
+    /// Undo (and redo) steps kept whatever memory they take.
+    pub const MIN_STEPS: usize = 8;
+
+    /// Roughly the memory the steps keep of their own ([`HistoryEntry::bytes`]).
+    pub fn bytes(&self) -> usize {
+        self.undo.iter().chain(&self.redo).map(|e| e.bytes).sum()
+    }
+
+    /// Let the oldest steps go while over the step limit or the memory budget: undo steps first
+    /// (the oldest), then redo steps (the furthest ahead).
+    pub fn trim(&mut self) {
+        let over = self.undo.len().saturating_sub(self.limit);
+        if over > 0 {
+            self.undo.drain(..over);
+        }
+        let mut total = self.bytes();
+        if total <= self.byte_budget {
+            return;
+        }
+        let mut n = 0;
+        while total > self.byte_budget && self.undo.len() - n > Self::MIN_STEPS {
+            total -= self.undo.get(n).map_or(0, |e| e.bytes);
+            n += 1;
+        }
+        self.undo.drain(..n);
+        let mut n = 0;
+        while total > self.byte_budget && self.redo.len() - n > Self::MIN_STEPS {
+            total -= self.redo.get(n).map_or(0, |e| e.bytes);
+            n += 1;
+        }
+        self.redo.drain(..n);
+    }
+
+    /// Estimate the newest undo step again, its next state now being `now` (the steps after it were
+    /// merged into it, or an undo group extended it).
+    pub(crate) fn recost_last(&mut self, now: &Document) {
+        if let Some(e) = self.undo.last_mut() {
+            (e.bytes, e.next_bytes) = e.doc.retained_bytes_each(now);
+            e.next = std::ptr::from_ref(now) as usize;
+        }
+    }
+}
+
+/// The default [`History::byte_budget`]: an eighth of the machine's memory where it is known
+/// (Linux), at most 1 GiB (the figure elsewhere); 256 MiB on the web, whose memory is small.
+pub fn default_history_budget() -> usize {
+    const MAX: usize = 1 << 30;
+    if cfg!(target_arch = "wasm32") {
+        return 256 << 20;
+    }
+    static BUDGET: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *BUDGET.get_or_init(|| physical_memory().map_or(MAX, |m| (m / 8).clamp(64 << 20, MAX)))
+}
+
+/// The machine's memory, where cheap to learn without platform calls.
+fn physical_memory() -> Option<usize> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb: usize = info.lines().find_map(|l| l.strip_prefix("MemTotal:"))?.trim().trim_end_matches("kB").trim().parse().ok()?;
+    kb.checked_mul(1024)
+}
+
+/// An in-progress drag: the snapshot the previews are applied to.
+#[derive(Clone, Debug)]
+pub struct Interaction {
+    pub label: String,
+    pub doc: Arc<Document>,
+    /// The selection the previews start from (shared, so a preview frame copies nothing).
+    pub selection: Arc<Selection>,
+    pub preview: Option<(String, Value)>,
+    /// Per-document state restored on cancel (current layer, highlighted Layers panel rows,
+    /// isolation).
+    pub active_layer: Option<NodeId>,
+    pub layer_rows: Vec<NodeId>,
+    pub variables_highlight: Option<String>,
+    pub isolation: Option<NodeId>,
+    /// The perspective transform the previews make (`perspective.transform` params): Transform
+    /// Again repeats it once the drag is committed.
+    pub perspective_again: Option<Value>,
+    /// A transform or a perspective edit with `copy` keeps the copies it made of the snapshot here
+    /// ([`PreviewCopies`]).
+    pub(crate) copies: Option<Arc<PreviewCopies>>,
+}
+
+/// What Object → Transform → Transform Again (⌘D) repeats ([`SessionState::last_transform`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum LastTransform {
+    /// The last transform command's matrix, and the options Transform Again passes with it.
+    Matrix(Affine, Value),
+    /// The last Transform Each's parameters: each object transforms about its own bounds, so the
+    /// repeat runs the command on the selection of the moment rather than one matrix.
+    Each(Value),
+}
+
+/// This holds the copies that a transform or a perspective edit with `copy` made of an
+/// interaction's snapshot ([`cmd::object::apply_transform`]; `persp_edit` and `plane_move` in
+/// `cmd::distortcmds`). A later transform or perspective edit with `copy` of the same objects,
+/// while the document is still that snapshot, starts from `doc` and transforms only the copies.
+#[derive(Debug)]
+pub(crate) struct PreviewCopies {
+    /// The copies were made from this snapshot.
+    pub(crate) from: Arc<Document>,
+    /// The transform or perspective edit copied these objects.
+    pub(crate) roots: Vec<NodeId>,
+    /// This is `from` with the copies added, untransformed.
+    pub(crate) doc: Arc<Document>,
+    /// This is the selection after copying, with the copies selected.
+    pub(crate) selection: Selection,
+    /// These are the copies' ids, in the order of `roots`.
+    pub(crate) ids: Vec<NodeId>,
+}
+
+/// An open undo group ([`Session::begin_undo_group`]): the edits made in it are one undo step.
+#[derive(Clone, Debug)]
+pub struct UndoGroup {
+    /// The document before the group's first edit, as the undo step that edit recorded keeps it.
+    first: Option<Arc<Document>>,
+    /// The journal's length when the group began: a cancelled group drops the entries after it.
+    journal: usize,
+    /// The undo step's name; else the first edit's.
+    label: Option<String>,
+}
+
+/// Per-document editing state.
+#[derive(Clone, Debug)]
+pub struct DocState {
+    pub doc: Arc<Document>,
+    pub selection: Selection,
+    pub history: History,
+    pub path: Option<String>,
+    /// Increments on every change (also selection and view-only changes); UIs re-render when it
+    /// moves. Not a dirty flag: see [`DocState::is_dirty`].
+    pub revision: u64,
+    /// The document as last saved (or opened). Structural sharing makes "unchanged" a pointer
+    /// comparison, and undoing back to the saved state counts as clean.
+    saved_doc: Arc<Document>,
+    /// The documents that changes that are not edits to save replaced ([`DocState::same_content`]).
+    unsaved_changes: SameContent,
+    /// The layer new art goes into (the "current layer" in the Layers panel).
+    pub active_layer: Option<NodeId>,
+    /// The rows highlighted in the Layers panel (layers, sublayers, groups or objects, in the order
+    /// they were clicked): what the panel's Duplicate, Delete, Merge, Options… and similar act on.
+    /// Panel state, not art selection: not saved, not undoable (`layer.setCurrent`,
+    /// `layer.highlight`).
+    pub layer_rows: Vec<NodeId>,
+    /// The variable highlighted in the Variables panel: what its Delete, Options… and Select
+    /// Bound Object act on. Panel state, not art selection: not saved, not undoable
+    /// (`variable.highlight`). A name, so renaming a variable moves the highlight with it.
+    pub variables_highlight: Option<String>,
+    /// Isolation mode container.
+    pub isolation: Option<NodeId>,
+    pub interaction: Option<Interaction>,
+    /// Edits made while this is open are one undo step (a scrubbed numeric field).
+    pub undo_group: Option<UndoGroup>,
+    /// For Object → Transform → Transform Again (⌘D): what the last transformation was. A
+    /// transform command keeps the `copy`, `typeAreas` and `patterns` it used, and `strokes` and
+    /// `corners` when it scales; a drag keeps the params of its last preview with the values that
+    /// preview noted ([`Session::note_journal`]).
+    pub last_transform: Option<LastTransform>,
+    /// What Select → Reselect repeats: the last selection command, its params and the objects
+    /// selected when it ran (a Same command's reference objects).
+    pub last_selection_cmd: Option<(String, Value, Vec<NodeId>)>,
+    /// The saved selection last recalled (`select.recall`), which Select → Update Selection
+    /// changes. It is not saved with the file, and a recall is not an undo step.
+    pub recalled_selection: RecalledSelection,
+    /// Process-unique id of this open document (tab indices shift when tabs close).
+    pub uid: u64,
+    /// View Opacity Mask (Alt-click the mask thumbnail): the masked object whose mask the canvas
+    /// shows alone, in greyscale, while that mask is edited (see [`DocState::shown_mask`]).
+    pub mask_view: Option<NodeId>,
+    /// View → Show Transparency Grid, per document (saved view state, not undoable).
+    pub transparency_grid: bool,
+    /// The format Save writes ([`cmd::fileio::SAVE_FORMATS`]): the one the document was opened
+    /// from or last saved as.
+    pub format: &'static str,
+    /// That format's options as last saved (SVG options for SVG, the Save PDF settings for PDF;
+    /// empty for native files): Save reuses them and `file.formatOptions` reads them back.
+    pub save_options: serde_json::Map<String, Value>,
+    /// Opened from an older native file (former name or format version): the title says
+    /// "[Converted]" and Save asks for a new name instead of overwriting it.
+    pub converted: bool,
+    /// The view saved into native files (`Document::last_view`); the UI keeps it current before a
+    /// save and restores it when the document opens.
+    pub view: Option<vectorcraft_doc::SavedView>,
+    /// Restored by Data Recovery: the title says "[Recovered]" and Save asks where to save it
+    /// (suggesting `path`, the file it was copied from) instead of overwriting that file.
+    pub recovered: bool,
+    /// The document's Data Recovery copy, once one was written ([`cmd::recovery`]).
+    pub recovery: Option<cmd::recovery::RecoveryCopy>,
+    /// View → Show Print Tiling, per document (view state: not saved, not undoable).
+    pub print_tiling: bool,
+    /// The rows open in the Layers panel (view state: not undoable; native files keep it).
+    pub layers_open: OpenRows,
+    /// The file this document was read from, and what reading it left out (hidden text, art or
+    /// layers it could not read): writing the document over that file would lose those for good,
+    /// so an export or save to it asks first ([`cmd::fileio::check_not_lossy_overwrite`]). Not saved.
+    pub imported_from: Option<String>,
+    pub import_losses: Vec<String>,
+    /// Transform Again after a perspective move or scale (Perspective Selection tool): the
+    /// `perspective.transform` params it repeats. `None` once an ordinary transform follows.
+    pub last_perspective: Option<Value>,
+}
+
+static NEXT_DOC_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The rows open in the Layers panel: the layers, sublayers and groups that show what they hold.
+/// A document opens with the ones it was saved with ([`Document::layers_open`]), else with only
+/// its top-level layers open (a `.ai` another app wrote opens with none open).
+#[derive(Clone, Debug, Default)]
+pub struct OpenRows {
+    ids: std::collections::HashSet<NodeId>,
+    /// Counts the changes, so views can keep what they work out from the open rows.
+    generation: u64,
+}
+
+impl OpenRows {
+    /// The rows `saved` in a file, else `doc`'s top-level layers.
+    fn new(doc: &Document, saved: Option<Vec<NodeId>>) -> Self {
+        let ids = match saved {
+            Some(ids) => ids.into_iter().collect(),
+            None => doc.layers.iter().map(|l| l.id).collect(),
+        };
+        Self { ids, generation: 0 }
+    }
+    pub fn contains(&self, id: NodeId) -> bool {
+        self.ids.contains(&id)
+    }
+    /// Open or close row `id`.
+    pub fn set(&mut self, id: NodeId, open: bool) {
+        let changed = if open { self.ids.insert(id) } else { self.ids.remove(&id) };
+        self.generation += u64::from(changed);
+    }
+    /// Changes so far: the same number means the same open rows.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    /// What a native file keeps of the open rows: those of `doc` that hold others, in id order;
+    /// `None` when they are the default (only the top-level layers).
+    pub fn saved(&self, doc: &Document) -> Option<Vec<NodeId>> {
+        let mut ids = vec![];
+        doc.walk(|n| {
+            if n.children().is_some() && self.ids.contains(&n.id) {
+                ids.push(n.id);
+            }
+        });
+        ids.sort_unstable();
+        let mut layers: Vec<NodeId> = doc.layers.iter().map(|l| l.id).collect();
+        layers.sort_unstable();
+        (ids != layers).then_some(ids)
+    }
+}
+
+/// The saved selection last recalled, which Select → Update Selection changes. The Select commands
+/// give each saved selection an id for the session and keep the ids for every version of the
+/// document's saved selections they make or read, so the recalled one is found again after Edit
+/// Selection…, Undo and Redo. A version that nothing holds any more (neither the document nor its
+/// undo history) is dropped the next time a version is added.
+#[derive(Clone, Debug, Default)]
+pub struct RecalledSelection {
+    /// The recalled saved selection's id.
+    id: Option<u64>,
+    /// Each version of the saved selections (identified by its allocation), with the id of each saved
+    /// selection in it.
+    versions: Vec<(std::sync::Weak<Vec<vectorcraft_doc::SavedSelection>>, Vec<u64>)>,
+    /// The last id given.
+    last: u64,
+}
+
+impl RecalledSelection {
+    /// The ids of `list`'s saved selections; a version not met before gets new ones.
+    pub(crate) fn ids(&mut self, list: &vectorcraft_doc::Shared<Vec<vectorcraft_doc::SavedSelection>>) -> Vec<u64> {
+        let version = vectorcraft_doc::Shared::downgrade(list);
+        if let Some((_, ids)) = self.versions.iter().find(|(v, _)| v.ptr_eq(&version)) {
+            return ids.clone();
+        }
+        let ids: Vec<u64> = (0..list.len()).map(|_| self.new_id()).collect();
+        self.remember(list, ids.clone());
+        ids
+    }
+    /// An id no saved selection has had.
+    pub(crate) fn new_id(&mut self) -> u64 {
+        self.last += 1;
+        self.last
+    }
+    /// Keep `ids` as those of `list`'s saved selections, dropping versions nothing holds any more.
+    pub(crate) fn remember(&mut self, list: &vectorcraft_doc::Shared<Vec<vectorcraft_doc::SavedSelection>>, ids: Vec<u64>) {
+        let version = vectorcraft_doc::Shared::downgrade(list);
+        self.versions.retain(|(v, _)| v.strong_count() > 0 && !v.ptr_eq(&version));
+        self.versions.push((version, ids));
+    }
+    /// Recall the saved selection at `index` in `list`.
+    pub(crate) fn recall(&mut self, list: &vectorcraft_doc::Shared<Vec<vectorcraft_doc::SavedSelection>>, index: usize) {
+        self.id = self.ids(list).get(index).copied();
+    }
+    /// Where the recalled saved selection is in `list`, if `list` holds it.
+    pub fn index_in(&self, list: &vectorcraft_doc::Shared<Vec<vectorcraft_doc::SavedSelection>>) -> Option<usize> {
+        let id = self.id?;
+        let version = vectorcraft_doc::Shared::downgrade(list);
+        let (_, ids) = self.versions.iter().find(|(v, _)| v.ptr_eq(&version))?;
+        ids.iter().position(|&x| x == id).filter(|&i| i < list.len())
+    }
+}
+
+/// The documents that changes that are not edits to save (Puppet Warp pins dropped, Edit Text ended,
+/// type laid out again after a font scan) replaced, each counted as having the content of the
+/// document it was replaced by ([`DocState::change_unsaved`]). A document that nothing holds any
+/// more is dropped the next time one is added.
+#[derive(Clone, Debug, Default)]
+struct SameContent {
+    /// The document the last such change made.
+    now: std::sync::Weak<Document>,
+    /// The documents with its content that such changes replaced, oldest first.
+    before: Vec<std::sync::Weak<Document>>,
+}
+
+impl SameContent {
+    /// Note that `now` replaced `before` without a change to its content.
+    fn replaced(&mut self, before: std::sync::Weak<Document>, now: &Arc<Document>) {
+        if !self.now.ptr_eq(&before) {
+            self.before.clear();
+        }
+        self.before.retain(|d| d.strong_count() > 0);
+        if before.strong_count() > 0 {
+            self.before.push(before);
+        }
+        self.now = Arc::downgrade(now);
+    }
+    /// Whether `doc` is one of the documents with the content of `now`.
+    fn holds(&self, now: &Arc<Document>, doc: &Arc<Document>) -> bool {
+        std::ptr::eq(self.now.as_ptr(), Arc::as_ptr(now)) && self.before.iter().any(|d| std::ptr::eq(d.as_ptr(), Arc::as_ptr(doc)))
+    }
+}
+
+impl DocState {
+    pub fn new(mut doc: Document, path: Option<String>) -> Self {
+        let active_layer = doc.default_layer();
+        // Saved view state lives here while the document is open (saves write it back).
+        let view = doc.last_view.take();
+        let transparency_grid = std::mem::take(&mut doc.transparency_grid);
+        let saved_open = doc.layers_open.take();
+        let layers_open = OpenRows::new(&doc, saved_open);
+        let doc = Arc::new(doc);
         Self {
-            document,
-            active_target: ActivePageTarget::Page(0),
-            selection: Vec::new(),
-            tool_state: ToolState::default(),
-            default_fill: None,
-            default_outline: Some(OutlineStyle::hairline(Color::BLACK)),
-            cursor_pt: Point::ZERO,
-            zoom: F64::ONE,
-            pan_pt: Point::ZERO,
-            snap_to_objects: true,
-            snap_to_page: true,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            fallback_layer: Layer::new_normal(LayerId(0), "Fallback"),
+            saved_doc: doc.clone(),
+            unsaved_changes: SameContent::default(),
+            doc,
+            selection: Selection::default(),
+            history: History { limit: 500, ..Default::default() },
+            path,
+            revision: 1,
+            active_layer,
+            layer_rows: vec![],
+            variables_highlight: None,
+            isolation: None,
+            interaction: None,
+            undo_group: None,
+            last_transform: None,
+            last_selection_cmd: None,
+            recalled_selection: RecalledSelection::default(),
+            uid: NEXT_DOC_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            mask_view: None,
+            transparency_grid,
+            format: "vectorcraft",
+            save_options: Default::default(),
+            converted: false,
+            view,
+            recovered: false,
+            recovery: None,
+            print_tiling: false,
+            layers_open,
+            imported_from: None,
+            import_losses: vec![],
+            last_perspective: None,
         }
     }
-
-    /// Repairs the invariants the engine relies on: at least one page, a `next_id` above every
-    /// existing ID. Documents from files are already checked by `Document::validate`; this keeps
-    /// programmatically built documents from crashing the engine.
-    fn ensure_minimum_structure(document: &mut Document) {
-        // Ignore the error: an empty document is repaired below, and duplicate IDs cannot be
-        // repaired here (loaders reject them first).
-        let _ = document.validate();
-        if document.pages.is_empty()
-            && let Some(mut page) = Document::new_a4_portrait().pages.into_iter().next()
-        {
-            page.id = PageId(document.allocate_object_id().0);
-            for layer in &mut page.layers {
-                layer.id = LayerId(document.allocate_object_id().0);
-                layer.objects.clear();
-            }
-            document.pages.push(page);
+    /// Unsaved changes: the document differs from the saved one (selection changes and changes that
+    /// are not edits to save don't count, [`DocState::same_content`]).
+    pub fn is_dirty(&self) -> bool {
+        !self.same_content(&self.saved_doc)
+    }
+    /// Record the current document as saved.
+    pub fn mark_saved(&mut self) {
+        self.saved_doc = self.doc.clone();
+    }
+    /// Record `snapshot` (the document as a background save took it) as saved: edits made since
+    /// keep the document modified.
+    pub fn mark_saved_as(&mut self, snapshot: &Arc<Document>) {
+        self.saved_doc = snapshot.clone();
+    }
+    /// Whether `doc` counts as having the content of the document now: it is the document, or one
+    /// that changes that are not edits to save replaced since ([`DocState::change_unsaved`]).
+    pub fn same_content(&self, doc: &Arc<Document>) -> bool {
+        Arc::ptr_eq(&self.doc, doc) || self.unsaved_changes.holds(&self.doc, doc)
+    }
+    /// Make a change that is not an edit to save with `f`, without an undo step: editing state that
+    /// is never saved, or type laid out again after a font scan (which can also refit the frame of
+    /// Auto Size area type). A saved document stays saved, and a save or recovery copy taken of the
+    /// document before counts as having its content ([`DocState::same_content`]).
+    pub(crate) fn change_unsaved(&mut self, f: impl FnOnce(&mut Arc<Document>)) {
+        let saved = !self.is_dirty();
+        let before = Arc::downgrade(&self.doc);
+        f(&mut self.doc);
+        if !std::ptr::eq(before.as_ptr(), Arc::as_ptr(&self.doc)) {
+            self.unsaved_changes.replaced(before, &self.doc);
+        }
+        if saved {
+            self.mark_saved();
         }
     }
-
-    /// Returns the 0-based index of the currently viewed page (`0` when viewing `MasterPage` or `Desktop`).
-    #[must_use]
-    pub fn current_page_index(&self) -> usize {
-        match self.active_target {
-            ActivePageTarget::Page(idx) => idx.min(self.document.pages.len().saturating_sub(1)),
-            ActivePageTarget::MasterPage | ActivePageTarget::Desktop => 0,
-        }
-    }
-
-    /// Returns a reference to the currently viewed [`Page`].
-    #[must_use]
-    pub fn current_page(&self) -> &Page {
-        static FALLBACK_PAGE: std::sync::OnceLock<Page> = std::sync::OnceLock::new();
-        let idx = self.current_page_index();
-        self.document.pages.get(idx).unwrap_or_else(|| {
-            FALLBACK_PAGE.get_or_init(|| Page {
-                id: PageId(1),
-                name: "Page 1".to_owned(),
-                size: Size { width: F64::ONE, height: F64::ONE },
-                bleed: F64::ZERO,
-                background: Some(FillStyle::uniform(Color::WHITE)),
-                layers: Vec::new(),
-                residual: Residual::default(),
-                extra: BTreeMap::new(),
-            })
-        })
-    }
-
-    /// Switches the active tab in the bottom Page Navigator Bar (`Page 1..N`, `Master Page`, `Desktop`).
-    pub fn set_active_target(&mut self, target: ActivePageTarget) {
-        let valid = match target {
-            ActivePageTarget::Page(idx) if idx < self.document.pages.len() => ActivePageTarget::Page(idx),
-            ActivePageTarget::Page(_) => ActivePageTarget::Page(self.document.pages.len().saturating_sub(1)),
-            other => other,
-        };
-        if self.active_target != valid {
-            self.active_target = valid;
-            self.selection.clear();
-        }
-    }
-
-    /// Collects references to all currently selected [`ObjectNode`]s in z-order.
-    #[must_use]
-    pub fn selected_nodes(&self) -> Vec<&ObjectNode> {
-        if self.selection.is_empty() {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for page in &self.document.pages {
-            for layer in &page.layers {
-                collect_selected_recursive(&layer.objects, &self.selection, &mut out);
-            }
-        }
-        for layer in &self.document.master_layers {
-            collect_selected_recursive(&layer.objects, &self.selection, &mut out);
-        }
-        out
-    }
-
-    /// Computes the context-sensitive CorelDRAW Property Bar schema for the current state.
-    #[must_use]
-    pub fn property_bar_schema(&self) -> PropertyBarSchema {
-        let selected = self.selected_nodes();
-        build_property_bar_schema(&selected, self.current_page(), self.document.units, &self.tool_state)
-    }
-
-    /// Computes the bottom CorelDRAW Status Bar snapshot (`cursor x, y`, selection summary, Fill/Outline chips).
-    #[must_use]
-    pub fn status_bar_snapshot(&self) -> StatusBarSnapshot {
-        let selected = self.selected_nodes();
-        let selection_summary = match selected.as_slice() {
-            [] => "No selection".to_owned(),
-            [single] => match &single.kind {
-                ObjectKind::Rect(_) => "Rectangle on Layer".to_owned(),
-                ObjectKind::Ellipse(_) => "Ellipse on Layer".to_owned(),
-                ObjectKind::Polygon(p) if p.inner_radius.is_some() => "Star on Layer".to_owned(),
-                ObjectKind::Polygon(_) => "Polygon on Layer".to_owned(),
-                ObjectKind::Path(_) => "Curve on Layer".to_owned(),
-                ObjectKind::ArtisticText { .. } => "Artistic Text".to_owned(),
-                ObjectKind::ParagraphText(_) => "Paragraph Text on Layer".to_owned(),
-                ObjectKind::Group { children } => format!("Group of {} objects", children.len()),
-                ObjectKind::Bitmap { pixel_width, pixel_height, .. } => format!("Bitmap ({pixel_width}x{pixel_height}) on Layer"),
-                ObjectKind::Unsupported(_) => "Unsupported CDR Object".to_owned(),
-            },
-            many => format!("{} objects selected", many.len()),
-        };
-
-        let fill_source = selected.first().map_or(self.default_fill.as_ref(), |n| n.fill.as_ref());
-        let outline_source = selected.first().map_or(self.default_outline.as_ref(), |n| n.outline.as_ref());
-
-        let fill_chip = match fill_source {
-            Some(FillStyle::Uniform { color }) => Some(color.clone()),
-            Some(FillStyle::Fountain { stops, .. }) => stops.first().map(|s| s.color.clone()),
-            Some(FillStyle::TwoColorPattern { fg_color, .. }) => Some(fg_color.clone()),
-            Some(FillStyle::Unknown { .. }) | None => None,
-        };
-        let outline_chip = outline_source.map(|o| o.color.clone());
-
-        StatusBarSnapshot { cursor_pt: self.cursor_pt, units: self.document.units, selection_summary, fill_chip, outline_chip }
-    }
-
-    /// Applies a keyboard shortcut (`F5`, `F6`, `F7`, `F8`, `F10`, `Y`, `Z`, `G`, `Escape`).
-    pub fn handle_shortcut(&mut self, shortcut: KeyShortcut) -> bool {
-        self.tool_state.apply_shortcut(shortcut)
-    }
-
-    /// Performs top-to-bottom hit-testing at `pt` (in page coordinates) against effective visible,
-    /// unlocked layers of the current page.
-    #[must_use]
-    pub fn hit_test_point(&self, pt: Point) -> Option<ObjectId> {
-        let layers = self.document.effective_layers_for_page(self.current_page_index(), false).ok()?;
-        for layer in layers.into_iter().rev() {
-            if layer.locked || !layer.visible {
-                continue;
-            }
-            for obj in layer.objects.iter().rev() {
-                if obj.locked || !obj.visible {
-                    continue;
-                }
-                let bbox = combined_selection_bounds(&[obj]);
-                let pad = 2.0;
-                if pt.x.get() >= bbox.x0.get() - pad
-                    && pt.x.get() <= bbox.x1.get() + pad
-                    && pt.y.get() >= bbox.y0.get() - pad
-                    && pt.y.get() <= bbox.y1.get() + pad
-                {
-                    return Some(obj.id);
-                }
-            }
-        }
-        None
-    }
-
-    /// Handles a primary pointer down on the canvas at `pt` (in page coordinates).
-    pub fn pointer_down(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
-        self.cursor_pt = pt;
-        match self.tool_state.active_tool {
-            ToolKind::Pick => {
-                if let Some(hit_id) = self.hit_test_point(pt) {
-                    if shift_modifier {
-                        if let Some(pos) = self.selection.iter().position(|&id| id == hit_id) {
-                            self.selection.remove(pos);
-                        } else {
-                            self.selection.push(hit_id);
-                        }
-                    } else if !self.selection.contains(&hit_id) {
-                        self.selection = vec![hit_id];
-                    }
-                    self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
-                } else if !shift_modifier {
-                    self.selection.clear();
-                }
-            }
-            ToolKind::ArtisticText => {
-                let size_pt = self.tool_state.default_font_size_pt;
-                let font_family = self.tool_state.default_font_family.clone();
-                self.execute(EngineCommand::AddObject {
-                    name: Some("Artistic Text".to_owned()),
-                    kind: ObjectKind::ArtisticText { text: "Text".to_owned(), font_family, size_pt, position: pt },
-                });
-            }
-            ToolKind::Zoom => {
-                let factor = if alt_modifier { 0.5 } else { 2.0 };
-                if let Ok(new_zoom) = F64::new((self.zoom.get() * factor).clamp(0.05, 64.0)) {
-                    self.zoom = new_zoom;
-                }
-            }
-            ToolKind::InteractiveFill => {
-                if self.selection.is_empty()
-                    && let Some(hit_id) = self.hit_test_point(pt)
-                {
-                    self.selection = vec![hit_id];
-                }
-                self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
-            }
-            _ => {
-                self.tool_state.begin_drag(pt, shift_modifier, alt_modifier);
-            }
-        }
-    }
-
-    /// Updates pointer coordinates during a canvas move/drag.
-    pub fn pointer_move(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
-        self.cursor_pt = pt;
-        self.tool_state.update_drag(pt, shift_modifier, alt_modifier);
-    }
-
-    /// Completes an active canvas drag gesture, committing shape creation or object movement
-    /// as a single undo step.
-    pub fn pointer_up(&mut self, pt: Point, shift_modifier: bool, alt_modifier: bool) {
-        self.cursor_pt = pt;
-        self.tool_state.update_drag(pt, shift_modifier, alt_modifier);
-
-        if let Some(coralcraft_tools::GestureState::DragMoveSelection { start, current }) = self.tool_state.gesture.clone() {
-            self.tool_state.gesture = None;
-            let dx = current.x.get() - start.x.get();
-            let dy = current.y.get() - start.y.get();
-            if (dx.abs() > 1e-6 || dy.abs() > 1e-6)
-                && !self.selection.is_empty()
-                && let (Ok(dx_pt), Ok(dy_pt)) = (F64::new(dx), F64::new(dy))
-            {
-                self.execute(EngineCommand::TranslateSelection { dx_pt, dy_pt });
-            }
-            return;
-        }
-
-        if let Some(coralcraft_tools::GestureState::DragInteractiveFill { start, current }) = self.tool_state.gesture.clone() {
-            self.tool_state.gesture = None;
-            let dx = current.x.get() - start.x.get();
-            let dy = current.y.get() - start.y.get();
-            if (dx.abs() > 1e-6 || dy.abs() > 1e-6) && !self.selection.is_empty() {
-                let angle_deg = dy.atan2(dx).to_degrees();
-                let (c0, c1) = self.current_target_objects().iter().find(|o| self.selection.contains(&o.id)).map_or(
-                    (Color::rgb8(0, 120, 215), Color::WHITE),
-                    |o| match &o.fill {
-                        Some(FillStyle::Fountain { stops, .. }) if stops.len() >= 2 => {
-                            if let (Some(first), Some(last)) = (stops.first(), stops.last()) {
-                                (first.color.clone(), last.color.clone())
-                            } else {
-                                (Color::rgb8(0, 120, 215), Color::WHITE)
-                            }
-                        }
-                        Some(FillStyle::Uniform { color }) => (color.clone(), Color::WHITE),
-                        _ => (Color::rgb8(0, 120, 215), Color::WHITE),
-                    },
-                );
-                let mut stops = Vec::with_capacity(2);
-                if let Ok(st0) = coralcraft_color::FountainStop::new(0.0, c0) {
-                    stops.push(st0);
-                }
-                if let Ok(st1) = coralcraft_color::FountainStop::new(1.0, c1) {
-                    stops.push(st1);
-                }
-                let fill = FillStyle::Fountain {
-                    geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg: F64::new(angle_deg).unwrap_or(F64::ZERO), edge_pad: F64::ZERO },
-                    blend_mode: coralcraft_color::FountainBlendMode::Direct,
-                    stops,
-                };
-                self.execute(EngineCommand::SetFill { fill: Some(fill) });
-            }
-            return;
-        }
-
-        if let Some(kind) = self.tool_state.finish_create_shape() {
-            let name = match &kind {
-                ObjectKind::Rect(_) => Some("Rectangle".to_owned()),
-                ObjectKind::Ellipse(_) => Some("Ellipse".to_owned()),
-                ObjectKind::Polygon(p) if p.inner_radius.is_some() => Some("Star".to_owned()),
-                ObjectKind::Polygon(_) => Some("Polygon".to_owned()),
-                _ => None,
+    /// Keep what interaction `it` (taken from this document) changed, as one undo step.
+    pub(crate) fn keep_interaction(&mut self, it: Interaction) {
+        if !Arc::ptr_eq(&it.doc, &self.doc) {
+            let selection = match self.history.undo.last() {
+                Some(l) if l.selection == it.selection => l.selection.clone(),
+                _ => it.selection,
             };
-            self.execute(EngineCommand::AddObject { name, kind });
+            self.push_undo(it.label, it.doc, selection);
+            self.revision += 1;
         }
     }
-
-    /// Executes an atomic [`EngineCommand`] transactionally and pushes the previous state onto the undo stack.
-    pub fn execute(&mut self, cmd: EngineCommand) -> bool {
-        self.try_execute(cmd).is_ok()
+    /// Record an undo step: `doc` and `selection` as they were before an edit (the document now is
+    /// the one after it). In an undo group only the group's first edit records one: the edits
+    /// after it extend that step.
+    fn push_undo(&mut self, mut label: String, doc: Arc<Document>, selection: Arc<Selection>) {
+        if let Some(g) = &mut self.undo_group {
+            let recorded = |first: &Arc<Document>| self.history.undo.last().is_some_and(|l| Arc::ptr_eq(&l.doc, first));
+            if g.first.as_ref().is_some_and(recorded) {
+                self.history.recost_last(&self.doc);
+                self.history.trim();
+                return;
+            }
+            g.first = Some(doc.clone());
+            if let Some(l) = &g.label {
+                label = l.clone();
+            }
+        }
+        let e = HistoryEntry::kept(label, doc, selection, &self.doc);
+        self.history.undo.push(e);
+        self.history.redo.clear();
+        self.history.trim();
     }
-
-    /// Executes an atomic [`EngineCommand`] transactionally, rolling back and preserving undo/redo history on error.
-    pub fn try_execute(&mut self, cmd: EngineCommand) -> Result<(), EngineError> {
-        let current_total = self.total_object_count();
-        let estimated_added = match &cmd {
-            EngineCommand::AddObject { kind, .. } => 1usize.saturating_add(match kind {
-                ObjectKind::Group { children } => count_nodes_recursive(children),
-                ObjectKind::Unsupported(u) => count_nodes_recursive(&u.children),
-                _ => 0,
-            }),
-            EngineCommand::StepAndRepeat { count, .. } => {
-                let sel_nodes = self.selected_nodes();
-                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
-                weight.saturating_mul((*count).min(100) as usize)
-            }
-            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
-                let sel_nodes = self.selected_nodes();
-                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
-                let cells = ((*rows).clamp(1, 20) as usize).saturating_mul((*cols).clamp(1, 20) as usize).saturating_sub(1);
-                weight.saturating_mul(cells)
-            }
-            EngineCommand::CircularDuplicateSelection { count, .. } => {
-                let sel_nodes = self.selected_nodes();
-                let weight: usize = sel_nodes.iter().filter(|o| !o.locked).map(|o| count_nodes_recursive(std::slice::from_ref(*o))).sum();
-                weight.saturating_mul((*count).clamp(1, 72) as usize)
-            }
-            _ => 0,
-        };
-        if current_total.saturating_add(estimated_added) > MAX_DOCUMENT_OBJECTS {
-            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
+    /// End the interaction in progress, undoing what it changed.
+    pub(crate) fn undo_interaction(&mut self) {
+        if let Some(it) = self.interaction.take() {
+            self.doc = it.doc;
+            self.selection = Arc::unwrap_or_clone(it.selection);
+            self.active_layer = it.active_layer;
+            self.layer_rows = it.layer_rows;
+            self.variables_highlight = it.variables_highlight;
+            self.isolation = it.isolation;
+            self.revision += 1;
         }
-
-        let before = self.capture_snapshot();
-        if !self.apply_command(cmd) {
-            self.restore_snapshot(before);
-            return Err(EngineError::CommandRejected);
-        }
-        if self.total_object_count() > MAX_DOCUMENT_OBJECTS {
-            self.restore_snapshot(before);
-            return Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS });
-        }
-        self.sanitize_selection();
-        if self.undo_stack.len() >= MAX_UNDO_HISTORY {
-            self.undo_stack.remove(0);
-        }
-        self.undo_stack.push(before);
-        self.redo_stack.clear();
-        Ok(())
     }
-
-    fn apply_command(&mut self, cmd: EngineCommand) -> bool {
-        match &cmd {
-            EngineCommand::DeletePage { page_index } if self.document.pages.len() <= 1 || *page_index >= self.document.pages.len() => {
-                return false;
-            }
-            EngineCommand::RenamePage { page_index, .. } | EngineCommand::DuplicatePage { page_index }
-                if *page_index >= self.document.pages.len() =>
-            {
-                return false;
-            }
-            EngineCommand::DeleteSelection if self.selection.is_empty() => {
-                return false;
-            }
-            EngineCommand::TranslateSelection { dx_pt, dy_pt }
-                if self.selection.is_empty() || Affine2::translation(dx_pt.get(), dy_pt.get()).is_err() =>
-            {
-                return false;
-            }
-            EngineCommand::SetPageSetup { width_pt, height_pt, .. } if Size::new(width_pt.get(), height_pt.get()).is_err() => {
-                return false;
-            }
-            EngineCommand::GroupSelection => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
-                if count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::UngroupSelection => {
-                let sel = &self.selection;
-                let has_group =
-                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
-                if !has_group {
-                    return false;
-                }
-            }
-            EngineCommand::ConvertToCurves => {
-                let has_convertible = self.selected_nodes().into_iter().any(|o| {
-                    !o.locked
-                        && matches!(
-                            o.kind,
-                            ObjectKind::Rect(_)
-                                | ObjectKind::Ellipse(_)
-                                | ObjectKind::Polygon(_)
-                                | ObjectKind::ArtisticText { .. }
-                                | ObjectKind::ParagraphText(_)
-                        )
-                });
-                if !has_convertible {
-                    return false;
-                }
-            }
-            EngineCommand::BooleanSelection { .. } => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
-                if count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::ApplyContour { object_id, .. }
-            | EngineCommand::AddDropShadow { object_id, .. }
-            | EngineCommand::AddExtrude { object_id, .. }
-            | EngineCommand::ApplyEnvelope { object_id, .. }
-            | EngineCommand::ApplyPerspective { object_id, .. }
-            | EngineCommand::ApplyDistortion { object_id, .. }
-            | EngineCommand::FilletPathCorners { object_id, .. }
-            | EngineCommand::ApplyArtisticBrush { object_id, .. }
-            | EngineCommand::ExpandEffects { object_id } => {
-                if self.selected_or_all_node(*object_id).is_none_or(|o| o.locked) {
-                    return false;
-                }
-            }
-            EngineCommand::CreateBlend { start_id, end_id, .. } => {
-                let has_start = self.selected_or_all_node(*start_id).is_some_and(|o| !o.locked);
-                let has_end = self.selected_or_all_node(*end_id).is_some_and(|o| !o.locked);
-                if !has_start || !has_end || start_id == end_id {
-                    return false;
-                }
-            }
-            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
-                let has_blend = self
-                    .selected_or_all_node(*blend_object_id)
-                    .is_some_and(|o| !o.locked && o.effects.iter().any(|e| matches!(e, VectorEffect::Blend { .. })));
-                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
-                if !has_blend || !has_spine || blend_object_id == spine_object_id {
-                    return false;
-                }
-            }
-            EngineCommand::FitTextToPath { text_object_id, spine_object_id, .. } => {
-                let has_text =
-                    self.selected_or_all_node(*text_object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. }));
-                let has_spine = self.selected_or_all_node(*spine_object_id).and_then(object_to_path).is_some();
-                if !has_text || !has_spine || text_object_id == spine_object_id {
-                    return false;
-                }
-            }
-            EngineCommand::StepAndRepeat { count, .. } => {
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if *count == 0 || !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
-                if (!*copy_fill && !*copy_outline && !*copy_effects) || self.selected_or_all_node(*source_id).is_none() {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_target = self.current_target_objects().iter().any(|o| !o.locked && o.id != *source_id && sel.contains(&o.id));
-                if !has_target {
-                    return false;
-                }
-            }
-            EngineCommand::CombineSelection => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
-                if count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::BreakApartSelection => {
-                let sel = &self.selection;
-                let has_compound = self.current_target_objects().iter().any(|o| {
-                    !o.locked
-                        && sel.contains(&o.id)
-                        && matches!(&o.kind, ObjectKind::Path(p) if p.elements.iter().filter(|e| matches!(e, PathElement::MoveTo(_))).count() >= 2)
-                });
-                if !has_compound {
-                    return false;
-                }
-            }
-            EngineCommand::AdjustBitmap { object_id, .. } | EngineCommand::TraceBitmap { object_id, .. } => {
-                let is_bmp = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::Bitmap { .. }));
-                if !is_bmp {
-                    return false;
-                }
-            }
-            EngineCommand::MirrorSelection { horizontal, vertical, .. } => {
-                if !*horizontal && !*vertical {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::CreateBoundary => {
-                let sel = &self.selection;
-                let has_path = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some());
-                if !has_path {
-                    return false;
-                }
-            }
-            EngineCommand::ConvertOutlineToObject => {
-                let sel = &self.selection;
-                let has_outlined = self
-                    .current_target_objects()
-                    .iter()
-                    .any(|o| !o.locked && sel.contains(&o.id) && o.outline.is_some() && object_to_path(o).is_some());
-                if !has_outlined {
-                    return false;
-                }
-            }
-            EngineCommand::RotateSelection { angle_deg, origin_index, .. } => {
-                if *origin_index > 8 || angle_deg.get().abs() <= 1e-9 {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, .. } => {
-                if *origin_index > 8 || scale_x.get().abs() <= 1e-6 || scale_y.get().abs() <= 1e-6 {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, .. } => {
-                let sx = skew_x_deg.get();
-                let sy = skew_y_deg.get();
-                if *origin_index > 8
-                    || sx.abs() >= 85.0
-                    || sy.abs() >= 85.0
-                    || (sx.abs() <= 1e-9 && sy.abs() <= 1e-9)
-                    || Affine2::skew_deg(sx, sy).is_err_and(|_| true)
-                {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
-                if Affine2::translation(offset_x_pt.get(), offset_y_pt.get()).is_err() {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::ReversePathDirection { object_id } | EngineCommand::CloseOpenSubpaths { object_id } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
-                if tolerance_pt.get() < 0.0 {
-                    return false;
-                }
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::UngroupAllSelection => {
-                let sel = &self.selection;
-                let has_group =
-                    self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id) && matches!(o.kind, ObjectKind::Group { .. }));
-                if !has_group {
-                    return false;
-                }
-            }
-            EngineCommand::MovePage { from_index, to_index } => {
-                let len = self.document.pages.len();
-                if *from_index >= len || *to_index >= len || *from_index == *to_index {
-                    return false;
-                }
-            }
-            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
-                if tolerance_pt.get() < 0.0 {
-                    return false;
-                }
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
-                if *origin_index > 8 || (x_pt.is_none() && y_pt.is_none() && width_pt.is_none() && height_pt.is_none()) {
-                    return false;
-                }
-                if width_pt.is_some_and(|w| w.get() <= 1e-6) || height_pt.is_some_and(|h| h.get() <= 1e-6) {
-                    return false;
-                }
-                let sel = &self.selection;
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && sel.contains(&o.id));
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::AddLayer { name } => {
-                if name.trim().is_empty() || self.document.pages.is_empty() {
-                    return false;
-                }
-            }
-            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
-                if visible.is_none() && locked.is_none() && printable.is_none() && opacity.is_none() {
-                    return false;
-                }
-                let exists = self.document.pages.iter().flat_map(|p| &p.layers).chain(&self.document.master_layers).any(|l| l.id == *layer_id);
-                if !exists {
-                    return false;
-                }
-            }
-            EngineCommand::ClearTransformations => {
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::ToggleTextKind { object_id } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::FindAndReplaceText { find, .. } => {
-                if find.is_empty() {
-                    return false;
-                }
-            }
-            EngineCommand::ChangeTextCase { object_id, .. } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::InsertCurveNode { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| insert_curve_node_at(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::DeleteCurveNode { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_curve_node_at(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_line(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| convert_segment_to_curve(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetPageBackground { page_index, .. } | EngineCommand::SetPageBleed { page_index, .. } => {
-                if *page_index >= self.document.pages.len() {
-                    return false;
-                }
-            }
-            EngineCommand::DeleteLayer { layer_id } => {
-                let can_delete = self.document.pages.iter().any(|p| p.layers.len() > 1 && p.layers.iter().any(|l| l.id == *layer_id));
-                if !can_delete {
-                    return false;
-                }
-            }
-            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
-                let valid = self
-                    .document
-                    .pages
-                    .get(*page_index)
-                    .is_some_and(|p| *from_index < p.layers.len() && *to_index < p.layers.len() && *from_index != *to_index);
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
-                if width_pt.is_none() && behind_fill.is_none() && scale_with_object.is_none() {
-                    return false;
-                }
-            }
-            EngineCommand::SetDocumentTitle { title } => {
-                if title.trim().is_empty() {
-                    return false;
-                }
-            }
-            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked && object_to_path(o).is_some_and(|p| twirl_path_around_point(&p, *center, radius_pt.get(), angle_deg.get()).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && object_to_path(o).is_some_and(|p| radial_push_path_around_point(&p, *center, radius_pt.get(), strength.get()).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && object_to_path(o).is_some_and(|p| smear_path_from_point(&p, *origin, radius_pt.get(), dx_pt.get(), dy_pt.get()).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetParagraphTextLayout { object_id, .. } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ParagraphText(_)));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked && object_to_path(o).is_some_and(|p| roughen_path_segments(&p, tooth_height_pt.get(), *frequency).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetArtisticTextProperties { object_id, .. } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && object_to_path(o)
-                            .is_some_and(|p| smooth_path_around_point(&p, *center, radius_pt.get(), strength.get(), *iterations).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked && object_to_path(o).is_some_and(|p| knife_cut_path_by_line(&p, *line_start, *line_end, gap_pt.get()).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::CropToRect { rect } => {
-                if rect.width() <= 0.0 || rect.height() <= 0.0 {
-                    return false;
-                }
-                let has_unlocked = self.current_target_objects().iter().any(|o| !o.locked && o.visible);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
-                let page = self.current_page();
-                let dst_ok = page.layers.iter().any(|l| l.id == *target_layer_id && !l.locked);
-                let src_ok =
-                    page.layers.iter().any(|l| l.id != *target_layer_id && !l.locked && l.objects.iter().any(|o| o.id == *object_id && !o.locked));
-                if !dst_ok || !src_ok {
-                    return false;
-                }
-            }
-            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| erase_path_within_circle(&p, *center, radius_pt.get()).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
-                if snap_to_objects.is_none() && snap_to_page.is_none() {
-                    return false;
-                }
-            }
-            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| delete_segment_at_index(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SmartFillAtPoint { point, .. } => {
-                let px = point.x.get();
-                let py = point.y.get();
-                let has_enclosing = self.current_target_objects().iter().any(|o| {
-                    !o.locked
-                        && o.visible
-                        && object_to_path(o)
-                            .and_then(|p| p.transform(o.transform).ok())
-                            .and_then(|wp| wp.bounds())
-                            .is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get())
-                });
-                if !has_enclosing {
-                    return false;
-                }
-            }
-            EngineCommand::OffsetObjectPath { object_id, distance_pt, .. } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| offset_open_or_closed_path(&p, distance_pt.get()).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SetPathFillRule { object_id, .. } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked && object_to_path(o).is_some());
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SwapObjectPositions { first_id, second_id } => {
-                if first_id == second_id {
-                    return false;
-                }
-                let ok1 = self.selected_or_all_node(*first_id).is_some_and(|o| !o.locked);
-                let ok2 = self.selected_or_all_node(*second_id).is_some_and(|o| !o.locked);
-                if !ok1 || !ok2 {
-                    return false;
-                }
-            }
-            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
-                if !horizontal && !vertical {
-                    return false;
-                }
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-            }
-            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| smooth_curve_node_at(&p, *element_index, tension.get()).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::ArrayDuplicateSelection { rows, cols, .. } => {
-                if *rows == 0 || *cols == 0 || (*rows == 1 && *cols == 1) {
-                    return false;
-                }
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::AddGuideline { position_pt, .. } => {
-                if !position_pt.get().is_finite() {
-                    return false;
-                }
-            }
-            EngineCommand::ClearGuidelines => {
-                let has_guides = self.current_page().layers.iter().any(|l| l.role == LayerRole::Guides && !l.objects.is_empty());
-                if !has_guides {
-                    return false;
-                }
-            }
-            EngineCommand::CircularDuplicateSelection { count, total_angle_deg, .. } => {
-                if *count == 0 || total_angle_deg.get().abs() <= 1e-6 {
-                    return false;
-                }
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::FitPageToSelection { margin_pt } => {
-                if margin_pt.get() < 0.0 || !margin_pt.get().is_finite() {
-                    return false;
-                }
-                let has_targets = if self.selection.is_empty() {
-                    self.current_target_objects().iter().any(|o| !o.locked && o.visible)
-                } else {
-                    self.selected_nodes().iter().any(|o| !o.locked)
-                };
-                if !has_targets {
-                    return false;
-                }
-            }
-            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
-                if cap.is_none() && join.is_none() && miter_limit.is_none() {
-                    return false;
-                }
-            }
-            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
-                if element_indices.len() < 2 || (!horizontal && !vertical) {
-                    return false;
-                }
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && object_to_path(o).is_some_and(|p| {
-                            element_indices.iter().all(|&idx| p.elements.get(idx).is_some_and(|el| !matches!(el, PathElement::Close)))
-                        })
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
-                if hue_delta_deg.get().abs() <= 1e-6 && saturation_delta.get().abs() <= 1e-6 && brightness_delta.get().abs() <= 1e-6 {
-                    return false;
-                }
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::SubdividePathSegments { object_id } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| subdivide_all_path_segments(&p).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
-                if !invert && !grayscale {
-                    return false;
-                }
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && object_to_path(o)
-                            .is_some_and(|p| transform_curve_nodes(&p, element_indices, scale_x.get(), scale_y.get(), rotate_deg.get()).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::SelectByColor { match_fill, match_outline, .. } => {
-                if !match_fill && !match_outline {
-                    return false;
-                }
-            }
-            EngineCommand::BreakPathAtNode { object_id, element_index } => {
-                let valid = self
-                    .selected_or_all_node(*object_id)
-                    .is_some_and(|o| !o.locked && object_to_path(o).is_some_and(|p| break_path_at_node(&p, *element_index).is_ok()));
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
-                if !match_width && !match_height {
-                    return false;
-                }
-                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
-                if unlocked_count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
-                if start_id == end_id || !(0.0..=1.0).contains(&t.get()) || *sample_count < 3 {
-                    return false;
-                }
-                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
-                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
-                if !valid_a || !valid_b {
-                    return false;
-                }
-            }
-            EngineCommand::DistributeExactGap { gap_pt, .. } => {
-                if !gap_pt.get().is_finite() {
-                    return false;
-                }
-                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
-                if unlocked_count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::DivideSelection => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
-                if count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::DistributeSelectionAlongPath { spine_object_id, .. } => {
-                let valid_spine = self
-                    .selected_or_all_node(*spine_object_id)
-                    .and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
-                    .and_then(|p| ArcLengthTable::from_path(&p).ok())
-                    .is_some_and(|lut| lut.total_length() > 1e-6);
-                let has_targets = self.selected_nodes().iter().any(|o| !o.locked && o.id != *spine_object_id);
-                if !valid_spine || !has_targets {
-                    return false;
-                }
-            }
-            EngineCommand::RecolorArtwork { selection_only, .. } => {
-                if *selection_only && self.selected_nodes().iter().all(|o| o.locked) {
-                    return false;
-                }
-            }
-            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked && object_to_path(o).is_some_and(|p| hatch_path_region(&p, angle_deg.get(), spacing_pt.get(), *cross_hatch).is_ok())
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
-                if start_id == end_id || *steps == 0 || *sample_count < 3 {
-                    return false;
-                }
-                let valid_a = self.selected_or_all_node(*start_id).and_then(object_to_path).is_some();
-                let valid_b = self.selected_or_all_node(*end_id).and_then(object_to_path).is_some();
-                if !valid_a || !valid_b {
-                    return false;
-                }
-            }
-            EngineCommand::ProjectSelectionAxonometric { .. } => {
-                let has_valid = self.selected_nodes().iter().any(|o| !o.locked && object_to_path(o).is_some());
-                if !has_valid {
-                    return false;
-                }
-            }
-            EngineCommand::PackSelectionInGrid { cols, gap_pt, .. } => {
-                if *cols == 0 || !gap_pt.get().is_finite() {
-                    return false;
-                }
-                let has_unlocked = self.selected_nodes().iter().any(|o| !o.locked);
-                if !has_unlocked {
-                    return false;
-                }
-            }
-            EngineCommand::ExcludeSelection => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id) && object_to_path(o).is_some()).count();
-                if count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
-                if *iterations == 0 || min_gap_pt.get() < 0.0 || !min_gap_pt.get().is_finite() {
-                    return false;
-                }
-                let unlocked_count = self.selected_nodes().iter().filter(|o| !o.locked).count();
-                if unlocked_count < 2 {
-                    return false;
-                }
-            }
-            EngineCommand::ClearEffects { object_id } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| !o.locked);
-                if !valid {
-                    return false;
-                }
-            }
-            EngineCommand::CloneEffectsFrom { source_id } => {
-                let has_src = self.selected_or_all_node(*source_id).is_some();
-                let has_target = self.selected_nodes().iter().any(|o| !o.locked && o.id != *source_id);
-                if !has_src || !has_target {
-                    return false;
-                }
-            }
-            EngineCommand::SetObjectLocked { object_id, .. }
-            | EngineCommand::SetObjectOpacity { object_id, .. }
-            | EngineCommand::SetObjectVisible { object_id, .. }
-            | EngineCommand::RenameObject { object_id, .. } => {
-                if self.selected_or_all_node(*object_id).is_none() {
-                    return false;
-                }
-            }
-            EngineCommand::UnlockAllObjects => {
-                let mut any_locked = false;
-                for page in &self.document.pages {
-                    for layer in &page.layers {
-                        if layer.objects.iter().any(|o| o.locked) {
-                            any_locked = true;
-                        }
-                    }
-                }
-                for layer in &self.document.master_layers {
-                    if layer.objects.iter().any(|o| o.locked) {
-                        any_locked = true;
-                    }
-                }
-                if !any_locked {
-                    return false;
-                }
-            }
-            EngineCommand::ReorderSelection { .. } if self.selection.is_empty() => {
-                return false;
-            }
-            EngineCommand::AlignSelection { mode } => {
-                let min_required = if *mode == AlignMode::CenterToPage { 1 } else { 2 };
-                if self.selection.len() < min_required {
-                    return false;
-                }
-            }
-            EngineCommand::DistributeSelection { .. } => {
-                let sel = &self.selection;
-                let count = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).count();
-                if count < 3 {
-                    return false;
-                }
-            }
-            EngineCommand::PlaceInsidePowerClip { container_id } => {
-                let sel = &self.selection;
-                let objs = self.current_target_objects();
-                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
-                    return false;
-                };
-                let candidates: Vec<&ObjectNode> = objs.iter().filter(|o| !o.locked && o.id != *container_id && sel.contains(&o.id)).collect();
-                if candidates.is_empty() {
-                    return false;
-                }
-                for c in candidates {
-                    if powerclip_subtree_depth(container).max(powerclip_subtree_depth(c).saturating_add(1)) > 3 {
-                        return false;
-                    }
-                }
-            }
-            EngineCommand::ExtractPowerClip { container_id } => {
-                let objs = self.current_target_objects();
-                let Some(container) = objs.iter().find(|o| o.id == *container_id && !o.locked) else {
-                    return false;
-                };
-                if container.powerclip_children.is_empty() {
-                    return false;
-                }
-            }
-            EngineCommand::MoveBezierNode { object_id, element_index, .. } => {
-                let valid = self.selected_or_all_node(*object_id).is_some_and(|o| {
-                    !o.locked
-                        && match &o.kind {
-                            ObjectKind::Path(p) => {
-                                p.elements.get(*element_index).is_some_and(|el| !matches!(el, coralcraft_geom::PathElement::Close))
-                            }
-                            _ => false,
-                        }
-                });
-                if !valid {
-                    return false;
-                }
-            }
-            _ => {}
+    /// Count the document as modified, as if never saved (a document restored by Data Recovery).
+    pub fn mark_unsaved(&mut self) {
+        self.saved_doc = Arc::new(Document::new(1.0, 1.0));
+    }
+    pub fn title(&self) -> String {
+        let name = self
+            .path
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| self.doc.title.clone());
+        if self.converted {
+            format!("{} [Converted]", cmd::fileio::file_stem(&name))
+        } else if self.recovered {
+            format!("{} [Recovered]", cmd::fileio::file_stem(&name))
+        } else {
+            name
         }
+    }
+    /// Where new art is inserted: the isolation container, else the active layer.
+    /// The current layer, if the remembered id still names a layer (ids are reused after undo).
+    pub fn current_layer(&self) -> Option<NodeId> {
+        self.active_layer.filter(|l| self.doc.node(*l).is_some_and(|n| n.is_layer()))
+    }
+    pub fn insertion_parent(&self) -> Option<NodeId> {
+        // Ids are reused after undo (the id counter is part of the document), so a remembered
+        // layer or isolated group must still be one: a pasted group must never land in a path.
+        if let Some(i) = self.isolation
+            && self.doc.node(i).is_some_and(|n| matches!(n.kind, NodeKind::Group { .. } | NodeKind::Layer { .. }))
+        {
+            return Some(i);
+        }
+        // A single object isolated: new art goes beside it, in its group or layer.
+        if let Some(p) = self.isolation.filter(|i| self.doc.node(*i).is_some_and(|n| !n.is_container())).and_then(|i| self.doc.parent_of(i))
+            && self.doc.node(p).is_some_and(|n| matches!(n.kind, NodeKind::Group { .. } | NodeKind::Layer { .. }))
+        {
+            return Some(p);
+        }
+        // A sublayer takes new art only while it and the layers around it are shown and unlocked.
+        self.active_layer.filter(|l| self.doc.node(*l).is_some_and(|n| n.is_layer()) && self.doc.is_editable(*l)).or_else(|| self.doc.default_layer())
+    }
+    /// [`Self::insertion_parent`] for new art, which a locked or hidden layer never takes: an error
+    /// when no layer is shown and unlocked, so the art is refused rather than hidden or locked away.
+    pub fn target_parent(&self) -> Result<Option<NodeId>> {
+        match self.insertion_parent() {
+            Some(p) if !self.doc.is_editable(p) => Err(EngineError::Other("the target layer is locked or hidden".into())),
+            parent => Ok(parent),
+        }
+    }
+    /// The highlighted Layers panel rows that still exist (ids are reused after undo, so a
+    /// remembered row must still be in the document).
+    pub fn highlighted_rows(&self) -> Vec<NodeId> {
+        self.layer_rows.iter().copied().filter(|id| self.doc.node(*id).is_some()).collect()
+    }
+    /// The object whose opacity mask View Opacity Mask shows ([`DocState::mask_view`]): only while
+    /// its mask is being edited, so leaving editing by any route (undo, deleting the object) ends it.
+    pub fn shown_mask(&self) -> Option<NodeId> {
+        self.mask_view.filter(|id| self.doc.mask_edit.is_some_and(|m| m.object == *id))
+    }
+}
 
-        match cmd {
-            EngineCommand::AddObject { name, kind } => {
-                let id = self.document.allocate_object_id();
-                let node = ObjectNode::new(id, name, kind, self.default_fill.clone(), self.default_outline.clone());
-                self.target_layer_mut().objects.push(node);
-                self.selection = vec![id];
+/// Coordinates beyond this (points) are rejected: ~1,400 m, far past Illustrator's large canvas.
+pub use vectorcraft_doc::MAX_COORD;
+
+/// The commands that act on the active artboard (#693), which the app passes as their `artboard`:
+/// Paste in Place, in Front and in Back paste onto it, Align to Artboard aligns to it, Distribute
+/// Objects and Distribute Spacing with Align to Artboard distribute objects across it, and All on
+/// Active Artboard selects on it. A `command.batch` given `artboard` passes it on to each of their
+/// steps that names none.
+pub const ON_ACTIVE_ARTBOARD: [&str; 7] = [
+    "edit.pasteInPlace",
+    "edit.pasteInFront",
+    "edit.pasteInBack",
+    "object.align",
+    "object.distribute",
+    "object.distributeSpacing",
+    "select.allOnArtboard",
+];
+
+/// The commands that resize the artboards the app passes (Object › Artboards): the app passes the
+/// selected artboards to Fit to Artwork Bounds as its `indices`, and the active artboard to Fit to
+/// Selected Art as its `index`. A `command.batch` given `artboard` passes it on, as `index`, to
+/// each of their steps that names none.
+pub const FIT_ACTIVE_ARTBOARD: [&str; 2] = ["artboard.fitToArt", "artboard.fitToSelection"];
+
+/// `(command, param)` pairs the journal records only so a replay reproduces the original run
+/// (dates from the clock: `cmd::clock_date`; the artboards the app passes to the
+/// [`ON_ACTIVE_ARTBOARD`] and [`FIT_ACTIVE_ARTBOARD`] commands and to a batch); an action leaves
+/// them out ([`Session::journal_for_action`]).
+const REPLAY_ONLY: [(&str, &str); 14] = [
+    ("file.new", "created"),
+    ("document.save", "modified"),
+    ("file.saveAs", "modified"),
+    ("edit.pasteInPlace", "artboard"),
+    ("edit.pasteInFront", "artboard"),
+    ("edit.pasteInBack", "artboard"),
+    ("object.align", "artboard"),
+    ("object.distribute", "artboard"),
+    ("object.distributeSpacing", "artboard"),
+    ("artboard.fitToArt", "index"),
+    ("artboard.fitToArt", "indices"),
+    ("artboard.fitToSelection", "index"),
+    ("select.allOnArtboard", "artboard"),
+    ("command.batch", "artboard"),
+];
+
+/// `p`, the params of command `id`, without its [`REPLAY_ONLY`] values (a batch: its steps').
+fn strip_replay_only(id: &str, p: &mut Value) {
+    let strip = |id: &str, p: &mut Value| {
+        if let Value::Object(m) = p {
+            m.retain(|k, _| !REPLAY_ONLY.iter().any(|&(c, key)| c == id && key == k));
+        }
+    };
+    strip(id, p);
+    // Batches don't nest: one level of steps.
+    if id == "command.batch"
+        && let Some(Value::Array(steps)) = p.get_mut("commands")
+    {
+        for step in steps {
+            let id = step.get("command").and_then(Value::as_str).unwrap_or_default().to_string();
+            if let Some(p) = step.get_mut("params") {
+                strip(&id, p);
             }
-            EngineCommand::DeleteSelection => {
-                let sel = self.selection.clone();
-                for page in &mut self.document.pages {
-                    for layer in &mut page.layers {
-                        if !layer.locked {
-                            layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
-                        }
-                    }
-                }
-                for layer in &mut self.document.master_layers {
-                    if !layer.locked {
-                        layer.objects.retain(|o| o.locked || !sel.contains(&o.id));
-                    }
-                }
-                self.selection.clear();
-            }
-            EngineCommand::TranslateSelection { dx_pt, dy_pt } => {
-                let Ok(t) = Affine2::translation(dx_pt.get(), dy_pt.get()) else {
-                    return false;
-                };
-                self.for_each_selected_mut(|obj| {
-                    if let Ok(composed) = obj.transform.then(t) {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ApplyPaletteSwatch { channel, color } => match channel {
-                PaletteChannel::Fill => {
-                    let fill = color.map(FillStyle::uniform);
-                    if self.selection.is_empty() {
-                        self.default_fill = fill;
-                    } else {
-                        self.for_each_selected_mut(|obj| {
-                            obj.fill = fill.clone();
-                        });
-                    }
-                }
-                PaletteChannel::Outline => {
-                    if self.selection.is_empty() {
-                        self.default_outline = color.map(|c| {
-                            let mut style = self.default_outline.clone().unwrap_or_else(|| OutlineStyle::hairline(c.clone()));
-                            style.color = c;
-                            style
-                        });
-                    } else {
-                        self.for_each_selected_mut(|obj| {
-                            obj.outline = color.clone().map(|c| {
-                                let mut style = obj.outline.clone().unwrap_or_else(|| OutlineStyle::hairline(c.clone()));
-                                style.color = c;
-                                style
-                            });
-                        });
-                    }
-                }
+        }
+    }
+}
+
+/// Is `id` a path made into a guide (View → Guides → Make Guides)?
+pub(crate) fn is_guide_path(d: &Document, id: NodeId) -> bool {
+    d.node(id).is_some_and(|n| matches!(n.kind, NodeKind::Path { guide: true, .. }))
+}
+
+/// Deselect the ruler guides and the paths made into guides: while View → Guides → Lock Guides is
+/// on, they can't be selected (#1534), whatever selects them. → whether any was selected.
+pub(crate) fn deselect_guides(d: &Document, sel: &mut Selection) -> bool {
+    let paths: Vec<NodeId> = sel.objects.iter().copied().filter(|id| is_guide_path(d, *id)).collect();
+    let any = !paths.is_empty() || !sel.guides.is_empty();
+    for id in paths {
+        sel.remove(id);
+    }
+    sel.guides.clear();
+    any
+}
+
+/// The error of an edit that would nest objects deeper than [`vectorcraft_doc::MAX_DEPTH`].
+pub const TOO_DEEP: &str = "objects can't be nested more than 32 deep";
+const _: () = assert!(vectorcraft_doc::MAX_DEPTH == 32, "TOO_DEEP (and its catalog rows) names the cap");
+
+/// Cheap sanity check after an edit: artboards and the objects just touched (the selection) must
+/// have finite, in-range geometry, so saved files always reload and renderers never see NaN/∞.
+fn doc_sane(d: &Document, sel: &Selection) -> bool {
+    let ok = |r: vectorcraft_geom::Rect| [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_COORD);
+    d.ruler_origin.is_finite()
+        && d.ruler_origin.x.abs() <= MAX_COORD
+        && d.ruler_origin.y.abs() <= MAX_COORD
+        && d.artboards.iter().all(|a| ok(a.rect))
+        && d.guides.iter().all(|g| g.pos.is_finite() && g.pos.abs() <= MAX_COORD)
+        && {
+            let paths = d.index_paths(sel.objects.iter().copied());
+            sel.objects.iter().all(|id| paths.get(id).and_then(|p| d.node_at(p)).and_then(|n| n.geometric_bounds()).is_none_or(ok))
+        }
+}
+
+/// Where new art goes (Illustrator's drawing modes, Shift+D cycles).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DrawMode {
+    #[default]
+    Normal,
+    Behind,
+    Inside,
+}
+
+/// Application preferences (Edit → Preferences). Every field is reachable through `prefs.get` /
+/// `prefs.set {key, value}` (camelCase keys, validated against [`cmd::prefscmds::PREF_SPECS`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Prefs {
+    // General
+    /// Arrow-key nudge distance (General → Keyboard Increment), points.
+    pub keyboard_increment: f64,
+    pub constrain_angle: f64,
+    pub corner_radius: f64,
+    pub disable_auto_add_delete: bool,
+    pub use_precise_cursors: bool,
+    pub show_tool_tips: bool,
+    pub anti_aliased_artwork: bool,
+    pub select_same_tint_percent: bool,
+    pub show_home_screen: bool,
+    pub use_preview_bounds: bool,
+    pub display_print_size: bool,
+    pub double_click_to_isolate: bool,
+    pub transform_pattern_tiles: bool,
+    pub scale_corners: bool,
+    /// Scale Strokes & Effects.
+    pub scale_strokes: bool,
+    pub zoom_with_mouse_wheel: bool,
+    /// A horizontal drag on a numeric field or its label steps its value (#400).
+    pub scrub_numeric_fields: bool,
+    /// A two-finger rotation on a Mac trackpad turns the view about the pointer once it reaches 5°.
+    pub trackpad_rotate_view: bool,
+    /// Offset for Paste / duplicate (Illustrator pastes to the view centre; we offset by this).
+    pub paste_offset: f64,
+    // Selection & Anchor Display
+    pub selection_tolerance: f64,
+    pub object_selection_by_path_only: bool,
+    pub snap_to_point_tolerance: f64,
+    pub ctrl_click_selects_behind: bool,
+    pub zoom_to_selection: bool,
+    pub move_locked_with_artboard: bool,
+    pub anchor_size: u32,
+    pub handle_style: String,
+    pub highlight_anchors_on_hover: bool,
+    pub show_handles_multiple_anchors: bool,
+    pub hide_corner_widget_above: f64,
+    pub pen_rubber_band: bool,
+    pub curvature_rubber_band: bool,
+    // Type
+    pub type_size_increment: f64,
+    pub tracking_increment: f64,
+    pub baseline_shift_increment: f64,
+    pub show_east_asian_options: bool,
+    pub show_indic_options: bool,
+    pub type_selection_by_path_only: bool,
+    pub font_names_in_english: bool,
+    pub auto_size_area_type: bool,
+    pub font_preview: bool,
+    pub font_preview_size: String,
+    pub recent_fonts_count: u32,
+    pub missing_glyph_protection: bool,
+    pub highlight_alternate_glyphs: bool,
+    pub placeholder_text: bool,
+    // Units
+    pub units_general: String,
+    pub units_stroke: String,
+    pub units_type: String,
+    pub units_asian_type: String,
+    /// Numbers Without Units Are Points: a number typed with no unit into a length field in picas
+    /// is read in points (on by default; the reference app dims it unless a unit is Picas).
+    pub numbers_without_units_are_points: bool,
+    pub identify_objects_by: String,
+    // Guides & Grid
+    pub guide_color: String,
+    pub guide_style: String,
+    pub grid_color: String,
+    pub grid_style: String,
+    pub gridline_every: f64,
+    pub grid_subdivisions: u32,
+    pub grids_in_back: bool,
+    pub show_pixel_grid: bool,
+    // Smart Guides
+    pub smart_guide_color: String,
+    pub alignment_guides: bool,
+    pub object_highlighting: bool,
+    pub transform_tools_guides: bool,
+    pub construction_guides: bool,
+    pub construction_angles: String,
+    pub anchor_path_labels: bool,
+    pub measurement_labels: bool,
+    pub spacing_guides: bool,
+    pub snapping_tolerance: f64,
+    // Slices
+    pub show_slice_numbers: bool,
+    pub slice_line_color: String,
+    // Hyphenation
+    pub hyphenation_language: String,
+    pub hyphenation_exceptions: String,
+    /// Type › Options › Additional Fonts Folder: a folder (read with its subfolders) whose fonts
+    /// are listed and used as if installed (#683); empty for none.
+    pub fonts_folder: String,
+    // Performance & Storage (Plug-ins & Scratch Disks)
+    pub plugins_folder: String,
+    pub scratch_primary: String,
+    pub scratch_secondary: String,
+    // User Interface
+    pub ui_brightness: String,
+    /// User Interface › Accent Color: the colour of what is on, chosen or focused.
+    pub ui_accent: String,
+    /// User Interface › Color Scheme: "modern" (with the accent above) or "classic" (neutral
+    /// greys and a blue accent).
+    pub ui_color_scheme: String,
+    pub canvas_color: String,
+    pub auto_collapse_icon_panels: bool,
+    /// User Interface › Show Tool Group Labels: the toolbar's group names (Select, Shapes, Draw…);
+    /// off (as it ships, #1736), the tools run on from group to group with nothing between them.
+    pub tool_group_labels: bool,
+    pub open_documents_as_tabs: bool,
+    pub large_tabs: bool,
+    pub ui_scaling: f64,
+    pub scale_cursor_with_ui: bool,
+    /// UI language: `auto` (follow the system locale) or a language code such as `en`, `zh-hant`.
+    /// The list of languages belongs to the shell (`ui-egui` i18n); an unknown code reads as `auto`.
+    pub interface_language: String,
+    /// Windows and Linux: use the system's title bar and window buttons instead of the app bar
+    /// acting as the title bar (tiling window managers, desktops that draw their own decorations).
+    /// Read when the app starts. macOS always uses the system's.
+    pub system_title_bar: bool,
+    // Performance
+    pub gpu_performance: bool,
+    pub animated_zoom: bool,
+    /// Which graphics processor the desktop app asks for at startup (it takes effect after a
+    /// restart): `automatic`, `lowPower` (the integrated GPU on hybrid-graphics machines) or
+    /// `highPerformance` (the discrete one). The canvas is rasterized on the CPU and only
+    /// composited on the GPU, so the integrated GPU is plenty; presenting from the discrete GPU
+    /// through the integrated one made some hybrid laptops flicker (#306). Automatic is power
+    /// saving on Windows and macOS and the system's default GPU elsewhere, the one the desktop
+    /// runs on: a Wayland compositor may not show frames from another GPU (#502). Single-GPU
+    /// machines are unaffected.
+    pub gpu_preference: String,
+    pub history_states: u32,
+    pub real_time_drawing: bool,
+    /// Rasterizer worker threads; -1 = automatic.
+    pub render_threads: i32,
+    /// Linux: `automatic` opens the window on the session's display server; `x11` opens it through
+    /// XWayland on a Wayland session, where dropped files arrive (#1151); `x11WithPen` opens it
+    /// through XWayland only when a pen is attached (#2028). Read when the app starts.
+    pub linux_display_server: String,
+    // File Handling
+    pub background_save: bool,
+    pub background_export: bool,
+    pub autosave_recovery: bool,
+    pub autosave_interval: u32,
+    pub recovery_folder: String,
+    pub recovery_off_for_complex: bool,
+    pub recent_files_count: u32,
+    pub low_res_proxy_eps: bool,
+    pub anti_aliased_bitmaps: bool,
+    pub update_links: String,
+    // Clipboard Handling
+    pub copy_as_svg: bool,
+    pub copy_as_pdf: bool,
+    pub copy_aicb: bool,
+    pub aicb_mode: String,
+    pub paste_text_formatting: String,
+    // Appearance of Black
+    pub black_on_screen: String,
+    pub black_output: String,
+    // Devices
+    pub touch_workspace: bool,
+    pub touch_gestures: bool,
+    // Graphic Styles panel
+    /// Override Character Color: a graphic style applied to type replaces its characters' fill
+    /// and stroke with the style's fills and strokes.
+    pub override_char_color: bool,
+    // Pattern editing
+    /// Object → Pattern → Tile Edge Color (`#rrggbb`): the tile edge and swatch bounds in pattern
+    /// editing mode.
+    pub pattern_tile_edge_color: String,
+    /// Eyedropper Options (`eyedropper.setOptions`; a preference group, see
+    /// [`cmd::prefscmds::PREF_GROUPS`]).
+    pub eyedropper: EyedropperOptions,
+    /// Edit → Transparency Flattener Presets: the user's presets (the built-in ones aren't stored).
+    /// Not a `prefs.set` key or group (resetting the preferences keeps them): `flattener.presets.*`
+    /// edit it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flattener_presets: Vec<cmd::FlattenerPreset>,
+    /// Width profiles saved to the Stroke panel's Profile list (`stroke.widthProfile.*`). Not a
+    /// Preferences dialog field, so it has no [`cmd::prefscmds::PREF_SPECS`] row.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub width_profiles: Vec<vectorcraft_doc::SavedProfile>,
+    /// General → Use Japanese Crop Marks: the style of Create Trim Marks and Effect → Crop Marks.
+    pub japanese_crop_marks: bool,
+    /// Appearance panel → New Art Has Basic Appearance (on): new art takes one fill and stroke;
+    /// off, the whole appearance of the last selection (`appearance.setNewArtBasic`).
+    pub new_art_basic: bool,
+    /// The Color Themes panel's saved themes (`colorTheme.*`): a local library, not a Preferences
+    /// dialog field, so it has no [`cmd::prefscmds::PREF_SPECS`] row and resetting keeps it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub color_themes: Vec<cmd::colortheme::ColorTheme>,
+    /// New Document → Saved: the user's document presets (`file.newPresets.save`). A local
+    /// library, not a Preferences dialog field: resetting the preferences keeps it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub new_doc_presets: Vec<cmd::newdoc::DocSettings>,
+    /// New Document → Recent: the settings of the last documents made (newest first).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recent_new_docs: Vec<cmd::newdoc::DocSettings>,
+    /// Edit → PDF Presets: the user's presets (the built-in ones aren't stored). A local library,
+    /// not a Preferences dialog field: resetting the preferences keeps it; `pdf.preset.*` edit it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pdf_presets: Vec<vectorcraft_pdf::PdfPreset>,
+    /// File → Export for Screens: the user's batch export presets (`document.exportPresets.*`;
+    /// the built-in ones aren't stored). A local library, not a Preferences dialog field.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub screen_export_presets: Vec<cmd::fileio::ScreenExportPreset>,
+    // File Handling (continued)
+    /// Where Save as Template and New from Template start ("" = `Documents/VectorCraft Templates`).
+    pub templates_folder: String,
+    /// Open older native files as "<name> [Converted]" so Save asks for a new name.
+    pub append_converted: bool,
+    /// File Handling → Use Compression: native saves are gzip-compressed (`document.save
+    /// {compress}` overrides it).
+    pub use_compression: bool,
+    /// Save for Web: the user's presets (the built-in ones aren't stored). A local library, not a
+    /// Preferences dialog field: resetting the preferences keeps it; `webExport.presets.*` edit it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub web_export_presets: Vec<cmd::webexport::WebPreset>,
+    /// Save for Web: the settings the dialog opens on (`webExport.settings`); none until set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_export_settings: Option<cmd::webexport::WebSettings>,
+    /// Edit → Print Presets: the user's presets ([Default] isn't stored). A local library, not a
+    /// Preferences dialog field: resetting the preferences keeps it; `print.presets.*` edit it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub print_presets: Vec<cmd::printpresets::PrintPreset>,
+    /// Constrain Width and Height Proportions: the link between W and H in the Transform panel,
+    /// the Properties panel and the Control bar (their size fields pass `proportional` to
+    /// `object.setBounds`).
+    pub constrain_proportions: bool,
+    /// One Corner Radius field sets every corner of a live rectangle (off: a field per corner).
+    pub single_corner_radius: bool,
+    /// The tools' persistent options by store (a tool id, or a store a family shares: `liquify`
+    /// holds the Liquify tools' Global Brush Dimensions), see [`vectorcraft_tools::settings`]:
+    /// kept across tool switches and saved with the preferences. Not a Preferences dialog field:
+    /// resetting the preferences keeps them; `tool.setOption` edits them.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tool_settings: std::collections::BTreeMap<String, serde_json::Map<String, Value>>,
+    /// View → Perspective Grid presets: the user's (the built-in ones aren't stored). A local
+    /// library, not a Preferences dialog field: resetting the preferences keeps it;
+    /// `perspective.presets.*` edit it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub perspective_presets: Vec<vectorcraft_tools::distort::perspective::GridDefinition>,
+    /// Blend Options set with no blend selected: what new blends start with
+    /// (`object.blend.options`; none: Smooth Color, Align to Page). A tool setting, not a
+    /// Preferences dialog field: it has no [`cmd::prefscmds::PREF_SPECS`] row and resetting the
+    /// preferences keeps it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blend_options: Option<vectorcraft_doc::live::BlendDefaults>,
+    /// Perspective Grid Options (double-click the Perspective Grid tool): whether the Plane
+    /// Switching Widget shows and where (`perspective.widget.options`).
+    pub perspective_widget: vectorcraft_tools::distort::perspective::widget::WidgetOptions,
+    /// What names and codes in other apps' shortcut sets stand for, as the user confirmed them on
+    /// import (`importMatches.*`). A local library, not a Preferences dialog field: resetting the
+    /// preferences keeps it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub import_matches: Vec<cmd::importmatches::ImportMatch>,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        let s = |v: &str| v.to_string();
+        Self {
+            keyboard_increment: 1.0,
+            constrain_angle: 0.0,
+            corner_radius: 12.0,
+            disable_auto_add_delete: false,
+            use_precise_cursors: false,
+            show_tool_tips: true,
+            anti_aliased_artwork: true,
+            select_same_tint_percent: false,
+            show_home_screen: true,
+            use_preview_bounds: false,
+            display_print_size: false,
+            double_click_to_isolate: true,
+            transform_pattern_tiles: false,
+            scale_corners: false,
+            scale_strokes: false,
+            zoom_with_mouse_wheel: false,
+            scrub_numeric_fields: true,
+            trackpad_rotate_view: true,
+            paste_offset: 10.0,
+            selection_tolerance: 3.0,
+            object_selection_by_path_only: false,
+            snap_to_point_tolerance: 2.0,
+            ctrl_click_selects_behind: true,
+            zoom_to_selection: true,
+            move_locked_with_artboard: false,
+            anchor_size: 3,
+            handle_style: s("solid"),
+            highlight_anchors_on_hover: true,
+            show_handles_multiple_anchors: true,
+            hide_corner_widget_above: 177.0,
+            pen_rubber_band: true,
+            curvature_rubber_band: true,
+            type_size_increment: 2.0,
+            tracking_increment: 20.0,
+            baseline_shift_increment: 2.0,
+            show_east_asian_options: false,
+            show_indic_options: false,
+            type_selection_by_path_only: false,
+            font_names_in_english: true,
+            auto_size_area_type: false,
+            font_preview: true,
+            font_preview_size: s("medium"),
+            recent_fonts_count: 10,
+            missing_glyph_protection: true,
+            highlight_alternate_glyphs: false,
+            placeholder_text: true,
+            units_general: s("points"),
+            units_stroke: s("points"),
+            units_type: s("points"),
+            units_asian_type: s("points"),
+            numbers_without_units_are_points: true,
+            identify_objects_by: s("objectName"),
+            guide_color: s("#4affff"),
+            guide_style: s("lines"),
+            grid_color: s("#c8c8c8"),
+            grid_style: s("lines"),
+            gridline_every: 72.0,
+            grid_subdivisions: 8,
+            grids_in_back: true,
+            show_pixel_grid: true,
+            smart_guide_color: s("#ff3dfc"),
+            alignment_guides: true,
+            object_highlighting: true,
+            transform_tools_guides: true,
+            construction_guides: true,
+            construction_angles: s(vectorcraft_tools::guides::DEFAULT_CONSTRUCTION_ANGLES),
+            anchor_path_labels: true,
+            measurement_labels: true,
+            spacing_guides: true,
+            snapping_tolerance: 4.0,
+            show_slice_numbers: true,
+            slice_line_color: s("#ff3f3f"),
+            hyphenation_language: s("English: USA"),
+            hyphenation_exceptions: String::new(),
+            fonts_folder: String::new(),
+            plugins_folder: String::new(),
+            scratch_primary: s("Startup"),
+            scratch_secondary: s("None"),
+            ui_brightness: s("mediumDark"),
+            ui_accent: s("coral"),
+            ui_color_scheme: s("modern"),
+            canvas_color: s("matchUi"),
+            auto_collapse_icon_panels: false,
+            tool_group_labels: false,
+            open_documents_as_tabs: true,
+            large_tabs: false,
+            ui_scaling: 1.0,
+            scale_cursor_with_ui: false,
+            interface_language: s("auto"),
+            system_title_bar: false,
+            gpu_performance: true,
+            animated_zoom: true,
+            gpu_preference: s("automatic"),
+            history_states: 500,
+            real_time_drawing: true,
+            render_threads: -1,
+            linux_display_server: s("automatic"),
+            background_save: true,
+            background_export: true,
+            autosave_recovery: true,
+            autosave_interval: 2,
+            recovery_folder: String::new(),
+            recovery_off_for_complex: false,
+            recent_files_count: 20,
+            low_res_proxy_eps: false,
+            anti_aliased_bitmaps: false,
+            update_links: s("askWhenModified"),
+            copy_as_svg: true,
+            copy_as_pdf: false,
+            copy_aicb: false,
+            aicb_mode: s("preserveAppearance"),
+            paste_text_formatting: s("keep"),
+            black_on_screen: s("accurate"),
+            black_output: s("accurate"),
+            touch_workspace: true,
+            touch_gestures: true,
+            override_char_color: true,
+            pattern_tile_edge_color: {
+                let [r, g, b] = vectorcraft_doc::LAYER_COLORS[0].1;
+                Color::rgb8(r, g, b).to_hex()
             },
-            EngineCommand::SetFill { fill } => {
-                if self.selection.is_empty() {
-                    self.default_fill = fill;
-                } else {
-                    self.for_each_selected_mut(|obj| obj.fill = fill.clone());
-                }
-            }
-            EngineCommand::SetOutline { outline } => {
-                if self.selection.is_empty() {
-                    self.default_outline = outline;
-                } else {
-                    self.for_each_selected_mut(|obj| obj.outline = outline.clone());
-                }
-            }
-            EngineCommand::SetPageSetup { width_pt, height_pt, units } => {
-                self.document.units = units;
-                let idx = self.current_page_index();
-                if let Some(page) = self.document.pages.get_mut(idx)
-                    && let Ok(size) = Size::new(width_pt.get(), height_pt.get())
-                {
-                    page.size = size;
-                }
-            }
-            EngineCommand::UpdateRectCorners { corner_kind, radii, corners_locked } => {
-                self.tool_state.default_rect_corner_kind = corner_kind;
-                self.tool_state.default_rect_uniform_radius_pt = radii[0];
-                self.tool_state.default_rect_corners_locked = corners_locked;
-                self.for_each_selected_mut(|obj| {
-                    if let ObjectKind::Rect(spec) = &mut obj.kind {
-                        spec.corner_kinds = [corner_kind; 4];
-                        spec.radii = if corners_locked { [radii[0]; 4] } else { radii };
-                    }
-                });
-            }
-            EngineCommand::UpdateEllipseParameters { mode, start_deg, end_deg } => {
-                self.tool_state.default_ellipse_mode = mode;
-                self.tool_state.default_ellipse_start_deg = start_deg;
-                self.tool_state.default_ellipse_end_deg = end_deg;
-                self.for_each_selected_mut(|obj| {
-                    if let ObjectKind::Ellipse(spec) = &mut obj.kind {
-                        spec.mode = mode;
-                        spec.start_deg = start_deg;
-                        spec.end_deg = end_deg;
-                    }
-                });
-            }
-            EngineCommand::UpdatePolygonParameters { mode, points, inner_radius_pt } => {
-                let pts = points.max(3);
-                self.tool_state.polygon_mode = mode;
-                self.tool_state.default_polygon_points = pts;
-                self.for_each_selected_mut(|obj| {
-                    if let ObjectKind::Polygon(spec) = &mut obj.kind {
-                        spec.points = pts;
-                        spec.inner_radius = match mode {
-                            PolygonSubMode::Polygon => None,
-                            PolygonSubMode::Star => inner_radius_pt.or_else(|| F64::new(spec.radius.get() * 0.5).ok()),
-                        };
-                    }
-                });
-            }
-            EngineCommand::AddPageAfterActive => {
-                let insert_after = self.current_page_index();
-                let template_size = self.current_page().size;
-                let page_id = PageId(self.document.allocate_object_id().0);
-                let layer_id = LayerId(self.document.allocate_object_id().0);
-                let new_num = self.document.pages.len().saturating_add(1);
-                let new_page = Page {
-                    id: page_id,
-                    name: format!("Page {new_num}"),
-                    size: template_size,
-                    bleed: F64::ZERO,
-                    background: Some(FillStyle::uniform(Color::WHITE)),
-                    layers: vec![Layer::new_normal(layer_id, "Layer 1")],
-                    residual: Residual::default(),
-                    extra: BTreeMap::new(),
-                };
-                let new_idx = insert_after.saturating_add(1).min(self.document.pages.len());
-                self.document.pages.insert(new_idx, new_page);
-                self.active_target = ActivePageTarget::Page(new_idx);
-                self.selection.clear();
-            }
-            EngineCommand::DuplicatePage { page_index } => {
-                let idx = page_index.min(self.document.pages.len().saturating_sub(1));
-                let Some(mut cloned) = self.document.pages.get(idx).cloned() else {
-                    return false;
-                };
-                cloned.id = PageId(self.document.allocate_object_id().0);
-                cloned.name = format!("{} Copy", cloned.name);
-                for layer in &mut cloned.layers {
-                    layer.id = LayerId(self.document.allocate_object_id().0);
-                    for obj in &mut layer.objects {
-                        reallocate_object_ids_recursive(obj, &mut self.document);
-                    }
-                }
-                let new_idx = idx.saturating_add(1).min(self.document.pages.len());
-                self.document.pages.insert(new_idx, cloned);
-                self.active_target = ActivePageTarget::Page(new_idx);
-                self.selection.clear();
-            }
-            EngineCommand::RenamePage { page_index, name } => {
-                if let Some(page) = self.document.pages.get_mut(page_index) {
-                    page.name = name;
-                }
-            }
-            EngineCommand::DeletePage { page_index } => {
-                if self.document.pages.len() > 1 && page_index < self.document.pages.len() {
-                    self.document.pages.remove(page_index);
-                    let clamped = page_index.min(self.document.pages.len().saturating_sub(1));
-                    self.active_target = ActivePageTarget::Page(clamped);
-                    self.selection.clear();
-                }
-            }
-            EngineCommand::GroupSelection => {
-                let sel = self.selection.clone();
-                let group_id = self.document.allocate_object_id();
-                let layer = self.target_layer_mut();
-                let mut children = Vec::new();
-                let mut remaining = Vec::with_capacity(layer.objects.len());
-                let mut insert_idx = 0usize;
-                for obj in layer.objects.drain(..) {
-                    if !obj.locked && sel.contains(&obj.id) {
-                        insert_idx = remaining.len();
-                        children.push(obj);
-                    } else {
-                        remaining.push(obj);
-                    }
-                }
-                let group_node = ObjectNode::new(group_id, Some("Group".to_owned()), ObjectKind::Group { children }, None, None);
-                remaining.insert(insert_idx.min(remaining.len()), group_node);
-                layer.objects = remaining;
-                self.selection = vec![group_id];
-            }
-            EngineCommand::UngroupSelection => {
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                let mut new_objects = Vec::with_capacity(layer.objects.len());
-                let mut new_selection = Vec::new();
-                for obj in layer.objects.drain(..) {
-                    if !obj.locked && sel.contains(&obj.id) {
-                        if let ObjectKind::Group { children } = obj.kind {
-                            let group_tf = obj.transform;
-                            for mut child in children {
-                                if let Ok(composed) = child.transform.then(group_tf) {
-                                    child.transform = composed;
-                                }
-                                new_selection.push(child.id);
-                                new_objects.push(child);
-                            }
-                        } else {
-                            new_objects.push(obj);
-                        }
-                    } else {
-                        new_objects.push(obj);
-                    }
-                }
-                layer.objects = new_objects;
-                self.selection = new_selection;
-            }
-            EngineCommand::ConvertToCurves => {
-                self.for_each_selected_mut(|obj| {
-                    if obj.locked {
-                        return;
-                    }
-                    if let Some(path) = object_to_path(obj) {
-                        obj.kind = ObjectKind::Path(path);
-                    }
-                });
-            }
-            EngineCommand::ReorderSelection { op } => {
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                match op {
-                    ZOrderOp::ToFront => {
-                        let mut unselected = Vec::with_capacity(layer.objects.len());
-                        let mut selected = Vec::new();
-                        for obj in layer.objects.drain(..) {
-                            if !obj.locked && sel.contains(&obj.id) {
-                                selected.push(obj);
-                            } else {
-                                unselected.push(obj);
-                            }
-                        }
-                        unselected.extend(selected);
-                        layer.objects = unselected;
-                    }
-                    ZOrderOp::ToBack => {
-                        let mut selected = Vec::new();
-                        let mut unselected = Vec::with_capacity(layer.objects.len());
-                        for obj in layer.objects.drain(..) {
-                            if !obj.locked && sel.contains(&obj.id) {
-                                selected.push(obj);
-                            } else {
-                                unselected.push(obj);
-                            }
-                        }
-                        selected.extend(unselected);
-                        layer.objects = selected;
-                    }
-                    ZOrderOp::ForwardOne => {
-                        let len = layer.objects.len();
-                        if len >= 2 {
-                            for i in (0..len.saturating_sub(1)).rev() {
-                                let next_idx = i.saturating_add(1);
-                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
-                                let next_sel = layer.objects.get(next_idx).is_some_and(|o| sel.contains(&o.id));
-                                if is_sel && !next_sel {
-                                    layer.objects.swap(i, next_idx);
-                                }
-                            }
-                        }
-                    }
-                    ZOrderOp::BackwardOne => {
-                        let len = layer.objects.len();
-                        if len >= 2 {
-                            for i in 1..len {
-                                let prev_idx = i.saturating_sub(1);
-                                let is_sel = layer.objects.get(i).is_some_and(|o| !o.locked && sel.contains(&o.id));
-                                let prev_sel = layer.objects.get(prev_idx).is_some_and(|o| sel.contains(&o.id));
-                                if is_sel && !prev_sel {
-                                    layer.objects.swap(prev_idx, i);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            EngineCommand::AlignSelection { mode } => {
-                if mode == AlignMode::CenterToPage {
-                    let ps = self.current_page().size;
-                    let nodes = self.selected_nodes();
-                    let sb = combined_selection_bounds(&nodes);
-                    let dx = ps.width.get() * 0.5 - (sb.x0.get() + sb.x1.get()) * 0.5;
-                    let dy = ps.height.get() * 0.5 - (sb.y0.get() + sb.y1.get()) * 0.5;
-                    if let Ok(t) = Affine2::translation(dx, dy) {
-                        self.for_each_selected_mut(|obj| {
-                            if !obj.locked
-                                && let Ok(composed) = obj.transform.then(t)
-                            {
-                                obj.transform = composed;
-                            }
-                        });
-                    }
-                } else if let Some(&anchor_id) = self.selection.last()
-                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
-                {
-                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
-                    let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
-                    let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
-                    self.for_each_selected_mut(|obj| {
-                        if obj.locked || obj.id == anchor_id {
-                            return;
-                        }
-                        let bbox = combined_selection_bounds(&[obj]);
-                        let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
-                        let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
-                        let (dx, dy) = match mode {
-                            AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
-                            AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
-                            AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
-                            AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
-                            AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
-                            AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
-                            AlignMode::CenterToPage => (0.0, 0.0),
-                        };
-                        if let Ok(t) = Affine2::translation(dx, dy)
-                            && let Ok(composed) = obj.transform.then(t)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::DistributeSelection { mode } => {
-                let sel = &self.selection;
-                let mut items: Vec<(ObjectId, Rect)> = self
-                    .current_target_objects()
-                    .iter()
-                    .filter(|o| !o.locked && sel.contains(&o.id))
-                    .map(|o| (o.id, combined_selection_bounds(&[o])))
-                    .collect();
-                let n = items.len();
-                if n >= 3 {
-                    let is_horizontal = matches!(
-                        mode,
-                        DistributeMode::Left | DistributeMode::CenterHorizontal | DistributeMode::Right | DistributeMode::SpacingHorizontal
-                    );
-                    if is_horizontal {
-                        items.sort_by_key(|a| a.1.x0);
-                    } else {
-                        items.sort_by_key(|a| a.1.y0);
-                    }
-                    let (Some(&(_, first_b)), Some(&(_, last_b))) = (items.first(), items.last()) else {
-                        return false;
-                    };
-                    let mut deltas = BTreeMap::new();
-                    let n_minus_1 = n.saturating_sub(1);
-                    let denom = n_minus_1 as f64;
-                    match mode {
-                        DistributeMode::Left => {
-                            let start = first_b.x0.get();
-                            let span = last_b.x0.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x0.get(), 0.0));
-                            }
-                        }
-                        DistributeMode::CenterHorizontal => {
-                            let start = (first_b.x0.get() + first_b.x1.get()) * 0.5;
-                            let end = (last_b.x0.get() + last_b.x1.get()) * 0.5;
-                            let span = end - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                let cur = (b.x0.get() + b.x1.get()) * 0.5;
-                                deltas.insert(*id, (start + (k as f64 / denom) * span - cur, 0.0));
-                            }
-                        }
-                        DistributeMode::Right => {
-                            let start = first_b.x1.get();
-                            let span = last_b.x1.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (start + (k as f64 / denom) * span - b.x1.get(), 0.0));
-                            }
-                        }
-                        DistributeMode::SpacingHorizontal => {
-                            let min_x = first_b.x0.get();
-                            let max_x = last_b.x1.get();
-                            let total_w: f64 = items.iter().map(|(_, b)| b.width()).sum();
-                            let gap = (max_x - min_x - total_w) / denom;
-                            let mut cur_x = min_x + first_b.width() + gap;
-                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
-                                cur_x += b.width() + gap;
-                            }
-                        }
-                        DistributeMode::Top => {
-                            let start = first_b.y0.get();
-                            let span = last_b.y0.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y0.get()));
-                            }
-                        }
-                        DistributeMode::CenterVertical => {
-                            let start = (first_b.y0.get() + first_b.y1.get()) * 0.5;
-                            let end = (last_b.y0.get() + last_b.y1.get()) * 0.5;
-                            let span = end - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                let cur = (b.y0.get() + b.y1.get()) * 0.5;
-                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - cur));
-                            }
-                        }
-                        DistributeMode::Bottom => {
-                            let start = first_b.y1.get();
-                            let span = last_b.y1.get() - start;
-                            for (k, (id, b)) in items.iter().enumerate().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (0.0, start + (k as f64 / denom) * span - b.y1.get()));
-                            }
-                        }
-                        DistributeMode::SpacingVertical => {
-                            let min_y = first_b.y0.get();
-                            let max_y = last_b.y1.get();
-                            let total_h: f64 = items.iter().map(|(_, b)| b.height()).sum();
-                            let gap = (max_y - min_y - total_h) / denom;
-                            let mut cur_y = min_y + first_b.height() + gap;
-                            for (id, b) in items.iter().take(n_minus_1).skip(1) {
-                                deltas.insert(*id, (0.0, cur_y - b.y0.get()));
-                                cur_y += b.height() + gap;
-                            }
-                        }
-                    }
-                    self.for_each_selected_mut(|obj| {
-                        if let Some(&(dx, dy)) = deltas.get(&obj.id)
-                            && let Ok(t) = Affine2::translation(dx, dy)
-                            && let Ok(composed) = obj.transform.then(t)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::PlaceInsidePowerClip { container_id } => {
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                let mut extracted = Vec::new();
-                let mut remaining = Vec::with_capacity(layer.objects.len());
-                for obj in layer.objects.drain(..) {
-                    if !obj.locked && obj.id != container_id && sel.contains(&obj.id) {
-                        extracted.push(obj);
-                    } else {
-                        remaining.push(obj);
-                    }
-                }
-                if let Some(container) = remaining.iter_mut().find(|o| o.id == container_id) {
-                    container.powerclip_children.extend(extracted);
-                }
-                layer.objects = remaining;
-                self.selection = vec![container_id];
-            }
-            EngineCommand::ExtractPowerClip { container_id } => {
-                let layer = self.target_layer_mut();
-                let mut new_objects = Vec::with_capacity(layer.objects.len());
-                let mut extracted_ids = Vec::new();
-                for mut obj in layer.objects.drain(..) {
-                    if obj.id == container_id && !obj.locked {
-                        let children: Vec<ObjectNode> = std::mem::take(&mut obj.powerclip_children);
-                        new_objects.push(obj);
-                        for child in children {
-                            extracted_ids.push(child.id);
-                            new_objects.push(child);
-                        }
-                    } else {
-                        new_objects.push(obj);
-                    }
-                }
-                layer.objects = new_objects;
-                self.selection = extracted_ids;
-            }
-            EngineCommand::MoveBezierNode { object_id, element_index, new_pt } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id != object_id || obj.locked {
-                        return;
-                    }
-                    let inv = obj.transform.invert().unwrap_or(Affine2::IDENTITY);
-                    let Ok(local_pt) = inv.apply_point(new_pt) else {
-                        return;
-                    };
-                    if let ObjectKind::Path(path) = &mut obj.kind
-                        && let Some(el) = path.elements.get_mut(element_index)
-                    {
-                        match el {
-                            coralcraft_geom::PathElement::MoveTo(pt) | coralcraft_geom::PathElement::LineTo(pt) => {
-                                *pt = local_pt;
-                            }
-                            coralcraft_geom::PathElement::QuadTo { ctrl, end } => {
-                                let dx = local_pt.x.get() - end.x.get();
-                                let dy = local_pt.y.get() - end.y.get();
-                                if let Ok(new_ctrl) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
-                                    *ctrl = new_ctrl;
-                                }
-                                *end = local_pt;
-                            }
-                            coralcraft_geom::PathElement::CubicTo { c2, end, .. } => {
-                                let dx = local_pt.x.get() - end.x.get();
-                                let dy = local_pt.y.get() - end.y.get();
-                                if let Ok(new_c2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
-                                    *c2 = new_c2;
-                                }
-                                *end = local_pt;
-                            }
-                            coralcraft_geom::PathElement::Close => {}
-                        }
-                    }
-                });
-            }
-            EngineCommand::BooleanSelection { op } => {
-                let new_id = self.document.allocate_object_id();
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                let mut sel_indices: Vec<usize> = Vec::new();
-                for (idx, obj) in layer.objects.iter().enumerate() {
-                    if !obj.locked && sel.contains(&obj.id) {
-                        sel_indices.push(idx);
-                    }
-                }
-                if sel_indices.len() < 2 {
-                    return false;
-                }
+            eyedropper: Default::default(),
+            flattener_presets: vec![],
+            width_profiles: vec![],
+            japanese_crop_marks: false,
+            new_art_basic: true,
+            color_themes: vec![],
+            new_doc_presets: vec![],
+            recent_new_docs: vec![],
+            pdf_presets: vec![],
+            screen_export_presets: vec![],
+            templates_folder: String::new(),
+            append_converted: true,
+            use_compression: false,
+            web_export_presets: vec![],
+            web_export_settings: None,
+            print_presets: vec![],
+            constrain_proportions: false,
+            single_corner_radius: true,
+            tool_settings: Default::default(),
+            perspective_presets: vec![],
+            blend_options: None,
+            perspective_widget: Default::default(),
+            import_matches: vec![],
+        }
+    }
+}
 
-                let Some(&first_idx) = sel_indices.first() else {
-                    return false;
-                };
-                let anchor_idx = *sel_indices.last().unwrap_or(&first_idx);
-                let Some(anchor_obj) = layer.objects.get(anchor_idx) else {
-                    return false;
-                };
-                let anchor_style_fill = anchor_obj.fill.clone();
-                let anchor_style_outline = anchor_obj.outline.clone();
+pub struct Session {
+    docs: Vec<DocState>,
+    active: Option<usize>,
+    pub prefs: Prefs,
+    /// Fill/stroke for new art (the toolbar proxy).
+    pub paint: PaintDefaults,
+    /// Which proxy is in front (true = Fill, false = Stroke) — the X key toggles.
+    pub fill_active: bool,
+    /// Internal clipboard: the copied objects and the document resources they use.
+    pub clipboard: Clipboard,
+    /// Executed commands (for actions and debugging), the most recent ones kept ([`Journal`]).
+    pub journal: Journal,
+    pub(crate) tool: Box<dyn Tool>,
+    /// While Cmd lends `tool` (a selection tool) for a drag: the tool it was lent to, which comes
+    /// back as it was at the release ([`Session::pointer`]).
+    pub(crate) lender: Option<Box<dyn Tool>>,
+    /// The selection tool chosen last (Selection, Direct Selection or Group Selection): the one Cmd
+    /// lends the other tools. None until one is chosen.
+    pub(crate) last_selection_tool: Option<&'static str>,
+    pub(crate) last_view: ViewInfo,
+    depth: u32,
+    /// Set when the active tool panicked (see [`guard`]); reported by the next tool event.
+    tool_panic: Option<EngineError>,
+    /// Draw Normal / Behind / Inside (toolbar drawing modes).
+    pub draw_mode: DrawMode,
+    /// The path new art is drawn inside (Draw Inside).
+    pub draw_inside: Option<NodeId>,
+    untitled_counter: u32,
+    /// Session-level state of the menu commands (saved selections, guide lock).
+    pub(crate) menu: cmd::menucmds::MenuState,
+    /// The selected gradient stop (`gradient.selectStop`) and whose gradient it was selected on,
+    /// shared by the Gradient tool's annotator, the Gradient and Color panels and agents: read it
+    /// with [`Session::selected_stop`].
+    pub(crate) gradient_stop: Option<(usize, cmd::gradient::StopOwner)>,
+    /// The Appearance panel's active fill/stroke row (`appearance.setActiveItem`); not saved. Read
+    /// it through [`Session::appearance_item`], which drops it once the selection changes.
+    pub(crate) active_appearance_item: Option<cmd::appearance::ActiveItem>,
+    /// The last solid colour applied (the toolbar's Color button; `,` applies it again).
+    pub last_solid: Color,
+    /// The last gradient applied (the toolbar's Gradient button; `.` applies it again).
+    pub last_gradient: GradientPaint,
+    /// Recently applied solid colours, newest first (the Recent Colors rows), fed by every paint
+    /// command whichever frontend runs it.
+    pub recent_colors: Vec<Color>,
+    /// A paint applied by a live preview: remembered when the interaction commits.
+    pub(crate) pending_paint: Option<Paint>,
+    /// User Defined and loaded swatch libraries (Window → Swatch Libraries); not saved.
+    pub swatch_libraries: cmd::swatchlib::Libraries,
+    /// The selected freeform gradient point (`paint.freeform.selectPoint`) and whose gradient it
+    /// was selected on: read it with [`Session::selected_freeform_point`].
+    pub(crate) freeform_point: Option<(usize, cmd::gradient::StopOwner)>,
+    /// User Defined and loaded graphic style libraries (Window → Graphic Style Libraries); not saved.
+    pub style_libraries: cmd::stylelib::Libraries,
+    /// The Libraries panel's libraries of graphics, colours and text styles (`library.*`).
+    pub libraries: cmd::library::Libraries,
+    /// Where the saved PDF presets are kept, one file each; `None`: only for the session
+    /// ([`Session::attach_pdf_preset_store`]).
+    pdf_preset_dir: Option<std::path::PathBuf>,
+    /// Where the ICC profiles `color.loadProfile` loads are kept; `None`: only for the process
+    /// ([`Session::attach_profile_store`]).
+    profile_dir: Option<std::path::PathBuf>,
+    /// Where the plug-ins `plugin.install` installs are kept; `None`: only for the process
+    /// ([`Session::attach_plugin_store`]).
+    plugin_dir: Option<std::path::PathBuf>,
+    /// URLs recently given in the Attributes panel (`attributes.set {url}`), newest first; not saved.
+    pub recent_urls: Vec<String>,
+    /// The language the UI is drawn in (a language code, never `auto`), set by the UI each frame;
+    /// `None` without one (headless), where an explicit `interfaceLanguage` preference counts.
+    /// Japanese gives new type the Japanese defaults ([`Session::japanese_interface`]).
+    pub ui_language: Option<String>,
+    /// Parameters the running top-level command resolved from the preferences or the clock, added
+    /// to its journal entry so a replay does the same ([`Session::note_journal`]).
+    journal_note: serde_json::Map<String, Value>,
+    /// The depth of the command whose values [`Session::note_journal`] keeps: 1 (the top-level
+    /// command), or a step's while a batch runs it ([`Session::execute_step`]).
+    note_depth: u32,
+    /// While `command.batch` runs: the documents its steps closed or replaced (Revert), which an
+    /// error brings back; `None` otherwise.
+    pub(crate) batch_stash: Option<Vec<DocState>>,
+    /// Where Data Recovery keeps its copies ([`cmd::recovery`]).
+    pub recovery: cmd::recovery::Recovery,
+    /// While the active tool's actions run: their commands aren't "a command from outside the
+    /// tool" ([`Session::after_command`]).
+    pub(crate) in_tool_actions: bool,
+    /// While [`Session::preview`] runs its command: its edits are the interaction's own.
+    previewing: bool,
+    /// Envelope Options with no envelope selected: the options and fidelity new envelopes get
+    /// (`None`: the reference app's defaults, fidelity 50); not saved.
+    pub(crate) envelope_defaults: Option<(vectorcraft_doc::live::EnvelopeOptions, f64)>,
+    /// The Liquify stroke the last live preview applied, which the next sample of the drag goes on
+    /// from ([`cmd::distortcmds::LiquifyStroke`]).
+    pub(crate) liquify_stroke: Option<Box<cmd::distortcmds::LiquifyStroke>>,
+    /// A press on the Plane Switching Widget is under way: its drag and release are the widget's.
+    pub(crate) plane_widget_press: bool,
+    /// A guide being dragged out of a ruler ([`Session::ruler_guide`]).
+    pub(crate) ruler_guide: Option<vectorcraft_tools::rulerguide::NewGuide>,
+    /// Which selected type overflows its frame, for the markers every tool but the Type tools shows.
+    pub(crate) overflow_marks: vectorcraft_tools::text::OverflowMarks,
+    /// The last search for the files of missing fonts (`text.findFontFiles`), until another
+    /// starts; dropping it stops it.
+    pub(crate) font_search: Option<cmd::fontfiles::FontSearch>,
+    /// The last search for the files of linked images and placed documents (`links.findFiles`),
+    /// until another starts; dropping it stops it.
+    pub(crate) link_search: Option<cmd::linkfiles::LinkSearch>,
+    /// Where folder searches may go; `None`: this computer's rules ([`cmd::findfiles::Rules`]).
+    /// Tests set it.
+    pub search_rules: Option<cmd::findfiles::Rules>,
+    /// The walker threads a folder search starts; `None`: [`cmd::findfiles::threads`]. Tests set
+    /// it.
+    pub search_threads: Option<usize>,
+    /// Each open document's linked files' size and modification time when last seen (linked
+    /// files changing while the document is open, [`link_watch`]).
+    pub link_stamps: std::collections::HashMap<(u64, String), link_watch::Stamp>,
+    /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
+    pub link_scan: Option<link_watch::LinkScan>,
+}
 
-                let Some(mut combined_path) = layer.objects.get(first_idx).and_then(object_to_path) else {
-                    return false;
-                };
+impl Default for Session {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-                for &idx in sel_indices.iter().skip(1) {
-                    if let Some(p) = layer.objects.get(idx).and_then(object_to_path)
-                        && let Ok(merged) = boolean_paths(&combined_path, &p, op)
-                    {
-                        combined_path = merged;
-                    }
-                }
+impl Session {
+    pub fn new() -> Self {
+        // Placed documents are read by the native format's loader.
+        vectorcraft_doc::placed_document::set_loader(cmd::place::document::read_document);
+        vectorcraft_doc::placed_document::set_file_reader(cmd::place::document::read_file_again);
+        Self {
+            docs: vec![],
+            active: None,
+            prefs: Prefs::default(),
+            paint: PaintDefaults::default(),
+            fill_active: true,
+            clipboard: Clipboard::default(),
+            journal: Journal::default(),
+            tool: vectorcraft_tools::create("selection"),
+            lender: None,
+            last_selection_tool: None,
+            last_view: ViewInfo::default(),
+            depth: 0,
+            tool_panic: None,
+            draw_mode: DrawMode::Normal,
+            draw_inside: None,
+            untitled_counter: 0,
+            menu: Default::default(),
+            gradient_stop: None,
+            active_appearance_item: None,
+            last_solid: Color::WHITE,
+            last_gradient: GradientPaint::new(Default::default()),
+            recent_colors: vec![],
+            pending_paint: None,
+            swatch_libraries: Default::default(),
+            freeform_point: None,
+            style_libraries: Default::default(),
+            libraries: Default::default(),
+            pdf_preset_dir: None,
+            profile_dir: None,
+            plugin_dir: None,
+            recent_urls: vec![],
+            ui_language: None,
+            journal_note: Default::default(),
+            note_depth: 1,
+            batch_stash: None,
+            recovery: Default::default(),
+            in_tool_actions: false,
+            previewing: false,
+            envelope_defaults: None,
+            liquify_stroke: None,
+            plane_widget_press: false,
+            ruler_guide: None,
+            overflow_marks: Default::default(),
+            font_search: None,
+            link_search: None,
+            search_rules: None,
+            search_threads: None,
+            link_stamps: Default::default(),
+            link_scan: None,
+        }
+    }
 
-                let new_node = ObjectNode::new(
-                    new_id,
-                    Some(format!("{:?} Result", op)),
-                    ObjectKind::Path(combined_path),
-                    anchor_style_fill,
-                    anchor_style_outline,
-                );
-
-                match op {
-                    BooleanOp::Trim => {
-                        if let Some(slot) = layer.objects.get_mut(anchor_idx) {
-                            *slot = new_node;
-                        }
-                        self.selection = vec![new_id];
-                    }
-                    _ => {
-                        let mut remaining = Vec::with_capacity(layer.objects.len());
-                        let mut inserted = false;
-                        for (idx, obj) in layer.objects.drain(..).enumerate() {
-                            if sel_indices.contains(&idx) {
-                                if !inserted {
-                                    remaining.push(new_node.clone());
-                                    inserted = true;
-                                }
-                            } else {
-                                remaining.push(obj);
-                            }
-                        }
-                        layer.objects = remaining;
-                        self.selection = vec![new_id];
-                    }
-                }
-            }
-            EngineCommand::ApplyContour { object_id, steps, offset_pt, inside } => {
-                let effect = VectorEffect::Contour { steps, offset_pt, inside };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::AddDropShadow { object_id, offset_x, offset_y, opacity, color } => {
-                let effect = VectorEffect::DropShadow { offset_x, offset_y, opacity, color };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::AddExtrude { object_id, depth_pt, angle_deg } => {
-                let effect = VectorEffect::Extrude { depth_pt, angle_deg };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::CreateBlend { start_id, end_id, steps } => {
-                let effect = VectorEffect::Blend { target_id: end_id, steps, spine: None };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == start_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::AttachBlendSpine { blend_object_id, spine_object_id } => {
-                let Some(spine_path) =
-                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
-                else {
-                    return false;
-                };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == blend_object_id && !obj.locked {
-                        for effect in &mut obj.effects {
-                            if let VectorEffect::Blend { spine, .. } = effect {
-                                *spine = Some(spine_path.clone());
-                            }
-                        }
-                    }
-                });
-            }
-            EngineCommand::ApplyEnvelope { object_id, corners } => {
-                let effect = VectorEffect::Envelope { corners };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::ApplyPerspective { object_id, corners } => {
-                let effect = VectorEffect::Perspective { corners };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::FilletPathCorners { object_id, radius_pt, corner_kind } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(modified) = coralcraft_geom::fillet_path_corners(&base_path, radius_pt.get(), corner_kind)
-                    {
-                        obj.kind = ObjectKind::Path(modified);
-                    }
-                });
-            }
-            EngineCommand::ApplyArtisticBrush { object_id, start_width_pt, end_width_pt } => {
-                let effect = VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::FitTextToPath { text_object_id, spine_object_id, offset_pt } => {
-                let Some(spine_path) =
-                    self.selected_or_all_node(spine_object_id).and_then(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
-                else {
-                    return false;
-                };
-                let effect = VectorEffect::TextOnPath { spine: spine_path, offset_pt };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == text_object_id && !obj.locked {
-                        obj.effects.retain(|e| !matches!(e, VectorEffect::TextOnPath { .. }));
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::StepAndRepeat { count, offset_x_pt, offset_y_pt } => {
-                let sel = self.selection.clone();
-                let clamped_count = count.min(100);
-                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                let mut new_selection = Vec::new();
-                for step in 1..=clamped_count {
-                    let dx = f64::from(step) * offset_x_pt.get();
-                    let dy = f64::from(step) * offset_y_pt.get();
-                    let Ok(step_tf) = Affine2::translation(dx, dy) else {
-                        continue;
-                    };
-                    for orig in &templates {
-                        let mut copy = orig.clone();
-                        reallocate_object_ids_recursive(&mut copy, &mut self.document);
-                        if let Ok(composed) = copy.transform.then(step_tf) {
-                            copy.transform = composed;
-                        }
-                        new_selection.push(copy.id);
-                        self.target_layer_mut().objects.push(copy);
-                    }
-                }
-                if !new_selection.is_empty() {
-                    self.selection = new_selection;
-                }
-            }
-            EngineCommand::ExpandEffects { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked && !obj.effects.is_empty() {
-                        if let Some(mut base_path) = object_to_path(obj) {
-                            for effect in &obj.effects {
-                                match effect {
-                                    VectorEffect::ArtisticMediaBrush { start_width_pt, end_width_pt } => {
-                                        if let Ok(p) =
-                                            coralcraft_geom::expand_artistic_brush_stroke(&base_path, start_width_pt.get(), end_width_pt.get())
-                                        {
-                                            base_path = p;
-                                        }
-                                    }
-                                    VectorEffect::Envelope { corners } => {
-                                        if let Some(bbox) = base_path.bounds()
-                                            && let Ok(p) = coralcraft_geom::warp_path_bilinear(&base_path, bbox, *corners)
-                                        {
-                                            base_path = p;
-                                        }
-                                    }
-                                    VectorEffect::Perspective { corners } => {
-                                        if let Some(bbox) = base_path.bounds()
-                                            && let Ok(p) = coralcraft_geom::warp_path_perspective(&base_path, bbox, *corners)
-                                        {
-                                            base_path = p;
-                                        }
-                                    }
-                                    VectorEffect::Distortion { kind, amplitude, frequency } => {
-                                        if let Some(bbox) = base_path.bounds()
-                                            && let Ok(p) = coralcraft_geom::distort_path(&base_path, bbox, *kind, amplitude.get(), frequency.get())
-                                        {
-                                            base_path = p;
-                                        }
-                                    }
-                                    VectorEffect::TextOnPath { spine, offset_pt } => {
-                                        if let ObjectKind::ArtisticText { text, font_family, size_pt, .. } = &obj.kind
-                                            && let Ok(p) = coralcraft_geom::fit_text_to_path(text, font_family, size_pt.get(), spine, offset_pt.get())
-                                        {
-                                            base_path = p;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            obj.kind = ObjectKind::Path(base_path);
-                        }
-                        obj.effects.clear();
-                    }
-                });
-            }
-            EngineCommand::SetTransparency { transparency } => {
-                self.for_each_selected_mut(|obj| {
-                    obj.transparency = transparency.clone();
-                });
-            }
-            EngineCommand::CopyPropertiesFrom { source_id, copy_fill, copy_outline, copy_effects } => {
-                let Some(src) = self.selected_or_all_node(source_id).cloned() else {
-                    return false;
-                };
-                self.for_each_selected_mut(|obj| {
-                    if obj.id != source_id {
-                        if copy_fill {
-                            obj.fill = src.fill.clone();
-                        }
-                        if copy_outline {
-                            obj.outline = src.outline.clone();
-                        }
-                        if copy_effects {
-                            obj.effects = src.effects.clone();
-                        }
-                    }
-                });
-            }
-            EngineCommand::CombineSelection => {
-                let new_id = self.document.allocate_object_id();
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                let mut combined_elements = Vec::new();
-                let mut anchor_fill = None;
-                let mut anchor_outline = None;
-                let mut sel_indices = Vec::new();
-                for (idx, obj) in layer.objects.iter().enumerate() {
-                    if !obj.locked
-                        && sel.contains(&obj.id)
-                        && let Some(local_p) = object_to_path(obj)
-                        && let Ok(world_p) = local_p.transform(obj.transform)
-                    {
-                        combined_elements.extend(world_p.elements);
-                        anchor_fill = obj.fill.clone();
-                        anchor_outline = obj.outline.clone();
-                        sel_indices.push(idx);
-                    }
-                }
-                if sel_indices.len() < 2 {
-                    return false;
-                }
-                let combined_path = Path { elements: combined_elements, fill_rule: FillRule::EvenOdd };
-                let new_node =
-                    ObjectNode::new(new_id, Some("Combined Path".to_owned()), ObjectKind::Path(combined_path), anchor_fill, anchor_outline);
-                let mut remaining = Vec::with_capacity(layer.objects.len());
-                let mut inserted = false;
-                for (idx, obj) in layer.objects.drain(..).enumerate() {
-                    if sel_indices.contains(&idx) {
-                        if !inserted {
-                            remaining.push(new_node.clone());
-                            inserted = true;
-                        }
-                    } else {
-                        remaining.push(obj);
-                    }
-                }
-                layer.objects = remaining;
-                self.selection = vec![new_id];
-            }
-            EngineCommand::BreakApartSelection => {
-                let sel = self.selection.clone();
-                let mut next_id_val = self.document.next_id;
-                let layer = self.target_layer_mut();
-                let mut new_objects = Vec::with_capacity(layer.objects.len().saturating_add(4));
-                let mut new_sel = Vec::new();
-                for obj in layer.objects.drain(..) {
-                    if !obj.locked
-                        && sel.contains(&obj.id)
-                        && let ObjectKind::Path(ref path) = obj.kind
-                    {
-                        let mut subpaths: Vec<Vec<PathElement>> = Vec::new();
-                        for &el in &path.elements {
-                            if matches!(el, PathElement::MoveTo(_)) || subpaths.is_empty() {
-                                subpaths.push(vec![el]);
-                            } else if let Some(last) = subpaths.last_mut() {
-                                last.push(el);
-                            }
-                        }
-                        if subpaths.len() >= 2 {
-                            for (k, elems) in subpaths.into_iter().enumerate() {
-                                let part_id = ObjectId(next_id_val);
-                                next_id_val = next_id_val.saturating_add(1);
-                                let mut part_node = obj.clone();
-                                part_node.id = part_id;
-                                part_node.name = Some(format!("Subpath {}", k.saturating_add(1)));
-                                part_node.kind = ObjectKind::Path(Path { elements: elems, fill_rule: FillRule::NonZero });
-                                new_objects.push(part_node);
-                                new_sel.push(part_id);
-                            }
-                            continue;
-                        }
-                    }
-                    new_objects.push(obj);
-                }
-                layer.objects = new_objects;
-                self.document.next_id = next_id_val;
-                if !new_sel.is_empty() {
-                    self.selection = new_sel;
-                }
-            }
-            EngineCommand::AdjustBitmap { object_id, brightness, contrast, grayscale, invert } => {
-                let b_adj = brightness.get().clamp(-1.0, 1.0);
-                let c_adj = contrast.get().clamp(-0.99, 0.99);
-                let c_factor = (1.0 + c_adj) / (1.0 - c_adj);
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let ObjectKind::Bitmap { rgba_pixels, .. } = &mut obj.kind
-                    {
-                        for [pr, pg, pb, _] in rgba_pixels.as_chunks_mut::<4>().0 {
-                            let mut r = f64::from(*pr) / 255.0;
-                            let mut g = f64::from(*pg) / 255.0;
-                            let mut b = f64::from(*pb) / 255.0;
-                            if grayscale {
-                                let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                                r = lum;
-                                g = lum;
-                                b = lum;
-                            }
-                            r = (c_factor * (r + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
-                            g = (c_factor * (g + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
-                            b = (c_factor * (b + b_adj - 0.5) + 0.5).clamp(0.0, 1.0);
-                            if invert {
-                                r = 1.0 - r;
-                                g = 1.0 - g;
-                                b = 1.0 - b;
-                            }
-                            *pr = (r * 255.0).round().clamp(0.0, 255.0) as u8;
-                            *pg = (g * 255.0).round().clamp(0.0, 255.0) as u8;
-                            *pb = (b * 255.0).round().clamp(0.0, 255.0) as u8;
-                        }
-                    }
-                });
-            }
-            EngineCommand::ApplyDistortion { object_id, kind, amplitude, frequency } => {
-                let effect = VectorEffect::Distortion { kind, amplitude, frequency };
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.retain(|e| !matches!(e, VectorEffect::Distortion { .. }));
-                        obj.effects.push(effect.clone());
-                    }
-                });
-            }
-            EngineCommand::TraceBitmap { object_id, threshold } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let ObjectKind::Bitmap { pixel_width, pixel_height, dpi_x, dpi_y, rgba_pixels } = &obj.kind
-                        && let Ok(traced_path) = trace_bitmap_to_path(*pixel_width, *pixel_height, dpi_x.get(), dpi_y.get(), rgba_pixels, threshold)
-                    {
-                        obj.kind = ObjectKind::Path(traced_path);
-                        if obj.fill.is_none() {
-                            obj.fill = Some(FillStyle::uniform(Color::BLACK));
-                        }
-                    }
-                });
-            }
-            EngineCommand::MirrorSelection { horizontal, vertical, copy } => {
-                let sel_nodes = self.selected_nodes();
-                let bounds = combined_selection_bounds(&sel_nodes);
-                let Ok(center) = bounds.center() else {
-                    return false;
-                };
-                let sx = if horizontal { -1.0 } else { 1.0 };
-                let sy = if vertical { -1.0 } else { 1.0 };
-                let Ok(t_to_origin) = Affine2::translation(-center.x.get(), -center.y.get()) else {
-                    return false;
-                };
-                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
-                    return false;
-                };
-                let Ok(t_back) = Affine2::translation(center.x.get(), center.y.get()) else {
-                    return false;
-                };
-                let Ok(mirror_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
-                    return false;
-                };
-
-                if copy {
-                    let sel = self.selection.clone();
-                    let templates: Vec<ObjectNode> =
-                        self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                    let mut new_selection = Vec::new();
-                    for mut dup in templates {
-                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
-                        if let Ok(composed) = dup.transform.then(mirror_tf) {
-                            dup.transform = composed;
-                        }
-                        new_selection.push(dup.id);
-                        self.target_layer_mut().objects.push(dup);
-                    }
-                    if !new_selection.is_empty() {
-                        self.selection = new_selection;
-                    }
-                } else {
-                    self.for_each_selected_mut(|obj| {
-                        if let Ok(composed) = obj.transform.then(mirror_tf) {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::CreateBoundary => {
-                let new_id = self.document.allocate_object_id();
-                let sel = self.selection.clone();
-                let default_outline = self.default_outline.clone();
-                let layer = self.target_layer_mut();
-                let mut boundary_path: Option<Path> = None;
-                let mut boundary_outline = None;
-                for obj in &layer.objects {
-                    if !obj.locked
-                        && sel.contains(&obj.id)
-                        && let Some(local_p) = object_to_path(obj)
-                        && let Ok(world_p) = local_p.transform(obj.transform)
-                    {
-                        boundary_outline = obj.outline.clone();
-                        boundary_path = Some(match boundary_path {
-                            None => world_p,
-                            Some(acc) => boolean_paths(&acc, &world_p, BooleanOp::Weld).unwrap_or(acc),
-                        });
-                    }
-                }
-                let Some(final_path) = boundary_path else {
-                    return false;
-                };
-                let outline = boundary_outline.or(default_outline).or_else(|| Some(OutlineStyle::hairline(Color::BLACK)));
-                let new_node = ObjectNode::new(new_id, Some("Boundary".to_owned()), ObjectKind::Path(final_path), None, outline);
-                layer.objects.push(new_node);
-                self.selection = vec![new_id];
-            }
-            EngineCommand::ConvertOutlineToObject => {
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(outline) = obj.outline.clone()
-                        && let Some(base_path) = object_to_path(obj)
-                    {
-                        let w = outline.width_pt.get().max(0.25);
-                        if let Ok(stroke_path) = coralcraft_geom::expand_artistic_brush_stroke(&base_path, w, w) {
-                            obj.kind = ObjectKind::Path(stroke_path);
-                            obj.fill = Some(FillStyle::uniform(outline.color));
-                            obj.outline = None;
-                        }
-                    }
-                });
-            }
-            EngineCommand::RotateSelection { angle_deg, origin_index, copy } => {
-                let sel_nodes = self.selected_nodes();
-                let bounds = combined_selection_bounds(&sel_nodes);
-                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
-                    return false;
-                };
-                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(t_rot) = Affine2::rotation_deg(angle_deg.get()) else {
-                    return false;
-                };
-                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(rot_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back)) else {
-                    return false;
-                };
-                self.apply_selection_transform(rot_tf, copy);
-            }
-            EngineCommand::ScaleSelection { scale_x, scale_y, origin_index, copy } => {
-                let sel_nodes = self.selected_nodes();
-                let bounds = combined_selection_bounds(&sel_nodes);
-                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
-                    return false;
-                };
-                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(t_scale) = Affine2::scaling(scale_x.get(), scale_y.get()) else {
-                    return false;
-                };
-                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back)) else {
-                    return false;
-                };
-                self.apply_selection_transform(scale_tf, copy);
-            }
-            EngineCommand::SkewSelection { skew_x_deg, skew_y_deg, origin_index, copy } => {
-                let sel_nodes = self.selected_nodes();
-                let bounds = combined_selection_bounds(&sel_nodes);
-                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
-                    return false;
-                };
-                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(t_skew) = Affine2::skew_deg(skew_x_deg.get(), skew_y_deg.get()) else {
-                    return false;
-                };
-                if t_skew.determinant().abs() <= 1e-6 {
-                    return false;
-                }
-                let Ok(t_back) = Affine2::translation(pivot.x.get(), pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(skew_tf) = t_to_origin.then(t_skew).and_then(|m| m.then(t_back)) else {
-                    return false;
-                };
-                self.apply_selection_transform(skew_tf, copy);
-            }
-            EngineCommand::DuplicateSelection { offset_x_pt, offset_y_pt } => {
-                let Ok(tf) = Affine2::translation(offset_x_pt.get(), offset_y_pt.get()) else {
-                    return false;
-                };
-                self.apply_selection_transform(tf, true);
-            }
-            EngineCommand::ReversePathDirection { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(rev) = reverse_path_direction(&base_path)
-                    {
-                        obj.kind = ObjectKind::Path(rev);
-                    }
-                });
-            }
-            EngineCommand::CloseOpenSubpaths { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(closed) = close_open_subpaths(&base_path)
-                    {
-                        obj.kind = ObjectKind::Path(closed);
-                    }
-                });
-            }
-            EngineCommand::SetObjectLocked { object_id, locked } => {
-                if self.selected_or_all_node(object_id).is_none() {
-                    return false;
-                }
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id {
-                        obj.locked = locked;
-                    }
-                });
-            }
-            EngineCommand::UnlockAllObjects => {
-                self.for_each_node_mut(|obj| {
-                    obj.locked = false;
-                });
-            }
-            EngineCommand::JoinOpenSubpaths { object_id, tolerance_pt } => {
-                let tol = tolerance_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(joined) = join_open_subpaths(&base_path, tol)
-                    {
-                        obj.kind = ObjectKind::Path(joined);
-                    }
-                });
-            }
-            EngineCommand::UngroupAllSelection => {
-                let sel = self.selection.clone();
-                let layer = self.target_layer_mut();
-                let mut new_objects = Vec::with_capacity(layer.objects.len());
-                let mut new_selection = Vec::new();
-                for obj in layer.objects.drain(..) {
-                    if !obj.locked && sel.contains(&obj.id) && matches!(obj.kind, ObjectKind::Group { .. }) {
-                        let mut leaves = Vec::new();
-                        flatten_group_recursive(obj, &mut leaves);
-                        for leaf in leaves {
-                            new_selection.push(leaf.id);
-                            new_objects.push(leaf);
-                        }
-                    } else {
-                        new_objects.push(obj);
-                    }
-                }
-                layer.objects = new_objects;
-                self.selection = new_selection;
-            }
-            EngineCommand::MovePage { from_index, to_index } => {
-                let page = self.document.pages.remove(from_index);
-                self.document.pages.insert(to_index, page);
-                self.active_target = ActivePageTarget::Page(to_index);
-                self.selection.clear();
-            }
-            EngineCommand::ReducePathNodes { object_id, tolerance_pt } => {
-                let tol = tolerance_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(reduced) = simplify_path_nodes(&base_path, tol)
-                    {
-                        obj.kind = ObjectKind::Path(reduced);
-                    }
-                });
-            }
-            EngineCommand::SetSelectionBounds { x_pt, y_pt, width_pt, height_pt, origin_index } => {
-                let sel_nodes = self.selected_nodes();
-                let bounds = combined_selection_bounds(&sel_nodes);
-                let Ok(pivot) = reference_point(bounds, usize::from(origin_index)) else {
-                    return false;
-                };
-                let cur_w = bounds.width().max(1e-6);
-                let cur_h = bounds.height().max(1e-6);
-                let sx = width_pt.map_or(1.0, |w| (w.get() / cur_w).max(1e-6));
-                let sy = height_pt.map_or(1.0, |h| (h.get() / cur_h).max(1e-6));
-                let target_x = x_pt.map_or(pivot.x.get(), F64::get);
-                let target_y = y_pt.map_or(pivot.y.get(), F64::get);
-
-                let Ok(t_to_origin) = Affine2::translation(-pivot.x.get(), -pivot.y.get()) else {
-                    return false;
-                };
-                let Ok(t_scale) = Affine2::scaling(sx, sy) else {
-                    return false;
-                };
-                let Ok(t_to_target) = Affine2::translation(target_x, target_y) else {
-                    return false;
-                };
-                let Ok(tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_to_target)) else {
-                    return false;
-                };
-                self.apply_selection_transform(tf, false);
-            }
-            EngineCommand::AddLayer { name } => {
-                let id_raw = self.document.allocate_object_id().0;
-                let page_idx = self.current_page_index();
-                if let Some(page) = self.document.pages.get_mut(page_idx) {
-                    page.layers.push(Layer::new_normal(LayerId(id_raw), name.trim()));
-                }
-            }
-            EngineCommand::SetLayerProperties { layer_id, visible, locked, printable, opacity } => {
-                for page in &mut self.document.pages {
-                    for layer in &mut page.layers {
-                        if layer.id == layer_id {
-                            if let Some(v) = visible {
-                                layer.visible = v;
-                            }
-                            if let Some(lk) = locked {
-                                layer.locked = lk;
-                            }
-                            if let Some(pr) = printable {
-                                layer.printable = pr;
-                            }
-                            if let Some(op) = opacity
-                                && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
-                            {
-                                layer.opacity = clamped;
-                            }
-                        }
-                    }
-                }
-                for layer in &mut self.document.master_layers {
-                    if layer.id == layer_id {
-                        if let Some(v) = visible {
-                            layer.visible = v;
-                        }
-                        if let Some(lk) = locked {
-                            layer.locked = lk;
-                        }
-                        if let Some(pr) = printable {
-                            layer.printable = pr;
-                        }
-                        if let Some(op) = opacity
-                            && let Ok(clamped) = F64::new(op.get().clamp(0.0, 1.0))
-                        {
-                            layer.opacity = clamped;
-                        }
-                    }
-                }
-            }
-            EngineCommand::ClearTransformations => {
-                self.for_each_selected_mut(|obj| {
-                    obj.transform = Affine2::IDENTITY;
-                });
-            }
-            EngineCommand::ToggleTextKind { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id != object_id || obj.locked {
-                        return;
-                    }
-                    match &obj.kind {
-                        ObjectKind::ArtisticText { text, font_family, size_pt, position } => {
-                            let w = (text.chars().count().max(4) as f64) * size_pt.get() * 0.65;
-                            let h = size_pt.get() * 3.0;
-                            if let Ok(spec) = ParagraphTextSpec::new(
-                                *position,
-                                w.max(72.0),
-                                h.max(36.0),
-                                text.clone(),
-                                font_family.clone(),
-                                size_pt.get(),
-                                1.2,
-                                TextAlignment::Left,
-                                1,
-                                12.0,
-                            ) {
-                                obj.kind = ObjectKind::ParagraphText(Box::new(spec));
-                            }
-                        }
-                        ObjectKind::ParagraphText(spec) => {
-                            obj.kind = ObjectKind::ArtisticText {
-                                text: spec.text.clone(),
-                                font_family: spec.font_family.clone(),
-                                size_pt: spec.font_size_pt,
-                                position: spec.position,
-                            };
-                        }
-                        _ => {}
-                    }
-                });
-            }
-            EngineCommand::FindAndReplaceText { find, replace } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.locked {
-                        return;
-                    }
-                    match &mut obj.kind {
-                        ObjectKind::ArtisticText { text, .. } if text.contains(&find) => {
-                            *text = text.replace(&find, &replace);
-                        }
-                        ObjectKind::ParagraphText(spec) if spec.text.contains(&find) => {
-                            spec.text = spec.text.replace(&find, &replace);
-                        }
-                        _ => {}
-                    }
-                });
-            }
-            EngineCommand::ChangeTextCase { object_id, case_kind } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id != object_id || obj.locked {
-                        return;
-                    }
-                    match &mut obj.kind {
-                        ObjectKind::ArtisticText { text, .. } => {
-                            *text = apply_text_case(text, case_kind);
-                        }
-                        ObjectKind::ParagraphText(spec) => {
-                            spec.text = apply_text_case(&spec.text, case_kind);
-                        }
-                        _ => {}
-                    }
-                });
-            }
-            EngineCommand::InsertCurveNode { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = insert_curve_node_at(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::DeleteCurveNode { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = delete_curve_node_at(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::ConvertSegmentToLine { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = convert_segment_to_line(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::ConvertSegmentToCurve { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = convert_segment_to_curve(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SetPageBackground { page_index, background } => {
-                if let Some(page) = self.document.pages.get_mut(page_index) {
-                    page.background = background;
-                }
-            }
-            EngineCommand::SetPageBleed { page_index, bleed_pt } => {
-                if let Some(page) = self.document.pages.get_mut(page_index)
-                    && let Ok(clamped) = F64::new(bleed_pt.get().max(0.0))
-                {
-                    page.bleed = clamped;
-                }
-            }
-            EngineCommand::SetObjectOpacity { object_id, opacity } => {
-                if self.selected_or_all_node(object_id).is_none_or(|o| o.locked) {
-                    return false;
-                }
-                if let Ok(clamped) = F64::new(opacity.get().clamp(0.0, 1.0)) {
-                    self.for_each_node_mut(|obj| {
-                        if obj.id == object_id && !obj.locked {
-                            obj.opacity = clamped;
-                        }
-                    });
-                }
-            }
-            EngineCommand::SetObjectVisible { object_id, visible } => {
-                if self.selected_or_all_node(object_id).is_none() {
-                    return false;
-                }
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id {
-                        obj.visible = visible;
-                    }
-                });
-            }
-            EngineCommand::RenameObject { object_id, name } => {
-                if self.selected_or_all_node(object_id).is_none() {
-                    return false;
-                }
-                let normalized = name.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id {
-                        obj.name = normalized.clone();
-                    }
-                });
-            }
-            EngineCommand::DeleteLayer { layer_id } => {
-                let mut removed_ids = Vec::new();
-                for page in &mut self.document.pages {
-                    if page.layers.len() > 1
-                        && let Some(pos) = page.layers.iter().position(|l| l.id == layer_id)
-                    {
-                        let removed = page.layers.remove(pos);
-                        for obj in removed.objects {
-                            removed_ids.push(obj.id);
-                        }
-                    }
-                }
-                self.selection.retain(|id| !removed_ids.contains(id));
-            }
-            EngineCommand::MoveLayer { page_index, from_index, to_index } => {
-                if let Some(page) = self.document.pages.get_mut(page_index) {
-                    let layer = page.layers.remove(from_index);
-                    page.layers.insert(to_index, layer);
-                }
-            }
-            EngineCommand::InvertSelection => {
-                let cur = self.selection.clone();
-                self.selection =
-                    self.current_target_objects().iter().filter(|o| !o.locked && o.visible && !cur.contains(&o.id)).map(|o| o.id).collect();
-            }
-            EngineCommand::SetOutlineProperties { width_pt, behind_fill, scale_with_object } => {
-                let update_outline = |opt: &mut Option<OutlineStyle>| {
-                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
-                    if let Some(w) = width_pt
-                        && let Ok(clamped) = F64::new(w.get().max(0.0))
-                    {
-                        st.width_pt = clamped;
-                    }
-                    if let Some(bf) = behind_fill {
-                        st.behind_fill = bf;
-                    }
-                    if let Some(swo) = scale_with_object {
-                        st.scale_with_object = swo;
-                    }
-                    *opt = Some(st);
-                };
-                if self.selection.is_empty() {
-                    update_outline(&mut self.default_outline);
-                } else {
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked {
-                            update_outline(&mut obj.outline);
-                        }
-                    });
-                }
-            }
-            EngineCommand::SelectByKind { kind } => {
-                let k = kind.trim().to_ascii_lowercase();
-                self.selection = self
-                    .current_target_objects()
-                    .iter()
-                    .filter(|o| {
-                        !o.locked
-                            && o.visible
-                            && match k.as_str() {
-                                "rect" | "rectangle" => matches!(o.kind, ObjectKind::Rect(_)),
-                                "ellipse" => matches!(o.kind, ObjectKind::Ellipse(_)),
-                                "polygon" | "star" => matches!(o.kind, ObjectKind::Polygon(_)),
-                                "path" | "curve" => matches!(o.kind, ObjectKind::Path(_)),
-                                "text" => matches!(o.kind, ObjectKind::ArtisticText { .. } | ObjectKind::ParagraphText(_)),
-                                "bitmap" | "image" => matches!(o.kind, ObjectKind::Bitmap { .. }),
-                                "group" => matches!(o.kind, ObjectKind::Group { .. }),
-                                _ => false,
-                            }
-                    })
-                    .map(|o| o.id)
-                    .collect();
-            }
-            EngineCommand::SetDocumentTitle { title } => {
-                self.document.title = title.trim().to_owned();
-            }
-            EngineCommand::TwirlObjectPath { object_id, center, radius_pt, angle_deg } => {
-                let r = radius_pt.get();
-                let deg = angle_deg.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = twirl_path_around_point(&base_path, center, r, deg)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::ClearEffects { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id && !obj.locked {
-                        obj.effects.clear();
-                    }
-                });
-            }
-            EngineCommand::CloneEffectsFrom { source_id } => {
-                let Some(src_effects) = self.selected_or_all_node(source_id).map(|o| o.effects.clone()) else {
-                    return false;
-                };
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked && obj.id != source_id {
-                        obj.effects = src_effects.clone();
-                    }
-                });
-            }
-            EngineCommand::AttractRepelObjectPath { object_id, center, radius_pt, strength } => {
-                let r = radius_pt.get();
-                let s = strength.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = radial_push_path_around_point(&base_path, center, r, s)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SmearObjectPath { object_id, origin, radius_pt, dx_pt, dy_pt } => {
-                let r = radius_pt.get();
-                let dx = dx_pt.get();
-                let dy = dy_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = smear_path_from_point(&base_path, origin, r, dx, dy)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SetParagraphTextLayout { object_id, columns, gutter_pt, line_spacing, alignment } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let ObjectKind::ParagraphText(spec) = &mut obj.kind
-                    {
-                        if let Some(cols) = columns {
-                            spec.columns = cols.clamp(1, 8);
-                        }
-                        if let Some(g) = gutter_pt
-                            && let Ok(clamped) = F64::new(g.get().max(0.0))
-                        {
-                            spec.gutter_pt = clamped;
-                        }
-                        if let Some(ls) = line_spacing
-                            && let Ok(clamped) = F64::new(ls.get().clamp(0.5, 5.0))
-                        {
-                            spec.line_spacing_multiplier = clamped;
-                        }
-                        if let Some(align) = alignment {
-                            spec.alignment = align;
-                        }
-                    }
-                });
-            }
-            EngineCommand::RoughenObjectPath { object_id, tooth_height_pt, frequency } => {
-                let h = tooth_height_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = roughen_path_segments(&base_path, h, frequency)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SetArtisticTextProperties { object_id, text, font_family, size_pt } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id != object_id || obj.locked {
-                        return;
-                    }
-                    match &mut obj.kind {
-                        ObjectKind::ArtisticText { text: t, font_family: ff, size_pt: sz, .. } => {
-                            if let Some(new_t) = &text {
-                                *t = new_t.clone();
-                            }
-                            if let Some(new_ff) = &font_family {
-                                *ff = new_ff.clone();
-                            }
-                            if let Some(new_sz) = size_pt
-                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
-                            {
-                                *sz = clamped;
-                            }
-                        }
-                        ObjectKind::ParagraphText(spec) => {
-                            if let Some(new_t) = &text {
-                                spec.text = new_t.clone();
-                            }
-                            if let Some(new_ff) = &font_family {
-                                spec.font_family = new_ff.clone();
-                            }
-                            if let Some(new_sz) = size_pt
-                                && let Ok(clamped) = F64::new(new_sz.get().clamp(1.0, 2000.0))
-                            {
-                                spec.font_size_pt = clamped;
-                            }
-                        }
-                        _ => {}
-                    }
-                });
-            }
-            EngineCommand::SmoothObjectPath { object_id, center, radius_pt, strength, iterations } => {
-                let r = radius_pt.get();
-                let s = strength.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = smooth_path_around_point(&base_path, center, r, s, iterations)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::KnifeCutObject { object_id, line_start, line_end, gap_pt } => {
-                let g = gap_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = knife_cut_path_by_line(&base_path, line_start, line_end, g)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::CropToRect { rect } => {
-                let Ok(clip_path) = RectSpec::sharp(rect).to_path() else {
-                    return false;
-                };
-                let sel = self.selection.clone();
-                let filter_sel = !sel.is_empty();
-                let layer = self.target_layer_mut();
-                let mut cropped_objs = Vec::with_capacity(layer.objects.len());
-                for mut obj in layer.objects.drain(..) {
-                    if obj.locked || !obj.visible || (filter_sel && !sel.contains(&obj.id)) {
-                        cropped_objs.push(obj);
-                        continue;
-                    }
-                    if let Some(world_path) = object_to_path(&obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(inter) = boolean_paths(&world_path, &clip_path, BooleanOp::Intersect)
-                    {
-                        if !inter.elements.is_empty() {
-                            obj.kind = ObjectKind::Path(inter);
-                            obj.transform = Affine2::IDENTITY;
-                            cropped_objs.push(obj);
-                        }
-                    } else {
-                        cropped_objs.push(obj);
-                    }
-                }
-                layer.objects = cropped_objs;
-                let remaining_ids: Vec<ObjectId> = layer.objects.iter().map(|o| o.id).collect();
-                self.selection.retain(|id| remaining_ids.contains(id));
-            }
-            EngineCommand::MoveObjectToLayer { object_id, target_layer_id } => {
-                let page_idx = self.current_page_index();
-                if let Some(page) = self.document.pages.get_mut(page_idx) {
-                    let mut extracted: Option<ObjectNode> = None;
-                    for layer in &mut page.layers {
-                        if let Some(pos) = layer.objects.iter().position(|o| o.id == object_id && !o.locked) {
-                            extracted = Some(layer.objects.remove(pos));
-                            break;
-                        }
-                    }
-                    if let Some(node) = extracted
-                        && let Some(dst) = page.layers.iter_mut().find(|l| l.id == target_layer_id)
-                    {
-                        dst.objects.push(node);
-                    }
-                }
-            }
-            EngineCommand::EraseObjectCircle { object_id, center, radius_pt } => {
-                let r = radius_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = erase_path_within_circle(&base_path, center, r)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SetSnapSettings { snap_to_objects, snap_to_page } => {
-                if let Some(so) = snap_to_objects {
-                    self.snap_to_objects = so;
-                }
-                if let Some(sp) = snap_to_page {
-                    self.snap_to_page = sp;
-                }
-            }
-            EngineCommand::VirtualSegmentDelete { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = delete_segment_at_index(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SmartFillAtPoint { point, fill, outline } => {
-                let px = point.x.get();
-                let py = point.y.get();
-                let hits: Vec<Path> = self
-                    .current_target_objects()
-                    .iter()
-                    .filter(|o| !o.locked && o.visible)
-                    .filter_map(|o| object_to_path(o).and_then(|p| p.transform(o.transform).ok()))
-                    .filter(|wp| wp.bounds().is_some_and(|b| px >= b.x0.get() && px <= b.x1.get() && py >= b.y0.get() && py <= b.y1.get()))
-                    .collect();
-                if let Some(first) = hits.first() {
-                    let mut region = first.clone();
-                    for other in hits.iter().skip(1) {
-                        if let Ok(inter) = boolean_paths(&region, other, BooleanOp::Intersect)
-                            && !inter.elements.is_empty()
-                        {
-                            region = inter;
-                        }
-                    }
-                    let id = self.document.allocate_object_id();
-                    let node = ObjectNode::new(id, Some("Smart Fill".to_owned()), ObjectKind::Path(region), Some(fill), outline);
-                    self.target_layer_mut().objects.push(node);
-                    self.selection = vec![id];
-                }
-            }
-            EngineCommand::OffsetObjectPath { object_id, distance_pt, copy } => {
-                let d = distance_pt.get();
-                if copy {
-                    if let Some(src) = self.selected_or_all_node(object_id).cloned()
-                        && let Some(base_path) = object_to_path(&src)
-                        && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
-                    {
-                        let mut dup = src;
-                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
-                        dup.kind = ObjectKind::Path(updated);
-                        let new_id = dup.id;
-                        self.target_layer_mut().objects.push(dup);
-                        self.selection = vec![new_id];
-                    }
-                } else {
-                    self.for_each_node_mut(|obj| {
-                        if obj.id == object_id
-                            && !obj.locked
-                            && let Some(base_path) = object_to_path(obj)
-                            && let Ok(updated) = offset_open_or_closed_path(&base_path, d)
-                        {
-                            obj.kind = ObjectKind::Path(updated);
-                        }
-                    });
-                }
-            }
-            EngineCommand::SetPathFillRule { object_id, fill_rule } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(mut base_path) = object_to_path(obj)
-                    {
-                        base_path.fill_rule = fill_rule;
-                        obj.kind = ObjectKind::Path(base_path);
-                    }
-                });
-            }
-            EngineCommand::SwapObjectPositions { first_id, second_id } => {
-                let c1 = self.selected_or_all_node(first_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
-                let c2 = self.selected_or_all_node(second_id).and_then(|o| combined_selection_bounds(&[o]).center().ok());
-                if let (Some(p1), Some(p2)) = (c1, c2) {
-                    let dx = p2.x.get() - p1.x.get();
-                    let dy = p2.y.get() - p1.y.get();
-                    let tf1 = Affine2::translation(dx, dy).unwrap_or(Affine2::IDENTITY);
-                    let tf2 = Affine2::translation(-dx, -dy).unwrap_or(Affine2::IDENTITY);
-                    self.for_each_node_mut(|obj| {
-                        if !obj.locked {
-                            if obj.id == first_id {
-                                if let Ok(composed) = obj.transform.then(tf1) {
-                                    obj.transform = composed;
-                                }
-                            } else if obj.id == second_id
-                                && let Ok(composed) = obj.transform.then(tf2)
-                            {
-                                obj.transform = composed;
-                            }
-                        }
-                    });
-                }
-            }
-            EngineCommand::CenterSelectionToPage { horizontal, vertical } => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if let Ok(sel_center) = combined_selection_bounds(&sel_nodes).center() {
-                    let page_size = self.current_page().size;
-                    let dx = if horizontal { 0.5 * page_size.width.get() - sel_center.x.get() } else { 0.0 };
-                    let dy = if vertical { 0.5 * page_size.height.get() - sel_center.y.get() } else { 0.0 };
-                    if let Ok(tf) = Affine2::translation(dx, dy) {
-                        self.for_each_selected_mut(|obj| {
-                            if !obj.locked
-                                && let Ok(composed) = obj.transform.then(tf)
-                            {
-                                obj.transform = composed;
-                            }
-                        });
-                    }
-                }
-            }
-            EngineCommand::SmoothCurveNode { object_id, element_index, tension } => {
-                let t = tension.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = smooth_curve_node_at(&base_path, element_index, t)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::ArrayDuplicateSelection { rows, cols, spacing_x_pt, spacing_y_pt } => {
-                let r_count = rows.clamp(1, 20);
-                let c_count = cols.clamp(1, 20);
-                let sx = spacing_x_pt.get();
-                let sy = spacing_y_pt.get();
-                let sel = self.selection.clone();
-                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                let mut new_selection = Vec::new();
-                for r in 0..r_count {
-                    for c in 0..c_count {
-                        if r == 0 && c == 0 {
-                            continue;
-                        }
-                        let dx = f64::from(c) * sx;
-                        let dy = f64::from(r) * sy;
-                        let Ok(tf) = Affine2::translation(dx, dy) else {
-                            continue;
-                        };
-                        for mut dup in templates.clone() {
-                            reallocate_object_ids_recursive(&mut dup, &mut self.document);
-                            if let Ok(composed) = dup.transform.then(tf) {
-                                dup.transform = composed;
-                            }
-                            new_selection.push(dup.id);
-                            self.target_layer_mut().objects.push(dup);
-                        }
-                    }
-                }
-                if !new_selection.is_empty() {
-                    self.selection = new_selection;
-                }
-            }
-            EngineCommand::AddGuideline { horizontal, position_pt } => {
-                let page_idx = self.current_page_index();
-                let Some(page_size) = self.document.pages.get(page_idx).map(|p| p.size) else {
-                    return false;
-                };
-                let pos = position_pt.get();
-                let (p0, p1, label) = if horizontal {
-                    (Point::new(0.0, pos), Point::new(page_size.width.get(), pos), format!("Horizontal Guide ({pos:.1} pt)"))
-                } else {
-                    (Point::new(pos, 0.0), Point::new(pos, page_size.height.get()), format!("Vertical Guide ({pos:.1} pt)"))
-                };
-                if let (Ok(a), Ok(b)) = (p0, p1)
-                    && let Ok(path) = Path::from_elements(vec![PathElement::MoveTo(a), PathElement::LineTo(b)], FillRule::NonZero)
-                {
-                    let obj_id = self.document.allocate_object_id();
-                    let mut outline = OutlineStyle::hairline(Color::rgb8(0, 85, 229));
-                    if let (Ok(d1), Ok(d2)) = (F64::new(4.0), F64::new(3.0)) {
-                        outline.dash_pattern = vec![d1, d2];
-                    }
-                    let node = ObjectNode::new(obj_id, Some(label), ObjectKind::Path(path), None, Some(outline));
-                    let has_guide_layer = self.document.pages.get(page_idx).is_some_and(|p| p.layers.iter().any(|l| l.role == LayerRole::Guides));
-                    if has_guide_layer {
-                        if let Some(guide_layer) =
-                            self.document.pages.get_mut(page_idx).and_then(|p| p.layers.iter_mut().find(|l| l.role == LayerRole::Guides))
-                        {
-                            guide_layer.objects.push(node);
-                        }
-                    } else {
-                        let layer_id = LayerId(self.document.allocate_object_id().0);
-                        if let Some(page) = self.document.pages.get_mut(page_idx) {
-                            page.layers.push(Layer {
-                                id: layer_id,
-                                name: "Guides".to_owned(),
-                                role: LayerRole::Guides,
-                                visible: true,
-                                printable: false,
-                                locked: false,
-                                master_in_front: true,
-                                opacity: F64::ONE,
-                                objects: vec![node],
-                                residual: Residual::default(),
-                                extra: BTreeMap::new(),
-                            });
-                        }
-                    }
-                }
-            }
-            EngineCommand::ClearGuidelines => {
-                let page_idx = self.current_page_index();
-                let mut removed_ids = Vec::new();
-                if let Some(page) = self.document.pages.get_mut(page_idx) {
-                    for layer in &mut page.layers {
-                        if layer.role == LayerRole::Guides {
-                            for obj in layer.objects.drain(..) {
-                                removed_ids.push(obj.id);
-                            }
-                        }
-                    }
-                }
-                self.selection.retain(|id| !removed_ids.contains(id));
-            }
-            EngineCommand::CircularDuplicateSelection { count, center, total_angle_deg, rotate_objects } => {
-                let n = count.clamp(1, 72);
-                let step_deg = total_angle_deg.get() / f64::from(n);
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let sel = self.selection.clone();
-                let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                let mut new_selection = Vec::new();
-                for k in 1..=n {
-                    let angle_rad = (f64::from(k) * step_deg).to_radians();
-                    for mut dup in templates.clone() {
-                        reallocate_object_ids_recursive(&mut dup, &mut self.document);
-                        if rotate_objects {
-                            if let Ok(t1) = Affine2::translation(-cx, -cy)
-                                && let Ok(rot) = Affine2::rotation_rad(angle_rad)
-                                && let Ok(t2) = Affine2::translation(cx, cy)
-                                && let Ok(around_center) = t1.then(rot).and_then(|m| m.then(t2))
-                                && let Ok(composed) = dup.transform.then(around_center)
-                            {
-                                dup.transform = composed;
-                            }
-                        } else if let Ok(obj_center) = combined_selection_bounds(&[&dup]).center() {
-                            let vx = obj_center.x.get() - cx;
-                            let vy = obj_center.y.get() - cy;
-                            let cos_a = angle_rad.cos();
-                            let sin_a = angle_rad.sin();
-                            let nx = cx + vx * cos_a - vy * sin_a;
-                            let ny = cy + vx * sin_a + vy * cos_a;
-                            if let Ok(tf) = Affine2::translation(nx - obj_center.x.get(), ny - obj_center.y.get())
-                                && let Ok(composed) = dup.transform.then(tf)
-                            {
-                                dup.transform = composed;
-                            }
-                        }
-                        new_selection.push(dup.id);
-                        self.target_layer_mut().objects.push(dup);
-                    }
-                }
-                if !new_selection.is_empty() {
-                    self.selection = new_selection;
-                }
-            }
-            EngineCommand::FitPageToSelection { margin_pt } => {
-                let m = margin_pt.get().max(0.0);
-                let bounds = if self.selection.is_empty() {
-                    let refs: Vec<&ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).collect();
-                    combined_selection_bounds(&refs)
-                } else {
-                    let refs: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                    combined_selection_bounds(&refs)
-                };
-                let new_w = (bounds.width() + 2.0 * m).max(1.0);
-                let new_h = (bounds.height() + 2.0 * m).max(1.0);
-                let dx = m - bounds.x0.get();
-                let dy = m - bounds.y0.get();
-                let page_idx = self.current_page_index();
-                if let Ok(sz) = Size::new(new_w, new_h)
-                    && let Ok(tf) = Affine2::translation(dx, dy)
-                    && let Some(page) = self.document.pages.get_mut(page_idx)
-                {
-                    page.size = sz;
-                    for layer in &mut page.layers {
-                        if !layer.locked {
-                            for obj in &mut layer.objects {
-                                if !obj.locked
-                                    && let Ok(composed) = obj.transform.then(tf)
-                                {
-                                    obj.transform = composed;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            EngineCommand::SetOutlineCapAndJoin { cap, join, miter_limit } => {
-                let update_outline = |opt: &mut Option<OutlineStyle>| {
-                    let mut st = opt.clone().unwrap_or_else(|| OutlineStyle::hairline(Color::BLACK));
-                    if let Some(c) = cap {
-                        st.cap = c;
-                    }
-                    if let Some(j) = join {
-                        st.join = j;
-                    }
-                    if let Some(ml) = miter_limit
-                        && let Ok(clamped) = F64::new(ml.get().clamp(1.0, 100.0))
-                    {
-                        st.miter_limit = clamped;
-                    }
-                    *opt = Some(st);
-                };
-                if self.selection.is_empty() {
-                    update_outline(&mut self.default_outline);
-                } else {
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked {
-                            update_outline(&mut obj.outline);
-                        }
-                    });
-                }
-            }
-            EngineCommand::AlignCurveNodes { object_id, element_indices, horizontal, vertical } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id != object_id || obj.locked {
-                        return;
-                    }
-                    let Some(mut path) = object_to_path(obj) else {
-                        return;
-                    };
-                    let elem_end = |el: &PathElement| -> Option<Point> {
-                        match *el {
-                            PathElement::MoveTo(p)
-                            | PathElement::LineTo(p)
-                            | PathElement::QuadTo { end: p, .. }
-                            | PathElement::CubicTo { end: p, .. } => Some(p),
-                            PathElement::Close => None,
-                        }
-                    };
-                    let Some(ref_pt) = element_indices.first().and_then(|&i| path.elements.get(i)).and_then(elem_end) else {
-                        return;
-                    };
-                    for &idx in element_indices.iter().skip(1) {
-                        let Some(cur_pt) = path.elements.get(idx).and_then(elem_end) else {
-                            continue;
-                        };
-                        let nx = if vertical { ref_pt.x.get() } else { cur_pt.x.get() };
-                        let ny = if horizontal { ref_pt.y.get() } else { cur_pt.y.get() };
-                        let dx = nx - cur_pt.x.get();
-                        let dy = ny - cur_pt.y.get();
-                        let Ok(new_end) = Point::new(nx, ny) else {
-                            continue;
-                        };
-                        if let Some(el) = path.elements.get_mut(idx) {
-                            match el {
-                                PathElement::MoveTo(p) | PathElement::LineTo(p) => *p = new_end,
-                                PathElement::QuadTo { ctrl, end } => {
-                                    if let Ok(nc) = Point::new(ctrl.x.get() + dx, ctrl.y.get() + dy) {
-                                        *ctrl = nc;
-                                    }
-                                    *end = new_end;
-                                }
-                                PathElement::CubicTo { c2, end, .. } => {
-                                    if let Ok(nc2) = Point::new(c2.x.get() + dx, c2.y.get() + dy) {
-                                        *c2 = nc2;
-                                    }
-                                    *end = new_end;
-                                }
-                                PathElement::Close => {}
-                            }
-                        }
-                        if let Some(PathElement::CubicTo { c1, .. }) = path.elements.get_mut(idx.saturating_add(1))
-                            && let Ok(nc1) = Point::new(c1.x.get() + dx, c1.y.get() + dy)
-                        {
-                            *c1 = nc1;
-                        }
-                    }
-                    obj.kind = ObjectKind::Path(path);
-                });
-            }
-            EngineCommand::ShiftSelectionColors { hue_delta_deg, saturation_delta, brightness_delta } => {
-                let dh = hue_delta_deg.get();
-                let ds = saturation_delta.get();
-                let db = brightness_delta.get();
-                let shift_color = |c: &Color| -> Color {
-                    let [r, g, b] = c.to_srgb8();
-                    let [h, s, v] = coralcraft_color::srgb8_to_hsb(r, g, b);
-                    let [nr, ng, nb] = coralcraft_color::hsb_to_srgb8((h + dh).rem_euclid(360.0), (s + ds).clamp(0.0, 1.0), (v + db).clamp(0.0, 1.0));
-                    Color::rgb8(nr, ng, nb)
-                };
-                self.for_each_selected_mut(|obj| {
-                    if obj.locked {
-                        return;
-                    }
-                    if let Some(fill) = &mut obj.fill {
-                        match fill {
-                            FillStyle::Uniform { color } => *color = shift_color(color),
-                            FillStyle::Fountain { stops, .. } => {
-                                for stop in stops {
-                                    stop.color = shift_color(&stop.color);
-                                }
-                            }
-                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
-                                *fg_color = shift_color(fg_color);
-                                *bg_color = shift_color(bg_color);
-                            }
-                            FillStyle::Unknown { .. } => {}
-                        }
-                    }
-                    if let Some(outline) = &mut obj.outline {
-                        outline.color = shift_color(&outline.color);
-                    }
-                });
-            }
-            EngineCommand::SubdividePathSegments { object_id } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = subdivide_all_path_segments(&base_path)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::ConvertSelectionColors { invert, grayscale } => {
-                let convert_color = |c: &Color| -> Color {
-                    let [mut r, mut g, mut b] = c.to_srgb8();
-                    if invert {
-                        r = 255u8.saturating_sub(r);
-                        g = 255u8.saturating_sub(g);
-                        b = 255u8.saturating_sub(b);
-                    }
-                    if grayscale {
-                        let lum = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)).round().clamp(0.0, 255.0) as u8;
-                        r = lum;
-                        g = lum;
-                        b = lum;
-                    }
-                    Color::rgb8(r, g, b)
-                };
-                self.for_each_selected_mut(|obj| {
-                    if obj.locked {
-                        return;
-                    }
-                    if let Some(fill) = &mut obj.fill {
-                        match fill {
-                            FillStyle::Uniform { color } => *color = convert_color(color),
-                            FillStyle::Fountain { stops, .. } => {
-                                for stop in stops {
-                                    stop.color = convert_color(&stop.color);
-                                }
-                            }
-                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
-                                *fg_color = convert_color(fg_color);
-                                *bg_color = convert_color(bg_color);
-                            }
-                            FillStyle::Unknown { .. } => {}
-                        }
-                    }
-                    if let Some(outline) = &mut obj.outline {
-                        outline.color = convert_color(&outline.color);
-                    }
-                });
-            }
-            EngineCommand::TransformCurveNodes { object_id, element_indices, scale_x, scale_y, rotate_deg } => {
-                let sx = scale_x.get();
-                let sy = scale_y.get();
-                let rot = rotate_deg.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = transform_curve_nodes(&base_path, &element_indices, sx, sy, rot)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::SelectByColor { color, match_fill, match_outline, tolerance_u8 } => {
-                let [tr, tg, tb] = color.to_srgb8();
-                let matches_c = |c: &Color| -> bool {
-                    let [r, g, b] = c.to_srgb8();
-                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
-                };
-                self.selection = self
-                    .current_target_objects()
-                    .iter()
-                    .filter(|o| {
-                        if o.locked || !o.visible {
-                            return false;
-                        }
-                        let fill_ok = match_fill
-                            && o.fill.as_ref().is_some_and(|f| match f {
-                                FillStyle::Uniform { color: fc } => matches_c(fc),
-                                FillStyle::Fountain { stops, .. } => stops.iter().any(|s| matches_c(&s.color)),
-                                FillStyle::TwoColorPattern { fg_color, bg_color, .. } => matches_c(fg_color) || matches_c(bg_color),
-                                FillStyle::Unknown { .. } => false,
-                            });
-                        let outline_ok = match_outline && o.outline.as_ref().is_some_and(|ol| matches_c(&ol.color));
-                        fill_ok || outline_ok
-                    })
-                    .map(|o| o.id)
-                    .collect();
-            }
-            EngineCommand::BreakPathAtNode { object_id, element_index } => {
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(updated) = break_path_at_node(&base_path, element_index)
-                    {
-                        obj.kind = ObjectKind::Path(updated);
-                    }
-                });
-            }
-            EngineCommand::EqualizeSelectionSize { match_width, match_height } => {
-                if let Some(&anchor_id) = self.selection.last()
-                    && let Some(anchor_node) = self.selected_or_all_node(anchor_id)
-                {
-                    let anchor_bbox = combined_selection_bounds(&[anchor_node]);
-                    let target_w = anchor_bbox.width();
-                    let target_h = anchor_bbox.height();
-                    if target_w > 1e-6 && target_h > 1e-6 {
-                        self.for_each_selected_mut(|obj| {
-                            if obj.locked || obj.id == anchor_id {
-                                return;
-                            }
-                            let bbox = combined_selection_bounds(&[obj]);
-                            let cur_w = bbox.width();
-                            let cur_h = bbox.height();
-                            if cur_w <= 1e-6 || cur_h <= 1e-6 {
-                                return;
-                            }
-                            let sx = if match_width { target_w / cur_w } else { 1.0 };
-                            let sy = if match_height { target_h / cur_h } else { 1.0 };
-                            let cx = 0.5 * (bbox.x0.get() + bbox.x1.get());
-                            let cy = 0.5 * (bbox.y0.get() + bbox.y1.get());
-                            if let Ok(t1) = Affine2::translation(-cx, -cy)
-                                && let Ok(sc) = Affine2::scaling(sx, sy)
-                                && let Ok(t2) = Affine2::translation(cx, cy)
-                                && let Ok(step1) = t1.then(sc)
-                                && let Ok(tf) = step1.then(t2)
-                                && let Ok(composed) = obj.transform.then(tf)
-                            {
-                                obj.transform = composed;
-                            }
-                        });
-                    }
-                }
-            }
-            EngineCommand::MorphBetweenObjects { start_id, end_id, t, sample_count } => {
-                let src_a = self.selected_or_all_node(start_id).cloned();
-                let src_b = self.selected_or_all_node(end_id).cloned();
-                if let (Some(a), Some(b)) = (src_a, src_b)
-                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
-                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
-                    && let Ok(morphed) = morph_paths_linear(&pa, &pb, t.get(), sample_count)
-                {
-                    let new_id = self.document.allocate_object_id();
-                    let node =
-                        ObjectNode::new(new_id, Some("Morphed Curve".to_owned()), ObjectKind::Path(morphed), a.fill.clone(), a.outline.clone());
-                    self.target_layer_mut().objects.push(node);
-                    self.selection = vec![new_id];
-                }
-            }
-            EngineCommand::DistributeExactGap { horizontal, gap_pt } => {
-                let gap = gap_pt.get();
-                let mut items: Vec<(ObjectId, Rect)> =
-                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
-                if items.len() >= 2 {
-                    if horizontal {
-                        items.sort_by_key(|a| a.1.x0);
-                    } else {
-                        items.sort_by_key(|a| a.1.y0);
-                    }
-                    let Some(&(_, first_b)) = items.first() else {
-                        return false;
-                    };
-                    let mut deltas = BTreeMap::new();
-                    if horizontal {
-                        let mut cur_x = first_b.x1.get() + gap;
-                        for (id, b) in items.iter().skip(1) {
-                            deltas.insert(*id, (cur_x - b.x0.get(), 0.0));
-                            cur_x += b.width() + gap;
-                        }
-                    } else {
-                        let mut cur_y = first_b.y1.get() + gap;
-                        for (id, b) in items.iter().skip(1) {
-                            deltas.insert(*id, (0.0, cur_y - b.y0.get()));
-                            cur_y += b.height() + gap;
-                        }
-                    }
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked
-                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                            && let Ok(tf) = Affine2::translation(dx, dy)
-                            && let Ok(composed) = obj.transform.then(tf)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::DivideSelection => {
-                let sel = self.selection.clone();
-                let candidates: Vec<ObjectNode> =
-                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                if let [cand0, cand1, ..] = candidates.as_slice()
-                    && let Some(pa) = object_to_path(cand0).and_then(|p| p.transform(cand0.transform).ok())
-                    && let Some(pb) = object_to_path(cand1).and_then(|p| p.transform(cand1.transform).ok())
-                    && let Ok(regions) = divide_overlapping_paths(&pa, &pb)
-                {
-                    let id_a = cand0.id;
-                    let id_b = cand1.id;
-                    let mut new_ids = Vec::with_capacity(regions.len());
-                    let mut new_nodes = Vec::with_capacity(regions.len());
-                    for (idx, reg) in regions.into_iter().enumerate() {
-                        let new_id = self.document.allocate_object_id();
-                        let src = if idx == 2 { cand1 } else { cand0 };
-                        let node = ObjectNode::new(
-                            new_id,
-                            Some(format!("Divided Region {}", idx.saturating_add(1))),
-                            ObjectKind::Path(reg),
-                            src.fill.clone(),
-                            src.outline.clone(),
-                        );
-                        new_ids.push(new_id);
-                        new_nodes.push(node);
-                    }
-                    let layer = self.target_layer_mut();
-                    layer.objects.retain(|o| o.id != id_a && o.id != id_b);
-                    layer.objects.extend(new_nodes);
-                    self.selection = new_ids;
-                }
-            }
-            EngineCommand::DistributeSelectionAlongPath { spine_object_id, rotate_to_tangent } => {
-                if let Some(spine_obj) = self.selected_or_all_node(spine_object_id).cloned()
-                    && let Some(spine_path) = object_to_path(&spine_obj).and_then(|p| p.transform(spine_obj.transform).ok())
-                    && let Ok(lut) = ArcLengthTable::from_path(&spine_path)
-                {
-                    let targets: Vec<(ObjectId, Point)> = self
-                        .selected_nodes()
-                        .into_iter()
-                        .filter(|o| !o.locked && o.id != spine_object_id)
-                        .filter_map(|o| combined_selection_bounds(&[o]).center().ok().map(|c| (o.id, c)))
-                        .collect();
-                    let n = targets.len();
-                    let mut transforms = BTreeMap::new();
-                    for (idx, (id, cur_c)) in targets.into_iter().enumerate() {
-                        let u = if n <= 1 { 0.5 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
-                        if let Some(sample) = lut.sample_normalized(u) {
-                            let dx = sample.point.x.get() - cur_c.x.get();
-                            let dy = sample.point.y.get() - cur_c.y.get();
-                            if rotate_to_tangent {
-                                if let Ok(t1) = Affine2::translation(-cur_c.x.get(), -cur_c.y.get())
-                                    && let Ok(rot) = Affine2::rotation_rad(sample.angle_deg.to_radians())
-                                    && let Ok(t2) = Affine2::translation(sample.point.x.get(), sample.point.y.get())
-                                    && let Ok(s1) = t1.then(rot)
-                                    && let Ok(tf) = s1.then(t2)
-                                {
-                                    transforms.insert(id, tf);
-                                }
-                            } else if let Ok(tf) = Affine2::translation(dx, dy) {
-                                transforms.insert(id, tf);
-                            }
-                        }
-                    }
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked
-                            && let Some(&tf) = transforms.get(&obj.id)
-                            && let Ok(composed) = obj.transform.then(tf)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::RecolorArtwork { from_color, to_color, tolerance_u8, selection_only } => {
-                let [tr, tg, tb] = from_color.to_srgb8();
-                let matches_c = |c: &Color| -> bool {
-                    let [r, g, b] = c.to_srgb8();
-                    r.abs_diff(tr) <= tolerance_u8 && g.abs_diff(tg) <= tolerance_u8 && b.abs_diff(tb) <= tolerance_u8
-                };
-                let recolor_node = |obj: &mut ObjectNode| {
-                    if obj.locked {
-                        return;
-                    }
-                    if let Some(fill) = &mut obj.fill {
-                        match fill {
-                            FillStyle::Uniform { color } => {
-                                if matches_c(color) {
-                                    *color = to_color.clone();
-                                }
-                            }
-                            FillStyle::Fountain { stops, .. } => {
-                                for s in stops {
-                                    if matches_c(&s.color) {
-                                        s.color = to_color.clone();
-                                    }
-                                }
-                            }
-                            FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
-                                if matches_c(fg_color) {
-                                    *fg_color = to_color.clone();
-                                }
-                                if matches_c(bg_color) {
-                                    *bg_color = to_color.clone();
-                                }
-                            }
-                            FillStyle::Unknown { .. } => {}
-                        }
-                    }
-                    if let Some(ol) = &mut obj.outline
-                        && matches_c(&ol.color)
-                    {
-                        ol.color = to_color.clone();
-                    }
-                };
-                if selection_only {
-                    self.for_each_selected_mut(recolor_node);
-                } else {
-                    self.for_each_node_mut(recolor_node);
-                }
-            }
-            EngineCommand::HatchObjectPath { object_id, angle_deg, spacing_pt, cross_hatch } => {
-                let ang = angle_deg.get();
-                let sp = spacing_pt.get();
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(hatched) = hatch_path_region(&base_path, ang, sp, cross_hatch)
-                    {
-                        obj.kind = ObjectKind::Path(hatched);
-                        if obj.outline.is_none() {
-                            obj.outline = Some(OutlineStyle::hairline(Color::BLACK));
-                        }
-                    }
-                });
-            }
-            EngineCommand::CreateIntermediateBlendPaths { start_id, end_id, steps, sample_count } => {
-                let n_steps = steps.clamp(1, 32);
-                let src_a = self.selected_or_all_node(start_id).cloned();
-                let src_b = self.selected_or_all_node(end_id).cloned();
-                if let (Some(a), Some(b)) = (src_a, src_b)
-                    && let Some(pa) = object_to_path(&a).and_then(|p| p.transform(a.transform).ok())
-                    && let Some(pb) = object_to_path(&b).and_then(|p| p.transform(b.transform).ok())
-                {
-                    let ca = a.fill.as_ref().and_then(|f| match f {
-                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
-                        _ => None,
-                    });
-                    let cb = b.fill.as_ref().and_then(|f| match f {
-                        FillStyle::Uniform { color } => Some(color.to_srgb8()),
-                        _ => None,
-                    });
-                    let mut new_ids = Vec::with_capacity(n_steps as usize);
-                    for k in 1..=n_steps {
-                        let t = f64::from(k) / f64::from(n_steps.saturating_add(1));
-                        if let Ok(morphed) = morph_paths_linear(&pa, &pb, t, sample_count) {
-                            let new_id = self.document.allocate_object_id();
-                            let fill = if let (Some([r0, g0, b0]), Some([r1, g1, b1])) = (ca, cb) {
-                                let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
-                                let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
-                                let bl = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
-                                Some(FillStyle::uniform(Color::rgb8(r, g, bl)))
-                            } else {
-                                a.fill.clone()
-                            };
-                            let node = ObjectNode::new(new_id, Some(format!("Blend Step {k}")), ObjectKind::Path(morphed), fill, a.outline.clone());
-                            new_ids.push(new_id);
-                            self.target_layer_mut().objects.push(node);
-                        }
-                    }
-                    if !new_ids.is_empty() {
-                        self.selection = new_ids;
-                    }
-                }
-            }
-            EngineCommand::ProjectSelectionAxonometric { plane } => {
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(projected) = project_path_axonometric(&world_path, plane)
-                    {
-                        obj.kind = ObjectKind::Path(projected);
-                        obj.transform = Affine2::IDENTITY;
-                    }
-                });
-            }
-            EngineCommand::PackSelectionInGrid { origin, cols, gap_pt } => {
-                let c_count = cols.clamp(1, 32) as usize;
-                let gap = gap_pt.get();
-                let items: Vec<(ObjectId, Rect)> =
-                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
-                let mut deltas = BTreeMap::new();
-                let mut cur_x = origin.x.get();
-                let mut cur_y = origin.y.get();
-                let mut row_h = 0.0_f64;
-                for (idx, (id, b)) in items.into_iter().enumerate() {
-                    if idx > 0 && idx.checked_rem(c_count) == Some(0) {
-                        cur_x = origin.x.get();
-                        cur_y += row_h + gap;
-                        row_h = 0.0;
-                    }
-                    deltas.insert(id, (cur_x - b.x0.get(), cur_y - b.y0.get()));
-                    cur_x += b.width() + gap;
-                    row_h = row_h.max(b.height());
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                        && let Ok(tf) = Affine2::translation(dx, dy)
-                        && let Ok(composed) = obj.transform.then(tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ExcludeSelection => {
-                let sel = self.selection.clone();
-                let candidates: Vec<ObjectNode> =
-                    self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-                if candidates.len() >= 2
-                    && let Some(first_cand) = candidates.first()
-                    && let Some(first_path) = object_to_path(first_cand).and_then(|p| p.transform(first_cand.transform).ok())
-                {
-                    let mut acc = first_path;
-                    for cand in candidates.iter().skip(1) {
-                        if let Some(wp) = object_to_path(cand).and_then(|p| p.transform(cand.transform).ok())
-                            && let Ok(excluded) = boolean_paths(&acc, &wp, BooleanOp::Exclude)
-                        {
-                            acc = excluded;
-                        }
-                    }
-                    let anchor = candidates.last().unwrap_or(first_cand);
-                    let new_id = self.document.allocate_object_id();
-                    let new_node =
-                        ObjectNode::new(new_id, Some("Excluded Path".to_owned()), ObjectKind::Path(acc), anchor.fill.clone(), anchor.outline.clone());
-                    let remove_ids: Vec<ObjectId> = candidates.iter().map(|c| c.id).collect();
-                    let layer = self.target_layer_mut();
-                    layer.objects.retain(|o| !remove_ids.contains(&o.id));
-                    layer.objects.push(new_node);
-                    self.selection = vec![new_id];
-                }
-            }
-            EngineCommand::ResolveSelectionOverlaps { min_gap_pt, iterations } => {
-                let gap = min_gap_pt.get().max(0.0);
-                let iters = iterations.clamp(1, 200);
-                let mut boxes: Vec<(ObjectId, f64, f64, f64, f64, f64, f64)> = self
-                    .selected_nodes()
-                    .into_iter()
-                    .filter(|o| !o.locked)
-                    .map(|o| {
-                        let b = combined_selection_bounds(&[o]);
-                        (o.id, b.x0.get(), b.y0.get(), b.width(), b.height(), b.x0.get(), b.y0.get())
-                    })
-                    .collect();
-                let n = boxes.len();
-                for _ in 0..iters {
-                    let mut any_moved = false;
-                    for i in 0..n {
-                        for j in i.saturating_add(1)..n {
-                            let (Some(&(_, xi, yi, wi, hi, _, _)), Some(&(_, xj, yj, wj, hj, _, _))) = (boxes.get(i), boxes.get(j)) else {
-                                continue;
-                            };
-                            let cxi = xi + 0.5 * wi;
-                            let cyi = yi + 0.5 * hi;
-                            let cxj = xj + 0.5 * wj;
-                            let cyj = yj + 0.5 * hj;
-                            let req_dx = 0.5 * (wi + wj) + gap;
-                            let req_dy = 0.5 * (hi + hj) + gap;
-                            let dx = cxj - cxi;
-                            let dy = cyj - cyi;
-                            let pen_x = req_dx - dx.abs();
-                            let pen_y = req_dy - dy.abs();
-                            if pen_x > 1e-6 && pen_y > 1e-6 {
-                                any_moved = true;
-                                if pen_x <= pen_y {
-                                    let dir = if dx.abs() > 1e-6 { dx.signum() } else { 1.0 };
-                                    let push = 0.5 * pen_x * dir;
-                                    if let Some(bi) = boxes.get_mut(i) {
-                                        bi.1 -= push;
-                                    }
-                                    if let Some(bj) = boxes.get_mut(j) {
-                                        bj.1 += push;
-                                    }
-                                } else {
-                                    let dir = if dy.abs() > 1e-6 { dy.signum() } else { 1.0 };
-                                    let push = 0.5 * pen_y * dir;
-                                    if let Some(bi) = boxes.get_mut(i) {
-                                        bi.2 -= push;
-                                    }
-                                    if let Some(bj) = boxes.get_mut(j) {
-                                        bj.2 += push;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !any_moved {
-                        break;
-                    }
-                }
-                let mut deltas = BTreeMap::new();
-                for (id, x, y, _, _, orig_x, orig_y) in boxes {
-                    deltas.insert(id, (x - orig_x, y - orig_y));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                        && let Ok(tf) = Affine2::translation(dx, dy)
-                        && let Ok(composed) = obj.transform.then(tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ApplyVariableWidthStroke { object_id, widths_pt } => {
-                if widths_pt.len() < 2 {
-                    return false;
-                }
-                let raw_widths: Vec<f64> = widths_pt.iter().map(|w| w.get()).collect();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(ribbon) = expand_tapered_stroke_profile(&base_path, &raw_widths)
-                    {
-                        if obj.fill.is_none() {
-                            let color = obj.outline.as_ref().map_or_else(|| Color::rgb8(31, 41, 55), |o| o.color.clone());
-                            obj.fill = Some(FillStyle::Uniform { color });
-                        }
-                        obj.kind = ObjectKind::Path(ribbon);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::ChaikinSmoothObjectPath { object_id, iterations } => {
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(smoothed) = chaikin_smooth_path(&base_path, iterations)
-                    {
-                        obj.kind = ObjectKind::Path(smoothed);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::WaveDistortObjectPath { object_id, amplitude_pt, frequency, phase_deg } => {
-                let amp = amplitude_pt.get();
-                let freq = frequency.get();
-                let phase = phase_deg.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(waved) = wave_distort_path(&base_path, amp, freq, phase)
-                    {
-                        obj.kind = ObjectKind::Path(waved);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::RadialScaleSelectionPositions { center, radial_scale, twist_deg } => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let scale = radial_scale.get();
-                let twist_rad = twist_deg.get().to_radians();
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let mut deltas = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let vx = oc.x.get() - cx;
-                    let vy = oc.y.get() - cy;
-                    let r = vx.hypot(vy);
-                    if r > 1e-6 {
-                        let theta = vy.atan2(vx) + twist_rad;
-                        let r_new = r * scale;
-                        let nx = cx + r_new * theta.cos();
-                        let ny = cy + r_new * theta.sin();
-                        deltas.insert(obj.id, (nx - oc.x.get(), ny - oc.y.get()));
-                    }
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                        && let Ok(tf) = Affine2::translation(dx, dy)
-                        && let Ok(composed) = obj.transform.then(tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ApplyDihedralSymmetry { object_id, center, folds, reflect } => {
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(sym) = build_dihedral_symmetry_path(&world_path, center, folds, reflect)
-                    {
-                        obj.kind = ObjectKind::Path(sym);
-                        obj.transform = Affine2::IDENTITY;
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::ScaleSelectionByDistance { center, min_scale, max_scale, falloff_radius_pt } => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let s_min = min_scale.get().max(0.05);
-                let s_max = max_scale.get().max(0.05);
-                let r_falloff = falloff_radius_pt.get().max(1e-6);
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let mut scales = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let d = (oc.x.get() - cx).hypot(oc.y.get() - cy);
-                    let t = (d / r_falloff).clamp(0.0, 1.0);
-                    let s = s_max + (s_min - s_max) * t;
-                    scales.insert(obj.id, (oc, s));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, s)) = scales.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_scale) = Affine2::scaling(s, s)
-                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
-                        && let Ok(scale_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
-                        && let Ok(composed) = obj.transform.then(scale_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::DashObjectPath { object_id, dash_pattern_pt } => {
-                if dash_pattern_pt.is_empty() {
-                    return false;
-                }
-                let raw_pat: Vec<f64> = dash_pattern_pt.iter().map(|d| d.get()).collect();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(dashed) = dash_path_to_open_subpaths(&base_path, &raw_pat)
-                    {
-                        obj.kind = ObjectKind::Path(dashed);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::QuantizeSelectionPositions { grid_x_pt, grid_y_pt } => {
-                let gx = grid_x_pt.get();
-                let gy = grid_y_pt.get();
-                if gx <= 0.0 || gy <= 0.0 {
-                    return false;
-                }
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let mut deltas = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let x0 = wb.x0.get();
-                    let y0 = wb.y0.get();
-                    let sx = (x0 / gx).round() * gx;
-                    let sy = (y0 / gy).round() * gy;
-                    deltas.insert(obj.id, (sx - x0, sy - y0));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                        && let Ok(tf) = Affine2::translation(dx, dy)
-                        && let Ok(composed) = obj.transform.then(tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ConvexHullSelection => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let mut agg = Path::new();
-                let mut first_fill = self.default_fill.clone();
-                let mut first_outline = self.default_outline.clone();
-                for (i, obj) in sel_nodes.into_iter().enumerate() {
-                    if i == 0 {
-                        first_fill = obj.fill.clone();
-                        first_outline = obj.outline.clone();
-                    }
-                    if let Some(wp) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok()) {
-                        agg.elements.extend(wp.elements);
-                    }
-                }
-                let Ok(hull) = convex_hull_of_path(&agg) else {
-                    return false;
-                };
-                let new_id = self.document.allocate_object_id();
-                let new_node = ObjectNode::new(new_id, Some("Convex Hull".to_owned()), ObjectKind::Path(hull), first_fill, first_outline);
-                self.target_layer_mut().objects.push(new_node);
-                self.selection = vec![new_id];
-            }
-            EngineCommand::ArrangeSelectionOnCircle { center, radius_pt, start_angle_deg, rotate_to_tangent } => {
-                let r = radius_pt.get();
-                if r <= 0.0 {
-                    return false;
-                }
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let n = sel_nodes.len();
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let start_rad = start_angle_deg.get().to_radians();
-                let mut placements = BTreeMap::new();
-                for (idx, obj) in sel_nodes.into_iter().enumerate() {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let theta = start_rad + std::f64::consts::TAU * (idx as f64) / (n as f64);
-                    let tx = cx + r * theta.cos();
-                    let ty = cy + r * theta.sin();
-                    let rot_rad = if rotate_to_tangent { theta + std::f64::consts::FRAC_PI_2 } else { 0.0 };
-                    placements.insert(obj.id, (oc, tx, ty, rot_rad));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, tx, ty, rot_rad)) = placements.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
-                        && let Ok(t_to_target) = Affine2::translation(tx, ty)
-                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_to_target))
-                        && let Ok(composed) = obj.transform.then(step_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ExtractPathSkeleton { object_id, sample_steps } => {
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(skel) = medial_chord_skeleton_of_path(&base_path, sample_steps)
-                    {
-                        obj.kind = ObjectKind::Path(skel);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::JitterSelectionTransforms { dx_max_pt, dy_max_pt, angle_max_deg, scale_max_pct, seed } => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let mut state = seed;
-                let mut next_signed_unit = || -> f64 {
-                    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-                    let mut z = state;
-                    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-                    z ^= z >> 31;
-                    ((z >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64)) * 2.0 - 1.0
-                };
-                let dx_m = dx_max_pt.get().max(0.0);
-                let dy_m = dy_max_pt.get().max(0.0);
-                let ang_m = angle_max_deg.get().max(0.0);
-                let sc_m = (scale_max_pct.get() / 100.0).clamp(0.0, 0.9);
-                let mut jitters = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let dx = next_signed_unit() * dx_m;
-                    let dy = next_signed_unit() * dy_m;
-                    let rot_rad = (next_signed_unit() * ang_m).to_radians();
-                    let scale = (1.0 + next_signed_unit() * sc_m).clamp(0.1, 10.0);
-                    jitters.insert(obj.id, (oc, dx, dy, rot_rad, scale));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, dx, dy, rot_rad, scale)) = jitters.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_scale) = Affine2::scaling(scale, scale)
-                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
-                        && let Ok(t_back) = Affine2::translation(oc.x.get() + dx, oc.y.get() + dy)
-                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_rot)).and_then(|m| m.then(t_back))
-                        && let Ok(composed) = obj.transform.then(step_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::DensifyObjectPath { object_id, max_len_pt } => {
-                let max_l = max_len_pt.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(dense) = subdivide_path_by_max_segment_length(&base_path, max_l)
-                    {
-                        obj.kind = ObjectKind::Path(dense);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::AlignSelectionToKeyObject { key_object_id, mode } => {
-                let Some(anchor_node) = self.selected_or_all_node(key_object_id) else {
-                    return false;
-                };
-                let anchor_bbox = combined_selection_bounds(&[anchor_node]);
-                let ax_mid = (anchor_bbox.x0.get() + anchor_bbox.x1.get()) * 0.5;
-                let ay_mid = (anchor_bbox.y0.get() + anchor_bbox.y1.get()) * 0.5;
-                let mut any_moved = false;
-                self.for_each_selected_mut(|obj| {
-                    if obj.locked || obj.id == key_object_id {
-                        return;
-                    }
-                    let bbox = combined_selection_bounds(&[obj]);
-                    let bx_mid = (bbox.x0.get() + bbox.x1.get()) * 0.5;
-                    let by_mid = (bbox.y0.get() + bbox.y1.get()) * 0.5;
-                    let (dx, dy) = match mode {
-                        AlignMode::Left => (anchor_bbox.x0.get() - bbox.x0.get(), 0.0),
-                        AlignMode::Right => (anchor_bbox.x1.get() - bbox.x1.get(), 0.0),
-                        AlignMode::Top => (0.0, anchor_bbox.y0.get() - bbox.y0.get()),
-                        AlignMode::Bottom => (0.0, anchor_bbox.y1.get() - bbox.y1.get()),
-                        AlignMode::CenterHorizontal => (ax_mid - bx_mid, 0.0),
-                        AlignMode::CenterVertical => (0.0, ay_mid - by_mid),
-                        AlignMode::CenterToPage => (ax_mid - bx_mid, ay_mid - by_mid),
-                    };
-                    if let Ok(t) = Affine2::translation(dx, dy)
-                        && let Ok(composed) = obj.transform.then(t)
-                    {
-                        obj.transform = composed;
-                        any_moved = true;
-                    }
-                });
-                if !any_moved {
-                    return false;
-                }
-            }
-            EngineCommand::SphericalWarpObjectPath { object_id, center, radius_pt, magnification } => {
-                let r_lens = radius_pt.get();
-                let mag = magnification.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(warped) = spherical_fisheye_warp_path(&world_path, center, r_lens, mag)
-                    {
-                        obj.kind = ObjectKind::Path(warped);
-                        obj.transform = Affine2::IDENTITY;
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::ColorizeSelectionByGradient { start_color, end_color, apply_to_fill, apply_to_outline } => {
-                if !apply_to_fill && !apply_to_outline {
-                    return false;
-                }
-                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
-                if sel_ids.is_empty() {
-                    return false;
-                }
-                let n = sel_ids.len();
-                let [r0, g0, b0] = start_color.to_srgb8();
-                let [r1, g1, b1] = end_color.to_srgb8();
-                let mut color_map = BTreeMap::new();
-                for (idx, id) in sel_ids.into_iter().enumerate() {
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
-                    let r = ((1.0 - t) * f64::from(r0) + t * f64::from(r1)).round().clamp(0.0, 255.0) as u8;
-                    let g = ((1.0 - t) * f64::from(g0) + t * f64::from(g1)).round().clamp(0.0, 255.0) as u8;
-                    let b = ((1.0 - t) * f64::from(b0) + t * f64::from(b1)).round().clamp(0.0, 255.0) as u8;
-                    color_map.insert(id, Color::rgb8(r, g, b));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(c) = color_map.get(&obj.id)
-                    {
-                        if apply_to_fill {
-                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
-                        }
-                        if apply_to_outline {
-                            if let Some(ol) = &mut obj.outline {
-                                ol.color = c.clone();
-                            } else {
-                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
-                            }
-                        }
-                    }
-                });
-            }
-            EngineCommand::RelaxObjectPath { object_id, iterations, lambda } => {
-                let lam = lambda.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(relaxed) = laplacian_relax_closed_path(&base_path, iterations, lam)
-                    {
-                        obj.kind = ObjectKind::Path(relaxed);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::ApplyPaletteSwatchesToSelection { colors, apply_to_fill, apply_to_outline } => {
-                if colors.is_empty() || (!apply_to_fill && !apply_to_outline) {
-                    return false;
-                }
-                let sel_ids: Vec<ObjectId> = self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| o.id).collect();
-                if sel_ids.is_empty() {
-                    return false;
-                }
-                let mut color_map = BTreeMap::new();
-                for (idx, id) in sel_ids.into_iter().enumerate() {
-                    if let Some(c) = idx.checked_rem(colors.len()).and_then(|rem| colors.get(rem)) {
-                        color_map.insert(id, c.clone());
-                    }
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(c) = color_map.get(&obj.id)
-                    {
-                        if apply_to_fill {
-                            obj.fill = Some(FillStyle::Uniform { color: c.clone() });
-                        }
-                        if apply_to_outline {
-                            if let Some(ol) = &mut obj.outline {
-                                ol.color = c.clone();
-                            } else {
-                                obj.outline = Some(OutlineStyle::hairline(c.clone()));
-                            }
-                        }
-                    }
-                });
-            }
-            EngineCommand::FitCircleToObjectPath { object_id } => {
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(circle_path) = fit_circle_to_path_points(&world_path)
-                    {
-                        obj.kind = ObjectKind::Path(circle_path);
-                        obj.transform = Affine2::IDENTITY;
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::SnapSelectionToCircleRadius { center, radius_pt } => {
-                let r = radius_pt.get();
-                if r <= 0.0 {
-                    return false;
-                }
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let mut deltas = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let dx = oc.x.get() - cx;
-                    let dy = oc.y.get() - cy;
-                    let dist = dx.hypot(dy);
-                    let (ux, uy) = if dist > 1e-6 { (dx / dist, dy / dist) } else { (1.0, 0.0) };
-                    let target_x = cx + ux * r;
-                    let target_y = cy + uy * r;
-                    deltas.insert(obj.id, (target_x - oc.x.get(), target_y - oc.y.get()));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(tx, ty)) = deltas.get(&obj.id)
-                        && let Ok(t) = Affine2::translation(tx, ty)
-                        && let Ok(composed) = obj.transform.then(t)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::SmoothPolylineToCubicBeziers { object_id, tension } => {
-                let tau = tension.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(smooth) = interpolate_smooth_cubic_path(&base_path, tau)
-                    {
-                        obj.kind = ObjectKind::Path(smooth);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::OrientSelectionToCenter { center, angle_offset_deg } => {
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let cx = center.x.get();
-                let cy = center.y.get();
-                let off_rad = angle_offset_deg.get().to_radians();
-                let mut rotations = BTreeMap::new();
-                for obj in sel_nodes {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let dx = oc.x.get() - cx;
-                    let dy = oc.y.get() - cy;
-                    let target_rad = dy.atan2(dx) + off_rad;
-                    rotations.insert(obj.id, (oc, target_rad));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, rot_rad)) = rotations.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_rot) = Affine2::rotation_rad(rot_rad)
-                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
-                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
-                        && let Ok(composed) = obj.transform.then(step_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::PinchPunchObjectPath { object_id, center, radius_pt, strength } => {
-                let r_max = radius_pt.get();
-                let s = strength.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                        && let Ok(warped) = pinch_punch_warp_path(&world_path, center, r_max, s)
-                    {
-                        obj.kind = ObjectKind::Path(warped);
-                        obj.transform = Affine2::IDENTITY;
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::StackSelection { horizontal, gap_pt } => {
-                let gap = gap_pt.get();
-                let mut items: Vec<(ObjectId, Rect)> =
-                    self.selected_nodes().into_iter().filter(|o| !o.locked).map(|o| (o.id, combined_selection_bounds(&[o]))).collect();
-                if items.len() < 2 {
-                    return false;
-                }
-                if horizontal {
-                    items.sort_by_key(|a| a.1.x0);
-                    let Some(&(_, first_b)) = items.first() else {
-                        return false;
-                    };
-                    let mut cursor = first_b.x0.get();
-                    let mut deltas = BTreeMap::new();
-                    for (id, bbox) in items {
-                        let dx = cursor - bbox.x0.get();
-                        deltas.insert(id, (dx, 0.0));
-                        cursor += bbox.width() + gap;
-                    }
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked
-                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                            && let Ok(t) = Affine2::translation(dx, dy)
-                            && let Ok(composed) = obj.transform.then(t)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                } else {
-                    items.sort_by_key(|a| a.1.y0);
-                    let Some(&(_, first_b)) = items.first() else {
-                        return false;
-                    };
-                    let mut cursor = first_b.y0.get();
-                    let mut deltas = BTreeMap::new();
-                    for (id, bbox) in items {
-                        let dy = cursor - bbox.y0.get();
-                        deltas.insert(id, (0.0, dy));
-                        cursor += bbox.height() + gap;
-                    }
-                    self.for_each_selected_mut(|obj| {
-                        if !obj.locked
-                            && let Some(&(dx, dy)) = deltas.get(&obj.id)
-                            && let Ok(t) = Affine2::translation(dx, dy)
-                            && let Ok(composed) = obj.transform.then(t)
-                        {
-                            obj.transform = composed;
-                        }
-                    });
-                }
-            }
-            EngineCommand::FlattenObjectPathToPolylines { object_id, tolerance_pt } => {
-                let tol = tolerance_pt.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(base_path) = object_to_path(obj)
-                        && let Ok(flat) = flatten_path_to_polylines(&base_path, tol)
-                    {
-                        obj.kind = ObjectKind::Path(flat);
-                        changed = true;
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::ScaleSelectionProgressively { start_scale, end_scale } => {
-                let s0 = start_scale.get();
-                let s1 = end_scale.get();
-                if s0 <= 0.05 || s1 <= 0.05 {
-                    return false;
-                }
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let n = sel_nodes.len();
-                let mut scales = BTreeMap::new();
-                for (idx, obj) in sel_nodes.into_iter().enumerate() {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
-                    let sc = (1.0 - t) * s0 + t * s1;
-                    scales.insert(obj.id, (oc, sc));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, sc)) = scales.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_scale) = Affine2::scaling(sc, sc)
-                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
-                        && let Ok(step_tf) = t_to_origin.then(t_scale).and_then(|m| m.then(t_back))
-                        && let Ok(composed) = obj.transform.then(step_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
-            EngineCommand::ShearWarpObjectPath { object_id, shear_x_pt, shear_y_pt } => {
-                let sx = shear_x_pt.get();
-                let sy = shear_y_pt.get();
-                let mut changed = false;
-                self.for_each_node_mut(|obj| {
-                    if obj.id == object_id
-                        && !obj.locked
-                        && let Some(world_path) = object_to_path(obj).and_then(|p| p.transform(obj.transform).ok())
-                    {
-                        let wb = combined_selection_bounds(&[obj]);
-                        if let Ok(warped) = shear_warp_path_along_axis(&world_path, wb, sx, sy) {
-                            obj.kind = ObjectKind::Path(warped);
-                            obj.transform = Affine2::IDENTITY;
-                            changed = true;
-                        }
-                    }
-                });
-                if !changed {
-                    return false;
-                }
-            }
-            EngineCommand::RotateSelectionProgressively { start_angle_deg, end_angle_deg } => {
-                let a0 = start_angle_deg.get();
-                let a1 = end_angle_deg.get();
-                let sel_nodes: Vec<&ObjectNode> = self.selected_nodes().into_iter().filter(|o| !o.locked).collect();
-                if sel_nodes.is_empty() {
-                    return false;
-                }
-                let n = sel_nodes.len();
-                let mut angles = BTreeMap::new();
-                for (idx, obj) in sel_nodes.into_iter().enumerate() {
-                    let wb = combined_selection_bounds(&[obj]);
-                    let Ok(oc) = wb.center() else {
-                        continue;
-                    };
-                    let t = if n <= 1 { 0.0 } else { (idx as f64) / (n.saturating_sub(1) as f64) };
-                    let ang_rad = ((1.0 - t) * a0 + t * a1).to_radians();
-                    angles.insert(obj.id, (oc, ang_rad));
-                }
-                self.for_each_selected_mut(|obj| {
-                    if !obj.locked
-                        && let Some(&(oc, ang_rad)) = angles.get(&obj.id)
-                        && let Ok(t_to_origin) = Affine2::translation(-oc.x.get(), -oc.y.get())
-                        && let Ok(t_rot) = Affine2::rotation_rad(ang_rad)
-                        && let Ok(t_back) = Affine2::translation(oc.x.get(), oc.y.get())
-                        && let Ok(step_tf) = t_to_origin.then(t_rot).and_then(|m| m.then(t_back))
-                        && let Ok(composed) = obj.transform.then(step_tf)
-                    {
-                        obj.transform = composed;
-                    }
-                });
-            }
+    pub fn documents(&self) -> &[DocState] {
+        &self.docs
+    }
+    /// The open document with [`DocState::uid`] `uid` (it may have closed since it was looked up).
+    pub fn document_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
+    }
+    pub fn active_index(&self) -> Option<usize> {
+        self.active
+    }
+    pub fn active(&self) -> Option<&DocState> {
+        self.active.and_then(|i| self.docs.get(i))
+    }
+    pub fn active_mut(&mut self) -> Option<&mut DocState> {
+        self.active.and_then(|i| self.docs.get_mut(i))
+    }
+    pub fn doc(&self) -> Result<&DocState> {
+        self.active().ok_or(EngineError::NoDocument)
+    }
+    pub fn doc_mut(&mut self) -> Result<&mut DocState> {
+        self.active_mut().ok_or(EngineError::NoDocument)
+    }
+    /// Finish the tool's pending work in the current document and give it fresh state, so nothing
+    /// (e.g. uncommitted typing) leaks into the document we are switching to.
+    fn reset_tool_for_doc_switch(&mut self) {
+        if self.active.is_none() {
+            return;
+        }
+        let view = self.last_view;
+        // The switch goes on whatever the lent tool's last actions did, as for the deactivation.
+        let _ = self.give_back_tool(view);
+        let acts = self.with_tool_cx(view, |t, cx| t.deactivate(cx));
+        let _ = self.apply_actions(acts);
+        // A batch leaves its interaction open in the document it leaves, to keep or roll back with
+        // the rest of the batch; anything else in progress (a drag) is cancelled.
+        if self.batch_stash.is_none() {
+            let _ = self.cancel_interaction();
+        }
+        self.keep_tool_settings();
+        self.tool = self.make_tool(self.tool.id());
+    }
+    pub fn set_active(&mut self, index: usize) -> bool {
+        if index < self.docs.len() {
+            if self.active != Some(index) {
+                self.reset_tool_for_doc_switch();
+            }
+            self.active = Some(index);
+            true
+        } else {
+            false
+        }
+    }
+    /// The name [`Session::next_untitled`] gives next (New Document's Name field).
+    pub fn peek_untitled(&self) -> String {
+        format!("Untitled-{}", self.untitled_counter + 1)
+    }
+    pub fn next_untitled(&mut self) -> String {
+        self.untitled_counter += 1;
+        format!("Untitled-{}", self.untitled_counter)
+    }
+    /// Text layout bounds are a cache (not saved): compute them for a document just read, or
+    /// selection boxes and hit testing would use the rough estimate until each text is edited, and
+    /// what is fitted to type's bounds (an envelope warping it) would come out differently. That
+    /// holds for the type in symbol definitions, pattern tiles, graph designs and opacity masks too,
+    /// not only in the layers (#1738).
+    pub(crate) fn refresh_text_bounds(doc: &mut Document) {
+        // Inline graphics in text take their size from their symbols' art (not saved either).
+        doc.resolve_inline_art();
+        let trees = doc.layers.iter_mut().chain(doc.symbols.iter_mut().map(|s| &mut s.art));
+        let trees = trees.chain(doc.graph_designs.iter_mut().map(|g| &mut g.art));
+        for tree in trees.chain(doc.patterns.iter_mut().flat_map(|p| p.art.iter_mut())) {
+            refresh_tree_text_bounds(tree);
+        }
+    }
+    /// Add a document and make it active.
+    pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
+        // Every edit is checked against the document before it, so the first one is within the cap
+        // (importers and the native reader have seen to theirs already, with a warning).
+        doc.limit_depth();
+        Self::refresh_text_bounds(&mut doc);
+        // Guides from files saved before guides had layers go on a layer.
+        doc.adopt_guides();
+        self.reset_tool_for_doc_switch();
+        let mut st = DocState::new(doc, path);
+        st.history.limit = self.prefs.history_states as usize;
+        self.docs.push(st);
+        let i = self.docs.len() - 1;
+        self.active = Some(i);
+        i
+    }
+    /// Replace the document in tab `index` (File → Revert): new content, cleared history and
+    /// selection, saved state. The tab keeps its place, path, format and view.
+    pub fn replace_document(&mut self, index: usize, mut doc: Document) -> bool {
+        if index >= self.docs.len() {
+            return false;
+        }
+        doc.limit_depth();
+        Self::refresh_text_bounds(&mut doc);
+        doc.adopt_guides();
+        if self.active == Some(index) {
+            // Pending tool work (typing, a drag) belongs to the content being thrown away.
+            self.reset_tool_for_doc_switch();
+        }
+        let old = &self.docs[index];
+        let mut st = DocState::new(doc, old.path.clone());
+        st.history.limit = old.history.limit;
+        // Same open document (caches keyed by uid stay valid); a new revision redraws it.
+        st.uid = old.uid;
+        st.revision = old.revision + 1;
+        st.format = old.format;
+        st.save_options = old.save_options.clone();
+        st.converted = old.converted;
+        st.imported_from = old.imported_from.clone();
+        st.import_losses = old.import_losses.clone();
+        st.view = old.view.clone();
+        st.layers_open = old.layers_open.clone();
+        let old = std::mem::replace(&mut self.docs[index], st);
+        if let Some(stash) = &mut self.batch_stash {
+            stash.push(old);
         }
         true
     }
+    pub fn close_document(&mut self, index: usize) -> bool {
+        if index >= self.docs.len() {
+            return false;
+        }
+        self.reset_tool_for_doc_switch();
+        // Closed (saved or discarded): nothing left to recover.
+        let uid = self.docs[index].uid;
+        cmd::recovery::forget(self, uid);
+        let old = self.docs.remove(index);
+        if let Some(stash) = &mut self.batch_stash {
+            stash.push(old);
+        }
+        self.active = if self.docs.is_empty() { None } else { Some(index.min(self.docs.len() - 1)) };
+        true
+    }
 
-    fn apply_selection_transform(&mut self, tf: Affine2, copy: bool) {
-        if copy {
-            let sel = self.selection.clone();
-            let templates: Vec<ObjectNode> = self.current_target_objects().iter().filter(|o| !o.locked && sel.contains(&o.id)).cloned().collect();
-            let mut new_selection = Vec::new();
-            for mut dup in templates {
-                reallocate_object_ids_recursive(&mut dup, &mut self.document);
-                if let Ok(composed) = dup.transform.then(tf) {
-                    dup.transform = composed;
-                }
-                new_selection.push(dup.id);
-                self.target_layer_mut().objects.push(dup);
-            }
-            if !new_selection.is_empty() {
-                self.selection = new_selection;
-            }
+    /// `spec`'s `enabled` with `ids` selected instead of the selection, which is then put back.
+    fn enabled_with_selection(&mut self, spec: &CommandSpec, ids: Vec<NodeId>) -> std::result::Result<(), String> {
+        let Some(d) = self.active_mut() else { return (spec.enabled)(self) };
+        let old = std::mem::replace(&mut d.selection, Selection { objects: ids, ..Selection::default() });
+        let r = (spec.enabled)(self);
+        if let Some(d) = self.active_mut() {
+            d.selection = old;
+        }
+        r
+    }
+
+    /// Execute a command by id. This is THE entry point for every frontend.
+    pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // The crate's own tests are the audit of the params descriptions (#1442): a key a test
+        // passes that its command's description doesn't name fails the test.
+        #[cfg(test)]
+        self.check_params(id, params)?;
+        // Clear's menu needs a selection; an agent supplying explicit targets only needs a
+        // document. The command validates those targets before making any edit.
+        let enabled = if id == "edit.clear" && params.get("ids").is_some() {
+            cmd::has_doc(self)
+        } else if let Some(ids) = given_ids(spec.params, params) {
+            // Objects given as `ids` stand in for the selection: the command is enabled as it is
+            // with them selected (#1575).
+            self.enabled_with_selection(spec, ids)
         } else {
-            self.for_each_selected_mut(|obj| {
-                if let Ok(composed) = obj.transform.then(tf) {
-                    obj.transform = composed;
+            (spec.enabled)(self)
+        };
+        if let Err(why) = enabled {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        // Only top-level commands are journaled (commands that call other commands would otherwise
+        // be recorded twice and replay differently).
+        if self.depth == 0 {
+            self.journal_note.clear();
+            self.note_depth = 1;
+            self.batch_stash = None;
+        }
+        // A selection-only command given `ids` selects them first, in the same undo step (#2130).
+        let select_first = SELECTS_GIVEN_IDS.contains(&id).then(|| params.get("ids")).flatten();
+        let run = |s: &mut Session| {
+            if let Some(ids) = select_first {
+                s.execute("select.set", &serde_json::json!({ "ids": ids }))?;
+            }
+            (spec.run)(s, params)
+        };
+        let r = if self.depth == 0 { self.run_guarded(id, run) } else { self.run_nested(run) };
+        let r = r?;
+        if self.depth == 0 {
+            self.inherit_new_art();
+        }
+        if spec.journal && self.depth == 0 && self.active().is_none_or(|d| d.interaction.is_none()) {
+            let p = self.noted(params);
+            self.journal.push((id.to_string(), p));
+        }
+        if self.depth == 0 {
+            self.after_command();
+        }
+        Ok(r)
+    }
+
+    /// Is the interface in Japanese? Then new type starts with em box top-to-top leading and em
+    /// box centre character alignment (#432).
+    pub fn japanese_interface(&self) -> bool {
+        self.ui_language.as_deref().unwrap_or(&self.prefs.interface_language).eq_ignore_ascii_case("ja")
+    }
+
+    /// Record `key: value` in the running top-level command's journal entry (or its interaction's
+    /// preview, or its step in a batch) unless its params give `key`: a value it resolved from the
+    /// preferences or the clock.
+    pub fn note_journal(&mut self, key: &str, value: Value) {
+        if self.depth == self.note_depth {
+            self.journal_note.insert(key.to_string(), value);
+        }
+    }
+
+    /// Run `id` as a step of the running command, which journals its steps (`command.batch`):
+    /// → the step's result and its params with what it noted ([`Session::note_journal`]), for the
+    /// step in the running command's journal entry.
+    pub(crate) fn execute_step(&mut self, id: &str, params: &Value) -> Result<(Value, Value)> {
+        let outer = (std::mem::take(&mut self.journal_note), self.note_depth);
+        self.note_depth = self.depth + 1;
+        let r = self.execute(id, params);
+        let noted = self.noted(params);
+        (self.journal_note, self.note_depth) = outer;
+        Ok((r?, noted))
+    }
+
+    /// The journal from entry `start` on, as an action records it: without the params that only
+    /// pin a replay to the original run ([`REPLAY_ONLY`]), so playing the action later acts now.
+    pub fn journal_for_action(&self, start: usize) -> Vec<(String, Value)> {
+        self.journal
+            .since(start)
+            .iter()
+            .cloned()
+            .map(|(id, mut p)| {
+                strip_replay_only(&id, &mut p);
+                (id, p)
+            })
+            .collect()
+    }
+
+    /// `params` with the noted values added (see [`Session::note_journal`]).
+    fn noted(&mut self, params: &Value) -> Value {
+        let mut note = std::mem::take(&mut self.journal_note);
+        match params {
+            // The params' own values win.
+            Value::Object(m) if !note.is_empty() => {
+                note.extend(m.clone());
+                Value::Object(note)
+            }
+            Value::Null if !note.is_empty() => Value::Object(note),
+            _ => params.clone(),
+        }
+    }
+
+    fn run_nested(&mut self, f: impl FnOnce(&mut Self) -> Result<Value>) -> Result<Value> {
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
+    /// A top-level command: a panic (a bug) becomes [`EngineError::Internal`] and the active
+    /// document goes back to how it was before the command, instead of crashing the frontend.
+    fn run_guarded(&mut self, id: &str, f: impl FnOnce(&mut Self) -> Result<Value>) -> Result<Value> {
+        let snapshot = self.active().map(|d| (d.uid, d.doc.clone(), d.selection.clone(), d.interaction.clone()));
+        let active = self.active;
+        match guard::catch_panic(|| self.run_nested(f)) {
+            Ok(r) => r,
+            Err(msg) => {
+                self.depth = 0;
+                self.journal_note.clear();
+                if let Some((uid, doc, selection, interaction)) = snapshot
+                    && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
+                {
+                    st.doc = doc;
+                    st.selection = selection;
+                    st.interaction = interaction;
+                    st.revision += 1;
                 }
-            });
-        }
-    }
-
-    /// Replaces the current selection list, deduplicating and dropping any IDs not present in the document.
-    pub fn set_selection(&mut self, selection: Vec<ObjectId>) {
-        self.selection = selection;
-        self.sanitize_selection();
-    }
-
-    fn sanitize_selection(&mut self) {
-        let mut valid = Vec::with_capacity(self.selection.len());
-        for &id in &self.selection {
-            if !valid.contains(&id) && self.selected_or_all_node(id).is_some() {
-                valid.push(id);
+                if active.is_some_and(|i| i < self.docs.len()) {
+                    self.active = active;
+                }
+                Err(EngineError::Internal { cmd: id.to_string(), msg })
             }
         }
-        self.selection = valid;
     }
 
-    /// Returns the total number of [`ObjectNode`]s across all pages, master layers, groups, and PowerClips.
-    #[must_use]
-    pub fn total_object_count(&self) -> usize {
-        let mut total = 0usize;
-        for page in &self.document.pages {
-            for layer in &page.layers {
-                total = total.saturating_add(count_nodes_recursive(&layer.objects));
+    /// Run `f` on a mutable copy of the active document. Outside an interaction this records one
+    /// undo step labelled `label`; inside one it just mutates (the interaction commits later).
+    pub fn edit<T>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Selection) -> Result<T>) -> Result<T> {
+        // An edit made while typing (the Transform panel) is a step of its own: inside the typing
+        // session, the next keystroke's preview would start again from before it (#1881).
+        if !self.previewing && cmd::typing_in_progress(self) {
+            cmd::settle_interaction(self)?;
+        }
+        let guides_locked = self.menu.guides_locked;
+        let st = self.doc_mut()?;
+        let before = st.doc.clone();
+        let before_sel = st.selection.clone();
+        let doc = Arc::make_mut(&mut st.doc);
+        // Dimensions follow the art they measure.
+        let result = match f(doc, &mut st.selection).and_then(|v| {
+            cmd::dimension::refresh(&before, doc)?;
+            Ok(v)
+        }) {
+            Ok(v) => match cmd::shaper::refresh(&before, Arc::make_mut(&mut st.doc)) {
+                Err(e) => Err(e),
+                Ok(()) => {
+                    // Inline graphics in text follow their symbols.
+                    cmd::inline::refresh(&before, Arc::make_mut(&mut st.doc));
+                    // Text Wrap: area type follows its wrap objects; then threads re-flow.
+                    cmd::textwrap::refresh(Arc::make_mut(&mut st.doc));
+                    // Opacity-mask editing: the mask follows its art on the editing layer.
+                    if st.doc.mask_edit.is_some() {
+                        cmd::maskedit::sync(Arc::make_mut(&mut st.doc));
+                    }
+                    // Threaded text re-flows when any of its frames changed.
+                    if !st.doc.text_threads.is_empty() {
+                        cmd::threads::reflow(&before, Arc::make_mut(&mut st.doc));
+                    }
+                    // Asset Export: assets let go of deleted art.
+                    if !st.doc.assets.is_empty() {
+                        Arc::make_mut(&mut st.doc).prune_assets();
+                    }
+                    // Variables: bindings let go of deleted art.
+                    if !st.doc.variables.bindings.is_empty() {
+                        Arc::make_mut(&mut st.doc).prune_variable_bindings();
+                    }
+                    if st.doc.too_deep(Some(&before)) {
+                        // Deeper trees overflow the stack of what walks them.
+                        Err(EngineError::Other(TOO_DEEP.into()))
+                    } else if doc_sane(&st.doc, &st.selection) {
+                        Ok(v)
+                    } else {
+                        Err(EngineError::Other("result would exceed the canvas (coordinates out of range)".into()))
+                    }
+                }
+            },
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(v) => {
+                st.selection.prune(&st.doc);
+                // An edit that selects what it unlocks, shows or pastes leaves locked guides out.
+                if guides_locked {
+                    deselect_guides(&st.doc, &mut st.selection);
+                }
+                st.revision += 1;
+                if st.interaction.is_none() {
+                    let selection = match st.history.undo.last() {
+                        Some(l) if *l.selection == before_sel => l.selection.clone(),
+                        _ => Arc::new(before_sel),
+                    };
+                    st.push_undo(label.to_string(), before, selection);
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                st.doc = before;
+                st.selection = before_sel;
+                Err(e)
             }
         }
-        for layer in &self.document.master_layers {
-            total = total.saturating_add(count_nodes_recursive(&layer.objects));
+    }
+
+    /// [`Session::edit`] with the step named `template`, its `{name}` placeholder filled with `name`
+    /// (a style's name). The undo step it records keeps the template and the name
+    /// ([`HistoryEntry::named`]), and a frontend shows the template's translation with the name in
+    /// it. An edit that records no step of its own (inside an interaction, or a later edit of an
+    /// undo group) keeps neither, and neither does a step an undo group names.
+    pub fn edit_named<T>(
+        &mut self,
+        template: &'static str,
+        name: &str,
+        built_in: bool,
+        f: impl FnOnce(&mut Document, &mut Selection) -> Result<T>,
+    ) -> Result<T> {
+        let named = NamedStep { template, name: name.to_string(), built_in };
+        let step = named.label();
+        // The step this edit records keeps the document as it is now.
+        let now = Arc::as_ptr(&self.doc()?.doc);
+        let v = self.edit(&step, f)?;
+        if let Ok(st) = self.doc_mut()
+            && let Some(e) = st.history.undo.last_mut()
+            && Arc::as_ptr(&e.doc) == now
+            && e.label == step
+        {
+            e.named = Some(named);
         }
-        total
+        Ok(v)
     }
 
-    /// Selects all unlocked, visible objects on the active target layer (`Edit -> Select All -> Objects` / `Ctrl+A`).
-    pub fn select_all(&mut self) {
-        self.selection = self.current_target_objects().iter().filter(|o| !o.locked && o.visible).map(|o| o.id).collect();
+    /// Change only the selection (not an undo step).
+    pub fn select(&mut self, f: impl FnOnce(&Document, &mut Selection)) -> Result<()> {
+        self.active_appearance_item = None;
+        let guides_locked = self.menu.guides_locked;
+        let st = self.doc_mut()?;
+        let before = st.selection.objects.clone();
+        f(&st.doc, &mut st.selection);
+        st.selection.prune(&st.doc);
+        // Lock Guides locks the paths made into guides too (#1534), whatever selects them.
+        if guides_locked {
+            deselect_guides(&st.doc, &mut st.selection);
+        }
+        // Selecting art makes its layer (or sublayer) the current one, as in the Layers panel of
+        // the reference app: new art then goes beside it.
+        if st.selection.objects != before
+            && let Some(layer) = st.selection.objects.last().and_then(|id| st.doc.layer_containing(*id)).filter(|l| st.doc.is_editable(*l))
+            && st.active_layer != Some(layer)
+        {
+            st.active_layer = Some(layer);
+            st.layer_rows.clear();
+        }
+        st.revision += 1;
+        // Puppet Warp pins belong to the art they were placed on: another selection starts afresh.
+        if st.doc.puppet.as_ref().is_some_and(|p| p.ids != st.selection.objects) {
+            cmd::distortcmds::drop_puppet_pins(st);
+        }
+        Ok(())
     }
 
-    /// Computes `(length_pt, signed_area_sq_pt)` of the world-space contour of `object_id` (`Object Properties -> Curve`).
-    pub fn measure_object_geometry(&self, object_id: ObjectId) -> Option<(f64, f64)> {
-        let obj = self.selected_or_all_node(object_id)?;
-        let local_path = object_to_path(obj)?;
-        let world_path = local_path.transform(obj.transform).ok()?;
-        measure_path_length_and_area(&world_path).ok()
+    // ---------- interactions (live drags) ----------
+
+    pub fn begin_interaction(&mut self, label: &str) -> Result<()> {
+        // Typing in progress is kept first: a drag or a dialog's preview would otherwise start
+        // from the snapshot taken before the typing, and drop it (#1881).
+        if label != "Typing" && cmd::typing_in_progress(self) {
+            cmd::settle_interaction(self)?;
+        }
+        let st = self.doc_mut()?;
+        if st.interaction.is_some() {
+            return Ok(());
+        }
+        st.interaction = Some(Interaction {
+            label: label.to_string(),
+            doc: st.doc.clone(),
+            selection: Arc::new(st.selection.clone()),
+            preview: None,
+            active_layer: st.active_layer,
+            layer_rows: st.layer_rows.clone(),
+            variables_highlight: st.variables_highlight.clone(),
+            isolation: st.isolation,
+            perspective_again: None,
+            copies: None,
+        });
+        Ok(())
+    }
+
+    /// Re-apply `cmd` on top of the interaction snapshot (replacing the previous preview).
+    pub fn preview(&mut self, cmd: &str, params: &Value) -> Result<Value> {
+        {
+            let st = self.doc_mut()?;
+            let Some(it) = &st.interaction else { return Err(EngineError::Other("no interaction in progress".into())) };
+            // Undoing the previous preview counts as a change, so views redraw even when the command
+            // below returns without an edit.
+            let selection_changed = st.selection != *it.selection;
+            if !Arc::ptr_eq(&st.doc, &it.doc) || selection_changed {
+                st.revision += 1;
+            }
+            st.doc = it.doc.clone();
+            if selection_changed {
+                st.selection.clone_from(&it.selection);
+            }
+        }
+        // The previous preview's paint is undone with it.
+        self.pending_paint = None;
+        let rw = cmd::distortcmds::perspective_rewrite(self, cmd, params);
+        let (cmd, params) = rw.as_ref().map_or((cmd, params), |(c, p)| (c.as_str(), p));
+        let outer = std::mem::replace(&mut self.previewing, true);
+        let r = self.execute(cmd, params);
+        self.previewing = outer;
+        let params = self.noted(params);
+        let st = self.doc_mut()?;
+        if let Some(it) = &mut st.interaction {
+            // A failed preview leaves the document at the snapshot, so nothing is left to commit
+            // (not even an earlier successful preview, which the reset above already undid).
+            it.preview = r.is_ok().then(|| (cmd.to_string(), params));
+        }
+        r
+    }
+
+    pub fn commit_interaction(&mut self) -> Result<()> {
+        self.remember_pending_paint();
+        let st = self.doc_mut()?;
+        let Some(mut it) = st.interaction.take() else { return Ok(()) };
+        let Some(preview) = it.preview.take() else { return Ok(()) };
+        let perspective_again = it.perspective_again.take();
+        let copy = preview.0 == "object.transform" && preview.1.get("copy").and_then(Value::as_bool).unwrap_or(false);
+        // Alt pressed or released during a move drag turns it into a copy or back: name it for
+        // what it did in the end.
+        match (it.label.as_str(), copy) {
+            ("Move", true) => it.label = "Copy".into(),
+            ("Copy", false) if preview.0 == "object.transform" => it.label = "Move".into(),
+            _ => {}
+        }
+        // A preview that left the document as it was records no Transform Again either (as
+        // `keep_interaction` records no undo step): the last real transformation stands.
+        let changed = !Arc::ptr_eq(&it.doc, &st.doc);
+        st.keep_interaction(it);
+        if preview.0 == "object.transform" {
+            let m = cmd::matrix_param(&preview.1, "matrix");
+            if let Some(m) = m {
+                // The options are the last preview's params with the values it noted, without the
+                // matrix and the ids.
+                let mut options = preview.1.clone();
+                if let Some(o) = options.as_object_mut() {
+                    o.remove("matrix");
+                    o.remove("ids");
+                }
+                st.last_transform = Some(LastTransform::Matrix(m, options));
+                st.last_perspective = None;
+            }
+        } else if preview.0 == "object.transformEach" && changed {
+            // Transform Again repeats it as it stood when OK was pressed.
+            st.last_transform = Some(LastTransform::Each(preview.1.clone()));
+            st.last_perspective = None;
+        }
+        if perspective_again.is_some() {
+            st.last_perspective = perspective_again;
+        }
+        self.journal.push(preview);
+        Ok(())
+    }
+
+    /// Remember the paint a live preview applied (as its interaction is kept).
+    pub(crate) fn remember_pending_paint(&mut self) {
+        if let Some(p) = self.pending_paint.take() {
+            self.remember_paint_now(&p);
+        }
+    }
+
+    pub fn cancel_interaction(&mut self) -> Result<()> {
+        self.pending_paint = None;
+        let guides_locked = self.menu.guides_locked;
+        let st = self.doc_mut()?;
+        st.undo_interaction();
+        // Guides locked during the interaction stay deselected.
+        if guides_locked {
+            deselect_guides(&st.doc, &mut st.selection);
+        }
+        Ok(())
+    }
+
+    pub fn in_interaction(&self) -> bool {
+        self.active().is_some_and(|d| d.interaction.is_some())
+    }
+
+    // ---------- undo groups (scrubbed numeric fields) ----------
+
+    /// Open an undo group in the active document: until [`Session::end_undo_group`], the edits
+    /// made there (commands, committed interactions) are one undo step. A scrubbed numeric field
+    /// applies each value it passes as its own command, as a typed value is applied; the drag is
+    /// one step.
+    pub fn begin_undo_group(&mut self) {
+        self.begin_named_undo_group(None);
+    }
+
+    /// [`Session::begin_undo_group`] with the undo step named `label` (else after its first edit).
+    pub fn begin_named_undo_group(&mut self, label: Option<String>) {
+        let journal = self.journal.len();
+        if let Some(st) = self.active_mut()
+            && st.undo_group.is_none()
+        {
+            st.undo_group = Some(UndoGroup { first: None, journal, label });
+        }
+    }
+
+    /// Close the open undo groups: their edits stay one undo step or, `cancel`led (Escape), are
+    /// undone and dropped from the journal.
+    pub fn end_undo_group(&mut self, cancel: bool) {
+        let mut journal = None;
+        for st in &mut self.docs {
+            let Some(g) = st.undo_group.take() else { continue };
+            // Only while the group's step is still the newest one.
+            if cancel
+                && let Some(first) = g.first
+                && st.history.undo.last().is_some_and(|e| Arc::ptr_eq(&e.doc, &first))
+                && let Some(e) = st.history.undo.pop()
+            {
+                st.doc = e.doc;
+                st.selection = Arc::unwrap_or_clone(e.selection);
+                if self.menu.guides_locked {
+                    deselect_guides(&st.doc, &mut st.selection);
+                }
+                st.revision += 1;
+                journal = Some(g.journal);
+            }
+        }
+        if let Some(len) = journal {
+            self.journal.truncate(len);
+        }
+    }
+
+    /// Commands with enablement (for menus, palette, MCP `list_commands`).
+    pub fn commands(&self) -> Vec<CommandInfo> {
+        command_specs().iter().map(|c| c.info(self)).collect()
+    }
+}
+
+/// Lay out the type in tree `n` (opacity mask art included) whose bounds aren't cached. Only the
+/// nodes on the way to such type are copied.
+fn refresh_tree_text_bounds(n: &mut Arc<vectorcraft_doc::Node>) {
+    fn stale(n: &vectorcraft_doc::Node) -> bool {
+        matches!(&n.kind, NodeKind::Text(t) if t.cached_bounds.is_none())
+            || n.extras().mask.as_deref().is_some_and(|m| stale(&m.art))
+            || n.children().is_some_and(|ch| ch.iter().any(|c| stale(c)))
+    }
+    if !stale(n) {
+        return;
+    }
+    let n = Arc::make_mut(n);
+    if let NodeKind::Text(t) = &mut n.kind
+        && t.cached_bounds.is_none()
+    {
+        cmd::typecmd::refresh_bounds(t);
+    }
+    if let Some(m) = n.extras_if_any().and_then(|e| e.mask.as_deref_mut()) {
+        refresh_tree_text_bounds(&mut m.art);
+    }
+    for c in n.children_mut().into_iter().flatten() {
+        refresh_tree_text_bounds(c);
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
-mod tests {
-    use super::*;
-    use coralcraft_doc::{LineCap, LineJoin, TextCaseKind};
-    use coralcraft_geom::AxonometricPlane;
-    use coralcraft_tools::PropertyContext;
+mod tests;
+#[cfg(test)]
+mod tests_adjust;
+#[cfg(test)]
+mod tests_appearance;
+#[cfg(test)]
+mod tests_areafit;
+#[cfg(test)]
+mod tests_assets;
+#[cfg(test)]
+mod tests_attributes;
+#[cfg(test)]
+mod tests_bboxrotate;
+#[cfg(test)]
+mod tests_blendfidelity;
+#[cfg(test)]
+mod tests_blendopts;
+#[cfg(test)]
+mod tests_blendspine;
+#[cfg(test)]
+mod tests_brushsym;
+#[cfg(test)]
+mod tests_build;
+#[cfg(test)]
+mod tests_cancel;
+#[cfg(test)]
+mod tests_charstroke;
+#[cfg(test)]
+mod tests_clip;
+#[cfg(test)]
+mod tests_clipboard;
+#[cfg(test)]
+mod tests_clipflavours;
+#[cfg(test)]
+mod tests_clippaint;
+#[cfg(test)]
+mod tests_cmdsplit;
+#[cfg(test)]
+mod tests_cmykflatten;
+#[cfg(test)]
+mod tests_colorguide;
+#[cfg(test)]
+mod tests_colorguidelib;
+#[cfg(test)]
+mod tests_colormgmt;
+#[cfg(test)]
+mod tests_colorthemes;
+#[cfg(test)]
+mod tests_containers;
+#[cfg(test)]
+mod tests_css;
+#[cfg(test)]
+mod tests_cut;
+#[cfg(test)]
+mod tests_dashalign;
+#[cfg(test)]
+mod tests_distort;
+#[cfg(test)]
+mod tests_docsetup;
+#[cfg(test)]
+mod tests_draw2;
+#[cfg(test)]
+mod tests_editcolors;
+#[cfg(test)]
+mod tests_effectedit;
+#[cfg(test)]
+mod tests_emptytype;
+#[cfg(test)]
+mod tests_envelope;
+#[cfg(test)]
+mod tests_envelope_distort;
+#[cfg(test)]
+mod tests_envelope_edit;
+#[cfg(test)]
+mod tests_expand;
+#[cfg(test)]
+mod tests_eyedropper;
+#[cfg(test)]
+mod tests_file;
+#[cfg(test)]
+mod tests_fileinfo;
+#[cfg(test)]
+mod tests_flatpresets;
+#[cfg(test)]
+mod tests_flatpreview;
+#[cfg(test)]
+mod tests_flatten;
+#[cfg(test)]
+mod tests_focal;
+#[cfg(test)]
+mod tests_fontfiles;
+#[cfg(test)]
+mod tests_fontlist;
+#[cfg(test)]
+mod tests_freeform;
+#[cfg(test)]
+mod tests_gradient;
+#[cfg(test)]
+mod tests_gradpanel;
+#[cfg(test)]
+mod tests_gradspan;
+#[cfg(test)]
+mod tests_halftone;
+#[cfg(test)]
+mod tests_history_mem;
+#[cfg(test)]
+mod tests_ids_without_selection;
+#[cfg(test)]
+mod tests_inline;
+#[cfg(test)]
+mod tests_interactivity;
+#[cfg(test)]
+mod tests_intertwine;
+#[cfg(test)]
+mod tests_journal;
+#[cfg(test)]
+mod tests_knockout;
+#[cfg(test)]
+mod tests_labspots;
+#[cfg(test)]
+mod tests_large_edits;
+#[cfg(test)]
+mod tests_layerclip;
+#[cfg(test)]
+mod tests_layers;
+#[cfg(test)]
+mod tests_legacy_ai;
+#[cfg(test)]
+mod tests_library;
+#[cfg(test)]
+mod tests_link_paths;
+#[cfg(test)]
+mod tests_linked_stops;
+#[cfg(test)]
+mod tests_linkfiles;
+#[cfg(test)]
+mod tests_links;
+#[cfg(test)]
+mod tests_linkspanel;
+#[cfg(test)]
+mod tests_linkwatch;
+#[cfg(test)]
+mod tests_liquify;
+#[cfg(test)]
+mod tests_live;
+#[cfg(test)]
+mod tests_livecorners;
+#[cfg(test)]
+mod tests_maskview;
+#[cfg(test)]
+mod tests_menucmds;
+#[cfg(test)]
+mod tests_nativefile;
+#[cfg(test)]
+mod tests_newart;
+#[cfg(test)]
+mod tests_newdoc;
+#[cfg(test)]
+mod tests_objexpand;
+#[cfg(test)]
+mod tests_opacitymask;
+#[cfg(test)]
+mod tests_outlineobject;
+#[cfg(test)]
+mod tests_outlinestroke;
+#[cfg(test)]
+mod tests_overprint;
+#[cfg(test)]
+mod tests_package;
+#[cfg(test)]
+mod tests_paintproxy;
+#[cfg(test)]
+mod tests_panelcmds;
+#[cfg(test)]
+mod tests_paragraphs;
+#[cfg(test)]
+mod tests_params;
+#[cfg(test)]
+mod tests_pathops;
+#[cfg(test)]
+mod tests_pathtype;
+#[cfg(test)]
+mod tests_pattern;
+#[cfg(test)]
+mod tests_pdffidelity;
+#[cfg(test)]
+mod tests_pdfmarks;
+#[cfg(test)]
+mod tests_pdfpresets;
+#[cfg(test)]
+mod tests_pdfraster;
+#[cfg(test)]
+mod tests_persp_planes;
+#[cfg(test)]
+mod tests_persp_select;
+#[cfg(test)]
+mod tests_persp_text;
+#[cfg(test)]
+mod tests_perspgrid;
+#[cfg(test)]
+mod tests_place;
+#[cfg(test)]
+mod tests_placed_document;
+#[cfg(test)]
+mod tests_plugins;
+#[cfg(test)]
+mod tests_prefs;
+#[cfg(test)]
+mod tests_previewbounds;
+#[cfg(test)]
+mod tests_print;
+#[cfg(test)]
+mod tests_printadvanced;
+#[cfg(test)]
+mod tests_printpresets;
+#[cfg(test)]
+mod tests_printpreview;
+#[cfg(test)]
+mod tests_printps;
+#[cfg(test)]
+mod tests_printtiling;
+#[cfg(test)]
+mod tests_proxyitems;
+#[cfg(test)]
+mod tests_puppetwarp;
+#[cfg(test)]
+mod tests_rasterfilters;
+#[cfg(test)]
+mod tests_rastersettings;
+#[cfg(test)]
+mod tests_recolor;
+#[cfg(test)]
+mod tests_recovery;
+#[cfg(test)]
+mod tests_reflecthit;
+#[cfg(test)]
+mod tests_registration;
+#[cfg(test)]
+mod tests_save;
+#[cfg(test)]
+mod tests_saveoptions;
+#[cfg(test)]
+mod tests_scalestrokes;
+#[cfg(test)]
+mod tests_scripts;
+#[cfg(test)]
+mod tests_select_ids_first;
+#[cfg(test)]
+mod tests_shaper;
+#[cfg(test)]
+mod tests_shortcutset;
+#[cfg(test)]
+mod tests_slices;
+#[cfg(test)]
+mod tests_smartguides;
+#[cfg(test)]
+mod tests_store;
+#[cfg(test)]
+mod tests_strokegeom;
+#[cfg(test)]
+mod tests_strokegradient;
+#[cfg(test)]
+mod tests_strokereach;
+#[cfg(test)]
+mod tests_strokeux;
+#[cfg(test)]
+mod tests_stylelib;
+#[cfg(test)]
+mod tests_stylepanel;
+#[cfg(test)]
+mod tests_styles;
+#[cfg(test)]
+mod tests_swatchcmds;
+#[cfg(test)]
+mod tests_swatches;
+#[cfg(test)]
+mod tests_swatchlib;
+#[cfg(test)]
+mod tests_symbolbounds;
+#[cfg(test)]
+mod tests_targeting;
+#[cfg(test)]
+mod tests_textcombos;
+#[cfg(test)]
+mod tests_textedit;
+#[cfg(test)]
+mod tests_textimport;
+#[cfg(test)]
+mod tests_tileedge;
+#[cfg(test)]
+mod tests_tints;
+#[cfg(test)]
+mod tests_toolsettings;
+#[cfg(test)]
+mod tests_transparencygrid;
+#[cfg(test)]
+mod tests_typearea;
+#[cfg(test)]
+mod tests_typescale;
+#[cfg(test)]
+mod tests_units;
+#[cfg(test)]
+mod tests_variables;
+#[cfg(test)]
+mod tests_webexport;
+#[cfg(test)]
+mod tests_widthpoints;
+#[cfg(test)]
+mod tests_widthprofiles;
+#[cfg(test)]
+mod tests_widthtool;
+#[cfg(test)]
+mod tests_xform;
 
-    #[test]
-    fn engine_repairs_a_document_without_pages_instead_of_panicking() {
-        let mut doc = Document::new_a4_portrait();
-        doc.pages.clear();
-        let mut engine = EditorEngine::new(doc);
-        assert_eq!(engine.document.pages.len(), 1, "engine must guarantee at least one page");
-        let _ = engine.current_page();
-        assert!(engine.current_target_objects().is_empty());
-        // Every target kind must yield a layer without panicking, even with no master layers.
-        engine.document.master_layers.clear();
-        for target in [ActivePageTarget::MasterPage, ActivePageTarget::Desktop, ActivePageTarget::Page(0)] {
-            engine.set_active_target(target);
-            engine.select_all();
-            let _ = engine.target_layer_mut();
-        }
-        let mut ids: Vec<u64> = engine.document.pages.iter().flat_map(|p| p.layers.iter().map(|l| l.id.0)).collect();
-        ids.extend(engine.document.master_layers.iter().map(|l| l.id.0));
-        let before = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), before, "repaired layers must get unique ids");
-    }
+/// Commands that act on the selection and take `ids` by selecting them first (`select.set`, with
+/// its checks), then running as on the selection: the result and the selection afterwards are the
+/// menu command's (#2130).
+pub(crate) const SELECTS_GIVEN_IDS: &[&str] = &[
+    "edit.duplicate",
+    "object.arrange.bringForward",
+    "object.arrange.bringToFront",
+    "object.arrange.sendBackward",
+    "object.arrange.sendToBack",
+    "object.arrange.sendToCurrentLayer",
+    "object.clippingMask.make",
+    "object.clippingMask.release",
+    "object.compoundPath.make",
+    "object.compoundPath.release",
+    "object.group",
+    "object.hide",
+    "object.lock",
+    "object.move",
+    "object.pathfinder.crop",
+    "object.pathfinder.divide",
+    "object.pathfinder.exclude",
+    "object.pathfinder.intersect",
+    "object.pathfinder.merge",
+    "object.pathfinder.minusBack",
+    "object.pathfinder.minusFront",
+    "object.pathfinder.outline",
+    "object.pathfinder.trim",
+    "object.pathfinder.unite",
+    "object.reflect",
+    "object.rotate",
+    "object.scale",
+    "object.shear",
+    "object.ungroup",
+];
 
-    #[test]
-    fn palette_left_right_click_and_no_color_swatch_update_selection_and_defaults_with_undo() {
-        let mut engine = EditorEngine::default();
-        assert_eq!(engine.status_bar_snapshot().selection_summary, "No selection");
-
-        // 1. With empty selection, left-click on Red swatch sets default fill for next object
-        let red = Color::rgb8(230, 40, 40);
-        let blue = Color::rgb8(30, 80, 220);
-        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color: Some(red.clone()) });
-        assert_eq!(engine.status_bar_snapshot().fill_chip, Some(red.clone()));
-
-        // 2. Drag-create a rectangle with F6 -> inherits default Red fill
-        engine.handle_shortcut(KeyShortcut::F6);
-        engine.pointer_down(Point::new(50.0, 60.0).unwrap(), false, false);
-        engine.pointer_move(Point::new(150.0, 120.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(150.0, 120.0).unwrap(), false, false);
-        assert_eq!(engine.selection.len(), 1);
-        assert_eq!(engine.selected_nodes()[0].fill, Some(FillStyle::uniform(red.clone())));
-        assert_eq!(engine.property_bar_schema().context, PropertyContext::Rectangle);
-
-        // 3. Right-click on Blue swatch sets Outline on selected rectangle
-        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Outline, color: Some(blue.clone()) });
-        assert_eq!(engine.status_bar_snapshot().outline_chip, Some(blue));
-
-        // 4. Left-click on `[X]` No-Color swatch clears Fill on selected rectangle
-        engine.execute(EngineCommand::ApplyPaletteSwatch { channel: PaletteChannel::Fill, color: None });
-        assert_eq!(engine.selected_nodes()[0].fill, None);
-
-        // 5. Undo restores the Red fill, Redo clears it again
-        assert!(engine.undo());
-        assert_eq!(engine.selected_nodes()[0].fill, Some(FillStyle::uniform(red)));
-        assert!(engine.redo());
-        assert_eq!(engine.selected_nodes()[0].fill, None);
-    }
-
-    #[test]
-    fn page_navigator_add_duplicate_rename_delete_and_master_desktop_targets() {
-        let mut engine = EditorEngine::default();
-        assert_eq!(engine.document.pages.len(), 1);
-
-        // Cannot delete the sole remaining numbered page
-        assert!(!engine.execute(EngineCommand::DeletePage { page_index: 0 }));
-        assert_eq!(engine.document.pages.len(), 1);
-
-        // `+` adds Page 2 after Page 1
-        assert!(engine.execute(EngineCommand::AddPageAfterActive));
-        assert_eq!(engine.document.pages.len(), 2);
-        assert_eq!(engine.active_target, ActivePageTarget::Page(1));
-        assert_eq!(engine.current_page().name, "Page 2");
-
-        // Rename Page 2 -> "Back Cover"
-        assert!(engine.execute(EngineCommand::RenamePage { page_index: 1, name: "Back Cover".to_owned() }));
-        assert_eq!(engine.document.pages[1].name, "Back Cover");
-
-        // Switch to Master Page and place an object -> visible across all pages
-        engine.set_active_target(ActivePageTarget::MasterPage);
-        engine.handle_shortcut(KeyShortcut::F7);
-        engine.pointer_down(Point::new(20.0, 20.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(80.0, 80.0).unwrap(), false, false);
-        let eff_p1 = engine.document.effective_layers_for_page(0, true).unwrap();
-        let eff_p2 = engine.document.effective_layers_for_page(1, true).unwrap();
-        assert!(eff_p1.iter().any(|l| l.role == LayerRole::MasterAllPages && !l.objects.is_empty()));
-        assert!(eff_p2.iter().any(|l| l.role == LayerRole::MasterAllPages && !l.objects.is_empty()));
-
-        // Switch to Desktop pasteboard and place an object -> visible on screen, non-printing in export
-        engine.set_active_target(ActivePageTarget::Desktop);
-        engine.handle_shortcut(KeyShortcut::F6);
-        engine.pointer_down(Point::new(-100.0, 50.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(-20.0, 120.0).unwrap(), false, false);
-        let screen_layers = engine.document.effective_layers_for_page(0, false).unwrap();
-        let print_layers = engine.document.effective_layers_for_page(0, true).unwrap();
-        assert!(screen_layers.iter().any(|l| l.role == LayerRole::Desktop && !l.objects.is_empty()));
-        assert!(!print_layers.iter().any(|l| l.role == LayerRole::Desktop));
-    }
-
-    #[test]
-    fn pick_tool_hit_testing_and_drag_move_selection() {
-        let mut engine = EditorEngine::default();
-        engine.handle_shortcut(KeyShortcut::F6);
-        engine.pointer_down(Point::new(100.0, 100.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(200.0, 180.0).unwrap(), false, false);
-        let id = engine.selection[0];
-
-        // Return to Pick tool (`Escape`), click inside rectangle, and drag by (+30, +40)
-        engine.handle_shortcut(KeyShortcut::Escape);
-        assert_eq!(engine.hit_test_point(Point::new(150.0, 140.0).unwrap()), Some(id));
-        engine.pointer_down(Point::new(150.0, 140.0).unwrap(), false, false);
-        engine.pointer_move(Point::new(180.0, 180.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(180.0, 180.0).unwrap(), false, false);
-
-        let moved = engine.selected_nodes()[0];
-        assert!((moved.transform.tx.get() - 30.0).abs() < 1e-9);
-        assert!((moved.transform.ty.get() - 40.0).abs() < 1e-9);
-
-        // Undo restores identity transform
-        assert!(engine.undo());
-        let restored = engine.selected_nodes()[0];
-        assert!((restored.transform.tx.get()).abs() < 1e-9);
-        assert!((restored.transform.ty.get()).abs() < 1e-9);
-    }
-
-    #[test]
-    fn group_ungroup_convert_to_curves_zorder_align_powerclip_and_node_edit() {
-        let mut engine = EditorEngine::default();
-
-        // Create two rectangles A and B
-        engine.handle_shortcut(KeyShortcut::F6);
-        engine.pointer_down(Point::new(10.0, 20.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(50.0, 60.0).unwrap(), false, false);
-        let id_a = engine.selection[0];
-
-        engine.pointer_down(Point::new(100.0, 120.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(160.0, 180.0).unwrap(), false, false);
-        let id_b = engine.selection[0];
-
-        // 1. Align A's left edge to B (anchor = last selected = id_b)
-        engine.set_selection(vec![id_a, id_b]);
-        assert!(engine.execute(EngineCommand::AlignSelection { mode: AlignMode::Left }));
-        let node_a = engine.selected_or_all_node(id_a).unwrap();
-        assert!((node_a.transform.tx.get() - 90.0).abs() < 1e-9);
-
-        // 2. Group A and B -> single Group node, then translate group by (+10, +5), then Ungroup
-        assert!(engine.execute(EngineCommand::GroupSelection));
-        assert_eq!(engine.selection.len(), 1);
-        let group_id = engine.selection[0];
-        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Group { .. }));
-        assert!(engine.execute(EngineCommand::TranslateSelection { dx_pt: F64::new(10.0).unwrap(), dy_pt: F64::new(5.0).unwrap() }));
-        assert_ne!(group_id, id_a);
-        assert!(engine.execute(EngineCommand::UngroupSelection));
-        assert_eq!(engine.selection, vec![id_a, id_b]);
-        let node_a_after = engine.selected_or_all_node(id_a).unwrap();
-        assert!((node_a_after.transform.tx.get() - 100.0).abs() < 1e-9);
-        assert!((node_a_after.transform.ty.get() - 5.0).abs() < 1e-9);
-
-        // 3. Reorder selection: move id_b to back, then id_b to front
-        engine.set_selection(vec![id_b]);
-        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToBack }));
-        assert_eq!(engine.document.pages[0].layers[0].objects[0].id, id_b);
-        assert!(engine.execute(EngineCommand::ReorderSelection { op: ZOrderOp::ToFront }));
-        assert_eq!(engine.document.pages[0].layers[0].objects[1].id, id_b);
-
-        // 4. PowerClip: place id_a inside container id_b, then extract
-        engine.set_selection(vec![id_a]);
-        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: id_b }));
-        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 1);
-        assert_eq!(engine.document.pages[0].layers[0].objects[0].powerclip_children.len(), 1);
-        assert!(engine.execute(EngineCommand::ExtractPowerClip { container_id: id_b }));
-        assert_eq!(engine.document.pages[0].layers[0].objects.len(), 2);
-        assert_eq!(engine.selection, vec![id_a]);
-
-        // 5. ConvertToCurves (`Ctrl+Q`) on id_a and MoveBezierNode (`F10` Shape Tool)
-        assert!(engine.execute(EngineCommand::ConvertToCurves));
-        assert!(matches!(engine.selected_or_all_node(id_a).unwrap().kind, ObjectKind::Path(_)));
-        assert!(engine.execute(EngineCommand::MoveBezierNode { object_id: id_a, element_index: 0, new_pt: Point::new(125.0, 35.0).unwrap() }));
-        if let ObjectKind::Path(p) = &engine.selected_or_all_node(id_a).unwrap().kind {
-            assert_eq!(p.elements[0], coralcraft_geom::PathElement::MoveTo(Point::new(25.0, 30.0).unwrap()));
-        } else {
-            panic!("expected Path after ConvertToCurves");
-        }
-    }
-
-    #[test]
-    fn boolean_selection_and_vector_effects_with_undo() {
-        let mut engine = EditorEngine::default();
-
-        // 1. Create two overlapping rectangles
-        engine.handle_shortcut(KeyShortcut::F6);
-        engine.pointer_down(Point::new(0.0, 0.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(60.0, 60.0).unwrap(), false, false);
-        let id1 = engine.selection[0];
-
-        engine.pointer_down(Point::new(40.0, 0.0).unwrap(), false, false);
-        engine.pointer_up(Point::new(100.0, 60.0).unwrap(), false, false);
-        let id2 = engine.selection[0];
-
-        // 2. Boolean Weld
-        engine.set_selection(vec![id1, id2]);
-        assert!(engine.execute(EngineCommand::BooleanSelection { op: BooleanOp::Weld }));
-        assert_eq!(engine.selection.len(), 1);
-        let welded_id = engine.selection[0];
-        assert!(matches!(engine.selected_nodes()[0].kind, ObjectKind::Path(_)));
-
-        // 3. Undo Weld restores both original rectangles
-        assert!(engine.undo());
-        assert_eq!(engine.current_target_objects().len(), 2);
-        assert!(engine.redo());
-        assert_eq!(engine.current_target_objects().len(), 1);
-
-        // 4. Non-destructive Contour effect on the welded object
-        assert!(engine.execute(EngineCommand::ApplyContour { object_id: welded_id, steps: 3, offset_pt: F64::new(4.0).unwrap(), inside: false }));
-        let obj = engine.selected_or_all_node(welded_id).unwrap();
-        assert_eq!(obj.effects.len(), 1);
-        assert!(matches!(obj.effects[0], VectorEffect::Contour { steps: 3, .. }));
-
-        // 5. Non-destructive DropShadow effect
-        assert!(engine.execute(EngineCommand::AddDropShadow {
-            object_id: welded_id,
-            offset_x: F64::new(5.0).unwrap(),
-            offset_y: F64::new(5.0).unwrap(),
-            opacity: F64::new(0.6).unwrap(),
-            color: Color::BLACK,
-        }));
-        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
-
-        // 6. ExpandEffects bakes effects into static geometry and clears live effect stack
-        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
-        assert!(engine.selected_or_all_node(welded_id).unwrap().effects.is_empty());
-
-        // 7. Undo restores both live effects
-        assert!(engine.undo());
-        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 2);
-
-        // 8. Convert ArtisticText to curves
-        let text_id = engine.document.allocate_object_id();
-        let text_node = ObjectNode::new(
-            text_id,
-            Some("Text".to_owned()),
-            ObjectKind::ArtisticText {
-                text: "CORAL".to_owned(),
-                font_family: "Sans".to_owned(),
-                size_pt: F64::new(24.0).unwrap(),
-                position: Point::new(10.0, 100.0).unwrap(),
-            },
-            Some(FillStyle::uniform(Color::BLACK)),
-            None,
-        );
-        engine.target_layer_mut().objects.push(text_node);
-        engine.set_selection(vec![text_id]);
-        assert!(engine.execute(EngineCommand::ConvertToCurves));
-        assert!(matches!(engine.selected_or_all_node(text_id).unwrap().kind, ObjectKind::Path(_)));
-
-        // 9. ApplyEnvelope and ExpandEffects bake warped corner coordinates on welded_id
-        let corners =
-            [Point::new(10.0, 10.0).unwrap(), Point::new(150.0, 20.0).unwrap(), Point::new(160.0, 90.0).unwrap(), Point::new(0.0, 80.0).unwrap()];
-        assert!(engine.execute(EngineCommand::ApplyEnvelope { object_id: welded_id, corners }));
-        assert!(engine.execute(EngineCommand::ExpandEffects { object_id: welded_id }));
-        if let ObjectKind::Path(warped_path) = &engine.selected_or_all_node(welded_id).unwrap().kind {
-            let wb = warped_path.bounds().unwrap();
-            assert!((wb.x0.get() - 0.0).abs() < 1e-3);
-            assert!((wb.x1.get() - 160.0).abs() < 1e-3);
-        } else {
-            panic!("expected baked Path");
-        }
-        assert!(engine.execute(EngineCommand::ApplyArtisticBrush {
-            object_id: text_id,
-            start_width_pt: F64::new(12.0).unwrap(),
-            end_width_pt: F64::new(2.0).unwrap(),
-        }));
-        assert_eq!(engine.selected_or_all_node(text_id).unwrap().effects.len(), 1);
-
-        // 10. Step and Repeat creates 3 offset duplicates and supports undo
-        engine.set_selection(vec![welded_id]);
-        let before_count = engine.current_target_objects().len();
-        assert!(engine.execute(EngineCommand::StepAndRepeat {
-            count: 3,
-            offset_x_pt: F64::new(25.0).unwrap(),
-            offset_y_pt: F64::new(15.0).unwrap(),
-        }));
-        assert_eq!(engine.current_target_objects().len(), before_count + 3);
-        assert_eq!(engine.selection.len(), 3);
-        let dup_ids = engine.selection.clone();
-        assert!(engine.execute(EngineCommand::DistributeSelection { mode: DistributeMode::SpacingHorizontal }));
-        assert_eq!(engine.selection, dup_ids);
-        assert!(engine.undo());
-        assert!(engine.undo());
-        assert_eq!(engine.current_target_objects().len(), before_count);
-
-        // 11. CopyPropertiesFrom copies fill, outline, and effects from text_id to welded_id
-        engine.set_selection(vec![welded_id]);
-        assert!(engine.execute(EngineCommand::CopyPropertiesFrom { source_id: text_id, copy_fill: true, copy_outline: true, copy_effects: true }));
-        assert_eq!(engine.selected_or_all_node(welded_id).unwrap().effects.len(), 1);
-
-        // 12. CombineSelection (Ctrl+L) and BreakApartSelection (Ctrl+K)
-        engine.set_selection(vec![welded_id, text_id]);
-        assert!(engine.execute(EngineCommand::CombineSelection));
-        assert!(engine.execute(EngineCommand::BreakApartSelection));
-        assert!(engine.selection.len() >= 2);
-
-        // 13. CreateBoundary (non-destructive union silhouette) & ConvertOutlineToObject (Ctrl+Shift+Q)
-        let count_before_boundary = engine.current_target_objects().len();
-        assert!(engine.execute(EngineCommand::CreateBoundary));
-        assert_eq!(engine.current_target_objects().len(), count_before_boundary + 1);
-        let boundary_id = engine.selection[0];
-        assert!(engine.selected_or_all_node(boundary_id).unwrap().outline.is_some());
-        assert!(engine.execute(EngineCommand::ConvertOutlineToObject));
-        let converted = engine.selected_or_all_node(boundary_id).unwrap();
-        assert!(converted.outline.is_none());
-        assert!(converted.fill.is_some());
-
-        // 14. RotateSelection & ScaleSelection around 9-point Object Origin (origin_index = 4 center)
-        assert!(engine.execute(EngineCommand::RotateSelection { angle_deg: F64::new(45.0).unwrap(), origin_index: 4, copy: false }));
-        assert!(engine.execute(EngineCommand::ScaleSelection {
-            scale_x: F64::new(1.5).unwrap(),
-            scale_y: F64::new(1.5).unwrap(),
-            origin_index: 0,
-            copy: true,
-        }));
-        assert!(engine.execute(EngineCommand::SkewSelection {
-            skew_x_deg: F64::new(15.0).unwrap(),
-            skew_y_deg: F64::ZERO,
-            origin_index: 4,
-            copy: false,
-        }));
-        assert!(engine.execute(EngineCommand::DuplicateSelection { offset_x_pt: F64::new(18.0).unwrap(), offset_y_pt: F64::new(18.0).unwrap() }));
-        engine.select_all();
-        assert!(engine.selection.len() >= 3);
-
-        // 15. ReversePathDirection, CloseOpenSubpaths, SetObjectLocked, and UnlockAllObjects
-        assert!(engine.execute(EngineCommand::ReversePathDirection { object_id: boundary_id }));
-        assert!(engine.execute(EngineCommand::CloseOpenSubpaths { object_id: boundary_id }));
-        assert!(engine.execute(EngineCommand::SetObjectLocked { object_id: boundary_id, locked: true }));
-        assert!(engine.selected_or_all_node(boundary_id).unwrap().locked);
-        assert!(engine.execute(EngineCommand::UnlockAllObjects));
-        assert!(!engine.selected_or_all_node(boundary_id).unwrap().locked);
-
-        // 16. JoinOpenSubpaths, UngroupAllSelection, and MovePage
-        assert!(engine.execute(EngineCommand::JoinOpenSubpaths { object_id: boundary_id, tolerance_pt: F64::new(5.0).unwrap() }));
-        engine.select_all();
-        assert!(engine.execute(EngineCommand::GroupSelection));
-        assert!(engine.execute(EngineCommand::UngroupAllSelection));
-        assert!(engine.selection.len() >= 2);
-        assert!(engine.execute(EngineCommand::AddPageAfterActive));
-        assert_eq!(engine.document.pages.len(), 2);
-        assert!(engine.execute(EngineCommand::MovePage { from_index: 1, to_index: 0 }));
-        assert_eq!(engine.current_page_index(), 0);
-
-        // 17. ReducePathNodes, SetSelectionBounds, AddLayer, and SetLayerProperties
-        engine.set_active_target(ActivePageTarget::Page(1));
-        assert!(engine.execute(EngineCommand::ReducePathNodes { object_id: boundary_id, tolerance_pt: F64::new(1.5).unwrap() }));
-        engine.set_selection(vec![boundary_id]);
-        assert!(engine.execute(EngineCommand::SetSelectionBounds {
-            x_pt: Some(F64::new(100.0).unwrap()),
-            y_pt: Some(F64::new(100.0).unwrap()),
-            width_pt: Some(F64::new(80.0).unwrap()),
-            height_pt: Some(F64::new(50.0).unwrap()),
-            origin_index: 4,
-        }));
-        let layers_before = engine.document.pages[1].layers.len();
-        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 2".to_owned() }));
-        assert_eq!(engine.document.pages[1].layers.len(), layers_before + 1);
-        let new_layer_id = engine.document.pages[1].layers.last().unwrap().id;
-        assert!(engine.execute(EngineCommand::SetLayerProperties {
-            layer_id: new_layer_id,
-            visible: Some(false),
-            locked: Some(true),
-            printable: Some(false),
-            opacity: Some(F64::new(0.5).unwrap()),
-        }));
-        let updated_layer = engine.document.pages[1].layers.last().unwrap();
-        assert!(!updated_layer.visible && updated_layer.locked && !updated_layer.printable);
-        assert!(engine.undo());
-        assert!(engine.undo());
-
-        // 18. ClearTransformations, ToggleTextKind (Ctrl+F8), and FindAndReplaceText
-        assert!(engine.execute(EngineCommand::ClearTransformations));
-        let art_id = engine.document.allocate_object_id();
-        engine.target_layer_mut().objects.push(ObjectNode::new(
-            art_id,
-            Some("Headline".to_owned()),
-            ObjectKind::ArtisticText {
-                text: "Hello Corel".to_owned(),
-                font_family: "Sans".to_owned(),
-                size_pt: F64::new(18.0).unwrap(),
-                position: Point::new(20.0, 40.0).unwrap(),
-            },
-            Some(FillStyle::uniform(Color::BLACK)),
-            None,
-        ));
-        assert!(engine.execute(EngineCommand::FindAndReplaceText { find: "Corel".to_owned(), replace: "CoralCraft".to_owned() }));
-        assert!(engine.execute(EngineCommand::ToggleTextKind { object_id: art_id }));
-        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
-            assert_eq!(pt.text, "Hello CoralCraft");
-        } else {
-            panic!("expected ParagraphText after ToggleTextKind");
-        }
-
-        // 19. ChangeTextCase (Shift+F3), InsertCurveNode (+), and DeleteCurveNode (-)
-        assert!(engine.execute(EngineCommand::ChangeTextCase { object_id: art_id, case_kind: TextCaseKind::Uppercase }));
-        if let ObjectKind::ParagraphText(pt) = &engine.selected_or_all_node(art_id).unwrap().kind {
-            assert_eq!(pt.text, "HELLO CORALCRAFT");
-        } else {
-            panic!("expected ParagraphText after ChangeTextCase");
-        }
-        assert!(engine.execute(EngineCommand::InsertCurveNode { object_id: boundary_id, element_index: 1 }));
-        assert!(engine.execute(EngineCommand::DeleteCurveNode { object_id: boundary_id, element_index: 1 }));
-
-        // 20. ConvertSegmentToCurve, ConvertSegmentToLine, SetPageBackground, and SetPageBleed
-        assert!(engine.execute(EngineCommand::ConvertSegmentToCurve { object_id: boundary_id, element_index: 1 }));
-        assert!(engine.execute(EngineCommand::ConvertSegmentToLine { object_id: boundary_id, element_index: 1 }));
-        assert!(engine.execute(EngineCommand::SetPageBackground { page_index: 0, background: Some(FillStyle::uniform(Color::rgb8(245, 245, 240))) }));
-        assert!(engine.execute(EngineCommand::SetPageBleed { page_index: 0, bleed_pt: F64::new(9.0).unwrap() }));
-        assert_eq!(engine.document.pages[0].bleed, F64::new(9.0).unwrap());
-
-        // 21. SetObjectOpacity, SetObjectVisible, and RenameObject
-        assert!(engine.execute(EngineCommand::SetObjectOpacity { object_id: boundary_id, opacity: F64::new(0.75).unwrap() }));
-        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().opacity, F64::new(0.75).unwrap());
-        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: false }));
-        assert!(!engine.selected_or_all_node(boundary_id).unwrap().visible);
-        assert!(engine.execute(EngineCommand::SetObjectVisible { object_id: boundary_id, visible: true }));
-        assert!(engine.execute(EngineCommand::RenameObject { object_id: boundary_id, name: Some("Custom Silhouette".to_owned()) }));
-        assert_eq!(engine.selected_or_all_node(boundary_id).unwrap().name.as_deref(), Some("Custom Silhouette"));
-
-        // 22. InvertSelection, AddLayer + MoveLayer + DeleteLayer
-        engine.set_selection(vec![boundary_id]);
-        assert!(engine.execute(EngineCommand::InvertSelection));
-        assert!(!engine.selection.contains(&boundary_id));
-        assert!(engine.execute(EngineCommand::AddLayer { name: "Layer 3".to_owned() }));
-        let l3_id = engine.document.pages[1].layers.last().unwrap().id;
-        assert!(engine.execute(EngineCommand::MoveLayer { page_index: 1, from_index: 1, to_index: 0 }));
-        assert!(engine.execute(EngineCommand::DeleteLayer { layer_id: l3_id }));
-        assert_eq!(engine.document.pages[1].layers.len(), 1);
-
-        // 23. SetOutlineProperties, SelectByKind, and SetDocumentTitle
-        engine.set_selection(vec![boundary_id]);
-        assert!(engine.execute(EngineCommand::SetOutlineProperties {
-            width_pt: Some(F64::new(3.0).unwrap()),
-            behind_fill: Some(true),
-            scale_with_object: Some(true),
-        }));
-        let outl = engine.selected_or_all_node(boundary_id).unwrap().outline.as_ref().unwrap();
-        assert!(outl.behind_fill && outl.scale_with_object);
-        assert!(engine.execute(EngineCommand::SelectByKind { kind: "path".to_owned() }));
-        assert!(engine.selection.contains(&boundary_id));
-        assert!(engine.execute(EngineCommand::SetDocumentTitle { title: "CoralCraft Masterpiece".to_owned() }));
-        assert_eq!(engine.document.title, "CoralCraft Masterpiece");
-
-        // 24. TwirlObjectPath, CloneEffectsFrom, and ClearEffects
-        assert!(engine.execute(EngineCommand::TwirlObjectPath {
-            object_id: boundary_id,
-            center: Point::new(100.0, 100.0).unwrap(),
-            radius_pt: F64::new(60.0).unwrap(),
-            angle_deg: F64::new(45.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::ApplyContour { object_id: art_id, steps: 1, offset_pt: F64::new(2.0).unwrap(), inside: false }));
-        engine.set_selection(vec![boundary_id]);
-        assert!(engine.execute(EngineCommand::CloneEffectsFrom { source_id: art_id }));
-        assert!(!engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
-        assert!(engine.execute(EngineCommand::ClearEffects { object_id: boundary_id }));
-        assert!(engine.selected_or_all_node(boundary_id).unwrap().effects.is_empty());
-
-        // 25. AttractRepelObjectPath, SmearObjectPath, and SetParagraphTextLayout
-        assert!(engine.execute(EngineCommand::AttractRepelObjectPath {
-            object_id: boundary_id,
-            center: Point::new(100.0, 100.0).unwrap(),
-            radius_pt: F64::new(60.0).unwrap(),
-            strength: F64::new(0.4).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::SmearObjectPath {
-            object_id: boundary_id,
-            origin: Point::new(100.0, 100.0).unwrap(),
-            radius_pt: F64::new(60.0).unwrap(),
-            dx_pt: F64::new(12.0).unwrap(),
-            dy_pt: F64::new(-8.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::SetParagraphTextLayout {
-            object_id: art_id,
-            columns: Some(2),
-            gutter_pt: Some(F64::new(14.0).unwrap()),
-            line_spacing: Some(F64::new(1.5).unwrap()),
-            alignment: Some(TextAlignment::Justify),
-        }));
-        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
-            assert_eq!(pt.columns, 2);
-            assert_eq!(pt.alignment, TextAlignment::Justify);
-        } else {
-            panic!("expected ParagraphText");
-        }
-
-        // 26. RoughenObjectPath and SetArtisticTextProperties
-        assert!(engine.execute(EngineCommand::RoughenObjectPath { object_id: boundary_id, tooth_height_pt: F64::new(2.0).unwrap(), frequency: 3 }));
-        assert!(engine.execute(EngineCommand::SetArtisticTextProperties {
-            object_id: art_id,
-            text: Some("UPDATED CORALCRAFT".to_owned()),
-            font_family: Some("Helvetica".to_owned()),
-            size_pt: Some(F64::new(20.0).unwrap()),
-        }));
-        if let ObjectKind::ParagraphText(pt) = &engine.inspect_object(art_id).unwrap().kind {
-            assert_eq!(pt.text, "UPDATED CORALCRAFT");
-            assert_eq!(pt.font_family, "Helvetica");
-        } else {
-            panic!("expected ParagraphText");
-        }
-        assert!(engine.execute(EngineCommand::SmoothObjectPath {
-            object_id: boundary_id,
-            center: Point::new(100.0, 100.0).unwrap(),
-            radius_pt: F64::new(60.0).unwrap(),
-            strength: F64::new(0.5).unwrap(),
-            iterations: 3,
-        }));
-        assert!(engine.execute(EngineCommand::KnifeCutObject {
-            object_id: boundary_id,
-            line_start: Point::new(0.0, 80.0).unwrap(),
-            line_end: Point::new(200.0, 80.0).unwrap(),
-            gap_pt: F64::new(2.0).unwrap(),
-        }));
-        engine.set_selection(vec![boundary_id]);
-        assert!(engine.execute(EngineCommand::CropToRect { rect: Rect::new(0.0, 0.0, 300.0, 300.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::EraseObjectCircle {
-            object_id: boundary_id,
-            center: Point::new(100.0, 100.0).unwrap(),
-            radius_pt: F64::new(15.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::SetSnapSettings { snap_to_objects: Some(false), snap_to_page: Some(true) }));
-        assert!(!engine.snap_to_objects && engine.snap_to_page);
-        assert!(engine.execute(EngineCommand::VirtualSegmentDelete { object_id: boundary_id, element_index: 1 }));
-        assert!(engine.execute(EngineCommand::SmartFillAtPoint {
-            point: Point::new(100.0, 100.0).unwrap(),
-            fill: FillStyle::uniform(Color::rgb8(0, 180, 120)),
-            outline: None,
-        }));
-        let sf_id = engine.selection[0];
-        assert!(engine.execute(EngineCommand::OffsetObjectPath { object_id: sf_id, distance_pt: F64::new(5.0).unwrap(), copy: true }));
-        let off_id = engine.selection[0];
-        assert!(engine.execute(EngineCommand::SetPathFillRule { object_id: sf_id, fill_rule: FillRule::EvenOdd }));
-        assert!(engine.execute(EngineCommand::SwapObjectPositions { first_id: sf_id, second_id: off_id }));
-        engine.set_selection(vec![sf_id]);
-        assert!(engine.execute(EngineCommand::CenterSelectionToPage { horizontal: true, vertical: true }));
-        assert!(engine.measure_object_geometry(sf_id).is_some());
-        assert!(engine.execute(EngineCommand::SmoothCurveNode { object_id: sf_id, element_index: 1, tension: F64::new(0.35).unwrap() }));
-        assert!(engine.execute(EngineCommand::ArrayDuplicateSelection {
-            rows: 2,
-            cols: 2,
-            spacing_x_pt: F64::new(20.0).unwrap(),
-            spacing_y_pt: F64::new(20.0).unwrap(),
-        }));
-        assert_eq!(engine.selection.len(), 3);
-        assert!(engine.execute(EngineCommand::AddGuideline { horizontal: true, position_pt: F64::new(120.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::ClearGuidelines));
-        assert!(engine.execute(EngineCommand::CircularDuplicateSelection {
-            count: 3,
-            center: Point::new(100.0, 100.0).unwrap(),
-            total_angle_deg: F64::new(360.0).unwrap(),
-            rotate_objects: true,
-        }));
-        assert!(engine.execute(EngineCommand::SetOutlineCapAndJoin {
-            cap: Some(LineCap::Round),
-            join: Some(LineJoin::Round),
-            miter_limit: Some(F64::new(8.0).unwrap()),
-        }));
-        assert!(engine.execute(EngineCommand::FitPageToSelection { margin_pt: F64::new(10.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::AlignCurveNodes { object_id: sf_id, element_indices: vec![0, 1], horizontal: true, vertical: false }));
-        assert!(engine.execute(EngineCommand::ShiftSelectionColors {
-            hue_delta_deg: F64::new(45.0).unwrap(),
-            saturation_delta: F64::new(0.1).unwrap(),
-            brightness_delta: F64::new(-0.05).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::SubdividePathSegments { object_id: sf_id }));
-        assert!(engine.execute(EngineCommand::ConvertSelectionColors { invert: true, grayscale: true }));
-        assert!(engine.execute(EngineCommand::TransformCurveNodes {
-            object_id: sf_id,
-            element_indices: vec![0, 1],
-            scale_x: F64::new(1.2).unwrap(),
-            scale_y: F64::new(0.8).unwrap(),
-            rotate_deg: F64::new(15.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::SelectByColor {
-            color: Color::rgb8(128, 128, 128),
-            match_fill: true,
-            match_outline: true,
-            tolerance_u8: 255,
-        }));
-        assert!(!engine.selection.is_empty());
-        assert!(engine.execute(EngineCommand::BreakPathAtNode { object_id: sf_id, element_index: 1 }));
-        assert!(engine.execute(EngineCommand::EqualizeSelectionSize { match_width: true, match_height: true }));
-        assert!(engine.execute(EngineCommand::DistributeExactGap { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::MorphBetweenObjects { start_id: sf_id, end_id: off_id, t: F64::new(0.5).unwrap(), sample_count: 16 }));
-        let morph_id = engine.selection[0];
-        engine.set_selection(vec![sf_id, off_id]);
-        assert!(engine.execute(EngineCommand::DistributeSelectionAlongPath { spine_object_id: morph_id, rotate_to_tangent: true }));
-        assert!(engine.execute(EngineCommand::RecolorArtwork {
-            from_color: Color::rgb8(128, 128, 128),
-            to_color: Color::rgb8(20, 140, 220),
-            tolerance_u8: 255,
-            selection_only: false,
-        }));
-        engine.set_selection(vec![sf_id, off_id]);
-        assert!(engine.execute(EngineCommand::DivideSelection));
-        let div_ids = engine.selection.clone();
-        assert!(engine.execute(EngineCommand::CreateIntermediateBlendPaths { start_id: div_ids[0], end_id: div_ids[1], steps: 2, sample_count: 16 }));
-        assert_eq!(engine.selection.len(), 2);
-        assert!(engine.execute(EngineCommand::HatchObjectPath {
-            object_id: div_ids[0],
-            angle_deg: F64::new(45.0).unwrap(),
-            spacing_pt: F64::new(6.0).unwrap(),
-            cross_hatch: true,
-        }));
-        assert!(engine.execute(EngineCommand::ProjectSelectionAxonometric { plane: AxonometricPlane::IsometricTop }));
-        assert!(engine.execute(EngineCommand::PackSelectionInGrid {
-            origin: Point::new(30.0, 30.0).unwrap(),
-            cols: 2,
-            gap_pt: F64::new(10.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::ResolveSelectionOverlaps { min_gap_pt: F64::new(16.0).unwrap(), iterations: 10 }));
-        assert!(engine.execute(EngineCommand::ExcludeSelection));
-        let xor_id = engine.selection[0];
-        assert!(engine.execute(EngineCommand::ChaikinSmoothObjectPath { object_id: xor_id, iterations: 2 }));
-        assert!(engine.execute(EngineCommand::ApplyVariableWidthStroke {
-            object_id: xor_id,
-            widths_pt: vec![F64::new(2.0).unwrap(), F64::new(10.0).unwrap(), F64::new(4.0).unwrap()],
-        }));
-        assert!(engine.execute(EngineCommand::WaveDistortObjectPath {
-            object_id: xor_id,
-            amplitude_pt: F64::new(3.0).unwrap(),
-            frequency: F64::new(4.0).unwrap(),
-            phase_deg: F64::new(0.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::RadialScaleSelectionPositions {
-            center: Point::new(100.0, 100.0).unwrap(),
-            radial_scale: F64::new(1.25).unwrap(),
-            twist_deg: F64::new(15.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::ApplyDihedralSymmetry {
-            object_id: xor_id,
-            center: Point::new(100.0, 100.0).unwrap(),
-            folds: 4,
-            reflect: true,
-        }));
-        assert!(engine.execute(EngineCommand::ScaleSelectionByDistance {
-            center: Point::new(100.0, 100.0).unwrap(),
-            min_scale: F64::new(0.5).unwrap(),
-            max_scale: F64::new(1.5).unwrap(),
-            falloff_radius_pt: F64::new(120.0).unwrap(),
-        }));
-        assert!(
-            engine
-                .execute(EngineCommand::DashObjectPath { object_id: xor_id, dash_pattern_pt: vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()] })
-        );
-        assert!(engine.execute(EngineCommand::QuantizeSelectionPositions { grid_x_pt: F64::new(10.0).unwrap(), grid_y_pt: F64::new(10.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::ConvexHullSelection));
-        let hull_id = engine.selection[0];
-        engine.set_selection(vec![xor_id, hull_id]);
-        assert!(engine.execute(EngineCommand::ArrangeSelectionOnCircle {
-            center: Point::new(120.0, 120.0).unwrap(),
-            radius_pt: F64::new(50.0).unwrap(),
-            start_angle_deg: F64::new(0.0).unwrap(),
-            rotate_to_tangent: true,
-        }));
-        assert!(engine.execute(EngineCommand::ExtractPathSkeleton { object_id: hull_id, sample_steps: 24 }));
-        assert!(engine.execute(EngineCommand::JitterSelectionTransforms {
-            dx_max_pt: F64::new(5.0).unwrap(),
-            dy_max_pt: F64::new(5.0).unwrap(),
-            angle_max_deg: F64::new(10.0).unwrap(),
-            scale_max_pct: F64::new(15.0).unwrap(),
-            seed: 42,
-        }));
-        assert!(engine.execute(EngineCommand::DensifyObjectPath { object_id: xor_id, max_len_pt: F64::new(8.0).unwrap() }));
-        engine.set_selection(vec![xor_id, hull_id]);
-        assert!(engine.execute(EngineCommand::AlignSelectionToKeyObject { key_object_id: xor_id, mode: AlignMode::CenterToPage }));
-        assert!(engine.execute(EngineCommand::SphericalWarpObjectPath {
-            object_id: xor_id,
-            center: Point::new(120.0, 120.0).unwrap(),
-            radius_pt: F64::new(60.0).unwrap(),
-            magnification: F64::new(1.5).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::ColorizeSelectionByGradient {
-            start_color: Color::rgb8(240, 60, 40),
-            end_color: Color::rgb8(40, 120, 240),
-            apply_to_fill: true,
-            apply_to_outline: true,
-        }));
-        assert!(engine.execute(EngineCommand::RelaxObjectPath { object_id: xor_id, iterations: 3, lambda: F64::new(0.45).unwrap() }));
-        assert!(engine.execute(EngineCommand::ApplyPaletteSwatchesToSelection {
-            colors: vec![Color::rgb8(220, 40, 60), Color::rgb8(40, 180, 90), Color::rgb8(50, 90, 220)],
-            apply_to_fill: true,
-            apply_to_outline: false,
-        }));
-        assert!(engine.execute(EngineCommand::FitCircleToObjectPath { object_id: xor_id }));
-        engine.set_selection(vec![xor_id, hull_id]);
-        assert!(
-            engine.execute(EngineCommand::SnapSelectionToCircleRadius {
-                center: Point::new(120.0, 120.0).unwrap(),
-                radius_pt: F64::new(65.0).unwrap(),
-            })
-        );
-        assert!(engine.execute(EngineCommand::SmoothPolylineToCubicBeziers { object_id: hull_id, tension: F64::new(1.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::OrientSelectionToCenter {
-            center: Point::new(120.0, 120.0).unwrap(),
-            angle_offset_deg: F64::new(90.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::PinchPunchObjectPath {
-            object_id: hull_id,
-            center: Point::new(120.0, 120.0).unwrap(),
-            radius_pt: F64::new(70.0).unwrap(),
-            strength: F64::new(-0.4).unwrap(),
-        }));
-        engine.set_selection(vec![xor_id, hull_id]);
-        assert!(engine.execute(EngineCommand::StackSelection { horizontal: true, gap_pt: F64::new(12.0).unwrap() }));
-        assert!(engine.execute(EngineCommand::FlattenObjectPathToPolylines { object_id: xor_id, tolerance_pt: F64::new(0.5).unwrap() }));
-        assert!(
-            engine.execute(EngineCommand::ScaleSelectionProgressively { start_scale: F64::new(0.8).unwrap(), end_scale: F64::new(1.25).unwrap() })
-        );
-        assert!(engine.execute(EngineCommand::ShearWarpObjectPath {
-            object_id: xor_id,
-            shear_x_pt: F64::new(10.0).unwrap(),
-            shear_y_pt: F64::new(-5.0).unwrap(),
-        }));
-        assert!(engine.execute(EngineCommand::RotateSelectionProgressively {
-            start_angle_deg: F64::new(-15.0).unwrap(),
-            end_angle_deg: F64::new(45.0).unwrap(),
-        }));
-    }
-
-    #[test]
-    fn transactional_execute_monotonic_ids_history_cap_selection_validation_and_recursive_visitors() {
-        let mut engine = EditorEngine::default();
-
-        // 1. Create an object, undo, and create another object -> IDs must be strictly monotonic across undo!
-        let r_spec = RectSpec::sharp(Rect::new(10.0, 10.0, 50.0, 40.0).unwrap());
-        assert!(engine.execute(EngineCommand::AddObject { name: Some("First".to_owned()), kind: ObjectKind::Rect(r_spec) }));
-        let first_id = engine.selection[0];
-        assert!(engine.undo());
-        assert!(engine.can_redo());
-
-        // 2. A command that fails inside execute (e.g. ApplyVariableWidthStroke with < 2 widths)
-        // must NOT push an undo snapshot and must NOT clear the redo stack!
-        assert!(!engine.execute(EngineCommand::ApplyVariableWidthStroke { object_id: first_id, widths_pt: vec![F64::ONE] }));
-        assert!(!engine.can_undo(), "failed command must not push to undo_stack");
-        assert!(engine.can_redo(), "failed command must not clear redo_stack");
-
-        // 3. Allocating a new object after undo must not reuse `first_id`.
-        assert!(engine.execute(EngineCommand::AddObject { name: Some("Second".to_owned()), kind: ObjectKind::Rect(r_spec) }));
-        let second_id = engine.selection[0];
-        assert!(second_id.0 > first_id.0, "object IDs must be monotonic across undo ({second_id:?} vs {first_id:?})");
-
-        // 4. `set_selection` deduplicates and drops non-existent IDs.
-        engine.set_selection(vec![second_id, ObjectId(999_999), second_id]);
-        assert_eq!(engine.selection, vec![second_id]);
-
-        // 5. Recursive visitor finds and mutates objects inside Group and PowerClip containers.
-        assert!(engine.execute(EngineCommand::AddObject { name: Some("Third".to_owned()), kind: ObjectKind::Rect(r_spec) }));
-        let third_id = engine.selection[0];
-        engine.set_selection(vec![second_id, third_id]);
-        assert!(engine.execute(EngineCommand::GroupSelection));
-        let group_id = engine.selection[0];
-        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside Group");
-        assert!(engine.execute(EngineCommand::RenameObject { object_id: second_id, name: Some("Nested Renamed".to_owned()) }));
-        assert_eq!(engine.inspect_object(second_id).unwrap().name.as_deref(), Some("Nested Renamed"));
-
-        // Place group inside a new container via PowerClip and inspect deeply nested child
-        assert!(engine.execute(EngineCommand::AddObject { name: Some("Frame".to_owned()), kind: ObjectKind::Rect(r_spec) }));
-        let frame_id = engine.selection[0];
-        engine.set_selection(vec![group_id]);
-        assert!(engine.execute(EngineCommand::PlaceInsidePowerClip { container_id: frame_id }));
-        assert!(engine.inspect_object(second_id).is_some(), "inspect_object must find child inside PowerClip->Group");
-
-        // 6. Undo history is capped at MAX_UNDO_HISTORY.
-        for i in 0..(MAX_UNDO_HISTORY + 20) {
-            assert!(engine.execute(EngineCommand::SetDocumentTitle { title: format!("Title {i}") }));
-        }
-        let mut undo_count = 0;
-        while engine.undo() {
-            undo_count += 1;
-        }
-        assert_eq!(undo_count, MAX_UNDO_HISTORY);
-
-        // 7. Document-wide object budget rejects exponential duplication past MAX_DOCUMENT_OBJECTS.
-        let mut budget_engine = EditorEngine::default();
-        assert!(budget_engine.execute(EngineCommand::AddObject { name: Some("Seed".to_owned()), kind: ObjectKind::Rect(r_spec) }));
-        // 1 -> 101 objects
-        assert!(budget_engine.execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ZERO }));
-        budget_engine.select_all();
-        assert_eq!(budget_engine.total_object_count(), 101);
-        // 101 * 100 = 10,100 > MAX_DOCUMENT_OBJECTS (8,192) -> rejected with ObjectBudgetExceeded!
-        assert_eq!(
-            budget_engine.try_execute(EngineCommand::StepAndRepeat { count: 100, offset_x_pt: F64::ONE, offset_y_pt: F64::ONE }),
-            Err(EngineError::ObjectBudgetExceeded { max: MAX_DOCUMENT_OBJECTS })
-        );
-        assert_eq!(budget_engine.total_object_count(), 101);
-    }
+/// The non-empty `ids` given to a command whose params description names `ids` as a key (the
+/// key callers outside the app may pass it, [`cmd::params::takes_key`]).
+fn given_ids(description: &'static str, params: &Value) -> Option<Vec<NodeId>> {
+    let ids = cmd::ids_param(params, "ids").filter(|ids| !ids.is_empty())?;
+    cmd::params::takes_key(description, "ids").then_some(ids)
 }

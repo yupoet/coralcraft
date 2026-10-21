@@ -9,7 +9,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 coralcraft-cdr = { path = "../crates/cdr" }
-coralcraft-doc = { path = "../crates/doc" }
+coralcraft-doc = { path = "../legacy/crates/doc" }
 
 [[bin]]
 name = "probe"

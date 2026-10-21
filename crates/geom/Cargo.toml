@@ -1,18 +1,19 @@
 [package]
-name = "coralcraft-geom"
-description = "2D geometry kernel: Bezier curves, boolean path operations, and snapping"
+name = "vectorcraft-geom"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
+description = "VectorCraft geom"
+
+[lints]
+workspace = true
 
 [dependencies]
+kurbo = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+vectorcraft-testkit = { workspace = true }
+proptest = { workspace = true }
 serde_json = { workspace = true }
-
-[lints]
-workspace = true

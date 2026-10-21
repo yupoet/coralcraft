@@ -82,3 +82,9 @@
 - **Brand assets**: VectorCraft's logo, splash, and app icons must not ship in CoralCraft. Every remaining file under `assets/` needs an `ASSETS.md` row.
 - **Upstream mergeability**: keep upstream directory and package names (`vectorcraft-*`). Rebrand only user-visible strings, app IDs, and bundle IDs. Put large CorelDRAW features in `corel-*` crates instead of editing upstream files.
 - **Fork base**: `refs/vectorcraft` is a single-commit snapshot (`a466625`), so `git subtree` history is not available. Record the base commit and every later sync in `docs/upstream-vectorcraft.md`.
+- **Post-V0.1 state quirks**:
+  1. Two workspaces share the repository tree: the main one and `legacy/` (plus `fuzz/`). Run legacy checks with `--manifest-path legacy/Cargo.toml`; `legacy/target/` is git-ignored.
+  2. `crates/cdr` still builds against `legacy/crates/{color,doc,geom}` through root workspace path deps; V1 replaces those with the VectorCraft document model. Until then CDR tests run in the main `cargo test --workspace` (our `ci.yml` still installs `libcdr-tools` for them).
+  3. The merged `ASSETS.md` holds upstream's rows minus brand rows; `cargo xtask assets` verifies them. `hayro-*` rows describe pinned git-dependency data, not files in this tree.
+  4. `refs/vectorcraft` is itself a git checkout: **always `cd /data/coralcraft` (absolute path) before repo-wide commands** — a stray `git mv` once ran inside `refs/` and had to be reset.
+  5. Upstream CI workflows (`freebsd`, `nix`, `packaging-lint`, `print`, `windows7`, `windows-arm64`, `affinity-corpus`) are copied as-is; V0.2/V0.3 adapt or drop any that cannot pass here (e.g. ones needing the excluded brand icons).

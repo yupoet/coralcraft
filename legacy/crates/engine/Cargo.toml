@@ -1,0 +1,20 @@
+[package]
+name = "coralcraft-engine"
+description = "Core application engine combining document state, rendering, and input dispatch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+coralcraft-cdr = { path = "../cdr" }
+coralcraft-color = { path = "../color" }
+coralcraft-doc = { path = "../doc" }
+coralcraft-geom = { path = "../geom" }
+coralcraft-render = { path = "../render" }
+coralcraft-tools = { path = "../tools" }
+serde.workspace = true
+
+[lints]
+workspace = true

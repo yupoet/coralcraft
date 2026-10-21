@@ -1,22 +1,27 @@
 [package]
-name = "coralcraft-mcp"
-description = "Model Context Protocol (MCP) server for agent-driven vector illustration"
+name = "vectorcraft-mcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
-
-[dependencies]
-coralcraft-cdr = { path = "../cdr" }
-coralcraft-color = { path = "../color" }
-coralcraft-doc = { path = "../doc" }
-coralcraft-engine = { path = "../engine" }
-coralcraft-geom = { path = "../geom" }
-coralcraft-render = { path = "../render" }
-coralcraft-tools = { path = "../tools" }
-serde.workspace = true
-serde_json.workspace = true
+description = "VectorCraft MCP server: JSON-RPC 2.0 over stdio, driving a running app or a headless session"
 
 [lints]
 workspace = true
+
+[dependencies]
+vectorcraft-engine = { workspace = true }
+vectorcraft-render = { workspace = true }
+vectorcraft-svg = { workspace = true }
+vectorcraft-format = { workspace = true }
+vectorcraft-tools = { workspace = true }
+vectorcraft-geom = { workspace = true }
+vectorcraft-doc = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+image = { workspace = true }
+
+[dev-dependencies]
+vectorcraft-testkit = { workspace = true }
+proptest = { workspace = true }
+socket2 = { workspace = true }

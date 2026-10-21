@@ -1,20 +1,57 @@
 [package]
-name = "coralcraft-engine"
-description = "Core application engine combining document state, rendering, and input dispatch"
+name = "vectorcraft-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
-
-[dependencies]
-coralcraft-cdr = { path = "../cdr" }
-coralcraft-color = { path = "../color" }
-coralcraft-doc = { path = "../doc" }
-coralcraft-geom = { path = "../geom" }
-coralcraft-render = { path = "../render" }
-coralcraft-tools = { path = "../tools" }
-serde.workspace = true
+description = "VectorCraft engine: sessions, history, selection, the command registry"
 
 [lints]
 workspace = true
+
+[features]
+default = ["bundled-fonts"]
+# The fonts vectorcraft-text bundles (see its `bundled-fonts`). Embedders that supply every font at
+# run time (`vectorcraft_text::FontDb::add_font`) build with `default-features = false`.
+bundled-fonts = ["vectorcraft-text/bundled-fonts"]
+
+[dependencies]
+# Which paths stored in documents may be opened.
+craft-docpath = { workspace = true }
+vectorcraft-geom = { workspace = true }
+vectorcraft-color = { workspace = true }
+vectorcraft-doc = { workspace = true }
+vectorcraft-tools = { workspace = true }
+vectorcraft-text = { workspace = true }
+vectorcraft-render = { workspace = true }
+vectorcraft-pathops = { workspace = true }
+vectorcraft-brush = { workspace = true }
+vectorcraft-trace = { workspace = true }
+vectorcraft-svg = { workspace = true }
+vectorcraft-format = { workspace = true }
+vectorcraft-pdf = { workspace = true }
+vectorcraft-cad = { workspace = true }
+vectorcraft-eps = { workspace = true }
+vectorcraft-metafile = { workspace = true }
+vectorcraft-plugins = { workspace = true }
+vectorcraft-affinity = { workspace = true }
+vectorcraft-scriptcheck = { workspace = true }
+image = { workspace = true }
+flate2 = { workspace = true }
+# The XML parts of Word documents placed as type (place/docx.rs).
+roxmltree = "0.21"
+kurbo = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+vectorcraft-affinity = { workspace = true, features = ["synth"] }
+crc32fast = { workspace = true }
+vectorcraft-testkit = { workspace = true }
+proptest = { workspace = true }
+# A variable font built in code (no font file is committed).
+vectorcraft-text = { workspace = true, features = ["test-fonts"] }
+wat = { workspace = true }
+# Zstandard streams for the Illustrator editing data fuzz tests.
+ruzstd = { workspace = true }

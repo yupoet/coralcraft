@@ -1,0 +1,18 @@
+[package]
+name = "coralcraft-render"
+description = "SIMD multi-threaded 2D vector rasterization and rendering pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+coralcraft-geom = { workspace = true }
+coralcraft-color = { workspace = true }
+coralcraft-doc = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

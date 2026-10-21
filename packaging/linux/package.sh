@@ -1,164 +1,114 @@
 #!/usr/bin/env bash
-# Build and package CoralCraft for Linux (<arch> is x86_64 or aarch64):
-#   - $DIST/coralcraft-<version>-linux-<arch>.deb       Debian/Ubuntu package (nfpm or dpkg-deb)
-#   - $DIST/coralcraft-<version>-linux-<arch>.rpm       Fedora/openSUSE/RHEL package (nfpm)
-#   - $DIST/coralcraft-<version>-linux-<arch>.AppImage  AppImage (appimagetool)
-#   - $DIST/coralcraft-<version>-linux-<arch>.tar.gz    FHS archive with install.sh
+# Build and package VectorCraft for Linux (<arch> is x86_64 or aarch64, or riscv64 when cross-compiling):
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "deb tar rpm appimage"]
+#   $DIST/vectorcraft-<version>-linux-<arch>.AppImage  any distro with glibc >= the build host's
+#   $DIST/vectorcraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
+#   $DIST/vectorcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
+#   $DIST/vectorcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/vectorcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
-# Binaries target a glibc 2.17 baseline via `cargo zigbuild` when available so they run on older
-# distributions (see .github/workflows/ci.yml linux-package-smoke).
-
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+#
+# Cross-compiling (release.yml's linux-riscv64 job): set CROSS_ARCH (riscv64), CROSS_TARGET (the Rust
+# target), CROSS_COMPILE (the binutils prefix, for strip) and EMULATOR (e.g. qemu-riscv64, to
+# smoke-test the CLI), and pass --formats tar.
+#
+# Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
+# (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
+# glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
+# zsyncmake (the zsync package) for the AppImage's .zsync.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID="ai.storyteller.coralcraft"
+APP_ID=ai.storyteller.vectorcraft
 
 SKIP_BUILD=0
-FORMATS="deb tar"
+FORMATS="appimage deb rpm tar"
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 ARCH="${CROSS_ARCH:-$(uname -m)}"
 case "$ARCH" in
-  x86_64) DEB_ARCH="amd64"; TARGET="x86_64-unknown-linux-gnu" ;;
-  aarch64 | arm64) ARCH="aarch64"; DEB_ARCH="arm64"; TARGET="aarch64-unknown-linux-gnu" ;;
+  riscv64) DEB_ARCH=riscv64 ;;
+  x86_64) DEB_ARCH=amd64 ;;
+  aarch64 | arm64) ARCH=aarch64; DEB_ARCH=arm64 ;;
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
-export CORALCRAFT_MAINTAINER="${CORALCRAFT_MAINTAINER:-CoralCraft Maintainers <maintainers@coralcraft.org>}"
-BASENAME="coralcraft-$VERSION-linux-$ARCH"
+export VECTORCRAFT_MAINTAINER="${VECTORCRAFT_MAINTAINER:-VectorCraft maintainers <vectorcraft@storyteller.ai>}"
+BASENAME="vectorcraft-$VERSION-linux-$ARCH"
 
-ICONS_DIR="$CARGO_TARGET_DIR/package-icons"
-python3 "$ROOT/packaging/icons.py" "$ICONS_DIR"
+echo "==> VectorCraft $VERSION for Linux $ARCH ($FORMATS)"
 
 if [ "$SKIP_BUILD" = 0 ]; then
-  if command -v cargo-zigbuild >/dev/null 2>&1; then
-    (cd "$ROOT" && cargo zigbuild --release --locked -p coralcraft -p coralcraft-cli --target "$TARGET.2.17")
-    BIN="$CARGO_TARGET_DIR/$TARGET/release"
+  if [ -n "${CROSS_TARGET:-}" ]; then
+    (cd "$ROOT" && cargo build --release --locked -p vectorcraft -p vectorcraft-cli --target "$CROSS_TARGET")
   else
-    (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli)
-    BIN="$CARGO_TARGET_DIR/release"
-  fi
-else
-  if [ -d "$CARGO_TARGET_DIR/$TARGET/release" ]; then
-    BIN="$CARGO_TARGET_DIR/$TARGET/release"
-  else
-    BIN="$CARGO_TARGET_DIR/release"
+    (cd "$ROOT" && cargo build --release --locked -p vectorcraft -p vectorcraft-cli)
   fi
 fi
-
+BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
-mkdir -p "$STAGE"
 
-# 1. Stage standard FHS tree (/usr/bin, /usr/share/applications, /usr/share/mime, /usr/share/metainfo, /usr/share/icons)
-install -Dm755 "$BIN/coralcraft" "$STAGE/usr/bin/coralcraft"
-install -Dm755 "$BIN/coralcraft-cli" "$STAGE/usr/bin/coralcraft-cli"
-strip "$STAGE/usr/bin/coralcraft" "$STAGE/usr/bin/coralcraft-cli" 2>/dev/null || true
-
+# ---- stage an FHS tree (shared by every format) -------------------------------------------------
+install -Dm755 "$BIN/vectorcraft" "$STAGE/usr/bin/vectorcraft"
+install -Dm755 "$BIN/vectorcraft-cli" "$STAGE/usr/bin/vectorcraft-cli"
+"${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/vectorcraft" "$STAGE/usr/bin/vectorcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
-sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$CORALCRAFT_BUILD_DATE/g" \
+sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$VECTORCRAFT_BUILD_DATE/g" \
   "$HERE/$APP_ID.metainfo.xml.in" >"$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 mkdir -p "$STAGE/usr/share/icons"
-cp -R "$ICONS_DIR/hicolor" "$STAGE/usr/share/icons/"
-copy_docs "$STAGE/usr/share/doc/coralcraft"
+cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
+mkdir -p "$STAGE/usr/share/doc/vectorcraft"
+copy_docs "$STAGE/usr/share/doc/vectorcraft"
+
+if command -v desktop-file-validate >/dev/null; then
+  desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"
+fi
+if command -v appstreamcli >/dev/null; then
+  appstreamcli validate --no-net --explain "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
+fi
 
 has() { case " $FORMATS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
-# 2. Build portable .tar.gz with install.sh
+# ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
-  TAR_STAGE="$WORK/$BASENAME"
-  mkdir -p "$TAR_STAGE"
-  cp -R "$STAGE/usr/"* "$TAR_STAGE/"
-  cat >"$TAR_STAGE/install.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-PREFIX="${PREFIX:-/usr/local}"
-HERE="$(cd "$(dirname "$0")" && pwd)"
-install -Dm755 "$HERE/bin/coralcraft" "$PREFIX/bin/coralcraft"
-install -Dm755 "$HERE/bin/coralcraft-cli" "$PREFIX/bin/coralcraft-cli"
-install -Dm644 "$HERE/share/applications/ai.storyteller.coralcraft.desktop" "$PREFIX/share/applications/ai.storyteller.coralcraft.desktop"
-install -Dm644 "$HERE/share/mime/packages/ai.storyteller.coralcraft.xml" "$PREFIX/share/mime/packages/ai.storyteller.coralcraft.xml"
-install -Dm644 "$HERE/share/metainfo/ai.storyteller.coralcraft.metainfo.xml" "$PREFIX/share/metainfo/ai.storyteller.coralcraft.metainfo.xml"
-mkdir -p "$PREFIX/share/icons"
-cp -R "$HERE/share/icons/hicolor" "$PREFIX/share/icons/"
-echo "Installed CoralCraft to $PREFIX/bin/coralcraft"
-EOF
-  chmod 755 "$TAR_STAGE/install.sh"
-
-  OUT_TAR="$DIST/$BASENAME.tar.gz"
-  rm -f "$OUT_TAR"
-  tar -C "$WORK" -czf "$OUT_TAR" "$BASENAME"
-  echo "wrote $OUT_TAR"
+  mkdir -p "$WORK/tar"
+  cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
+  tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
+  echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
-# 3. Build .deb and/or .rpm (nfpm when available; dpkg-deb fallback for .deb)
+# ---- .deb / .rpm --------------------------------------------------------------------------------
 if has deb || has rpm; then
-  if command -v nfpm >/dev/null 2>&1; then
-    export VERSION
-    export NFPM_ARCH="$DEB_ARCH"
-    sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
-    for fmt in deb rpm; do
-      if has "$fmt"; then
-        rm -f "$DIST/$BASENAME.$fmt"
-        (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt")
-        echo "wrote $DIST/$BASENAME.$fmt"
-      fi
-    done
-  else
-    if has rpm; then
-      echo "error: nfpm not found (required for .rpm: https://nfpm.goreleaser.com/install/)" >&2
-      exit 1
-    fi
-    if has deb; then
-      DEB_STAGE="$WORK/deb-root"
-      cp -R "$STAGE" "$DEB_STAGE"
-      mkdir -p "$DEB_STAGE/DEBIAN"
-      INSTALLED_KB="$(du -sk "$DEB_STAGE/usr" | cut -f1)"
-      cat >"$DEB_STAGE/DEBIAN/control" <<EOF
-Package: coralcraft
-Version: $VERSION
-Section: graphics
-Priority: optional
-Architecture: $DEB_ARCH
-Installed-Size: $INSTALLED_KB
-Depends: libc6 (>= 2.17), libgcc-s1
-Maintainer: $CORALCRAFT_MAINTAINER
-Homepage: https://github.com/yupoet/coralcraft
-Description: CoralCraft Vector Illustration and Multi-Page Layout Studio
- Clean-room, Rust-native vector illustration and multi-page layout application
- supporting .coralcraft, .cdr, .cmx, SVG 1.1, PDF 1.4, EPSF-3.0, and DXF,
- plus a 244-tool Model Context Protocol (MCP) server.
-EOF
-      cp "$HERE/postinst.sh" "$DEB_STAGE/DEBIAN/postinst"
-      chmod 755 "$DEB_STAGE/DEBIAN/postinst"
-      OUT_DEB="$DIST/$BASENAME.deb"
-      rm -f "$OUT_DEB"
-      dpkg-deb -Zxz --build --root-owner-group "$DEB_STAGE" "$OUT_DEB" >/dev/null
-      echo "wrote $OUT_DEB"
-    fi
-  fi
+  command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
+  export VERSION
+  export NFPM_ARCH="$DEB_ARCH"
+  # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
+  sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  for fmt in deb rpm; do
+    if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
+  done
 fi
 
-# 4. Build AppImage (appimagetool)
+# ---- AppImage -----------------------------------------------------------------------------------
 if has appimage; then
-  APPDIR="$WORK/CoralCraft.AppDir"
+  APPDIR="$WORK/VectorCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  rm -rf "$APPDIR/usr/share/doc"
-  ln -s usr/bin/coralcraft "$APPDIR/AppRun"
+  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
+  ln -s usr/bin/vectorcraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-  cp "$ICONS_DIR/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
@@ -169,13 +119,35 @@ if has appimage; then
       chmod +x "$TOOL"
     fi
   fi
+  # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR or APPIMAGETOOL may be
+  # relative, e.g. target/agent-<name>).
   OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
   APPDIR="$(cd "$APPDIR" && pwd)"
   TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
-  rm -f "$OUT" "$OUT.zsync"
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream "$APPDIR" "$OUT")
+  # A .zsync left by an earlier run would hide a missing zsyncmake and describe another file.
+  rm -f "$OUT.zsync"
+  # Update information: AppImageUpdate, AppImageLauncher and the like read it from the file and
+  # fetch only the blocks that changed in a newer release, through the .zsync published next to
+  # each AppImage on GitHub Releases. `latest` is the newest published release that is not a
+  # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
+  REPO="${GITHUB_REPOSITORY:-storytold/vectorcraft}"
+  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|vectorcraft-*-linux-$ARCH.AppImage.zsync"
+  # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
+  # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
+  # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$APPDIR" "$OUT")
   echo "wrote $OUT"
+  if [ -s "$OUT.zsync" ]; then
+    echo "wrote $OUT.zsync"
+  else
+    warn "zsyncmake not found, so $OUT.zsync was not written; AppImage delta updates need it"
+  fi
 fi
 
-"$STAGE/usr/bin/coralcraft-cli" --version
-ls -lh "$DIST"/coralcraft-"$VERSION"-linux-*
+if [ -z "${CROSS_TARGET:-}" ]; then
+  "$STAGE/usr/bin/vectorcraft-cli" --version
+elif [ -n "${EMULATOR:-}" ]; then
+  "$EMULATOR" "$STAGE/usr/bin/vectorcraft-cli" --version
+fi
+echo "==> done"
+ls -lh "$DIST"

@@ -4,13 +4,20 @@
 
 ## 1. Current Stage Status
 
+- **Phase V in progress. V0.1 DONE (2026-10-21):** VectorCraft `a466625` imported.
+  - Workspace = 24 `vectorcraft-*` crates + `apps/{vectorcraft,vectorcraft-cli,vectorcraft-web}` + `coralcraft-cdr` + merged `xtask`. Root manifest = upstream's plus `# CoralCraft:` divergences (`exclude = ["legacy", "fuzz"]`, our version/repository, `coralcraft-{color,doc,geom}` legacy path deps for `crates/cdr`).
+  - `legacy/` is the pre-fork workspace (`cargo build --manifest-path legacy/Cargo.toml` still works); its crates are excluded from the root workspace but stay buildable as path dependencies of `crates/cdr`.
+  - `fuzz/` path dep repointed to `../legacy/crates/doc`.
+  - xtask = VectorCraft's + our `cleanroom` module (wired into `cargo xtask ci`); old single-file xtask replaced (its `stats`/`layers`/`assets` exist upstream; the `package` command is gone — upstream releases via `packaging/` scripts and craft-common-actions).
+  - Brand exclusions at import: `assets/app-icon/`, `docs/brand/`, `docs/images/`, `packaging/macos/dmg/{background.*,DS_Store}`, upstream `release.yml`. Our `release.yml` was removed too (it packaged the legacy app); V0.3 restores a rebranded release pipeline (D2: macOS `.app.zip` first).
+  - Full import/divergence ledger: [`docs/upstream-vectorcraft.md`](../upstream-vectorcraft.md). **Next task: V0.2** (workspace builds green, upstream test suite passes, `cargo xtask ci` adapted).
 - **ACTIVE DIRECTION (operator decision 2026-10-21)**: CoralCraft is re-based on a copy of VectorCraft (`refs/vectorcraft` @ `a466625`).
-  - **D6 Copy, then adapt** (not an external dependency).
+  - **D6 Copy, then adapt** (not an external dependency). **Keep VectorCraft intact; CorelDRAW work is additive** (`corel-*` crates, new files; upstream files only get small marked `// CoralCraft:` edits) so upstream upgrades stay mergeable.
   - **D7** Every VectorCraft file works.
   - **D8** Reuse VectorCraft; never reimplement what it has.
   - **D9** CoralCraft's own scope is only the CorelDRAW extension.
   - **D10** No more format self-round-trip milestones.
-  - Active plan: [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](../superpowers/plans/2026-10-21-vectorcraft-fork.md). **Next task: V0.1.**
+  - Active plan: [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](../superpowers/plans/2026-10-21-vectorcraft-fork.md).
 - **Measured baseline (2026-10-21)**: the desktop app is about 8–10% of VectorCraft's.
   - 53k vs 577k lines; 2 vs ~40 panels; 6 vs 89 working canvas tools; 165 vs 8,275 tests.
   - No real text engine; full-page CPU re-rasterization on every redraw.

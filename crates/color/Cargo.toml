@@ -1,18 +1,20 @@
 [package]
-name = "coralcraft-color"
-description = "Color spaces, CMYK/spot colors, and .cpl/.xml palette files for CoralCraft"
+name = "vectorcraft-color"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
-
-[dependencies]
-serde = { workspace = true }
-thiserror = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }
+description = "VectorCraft color"
 
 [lints]
 workspace = true
+
+[dependencies]
+kurbo = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+moxcms = "0.8"
+
+[dev-dependencies]
+proptest = { workspace = true }
+serde_json = { workspace = true }

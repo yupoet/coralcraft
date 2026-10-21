@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
-# Build and sign the macOS release artifacts on a macOS host (modeled on refs/vectorcraft):
+# Build, sign and (optionally) notarize the macOS release artifacts:
 #
-#   $DIST/coralcraft-<version>-macos-<arch>.app.zip      CoralCraft.app (ditto archive)
-#   $DIST/coralcraft-cli-<version>-macos-<arch>.zip      the headless CLI (includes `coralcraft-cli mcp`)
+#   $DIST/vectorcraft-<version>-macos-<arch>.dmg          VectorCraft.app on a drag-to-Applications DMG
+#   $DIST/vectorcraft-cli-<version>-macos-<arch>.zip      the headless CLI
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 #
 # Signing (env):
-#   MACOS_SIGN_IDENTITY   codesign identity. Default "-" = ad-hoc: the app runs on the build machine
-#                         and on other Macs only after removing the quarantine attribute
-#                         (`xattr -dr com.apple.quarantine CoralCraft.app`). Not notarized.
+#   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc (local testing;
+#                         Gatekeeper will reject the result on other Macs). In CI, import-cert.sh sets it.
 #   MACOS_KEYCHAIN        keychain holding the identity (optional)
-#
-# This script must run on macOS: it needs lipo, codesign, plutil and ditto. Binary package formats
-# are never hand-rolled on other hosts (see docs/ai-memory/04-known-issues.md #10).
+# Notarization (env; all three needed, and a real identity):
+#   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/macos"
-
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "error: packaging/macos/package.sh must run on macOS (lipo/codesign/ditto required)" >&2
-  exit 2
-fi
 
 ARCH=universal
 SKIP_BUILD=0
@@ -46,32 +39,40 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION%%-*}"
 WORK="$CARGO_TARGET_DIR/macos-package"
-APP="$WORK/CoralCraft.app"
-APP_ZIP="$DIST/coralcraft-$VERSION-macos-$ARCH.app.zip"
-CLI_ZIP="$DIST/coralcraft-cli-$VERSION-macos-$ARCH.zip"
+APP="$WORK/VectorCraft.app"
+DMG="$DIST/vectorcraft-$VERSION-macos-$ARCH.dmg"
+CLI_ZIP="$DIST/vectorcraft-cli-$VERSION-macos-$ARCH.zip"
 
+NOTARIZE=0
 if [ "$IDENTITY" = "-" ]; then
   warn "macOS: ad-hoc signing (no MACOS_SIGN_IDENTITY); artifacts are not notarized"
+elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+  NOTARIZE=1
+else
+  warn "macOS: APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID incomplete; signed but not notarized"
 fi
-echo "==> CoralCraft $VERSION for macOS ($ARCH), identity: $IDENTITY"
+
+echo "==> VectorCraft $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = 0 ]; then
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
-  (cd "$ROOT" && cargo build --release --locked -p coralcraft -p coralcraft-cli "${args[@]}")
+  (cd "$ROOT" && cargo build --release --locked -p vectorcraft -p vectorcraft-cli "${args[@]}")
 fi
 
 rm -rf "$WORK"
 mkdir -p "$WORK/bin"
-for bin in coralcraft coralcraft-cli; do
+for bin in vectorcraft vectorcraft-cli; do
   inputs=()
   for t in "${TARGETS[@]}"; do inputs+=("$CARGO_TARGET_DIR/$t/release/$bin"); done
   lipo -create -output "$WORK/bin/$bin" "${inputs[@]}"
   lipo -info "$WORK/bin/$bin"
 done
 
+# ---- signing helpers ---------------------------------------------------------------------------
 sign() {
+  # Hardened runtime + secure timestamp for a real identity; ad-hoc can't be timestamped.
   local ts=(--timestamp)
   [ "$IDENTITY" = "-" ] && ts=(--timestamp=none)
   local kc=()
@@ -79,42 +80,129 @@ sign() {
   codesign --force --sign "$IDENTITY" ${kc[@]+"${kc[@]}"} "${ts[@]}" "$@"
 }
 
-# ---- CoralCraft.app ----------------------------------------------------------------------------
+notarize() {
+  local file="$1" out id status
+  echo "==> notarizing $(basename "$file") (this can take a few minutes)"
+  out="$(xcrun notarytool submit "$file" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" --wait --timeout 1h --output-format json)" || true
+  echo "$out"
+  id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
+  status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
+  if [ "$status" != "Accepted" ]; then
+    if [ -n "$id" ]; then
+      xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
+    fi
+    echo "error: notarization of $(basename "$file") failed (status: ${status:-unknown})" >&2
+    exit 1
+  fi
+}
+
+# `stapler validate` looks the ticket up in Apple's CloudKit, and a dropped connection there
+# (NSURLErrorDomain -1005, "Error 68") fails it although the staple worked. Retry with a pause; a
+# missing or bad ticket still fails every try.
+validate_stapled() {
+  local try
+  for try in 1 2 3 4; do
+    xcrun stapler validate "$1" && return 0
+    [ "$try" = 4 ] && break
+    echo "stapler validate failed (try $try of 4); retrying in $((try * 20)) s" >&2
+    sleep $((try * 20))
+  done
+  echo "error: stapler validate $(basename "$1") failed 4 times" >&2
+  exit 1
+}
+
+# ---- VectorCraft.app ----------------------------------------------------------------------------
 echo "==> assembling $APP"
-ICONS_DIR="$WORK/icons"
-python3 "$ROOT/packaging/icons.py" "$ICONS_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$WORK/bin/coralcraft" "$APP/Contents/MacOS/CoralCraft"
-cp "$ICONS_DIR/CoralCraft.icns" "$APP/Contents/Resources/CoralCraft.icns"
+# Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
+cp "$WORK/bin/vectorcraft" "$APP/Contents/MacOS/VectorCraft"
+cp "$ROOT/assets/app-icon/vectorcraft.icns" "$APP/Contents/Resources/VectorCraft.icns"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@SHORT_VERSION@/$SHORT_VERSION/g" \
-  -e "s/@BUILD_SHA@/${CORALCRAFT_BUILD_SHA:-unknown}/g" \
+  -e "s/@BUILD_SHA@/${VECTORCRAFT_BUILD_SHA:-unknown}/g" \
   "$HERE/Info.plist.in" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
+# The licences of the craft-fonts fonts embedded in the binary (release builds).
 copy_docs "$APP/Contents/Resources"
 
-# Sign inside-out: the main executable first, then the bundle (no --deep on the final signature).
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/CoralCraft"
+# Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
+# Today the only nested code is the main executable; frameworks/helpers would be signed here too.
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/VectorCraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
 
-rm -f "$APP_ZIP"
-ditto -c -k --keepParent "$APP" "$APP_ZIP"
+if [ "$NOTARIZE" = 1 ]; then
+  ditto -c -k --keepParent "$APP" "$WORK/VectorCraft-notarize.zip"
+  notarize "$WORK/VectorCraft-notarize.zip"
+  xcrun stapler staple "$APP"
+  validate_stapled "$APP"
+  spctl --assess --type execute -vvv "$APP"
+fi
+
+# ---- DMG ---------------------------------------------------------------------------------------
+echo "==> building $DMG"
+STAGE="$WORK/dmg"
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/VectorCraft.app"
+ln -s /Applications "$STAGE/Applications"
+# Finder window layout: background, icon size and positions (packaging/macos/dmg/README.md).
+mkdir -p "$STAGE/.background"
+cp "$HERE/dmg/background.tiff" "$STAGE/.background/background.tiff"
+cp "$HERE/dmg/DS_Store" "$STAGE/.DS_Store"
+rm -f "$DMG"
+# `hdiutil create -srcfolder` writes the files as they are. `makehybrid -hfs` gave every file a
+# com.apple.FinderInfo, which `codesign --verify --strict` rejects as "Finder information, or
+# similar detritus" on the app in the image and on a copy installed from it (#1085, as PdfCraft's
+# storytold/pdfcraft#823). `create` attaches a device while it copies, which fails now and then on
+# CI runners ("Resource busy"), so it gets a few tries. The volume name has no version: .DS_Store
+# finds the background through an alias that includes it.
+# Usage: hdiutil_retry <what> <hdiutil args…>; tries five times with growing pauses.
+hdiutil_retry() {
+  local what="$1" attempt
+  shift
+  for attempt in 1 2 3 4 5; do
+    if hdiutil "$@"; then
+      return 0
+    fi
+    [ "$attempt" = 5 ] && { echo "hdiutil $what failed 5 times" >&2; return 1; }
+    echo "hdiutil $what failed (attempt $attempt of 5); retrying in $((attempt * 10))s" >&2
+    sleep $((attempt * 10))
+  done
+}
+hdiutil_retry create create -srcfolder "$STAGE" -volname "VectorCraft" -fs HFS+ -format UDZO -imagekey zlib-level=9 -ov "$DMG"
+sign "$DMG"
+codesign --verify --strict --verbose=2 "$DMG"
+# The app inside the image must still pass --strict, so a makehybrid-style regression can't ship.
+MOUNT="$WORK/dmg-check"
+rm -rf "$MOUNT"
+mkdir -p "$MOUNT"
+hdiutil_retry attach attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+if ! codesign --verify --strict --deep --verbose=2 "$MOUNT/VectorCraft.app"; then
+  hdiutil_retry detach detach "$MOUNT" >/dev/null || true
+  exit 1
+fi
+hdiutil_retry detach detach "$MOUNT" >/dev/null
+if [ "$NOTARIZE" = 1 ]; then
+  notarize "$DMG"
+  xcrun stapler staple "$DMG"
+  validate_stapled "$DMG"
+  spctl --assess --type open --context context:primary-signature -vvv "$DMG"
+fi
 
 # ---- CLI ---------------------------------------------------------------------------------------
 echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/coralcraft-cli-$VERSION-macos-$ARCH"
+CLI_DIR="$WORK/vectorcraft-cli-$VERSION-macos-$ARCH"
 mkdir -p "$CLI_DIR"
-cp "$WORK/bin/coralcraft-cli" "$CLI_DIR/"
+cp "$WORK/bin/vectorcraft-cli" "$CLI_DIR/"
 copy_docs "$CLI_DIR"
-sign --options runtime "$CLI_DIR/coralcraft-cli"
-codesign --verify --strict --verbose=2 "$CLI_DIR/coralcraft-cli"
+sign --options runtime "$CLI_DIR/vectorcraft-cli"
+codesign --verify --strict --verbose=2 "$CLI_DIR/vectorcraft-cli"
 rm -f "$CLI_ZIP"
 ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
+# A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
+if [ "$NOTARIZE" = 1 ]; then notarize "$CLI_ZIP"; fi
 
-# ---- smoke test --------------------------------------------------------------------------------
-"$WORK/bin/coralcraft-cli" --version
-"$APP/Contents/MacOS/CoralCraft" --version
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | "$WORK/bin/coralcraft-cli" mcp | grep -q '"tools"'
+"$WORK/bin/vectorcraft-cli" --version
 echo "==> done"
-ls -lh "$APP_ZIP" "$CLI_ZIP"
+ls -lh "$DMG" "$CLI_ZIP"

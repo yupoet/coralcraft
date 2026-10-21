@@ -1,26 +1,50 @@
 [package]
-name = "coralcraft-ui-egui"
-description = "Replaceable egui desktop and Web frontend for CoralCraft"
+name = "vectorcraft-ui-egui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
-repository.workspace = true
-
-[dependencies]
-coralcraft-cdr = { path = "../cdr" }
-coralcraft-color = { path = "../color" }
-coralcraft-doc = { path = "../doc" }
-coralcraft-engine = { path = "../engine" }
-coralcraft-geom = { path = "../geom" }
-coralcraft-render = { path = "../render" }
-coralcraft-tools = { path = "../tools" }
-egui.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-
-[dev-dependencies]
-egui_kittest.workspace = true
+description = "VectorCraft egui frontend (menus, panels, tools and canvas); swappable — nothing below depends on it"
 
 [lints]
 workspace = true
+
+[dependencies]
+craft-ui = { workspace = true }
+vectorcraft-geom = { workspace = true }
+vectorcraft-color = { workspace = true }
+vectorcraft-doc = { workspace = true }
+vectorcraft-brush = { workspace = true }
+vectorcraft-render = { workspace = true }
+vectorcraft-text = { workspace = true }
+vectorcraft-tools = { workspace = true }
+vectorcraft-engine = { workspace = true }
+vectorcraft-svg = { workspace = true }
+vectorcraft-effects = { workspace = true }
+vectorcraft-three-d = { workspace = true }
+vectorcraft-plugins = { workspace = true }
+vectorcraft-pdf = { workspace = true }
+vectorcraft-cad = { workspace = true }
+vectorcraft-eps = { workspace = true }
+vectorcraft-format = { workspace = true }
+egui = { workspace = true }
+egui_extras = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `now_ms` (src/lib.rs) reads the page's `performance.now()` with this crate in the web build. It is
+# MIT OR Apache-2.0 and already in the build through eframe.
+web-time = "1"
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+vectorcraft-testkit = { workspace = true }
+# A variable font built in code (no font file is committed).
+vectorcraft-text = { workspace = true, features = ["test-fonts"] }
+wat = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+toml = "1"

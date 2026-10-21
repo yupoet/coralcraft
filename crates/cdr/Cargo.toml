@@ -17,5 +17,15 @@ thiserror = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 
-[lints]
-workspace = true
+# CoralCraft-owned crate: keeps the strict CoralCraft lints even though the root workspace now
+# carries VectorCraft's (milder) set (see docs/superpowers/plans/2026-10-21-vectorcraft-fork.md §3).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"

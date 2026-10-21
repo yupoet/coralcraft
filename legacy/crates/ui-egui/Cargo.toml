@@ -1,0 +1,26 @@
+[package]
+name = "coralcraft-ui-egui"
+description = "Replaceable egui desktop and Web frontend for CoralCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+coralcraft-cdr = { path = "../cdr" }
+coralcraft-color = { path = "../color" }
+coralcraft-doc = { path = "../doc" }
+coralcraft-engine = { path = "../engine" }
+coralcraft-geom = { path = "../geom" }
+coralcraft-render = { path = "../render" }
+coralcraft-tools = { path = "../tools" }
+egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+egui_kittest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,55 @@
+# Pre-fork CoralCraft workspace (frozen 2026-10-21, before the VectorCraft fork import).
+#
+# These crates are excluded from the main workspace and are deleted piece by piece as their
+# unique content is ported (see docs/superpowers/plans/2026-10-21-vectorcraft-fork.md, V7).
+# `cargo build --manifest-path legacy/Cargo.toml` still works for reference and diffing.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+default-members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+repository = "https://github.com/yupoet/coralcraft"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+clap = { version = "4", features = ["derive"] }
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_kittest = "0.36"
+rfd = "0.17"
+arboard = { version = "3.6", default-features = false }
+
+# internal
+coralcraft-geom = { path = "crates/geom" }
+coralcraft-color = { path = "crates/color" }
+coralcraft-doc = { path = "crates/doc" }
+coralcraft-cdr = { path = "../crates/cdr" }
+coralcraft-render = { path = "crates/render" }
+coralcraft-tools = { path = "crates/tools" }
+coralcraft-engine = { path = "crates/engine" }
+coralcraft-ui-egui = { path = "crates/ui-egui" }
+coralcraft-mcp = { path = "crates/mcp" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+# CoralCraft never crashes in shipped code: return Result/Option instead of panicking.
+# Tests may unwrap/expect/panic via clippy.toml.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+
+[profile.dev.package."*"]
+opt-level = 2
