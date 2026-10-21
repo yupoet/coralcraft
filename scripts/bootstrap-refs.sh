@@ -19,7 +19,8 @@ if [ -n "$LATEST" ] && [ "$LATEST" != "--latest" ]; then
   exit 2
 fi
 
-# name|url|pinned-sha (must match refs/REFS.md §D; full 40-char SHA required for git fetch --depth 1)
+# name|url|pinned-sha (must match refs/REFS.md §D; full 40-char SHA required for git fetch --depth 1)[|sparse-subdir]
+# sparse-subdir is for monorepos where only one subdirectory is relevant (cone-mode sparse checkout).
 ENTRIES=(
   "vectorcraft|https://github.com/storytold/vectorcraft.git|a466625c8987550635cda951ebf36e08e1e80a56"
   "designcraft|https://github.com/storytold/designcraft.git|443ea4640ca368fcf0241b04813bd3817acd5df8"
@@ -32,27 +33,42 @@ ENTRIES=(
   "uniconvertor|https://github.com/sk1project/uniconvertor.git|973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472"
   "rea|https://github.com/cyberkaida/reverse-engineering-assistant.git|a05a6b0a18649efd6d74ec8447bdadf8d468c365"
   "morluto-rea|https://github.com/morluto/rea.git|ba866a26ecbe179a717e746cbc0d1605ae616ad5"
+  "vector-studio|https://github.com/HeyPuter/everything.git|75fec282dd56aa107eff8150cfcd63d2c3149192|src/vector-studio"
 )
 
 for e in "${ENTRIES[@]}"; do
-  IFS='|' read -r name url pin <<<"$e"
+  IFS='|' read -r name url pin sparse <<<"$e"
   if [ -d "$name/.git" ]; then
     echo "== skipping existing: $name"
     continue
   fi
   if [ "$LATEST" = "--latest" ]; then
     echo "== cloning latest tip: $name"
-    git clone --depth 1 --single-branch "$url" "$name"
+    if [ -n "${sparse:-}" ]; then
+      git clone -q --depth 1 --single-branch --filter=blob:none --sparse "$url" "$name"
+      git -C "$name" sparse-checkout set "$sparse"
+    else
+      git clone --depth 1 --single-branch "$url" "$name"
+    fi
   else
     echo "== restoring pinned commit: $name @ ${pin}"
     git init -q "$name"
     git -C "$name" remote add origin "$url"
+    if [ -n "${sparse:-}" ]; then
+      git -C "$name" sparse-checkout init --cone
+      git -C "$name" sparse-checkout set "$sparse"
+    fi
     if git -C "$name" fetch -q --depth 1 origin "$pin"; then
       git -C "$name" checkout -q --detach FETCH_HEAD
     else
       echo "   !! failed to fetch pinned commit (remote history may have changed); falling back to latest tip" >&2
       rm -rf "$name"
-      git clone --depth 1 --single-branch "$url" "$name"
+      if [ -n "${sparse:-}" ]; then
+        git clone -q --depth 1 --single-branch --filter=blob:none --sparse "$url" "$name"
+        git -C "$name" sparse-checkout set "$sparse"
+      else
+        git clone --depth 1 --single-branch "$url" "$name"
+      fi
     fi
   fi
 done

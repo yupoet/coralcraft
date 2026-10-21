@@ -17,6 +17,7 @@
 | `uniconvertor/` | **AGPL-3.0** | Format support matrix existence proof only | **Strict prohibition**: AGPL-3.0. **Never** open, read, copy, link, or adapt its source code |
 | `rea/` (`cyberkaida/reverse-engineering-assistant`) | See repo | Optional Ghidra RE MCP | Only for inspecting operator-owned sample files; **never** point at proprietary binaries |
 | `morluto-rea/` (`REA: Reverse Engineer Anything`) | MIT | Primary RE assistant (`npx rea-agents`) | Same as above — only inspect operator-owned sample files |
+| `vector-studio/` (sparse: `src/vector-studio` of `HeyPuter/everything`) | MIT | **Behavioral & algorithm reference for Phase V5 CorelDRAW features**: blend spines, envelope distort (warp/mesh/top-object), liquify tools, width profiles, dimension tools, gradient mesh — study interaction models and geometry, then reimplement in Rust | Read-only reference; JS/Canvas codebase is not architecturally portable (CoralCraft is Rust/egui); MIT permits porting but attribute in [`NOTICE`](../NOTICE) if any code is adapted; Puter-cloud collaboration worker is irrelevant; README feature claims unverified — trust the code, not the docs |
 
 ## B. Public Behavioral Documentation Sources (Cite URLs)
 
@@ -37,7 +38,7 @@
 
 ## D. Pinned Commits (`scripts/bootstrap-refs.sh`)
 
-Pinned on 2026-10-19 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
+Pinned on 2026-10-19, `vector-studio/` added 2026-10-21 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
 
 | Directory | Upstream | Pinned Commit |
 | --- | --- | --- |
@@ -52,3 +53,4 @@ Pinned on 2026-10-19 (keep `scripts/bootstrap-refs.sh` and this table synchroniz
 | `uniconvertor/` | `github.com/sk1project/uniconvertor` | `973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472` (AGPL — do not read source) |
 | `rea/` | `github.com/cyberkaida/reverse-engineering-assistant` | `a05a6b0a18649efd6d74ec8447bdadf8d468c365` |
 | `morluto-rea/` | `github.com/morluto/rea` | `ba866a26ecbe179a717e746cbc0d1605ae616ad5` |
+| `vector-studio/` | `github.com/HeyPuter/everything` | `75fec282dd56aa107eff8150cfcd63d2c3149192` (sparse: `src/vector-studio` only) |
