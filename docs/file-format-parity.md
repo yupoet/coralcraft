@@ -21,9 +21,9 @@ All `.cdr` and `.cmx` format knowledge is clean-room derived from public specifi
 | **Corel Presentation Exchange** | `.cmx` | CMX1 (`RIFF` LE / `RIFX` BE + `CMX1` / `cdr6`) | **Yes** (`Cmx` LE/BE) | **Yes** (`parse_document` baseline) | **Yes** (`coralcraft_cdr::write_cmx1`) | M3 / M6 (Delivered) |
 | **CoralCraft Native** | `.coralcraft` | Open ZIP container (`manifest.json` + `document.json` + `blobs/`) or single-file JSON | — | **Yes** (`Document::load_bytes`) | **Yes** (`save_json` / `save_zip`) | M2 (Delivered) |
 | **Scalable Vector Graphics** | `.svg` | SVG 1.1 | — | **Yes** (`coralcraft_doc::import_svg`) | **Yes** (`coralcraft_render::export_svg`) | M3 / M14 (Delivered) |
-| **Portable Document Format** | `.pdf` | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`) | — | — | **Yes** (`coralcraft_render::export_pdf`) | M3 / M9 (Delivered) |
+| **Portable Document Format** | `.pdf` | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`) | — | **Yes** (`coralcraft_doc::import_pdf`) | **Yes** (`coralcraft_render::export_pdf`) | M3 / M9 / M88 (Delivered) |
 | **Portable Network Graphics** | `.png` | RGBA8 PNG with 4×4 MSAA | — | — | **Yes** (`coralcraft_render::encode_png`) | M2 (Delivered) |
-| **Encapsulated PostScript** | `.eps` | PostScript / `EPSF-3.0` (`%%BoundingBox`, `%%HiResBoundingBox`, CMYK `setcmykcolor`, RGB `setrgbcolor`) | — | — | **Yes** (`coralcraft_render::export_eps`) | M14 (Delivered) |
+| **Encapsulated PostScript** | `.eps` | PostScript / `EPSF-3.0` (`%%BoundingBox`, `%%HiResBoundingBox`, CMYK `setcmykcolor`, RGB `setrgbcolor`) | — | **Yes** (`coralcraft_doc::import_eps`) | **Yes** (`coralcraft_render::export_eps`) | M14 / M88 (Delivered) |
 | **AutoCAD Drawing Exchange** | `.dxf` | ASCII DXF (`AC1009` / R12 `ENTITIES`: `LINE`, `POLYLINE`/`VERTEX`/`SEQEND`, `LWPOLYLINE`, `CIRCLE`) | — | **Yes** (`coralcraft_doc::import_dxf`) | **Yes** (`coralcraft_render::export_dxf`) | M14 (Delivered) |
 | **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot) | — | **Yes** (`parse_xml_palette` / `parse_binary_cpl`) | **Yes** (`to_xml_palette` / `serialize_binary_cpl`) | M2 / M7 / R5.4 (Delivered) |
 

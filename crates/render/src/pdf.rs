@@ -266,6 +266,24 @@ pub fn export_pdf_with_prepress(doc: &Document, prepress: &PrepressOptions) -> R
     serialize_pdf_objects_with_budget(&objects, MAX_PDF_EXPORT_BYTES)
 }
 
+fn emit_pdf_comment_chunks(out: &mut String, first_prefix: &str, cont_prefix: &str, b64: &str) {
+    let bytes = b64.as_bytes();
+    let mut off = 0usize;
+    let mut first = true;
+    while off < bytes.len() {
+        let end = off.saturating_add(180).min(bytes.len());
+        if let Some(slice) = b64.get(off..end) {
+            if first {
+                let _ = writeln!(out, "{first_prefix}{slice}");
+                first = false;
+            } else {
+                let _ = writeln!(out, "{cont_prefix}{slice}");
+            }
+        }
+        off = end;
+    }
+}
+
 fn build_page_content_stream(
     doc: &Document,
     page_index: usize,
@@ -274,12 +292,33 @@ fn build_page_content_stream(
     bleed: f64,
     prepress: &PrepressOptions,
 ) -> Result<String, RenderError> {
-    let layers = doc.effective_layers_for_page(page_index, true)?;
+    let all_layers: Vec<&coralcraft_doc::Layer> = doc
+        .effective_layers_for_page(page_index, false)?
+        .into_iter()
+        .filter(|l| l.printable || l.role != coralcraft_doc::LayerRole::Desktop || !l.objects.is_empty())
+        .collect();
     let page =
         doc.pages.get(page_index).ok_or(RenderError::Doc(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() }))?;
     let media_h = h + 2.0 * bleed;
 
     let mut s = String::new();
+    if page_index == 0 {
+        let doc_meta =
+            coralcraft_doc::DxfDocMeta { title: doc.title.clone(), units: doc.units, palette: doc.palette.clone(), residual: doc.residual.clone() };
+        if let Some(b64) = coralcraft_doc::encode_interchange_meta(&doc_meta) {
+            emit_pdf_comment_chunks(&mut s, "% CoralCraftDoc: ", "% CoralCraftDoc+: ", &b64);
+        }
+    }
+    let page_meta = coralcraft_doc::DxfPageMeta {
+        name: page.name.clone(),
+        bleed: page.bleed,
+        background: page.background.clone(),
+        residual: page.residual.clone(),
+    };
+    if let Some(b64) = coralcraft_doc::encode_interchange_meta(&page_meta) {
+        emit_pdf_comment_chunks(&mut s, "% CoralCraftPage: ", "% CoralCraftPage+: ", &b64);
+    }
+
     s.push_str("q\n");
     // Flip Y-axis so model space (origin top-left, +Y down) maps to PDF user space (origin bottom-left, +Y up)
     let _ = writeln!(s, "1 0 0 -1 0 {} cm", fmt_num(media_h));
@@ -289,17 +328,37 @@ fn build_page_content_stream(
 
     // Optional page background fill
     if let Some(bg) = &page.background {
+        s.push_str("% CoralCraftSkipBegin\n");
         let page_bbox = Rect::new(0.0, 0.0, w, h)?;
         let page_path = RectSpec::sharp(page_bbox).to_path()?;
         emit_pdf_fill(&mut s, &page_path, page_bbox, bg)?;
+        s.push_str("% CoralCraftSkipEnd\n");
     }
 
-    for layer in layers {
-        if layer.opacity.get() <= 0.0 {
-            continue;
+    for layer in all_layers {
+        let lmeta = coralcraft_doc::DxfLayerMeta {
+            name: layer.name.clone(),
+            role: layer.role,
+            visible: layer.visible,
+            printable: layer.printable,
+            locked: layer.locked,
+            master_in_front: layer.master_in_front,
+            opacity: layer.opacity,
+            residual: layer.residual.clone(),
+            is_master: layer.role != coralcraft_doc::LayerRole::Normal,
+        };
+        if let Some(b64) = coralcraft_doc::encode_interchange_meta(&lmeta) {
+            emit_pdf_comment_chunks(&mut s, "% CoralCraftLayer: ", "% CoralCraftLayer+: ", &b64);
         }
+        let draw_layer = layer.visible && layer.printable && layer.opacity.get() > 0.0;
         for node in &layer.objects {
-            emit_pdf_node(&mut s, node)?;
+            if let Some(b64) = coralcraft_doc::encode_interchange_meta(node) {
+                emit_pdf_comment_chunks(&mut s, "% CoralCraftNode: ", "% CoralCraftNode+: ", &b64);
+            }
+            if draw_layer {
+                emit_pdf_node(&mut s, node)?;
+            }
+            s.push_str("% CoralCraftEndNode\n");
         }
     }
 
@@ -826,5 +885,254 @@ mod tests {
         let err = serialize_pdf_objects_with_budget(&small, 32).unwrap_err();
         assert!(matches!(err, RenderError::ExportOutputTooLarge { max: 32, .. }));
         assert_eq!(MAX_PDF_EXPORT_BYTES, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn export_pdf_and_import_pdf_roundtrip_multipage_layers_primitives_text_bitmap_and_third_party_pdf_m88() {
+        use std::collections::BTreeMap;
+
+        use coralcraft_color::{FountainBlendMode, FountainStop, Palette, PaletteSwatch};
+        use coralcraft_doc::{
+            ArrowheadKind, ChunkTag, Layer, LayerId, LayerRole, LensKind, ObjectId, Page, PageId, ParagraphTextSpec, PatternKind, RawChunk,
+            RawPayload, Residual, TextAlignment, TransparencyStyle, UnsupportedObject, VectorEffect,
+        };
+        use coralcraft_geom::{EllipseSpec, PolygonSpec, Size, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "PDF Multi-Page Portfolio".to_owned();
+        doc.units = Unit::Inch;
+        doc.palette = Palette {
+            name: "PDF Press Swatches".to_owned(),
+            guid: None,
+            swatches: vec![PaletteSwatch { name: "Process Cyan".to_owned(), color: Color::cmyk(1.0, 0.0, 0.0, 0.0).unwrap() }],
+        };
+        doc.residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"pdfd"),
+            flags: 1,
+            slot: 0,
+            payload: RawPayload(vec![0x50, 0x44, 0x46]),
+            src_offset: 12,
+        });
+
+        // Page 1 setup
+        {
+            let p1 = doc.pages.first_mut().unwrap();
+            p1.name = "Page 1 - Cover".to_owned();
+            p1.size = Size::new(612.0, 792.0).unwrap();
+            p1.bleed = F64::new(9.0).unwrap();
+            p1.background = Some(FillStyle::uniform(Color::rgb8(250, 248, 240)));
+            p1.residual.chunks.push(RawChunk { tag: ChunkTag(*b"pdfp"), flags: 2, slot: 1, payload: RawPayload(vec![1, 2]), src_offset: 20 });
+            let l1 = p1.layers.first_mut().unwrap();
+            l1.name = "Cover Graphics".to_owned();
+            let poly = PolygonSpec::star(Point::new(300.0, 250.0).unwrap(), 90.0, 40.5, 5, 0.0).unwrap();
+            let mut star_node = ObjectNode::new(
+                ObjectId(1),
+                Some("CoverStar".to_owned()),
+                ObjectKind::Polygon(poly),
+                Some(FillStyle::Fountain {
+                    geometry: FountainGeometry::Radial {
+                        center_x: F64::new(0.5).unwrap(),
+                        center_y: F64::new(0.5).unwrap(),
+                        focal_x: F64::new(0.5).unwrap(),
+                        focal_y: F64::new(0.5).unwrap(),
+                        radius: F64::new(0.7).unwrap(),
+                    },
+                    blend_mode: FountainBlendMode::Direct,
+                    stops: vec![
+                        FountainStop::new(0.0, Color::rgb8(255, 230, 50)).unwrap(),
+                        FountainStop::new(1.0, Color::rgb8(220, 40, 20)).unwrap(),
+                    ],
+                }),
+                Some(OutlineStyle {
+                    width_pt: F64::new(2.0).unwrap(),
+                    color: Color::BLACK,
+                    cap: LineCap::Round,
+                    join: LineJoin::Round,
+                    miter_limit: F64::new(4.0).unwrap(),
+                    behind_fill: false,
+                    scale_with_object: true,
+                    dash_pattern: vec![F64::new(8.0).unwrap(), F64::new(4.0).unwrap()],
+                    start_arrow: ArrowheadKind::None,
+                    end_arrow: ArrowheadKind::Triangle,
+                }),
+            );
+            star_node.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(1.5).unwrap() } });
+            star_node.effects.push(VectorEffect::Contour { steps: 1, offset_pt: F64::new(5.0).unwrap(), inside: true });
+            star_node.powerclip_children.push(ObjectNode::new(
+                ObjectId(2),
+                Some("InnerBadge".to_owned()),
+                ObjectKind::Ellipse(EllipseSpec::full(Rect::new(260.0, 210.0, 340.0, 290.0).unwrap())),
+                Some(FillStyle::uniform(Color::rgb8(255, 255, 255))),
+                None,
+            ));
+            l1.objects.push(star_node);
+        }
+
+        // Page 2 setup
+        let mut p2_layer = Layer::new_normal(LayerId(3), "Spread Content");
+        let pspec = ParagraphTextSpec::new(
+            Point::new(30.0, 40.0).unwrap(),
+            220.0,
+            120.0,
+            "Multi-page PDF 1.4 round-trip\nWith paragraph text and bitmaps".to_owned(),
+            "Helvetica",
+            14.0,
+            1.2,
+            TextAlignment::Left,
+            1,
+            12.0,
+        )
+        .unwrap();
+        p2_layer.objects.push(ObjectNode::new(
+            ObjectId(3),
+            Some("BodyCopy".to_owned()),
+            ObjectKind::ParagraphText(Box::new(pspec.clone())),
+            Some(FillStyle::TwoColorPattern {
+                kind: PatternKind::Checkerboard,
+                fg_color: Color::rgb8(20, 20, 20),
+                bg_color: Color::rgb8(240, 240, 240),
+                tile_size_pt: F64::new(12.0).unwrap(),
+            }),
+            None,
+        ));
+        p2_layer.objects.push(ObjectNode::new(
+            ObjectId(4),
+            Some("InlineThumb".to_owned()),
+            ObjectKind::Bitmap {
+                pixel_width: 2,
+                pixel_height: 1,
+                dpi_x: F64::new(72.0).unwrap(),
+                dpi_y: F64::new(72.0).unwrap(),
+                rgba_pixels: vec![10, 20, 30, 255, 200, 210, 220, 255],
+            },
+            None,
+            None,
+        ));
+        let unsup = UnsupportedObject {
+            tag: ChunkTag(*b"pdfu"),
+            class_hint: Some("CustomPdfAnnot".to_owned()),
+            payload: RawPayload(vec![0xCA, 0xFE]),
+            fallback_bounds: Some(Rect::new(300.0, 100.0, 420.0, 180.0).unwrap()),
+            absolute_geometry: false,
+            children: Vec::new(),
+            residual: Residual::default(),
+        };
+        p2_layer.objects.push(ObjectNode::new(
+            ObjectId(5),
+            Some("UnsupportedPdfObj".to_owned()),
+            ObjectKind::Unsupported(unsup.clone()),
+            Some(FillStyle::Unknown { tag: ChunkTag(*b"ufpd"), payload: RawPayload(vec![4, 5, 6]) }),
+            Some(OutlineStyle::hairline(Color::Registration)),
+        ));
+        let p2 = Page {
+            id: PageId(2),
+            name: "Page 2 - Inside Spread".to_owned(),
+            size: Size::new(500.0, 350.0).unwrap(),
+            bleed: F64::ZERO,
+            background: None,
+            layers: vec![p2_layer],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        };
+        doc.pages.push(p2);
+
+        let mut master = Layer::new_normal(LayerId(10), "PDF Master Header");
+        master.role = LayerRole::MasterAllPages;
+        master.objects.push(ObjectNode::new(
+            ObjectId(6),
+            Some("RunningHeader".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "CoralCraft Portfolio".to_owned(),
+                font_family: "Helvetica".to_owned(),
+                size_pt: F64::new(10.0).unwrap(),
+                position: Point::new(36.0, 24.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        ));
+        doc.master_layers.push(master);
+
+        let pdf_bytes = export_pdf(&doc).expect("export_pdf M88");
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4\n"));
+
+        let reimported = coralcraft_doc::import_pdf(&pdf_bytes).expect("import_pdf lossless round-trip M88");
+        assert_eq!(reimported.title, "PDF Multi-Page Portfolio");
+        assert_eq!(reimported.units, Unit::Inch);
+        assert_eq!(reimported.palette, doc.palette);
+        assert_eq!(reimported.residual, doc.residual);
+        assert_eq!(reimported.pages.len(), 2);
+
+        let rp1 = reimported.pages.first().unwrap();
+        assert_eq!(rp1.name, "Page 1 - Cover");
+        assert_eq!(rp1.size, Size::new(612.0, 792.0).unwrap());
+        assert_eq!(rp1.bleed, F64::new(9.0).unwrap());
+        assert_eq!(rp1.background, doc.pages.first().unwrap().background);
+        assert_eq!(rp1.residual, doc.pages.first().unwrap().residual);
+        let rl1 = rp1.layers.first().unwrap();
+        assert_eq!(rl1.name, "Cover Graphics");
+        assert_eq!(rl1.objects.len(), 1);
+        let rstar = rl1.objects.first().unwrap();
+        assert_eq!(rstar.name.as_deref(), Some("CoverStar"));
+        assert_eq!(rstar.effects.len(), 1);
+        assert_eq!(rstar.powerclip_children.len(), 1);
+        assert_eq!(rstar.transparency, Some(TransparencyStyle::Lens { kind: LensKind::Magnify { factor: F64::new(1.5).unwrap() } }));
+
+        let rp2 = reimported.pages.get(1).unwrap();
+        assert_eq!(rp2.name, "Page 2 - Inside Spread");
+        assert_eq!(rp2.size, Size::new(500.0, 350.0).unwrap());
+        let rl2 = rp2.layers.iter().find(|l| l.name == "Spread Content").expect("Spread Content layer");
+        assert_eq!(rl2.objects.len(), 3);
+        assert_eq!(rl2.objects.first().unwrap().kind, ObjectKind::ParagraphText(Box::new(pspec)));
+        assert!(matches!(rl2.objects.get(1).unwrap().kind, ObjectKind::Bitmap { pixel_width: 2, pixel_height: 1, .. }));
+        assert_eq!(rl2.objects.get(2).unwrap().kind, ObjectKind::Unsupported(unsup));
+
+        let rmaster = reimported.master_layers.iter().find(|l| l.name == "PDF Master Header").expect("PDF Master Header in master_layers");
+        assert_eq!(rmaster.role, LayerRole::MasterAllPages);
+        assert_eq!(rmaster.objects.len(), 1);
+
+        // Part 2: Handcrafted third-party uncompressed PDF 1.4 (no CoralCraft metadata comments)
+        let third_party_stream = "\
+q
+1 0 0 RG
+2 w 1 J 1 j 4 M [6 3] 0 d
+20 260 m 120 260 l 160 260 180 220 180 180 c S
+0 0.6 0.2 0 k
+40 60 100 80 re f
+BT /F1 16 Tf 1 0 0 1 30 220 Tm (Third-Party \\(PDF\\)) Tj ET
+q
+20 0 0 10 200 100 cm
+BI
+/W 2
+/H 1
+/CS /DeviceRGB
+/BPC 8
+/F /AHx
+ID
+FF000000FF00>
+EI
+Q
+Q
+";
+        let third_party_objects = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 300] /TrimBox [10 10 390 290] /Contents 5 0 R >>".to_vec(),
+            format!("<< /Length {} >>\nstream\n{third_party_stream}endstream", third_party_stream.len()).into_bytes(),
+        ];
+        let tp_pdf = serialize_pdf_objects_with_budget(&third_party_objects, MAX_PDF_EXPORT_BYTES).unwrap();
+        let tp_doc = coralcraft_doc::import_pdf(&tp_pdf).expect("import third-party PDF");
+        assert_eq!(tp_doc.pages.len(), 1);
+        let tp_page = tp_doc.pages.first().unwrap();
+        assert_eq!(tp_page.size, Size::new(380.0, 280.0).unwrap());
+        assert_eq!(tp_page.bleed, F64::new(10.0).unwrap());
+        let tp_objs = &tp_page.layers.first().unwrap().objects;
+        assert_eq!(tp_objs.len(), 4);
+        assert!(matches!(tp_objs.first().unwrap().kind, ObjectKind::Path(_)));
+        assert!(tp_objs.first().unwrap().outline.is_some());
+        assert!(matches!(tp_objs.get(1).unwrap().kind, ObjectKind::Rect(_) | ObjectKind::Path(_)));
+        assert!(tp_objs.get(1).unwrap().fill.is_some());
+        assert!(matches!(&tp_objs.get(2).unwrap().kind, ObjectKind::ArtisticText { text, .. } if text == "Third-Party (PDF)"));
+        assert!(matches!(&tp_objs.get(3).unwrap().kind, ObjectKind::Bitmap { pixel_width: 2, pixel_height: 1, .. }));
     }
 }

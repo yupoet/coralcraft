@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use coralcraft_cdr::{CdrContainer, ProbeError, ProbeReport, parse_document};
 use coralcraft_color::{ColorError, load_palette_bytes};
-use coralcraft_doc::{DocError, Document, import_dxf, import_svg, load_bytes, save_json, save_zip};
+use coralcraft_doc::{DocError, Document, import_dxf, import_eps, import_pdf, import_svg, load_bytes, save_json, save_zip};
 use coralcraft_engine::ActivePageTarget;
 use coralcraft_render::{RenderOpts, export_dxf, export_eps, export_pdf, export_svg, render_page};
 use coralcraft_ui_egui::DesktopWorkspace;
@@ -181,7 +181,7 @@ fn read_bounded_file(subcmd: &str, file: &str) -> Result<Vec<u8>, ExitCode> {
     })
 }
 
-/// Loads a native `.coralcraft`, `.svg`, `.dxf`, or `.cdr`/`.cmx` document.
+/// Loads a native `.coralcraft`, `.svg`, `.dxf`, `.eps`, `.pdf`, or `.cdr`/`.cmx` document.
 fn load_any_document(subcmd: &str, input: &str, bytes: &[u8]) -> Result<(Document, Vec<String>), ExitCode> {
     let ext = Path::new(input).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     if ext == "svg" {
@@ -201,6 +201,22 @@ fn load_any_document(subcmd: &str, input: &str, bytes: &[u8]) -> Result<(Documen
         })?;
         return import_dxf(text).map(|doc| (doc, Vec::new())).map_err(|e| {
             eprintln!("coralcraft-cli {subcmd}: failed to import DXF '{input}': {e}");
+            ExitCode::from(5)
+        });
+    }
+    if ext == "eps" {
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: invalid UTF-8 in EPS '{input}': {e}");
+            ExitCode::from(5)
+        })?;
+        return import_eps(text).map(|doc| (doc, Vec::new())).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: failed to import EPS '{input}': {e}");
+            ExitCode::from(5)
+        });
+    }
+    if ext == "pdf" {
+        return import_pdf(bytes).map(|doc| (doc, Vec::new())).map_err(|e| {
+            eprintln!("coralcraft-cli {subcmd}: failed to import PDF '{input}': {e}");
             ExitCode::from(5)
         });
     }

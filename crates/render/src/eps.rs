@@ -71,9 +71,31 @@ fn node_fill_color(node: &ObjectNode) -> Option<&Color> {
     })
 }
 
+fn emit_dsc_comment_chunks(out: &mut String, first_prefix: &str, cont_prefix: &str, b64: &str) {
+    let bytes = b64.as_bytes();
+    let mut off = 0usize;
+    let mut first = true;
+    while off < bytes.len() {
+        let end = off.saturating_add(180).min(bytes.len());
+        if let Some(slice) = b64.get(off..end) {
+            if first {
+                let _ = writeln!(out, "{first_prefix}{slice}");
+                first = false;
+            } else {
+                let _ = writeln!(out, "{cont_prefix}{slice}");
+            }
+        }
+        off = end;
+    }
+}
+
 /// Exports `page_index` (0-based) of `doc` as a clean-room Encapsulated PostScript (`%!PS-Adobe-3.0 EPSF-3.0`) document.
 pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderError> {
-    let layers = doc.effective_layers_for_page(page_index, true)?;
+    let layers: Vec<&coralcraft_doc::Layer> = doc
+        .effective_layers_for_page(page_index, false)?
+        .into_iter()
+        .filter(|l| l.printable || l.role != coralcraft_doc::LayerRole::Desktop || !l.objects.is_empty())
+        .collect();
     let page = doc.pages.get(page_index).ok_or(coralcraft_doc::DocError::PageOutOfRange { index: page_index, count: doc.pages.len() })?;
     let w = page.size.width.get();
     let h = page.size.height.get();
@@ -85,16 +107,50 @@ pub fn export_eps(doc: &Document, page_index: usize) -> Result<String, RenderErr
     let _ = writeln!(out, "%%BoundingBox: 0 0 {} {}", w.ceil() as i64, h.ceil() as i64);
     let _ = writeln!(out, "%%HiResBoundingBox: 0 0 {} {}", fmt_num(w), fmt_num(h));
     out.push_str("%%LanguageLevel: 2\n");
+    let doc_meta =
+        coralcraft_doc::DxfDocMeta { title: doc.title.clone(), units: doc.units, palette: doc.palette.clone(), residual: doc.residual.clone() };
+    if let Some(b64) = coralcraft_doc::encode_interchange_meta(&doc_meta) {
+        emit_dsc_comment_chunks(&mut out, "%%CoralCraftDoc: ", "%%+ ", &b64);
+    }
+    let page_meta = coralcraft_doc::DxfPageMeta {
+        name: page.name.clone(),
+        bleed: page.bleed,
+        background: page.background.clone(),
+        residual: page.residual.clone(),
+    };
+    if let Some(b64) = coralcraft_doc::encode_interchange_meta(&page_meta) {
+        emit_dsc_comment_chunks(&mut out, "%%CoralCraftPage: ", "%%+ ", &b64);
+    }
     out.push_str("%%EndComments\n");
     out.push_str("gsave\n");
 
     for layer in layers {
-        if !layer.visible || layer.opacity.get() <= 0.0 {
-            continue;
+        let lmeta = coralcraft_doc::DxfLayerMeta {
+            name: layer.name.clone(),
+            role: layer.role,
+            visible: layer.visible,
+            printable: layer.printable,
+            locked: layer.locked,
+            master_in_front: layer.master_in_front,
+            opacity: layer.opacity,
+            residual: layer.residual.clone(),
+            is_master: layer.role != coralcraft_doc::LayerRole::Normal,
+        };
+        if let Some(b64) = coralcraft_doc::encode_interchange_meta(&lmeta) {
+            emit_dsc_comment_chunks(&mut out, "% CoralCraftLayer: ", "% CoralCraftLayer+: ", &b64);
         }
-        let _ = writeln!(out, "% Layer: {}", sanitize_ps_text(&layer.name));
+        let draw_layer = layer.visible && layer.printable && layer.opacity.get() > 0.0;
+        if draw_layer {
+            let _ = writeln!(out, "% Layer: {}", sanitize_ps_text(&layer.name));
+        }
         for node in &layer.objects {
-            emit_eps_node(&mut out, node, Affine2::IDENTITY, h)?;
+            if let Some(b64) = coralcraft_doc::encode_interchange_meta(node) {
+                emit_dsc_comment_chunks(&mut out, "% CoralCraftNode: ", "% CoralCraftNode+: ", &b64);
+            }
+            if draw_layer {
+                emit_eps_node(&mut out, node, Affine2::IDENTITY, h)?;
+            }
+            out.push_str("% CoralCraftEndNode\n");
         }
     }
 
@@ -2712,5 +2768,281 @@ mod tests {
         assert_eq!(rmaster.role, LayerRole::MasterAllPages);
         assert!(rmaster.master_in_front);
         assert_eq!(rmaster.objects.len(), 1);
+    }
+
+    #[test]
+    fn export_eps_and_import_eps_roundtrip_dsc_comments_layers_primitives_text_bitmap_and_third_party_ps_m88() {
+        use coralcraft_color::{FountainBlendMode, FountainStop, Palette, PaletteSwatch};
+        use coralcraft_doc::{
+            ArrowheadKind, ChunkTag, Layer, LayerId, LayerRole, LensKind, ObjectId, ParagraphTextSpec, PatternKind, RawChunk, RawPayload,
+            TextAlignment, TransparencyStyle, UnsupportedObject,
+        };
+        use coralcraft_geom::{CornerKind, EllipseSpec, F64, PolygonSpec, Size, Unit};
+
+        let mut doc = Document::new_a4_portrait();
+        doc.title = "EPS Prepress Spec".to_owned();
+        doc.units = Unit::Pt;
+        doc.palette = Palette {
+            name: "EPS Custom Palette".to_owned(),
+            guid: None,
+            swatches: vec![PaletteSwatch {
+                name: "Pantone Reflex".to_owned(),
+                color: Color::spot("PANTONE Reflex Blue C", 0.9, [1.0, 0.72, 0.0, 0.06]).unwrap(),
+            }],
+        };
+        doc.residual.chunks.push(RawChunk { tag: ChunkTag(*b"epsd"), flags: 1, slot: 2, payload: RawPayload(vec![0xE0, 0xE1]), src_offset: 8 });
+
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.name = "Plate 1 - Front Cover".to_owned();
+            page.size = Size::new(500.0, 400.0).unwrap();
+            page.bleed = F64::new(9.0).unwrap();
+            page.background = Some(FillStyle::uniform(Color::cmyk(0.02, 0.01, 0.05, 0.0).unwrap()));
+            page.residual.chunks.push(RawChunk { tag: ChunkTag(*b"epsp"), flags: 2, slot: 1, payload: RawPayload(vec![0xA1, 0xA2]), src_offset: 16 });
+            let layer = page.layers.first_mut().unwrap();
+            layer.name = "Vector Plates".to_owned();
+            layer.opacity = F64::new(0.9).unwrap();
+            layer.residual.chunks.push(RawChunk { tag: ChunkTag(*b"epsl"), flags: 3, slot: 0, payload: RawPayload(vec![0xB1]), src_offset: 24 });
+        }
+
+        // Object 1: Polygon with Fountain fill, outline, live Contour effect, and PowerClip child
+        let poly_spec = PolygonSpec::star(Point::new(150.0, 140.0).unwrap(), 60.0, 30.0, 6, 15.0).unwrap();
+        let mut obj1 = ObjectNode::new(
+            ObjectId(1),
+            Some("HexStar".to_owned()),
+            ObjectKind::Polygon(poly_spec),
+            Some(FillStyle::Fountain {
+                geometry: coralcraft_doc::FountainGeometry::Linear { angle_deg: F64::new(30.0).unwrap(), edge_pad: F64::new(0.05).unwrap() },
+                blend_mode: FountainBlendMode::Direct,
+                stops: vec![
+                    FountainStop::with_midpoint(0.0, 0.4, Color::rgb8(240, 40, 80)).unwrap(),
+                    FountainStop::new(1.0, Color::rgb8(20, 120, 250)).unwrap(),
+                ],
+            }),
+            Some(OutlineStyle {
+                width_pt: F64::new(1.5).unwrap(),
+                color: Color::cmyk(0.0, 1.0, 1.0, 0.0).unwrap(),
+                cap: LineCap::Round,
+                join: LineJoin::Bevel,
+                miter_limit: F64::new(6.0).unwrap(),
+                behind_fill: true,
+                scale_with_object: true,
+                dash_pattern: vec![F64::new(6.0).unwrap(), F64::new(3.0).unwrap()],
+                start_arrow: ArrowheadKind::Triangle,
+                end_arrow: ArrowheadKind::Circle,
+            }),
+        );
+        obj1.transform = Affine2::new(1.1, 0.05, -0.05, 1.05, 12.5, -8.25).unwrap();
+        obj1.transparency = Some(TransparencyStyle::Lens { kind: LensKind::Brighten { rate: F64::new(0.35).unwrap() } });
+        obj1.effects.push(VectorEffect::Contour { steps: 1, offset_pt: F64::new(4.0).unwrap(), inside: false });
+        obj1.powerclip_children.push(ObjectNode::new(
+            ObjectId(2),
+            Some("ClippedCircle".to_owned()),
+            ObjectKind::Ellipse(EllipseSpec::full(Rect::new(120.0, 110.0, 180.0, 170.0).unwrap())),
+            Some(FillStyle::uniform(Color::rgb8(0, 200, 120))),
+            None,
+        ));
+
+        // Object 2: ArtisticText + ParagraphText + Bitmap + UnsupportedObject on Layer 2
+        let obj_text = ObjectNode::new(
+            ObjectId(3),
+            Some("HeadlineText".to_owned()),
+            ObjectKind::ArtisticText {
+                text: "Clean-Room (EPS) Plate".to_owned(),
+                font_family: "Helvetica".to_owned(),
+                size_pt: F64::new(18.0).unwrap(),
+                position: Point::new(40.0, 320.0).unwrap(),
+            },
+            Some(FillStyle::uniform(Color::BLACK)),
+            None,
+        );
+        let pspec = ParagraphTextSpec::new(
+            Point::new(260.0, 40.0).unwrap(),
+            200.0,
+            100.0,
+            "Paragraph frame in EPS\nSecond line".to_owned(),
+            "Times-Roman",
+            12.0,
+            1.25,
+            TextAlignment::Center,
+            2,
+            10.0,
+        )
+        .unwrap();
+        let obj_para = ObjectNode::new(
+            ObjectId(4),
+            Some("ColophonFrame".to_owned()),
+            ObjectKind::ParagraphText(Box::new(pspec.clone())),
+            Some(FillStyle::TwoColorPattern {
+                kind: PatternKind::PolkaDot,
+                fg_color: Color::rgb8(30, 60, 90),
+                bg_color: Color::rgb8(240, 240, 250),
+                tile_size_pt: F64::new(10.0).unwrap(),
+            }),
+            Some(OutlineStyle::hairline(Color::Registration)),
+        );
+        let obj_bmp = ObjectNode::new(
+            ObjectId(5),
+            Some("SwatchBitmap".to_owned()),
+            ObjectKind::Bitmap {
+                pixel_width: 2,
+                pixel_height: 1,
+                dpi_x: F64::new(144.0).unwrap(),
+                dpi_y: F64::new(144.0).unwrap(),
+                rgba_pixels: vec![255, 0, 0, 255, 0, 255, 0, 255],
+            },
+            None,
+            None,
+        );
+        let unsup = UnsupportedObject {
+            tag: ChunkTag(*b"epsu"),
+            class_hint: Some("CustomPostScriptProc".to_owned()),
+            payload: RawPayload(vec![0x11, 0x22, 0x33]),
+            fallback_bounds: Some(Rect::new(300.0, 220.0, 380.0, 280.0).unwrap()),
+            absolute_geometry: false,
+            children: Vec::new(),
+            residual: coralcraft_doc::Residual::default(),
+        };
+        let obj_unsup = ObjectNode::new(
+            ObjectId(6),
+            Some("UnsupportedEpsNode".to_owned()),
+            ObjectKind::Unsupported(unsup.clone()),
+            Some(FillStyle::Unknown { tag: ChunkTag(*b"ufep"), payload: RawPayload(vec![9, 8, 7]) }),
+            None,
+        );
+
+        {
+            let page = doc.pages.first_mut().unwrap();
+            page.layers.first_mut().unwrap().objects.push(obj1.clone());
+            let mut layer2 = Layer::new_normal(LayerId(5), "Typography & Raster");
+            layer2.printable = false;
+            layer2.objects.push(obj_text.clone());
+            layer2.objects.push(obj_para.clone());
+            layer2.objects.push(obj_bmp.clone());
+            layer2.objects.push(obj_unsup.clone());
+            page.layers.push(layer2);
+        }
+
+        let mut master = Layer::new_normal(LayerId(9), "EPS Master Guides");
+        master.role = LayerRole::MasterAllPages;
+        master.master_in_front = true;
+        master.objects.push(ObjectNode::new(
+            ObjectId(7),
+            Some("MasterBorder".to_owned()),
+            ObjectKind::Rect(RectSpec::uniform(Rect::new(5.0, 5.0, 495.0, 395.0).unwrap(), 4.0, CornerKind::Chamfered).unwrap()),
+            None,
+            Some(OutlineStyle::hairline(Color::BLACK)),
+        ));
+        doc.master_layers.push(master);
+
+        let eps = export_eps(&doc, 0).expect("export_eps M88");
+        assert!(eps.starts_with("%!PS-Adobe-3.0 EPSF-3.0\n"));
+        assert!(eps.contains("%%CoralCraftDoc:"));
+        assert!(eps.contains("%%CoralCraftPage:"));
+        for line in eps.lines() {
+            if line.starts_with('%') {
+                assert!(line.len() <= 255, "DSC comment line exceeds 255 chars ({} chars): {line}", line.len());
+            }
+        }
+
+        let reimported = coralcraft_doc::import_eps(&eps).expect("import_eps lossless round-trip M88");
+        assert_eq!(reimported.title, "EPS Prepress Spec");
+        assert_eq!(reimported.units, Unit::Pt);
+        assert_eq!(reimported.palette, doc.palette);
+        assert_eq!(reimported.residual, doc.residual);
+
+        let rpage = reimported.pages.first().unwrap();
+        assert_eq!(rpage.name, "Plate 1 - Front Cover");
+        assert_eq!(rpage.size, Size::new(500.0, 400.0).unwrap());
+        assert_eq!(rpage.bleed, F64::new(9.0).unwrap());
+        assert_eq!(rpage.background, doc.pages.first().unwrap().background);
+        assert_eq!(rpage.residual, doc.pages.first().unwrap().residual);
+        assert_eq!(rpage.layers.len(), 2);
+
+        let rl1 = rpage.layers.first().unwrap();
+        assert_eq!(rl1.name, "Vector Plates");
+        assert_eq!(rl1.opacity, F64::new(0.9).unwrap());
+        assert_eq!(rl1.residual, doc.pages.first().unwrap().layers.first().unwrap().residual);
+        assert_eq!(rl1.objects.len(), 1);
+        let robj1 = rl1.objects.first().unwrap();
+        assert_eq!(robj1.name.as_deref(), Some("HexStar"));
+        assert_eq!(robj1.kind, ObjectKind::Polygon(poly_spec));
+        assert_eq!(robj1.fill, obj1.fill);
+        assert_eq!(robj1.outline, obj1.outline);
+        assert_eq!(robj1.transform, obj1.transform);
+        assert_eq!(robj1.transparency, obj1.transparency);
+        assert_eq!(robj1.effects, obj1.effects);
+        assert_eq!(robj1.powerclip_children.len(), 1);
+
+        let rl2 = rpage.layers.get(1).unwrap();
+        assert_eq!(rl2.name, "Typography & Raster");
+        assert!(!rl2.printable);
+        assert_eq!(rl2.objects.len(), 4);
+        assert_eq!(rl2.objects.first().unwrap().kind, obj_text.kind);
+        assert_eq!(rl2.objects.get(1).unwrap().kind, ObjectKind::ParagraphText(Box::new(pspec)));
+        assert_eq!(rl2.objects.get(2).unwrap().kind, obj_bmp.kind);
+        assert_eq!(rl2.objects.get(3).unwrap().kind, ObjectKind::Unsupported(unsup));
+        assert_eq!(rl2.objects.get(3).unwrap().fill, obj_unsup.fill);
+
+        let rmaster = reimported.master_layers.iter().find(|l| l.name == "EPS Master Guides").expect("master layer round-tripped");
+        assert_eq!(rmaster.role, LayerRole::MasterAllPages);
+        assert!(rmaster.master_in_front);
+        assert_eq!(rmaster.objects.len(), 1);
+
+        // Part 2: Handcrafted third-party EPSF-3.0 (no CoralCraft DSC metadata)
+        let third_party_eps = "\
+%!PS-Adobe-3.0 EPSF-3.0
+%%Title: (Third Party Diagram)
+%%BoundingBox: 10 20 310 220
+%%HiResBoundingBox: 10.0 20.0 310.0 220.0
+%%EndComments
+gsave
+% Layer: CAD Curves
+1 0 0 setrgbcolor
+2 setlinewidth
+1 setlinecap
+2 setlinejoin
+[4 2] 0 setdash
+newpath
+20 40 moveto
+110 40 lineto
+110 80 150 120 190 120 curveto
+closepath
+stroke
+0 0.5 1 0 setcmykcolor
+newpath
+30 60 moveto
+80 60 lineto
+80 110 lineto
+closepath
+eofill
+0.25 setgray
+50 70 40 30 rectfill
+/Helvetica findfont 16 scalefont setfont
+25 180 moveto
+(Hello \\(EPS\\)) show
+gsave
+40 50 translate
+20 10 scale
+2 1 8 [2 0 0 -1 0 1]
+currentfile /ASCIIHexDecode filter false 3 colorimage
+ff000000ff00>
+grestore
+grestore
+showpage
+%%EOF
+";
+        let tp_doc = coralcraft_doc::import_eps(third_party_eps).expect("import third-party EPS");
+        let tp_page = tp_doc.pages.first().unwrap();
+        assert_eq!(tp_page.name, "Third Party Diagram");
+        assert_eq!(tp_page.size, Size::new(300.0, 200.0).unwrap());
+        let tp_layer = tp_page.layers.iter().find(|l| l.name == "CAD Curves").expect("CAD Curves layer");
+        assert_eq!(tp_layer.objects.len(), 5);
+        assert!(matches!(tp_layer.objects.first().unwrap().kind, ObjectKind::Path(_)));
+        assert!(tp_layer.objects.first().unwrap().outline.is_some());
+        assert!(matches!(tp_layer.objects.get(1).unwrap().kind, ObjectKind::Path(_)));
+        assert!(matches!(tp_layer.objects.get(2).unwrap().kind, ObjectKind::Rect(_) | ObjectKind::Path(_)));
+        assert!(matches!(&tp_layer.objects.get(3).unwrap().kind, ObjectKind::ArtisticText { text, .. } if text == "Hello (EPS)"));
+        assert!(matches!(&tp_layer.objects.get(4).unwrap().kind, ObjectKind::Bitmap { pixel_width: 2, pixel_height: 1, .. }));
     }
 }

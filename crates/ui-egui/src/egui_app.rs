@@ -128,7 +128,7 @@ impl CoralCraftApp {
         }
     }
 
-    /// Loads a document from `path` (`.coralcraft`, `.cdr`, `.cmx`, `.svg`, `.dxf`).
+    /// Loads a document from `path` (`.coralcraft`, `.cdr`, `.cmx`, `.svg`, `.dxf`, `.eps`, `.pdf`).
     pub fn open_from_path(&mut self, path: &Path) -> Result<(), String> {
         let bytes = std::fs::read(path).map_err(|e| format!("failed to read `{}`: {e}", path.display()))?;
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -138,6 +138,11 @@ impl CoralCraftApp {
         } else if ext == "dxf" {
             let text = std::str::from_utf8(&bytes).map_err(|e| format!("invalid UTF-8 in DXF: {e}"))?;
             coralcraft_doc::import_dxf(text).map_err(|e| format!("DXF import error: {e}"))?
+        } else if ext == "eps" {
+            let text = std::str::from_utf8(&bytes).map_err(|e| format!("invalid UTF-8 in EPS: {e}"))?;
+            coralcraft_doc::import_eps(text).map_err(|e| format!("EPS import error: {e}"))?
+        } else if ext == "pdf" {
+            coralcraft_doc::import_pdf(&bytes).map_err(|e| format!("PDF import error: {e}"))?
         } else if let Ok(doc) = coralcraft_doc::load_bytes(&bytes) {
             doc
         } else {
