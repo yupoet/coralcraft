@@ -130,6 +130,11 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/ui-egui/src/io.rs` asks `"cdr"` options on `SaveMode::SaveAs` only, matching `"vectorcraft"` and `"ai"`.
 - `crates/mcp/src/tools.rs` mentions `cdr` and `cmx` in the `export` tool description.
 
+### V1.4 `libcdr` differential oracle and real-sample checks on the VectorCraft pipeline (2026-10-22)
+
+- `crates/corel-import/src/lib.rs` adds `CdrImportMetrics` and `document_metrics(&vectorcraft_doc::Document)` for structural verification (`page_count`, `layer_count`, `object_count`).
+- `crates/corel-import/tests/oracle_and_samples.rs` and `crates/engine/src/cmd/fileio/tests.rs` verify `cdr2raw`/`cmx2raw` differential oracle acceptance and exact page/layer/object counts across all real-world `.cdr` samples in `refs/cdr-samples`.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

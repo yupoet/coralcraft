@@ -27,7 +27,7 @@ What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX 
 | Phase | Goal | Exit criterion |
 |---|---|---|
 | **V0** | Fork import and green build | VectorCraft test suite passes in this repo; app runs as CoralCraft (rebranded) |
-| **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.3` done: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1) |
+| **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.4` DONE: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1, `cdr2raw`/`cmx2raw` oracle & real-sample counts) |
 | **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft` round-trips losslessly |
 | **V3** | CorelDRAW multi-page model | Pages, master layers (all/odd/even), desktop layer, page navigator |
 | **V4** | CorelDRAW workspace | Toolbox, property bar, palette bar, dockers, CorelDRAW shortcut set |

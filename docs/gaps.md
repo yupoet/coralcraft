@@ -14,7 +14,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] V1.1 Map `coralcraft-cdr` parse output onto the VectorCraft `Document` (`corel-import`), with lossless residuals.
 - [x] V1.2 `.cdr`/`.cmx` in Open/Place tables and MCP `file.open`.
 - [x] V1.3 CDR7/CDRX/CMX1 writers on the VectorCraft `Document`; Save As/Export entries.
-- [ ] V1.4 libcdr differential tests and real-sample checks on the new pipeline (correct page/layer/object counts, not "no crash").
+- [x] V1.4 libcdr differential tests and real-sample checks on the new pipeline (correct page/layer/object counts, not "no crash").
 - [ ] V2.1 Compatibility matrix test over every VectorCraft `FORMATS` entry (CI fails on a missing format).
 - [ ] V2.2 `.vectorcraft`/`.drawcraft`/`.vctemplate` lossless; CoralCraft-only data in a namespaced extension block.
 - [ ] V2.3 Legacy `.coralcraft` import converter.

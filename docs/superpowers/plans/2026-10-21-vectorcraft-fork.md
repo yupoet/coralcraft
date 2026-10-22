@@ -56,7 +56,7 @@ Rules:
 - [x] V1.1 Port `coralcraft-cdr` `parse_document` output to the VectorCraft `Document` (via a `corel-import` mapping layer). Unsupported CDR objects keep a lossless residual.
 - [x] V1.2 `.cdr` / `.cmx` appear in the Open/Place format tables (`FORMATS`, `OPEN_EXTS`, `PLACE_EXTS`) and in MCP `file.open`.
 - [x] V1.3 CDR7 / CDRX / CMX1 writers consume the VectorCraft `Document`. Add Save As / Export entries.
-- [ ] V1.4 Re-point the libcdr `cdr2raw` differential tests and the real-sample probe (`refs/cdr-samples`) at the new pipeline. A sample counts as passing only if it opens with a correct page/layer/object count, not merely without crashing.
+- [x] V1.4 Re-point the libcdr `cdr2raw` differential tests and the real-sample probe (`refs/cdr-samples`) at the new pipeline. A sample counts as passing only if it opens with a correct page/layer/object count, not merely without crashing.
 
 ### V2: Full VectorCraft file compatibility (D7)
 - [ ] V2.1 Compatibility matrix test: for every entry in VectorCraft's `FORMATS` table, CoralCraft opens and saves/exports through the same code path. CI fails if a VectorCraft format is missing.

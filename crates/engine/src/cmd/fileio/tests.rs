@@ -876,3 +876,74 @@ fn cdr_and_cmx_writers_export_serialize_and_save_as() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// CoralCraft: V1.4 differential libcdr oracle and real-sample tests on the VectorCraft engine pipeline.
+#[test]
+fn cdr_and_cmx_engine_pipeline_passes_libcdr_oracle_and_real_samples() {
+    use std::process::Command;
+
+    let find_tool = |name: &str| -> Option<String> {
+        [name.to_owned(), format!("/home/paris/.local/bin/{name}")]
+            .into_iter()
+            .find(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+    };
+
+    let mut s = session(400.0, 300.0, 1);
+    s.execute("shape.rectangle", &json!({"x": 20, "y": 20, "width": 100, "height": 60})).unwrap();
+    s.execute("shape.ellipse", &json!({"x": 160, "y": 30, "width": 80, "height": 80})).unwrap();
+
+    let cdr_bytes = b64(&s.execute("document.export", &json!({"format": "cdr"})).unwrap());
+    let cmx_bytes = b64(&s.execute("document.export", &json!({"format": "cmx"})).unwrap());
+
+    if let Some(cdr2raw) = find_tool("cdr2raw") {
+        let tmp = std::env::temp_dir().join(format!("vc_engine_oracle_{}.cdr", std::process::id()));
+        std::fs::write(&tmp, &cdr_bytes).unwrap();
+        let out = Command::new(&cdr2raw).arg(&tmp).output().unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "cdr2raw failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("startDocument") && stdout.matches("drawPath").count() >= 2);
+    }
+
+    if let Some(cmx2raw) = find_tool("cmx2raw") {
+        let tmp = std::env::temp_dir().join(format!("vc_engine_oracle_{}.cmx", std::process::id()));
+        std::fs::write(&tmp, &cmx_bytes).unwrap();
+        let out = Command::new(&cmx2raw).arg(&tmp).output().unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "cmx2raw failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("startDocument") && stdout.matches("drawPath").count() >= 2);
+    }
+
+    let samples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../refs/cdr-samples");
+    if samples_dir.is_dir() {
+        let mut stack = vec![samples_dir];
+        let mut opened = 0usize;
+        let mut with_objects = 0usize;
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("cdr")) {
+                    let bytes = std::fs::read(&path).unwrap();
+                    if coralcraft_cdr::probe(&bytes).is_err() {
+                        continue;
+                    }
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("sample.cdr");
+                    let loaded = super::load::load(name, &bytes).unwrap_or_else(|e| panic!("engine load failed on {}: {e}", path.display()));
+                    assert_eq!(loaded.format.id, "cdr");
+                    let metrics = corel_import::document_metrics(&loaded.doc);
+                    assert!(metrics.page_count >= 1 && metrics.layer_count >= 1);
+                    if metrics.object_count > 0 {
+                        with_objects += 1;
+                    }
+                    opened += 1;
+                }
+            }
+        }
+        assert!(opened >= 64, "expected at least 64 real-world .cdr samples opened through engine, got {opened}");
+        assert!(with_objects >= 20, "expected >= 20 real-world .cdr samples with imported objects, got {with_objects}");
+    }
+}

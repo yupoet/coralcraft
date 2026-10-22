@@ -63,6 +63,44 @@ pub struct CorelImportOutcome {
     pub warnings: Vec<String>,
 }
 
+/// Structural counts (`page_count`, `layer_count`, `object_count`) for a [`vectorcraft_doc::Document`]
+/// imported from or prepared for CorelDRAW (`.cdr` / `.cmx`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CdrImportMetrics {
+    /// Number of artboards (pages) in the VectorCraft document.
+    pub page_count: usize,
+    /// Number of top-level layers in the VectorCraft document.
+    pub layer_count: usize,
+    /// Total number of non-layer drawing objects across all layers (including group and PowerClip contents).
+    pub object_count: usize,
+}
+
+fn count_vc_node_objects(node: &Node) -> usize {
+    match &node.kind {
+        NodeKind::Layer { children, .. } => children.iter().map(|c| count_vc_node_objects(c)).fold(0usize, usize::saturating_add),
+        NodeKind::Group { children, clip: true } => {
+            // A clip group represents one PowerClip container object (its first child is the frame)
+            // plus its inner PowerClip children (`children.iter().skip(1)`).
+            let inner = children.iter().skip(1).map(|c| count_vc_node_objects(c)).fold(0usize, usize::saturating_add);
+            inner.saturating_add(1)
+        }
+        NodeKind::Group { children, clip: false } => {
+            let inner = children.iter().map(|c| count_vc_node_objects(c)).fold(0usize, usize::saturating_add);
+            inner.saturating_add(1)
+        }
+        _ => 1,
+    }
+}
+
+/// Compute structural page, layer, and object counts for a [`vectorcraft_doc::Document`].
+#[must_use]
+pub fn document_metrics(doc: &VcDocument) -> CdrImportMetrics {
+    let page_count = doc.artboards.len();
+    let layer_count = doc.layers.len();
+    let object_count = doc.layers.iter().map(|l| count_vc_node_objects(l)).fold(0usize, usize::saturating_add);
+    CdrImportMetrics { page_count, layer_count, object_count }
+}
+
 /// Per-page CorelDRAW metadata stored under `Document::unknown["coralcraft"]`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoralCraftPageMeta {
