@@ -25,7 +25,7 @@ use vectorcraft_color::{
 use vectorcraft_doc::{
     Appearance, AppearanceItem, AreaOptions, Arrowhead, Artboard, CharStyle, ColorMode, Dash, Document as VcDocument, Effect, FillLayer, ImageBlob,
     ImageObject, Justify, LayerColor, LineCap as VcLineCap, LineJoin as VcLineJoin, LiveShape, Node, NodeId, NodeKind, OpacityMask, ParaStyle,
-    StrokeLayer, TextKind, TextObject, TextRun, Unit as VcUnit,
+    Scaling, Selection, StrokeLayer, TextKind, TextObject, TextRun, Unit as VcUnit,
 };
 use vectorcraft_geom::{
     Affine, BezPath, FillRule as VcFillRule, PathData, PathEl, Point as VcPoint, Rect as VcRect, Vec2,
@@ -143,15 +143,23 @@ pub struct CoralCraftObjectMeta {
     /// Page index (`Some(i)`) whose artboard offset was applied to this node, or `None` for local/master coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_index: Option<usize>,
+    /// Initial page-local geometric bounds `[x0, y0, x1, y1]` (in `F64`) when imported into VectorCraft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_local_bounds: Option<[F64; 4]>,
 }
 
 /// Top-level CorelDRAW metadata and lossless residuals stored in `Document::unknown["coralcraft"]`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoralCraftDocData {
+    #[serde(default)]
     pub schema: SchemaVersion,
+    #[serde(default)]
     pub doc_id: u64,
+    #[serde(default)]
     pub next_id: u64,
+    #[serde(default)]
     pub units: CdrUnit,
+    #[serde(default)]
     pub palette: Palette,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pages: Vec<CoralCraftPageMeta>,
@@ -165,6 +173,44 @@ pub struct CoralCraftDocData {
     pub residual: Residual,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+/// Page orientation (`Portrait`: width <= height; `Landscape`: width > height).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageOrientation {
+    /// Portrait orientation (`width <= height`).
+    Portrait,
+    /// Landscape orientation (`width > height`).
+    Landscape,
+}
+
+impl PageOrientation {
+    /// Returns the orientation of a `(width, height)` page size.
+    #[must_use]
+    pub fn of_size(width: f64, height: f64) -> Self {
+        if width > height { Self::Landscape } else { Self::Portrait }
+    }
+
+    /// Parses `"portrait"` or `"landscape"` (case-insensitive).
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "portrait" => Some(Self::Portrait),
+            "landscape" => Some(Self::Landscape),
+            _ => None,
+        }
+    }
+
+    /// Applies this orientation to `(width, height)`, swapping dimensions if needed.
+    #[must_use]
+    pub fn apply(self, width: f64, height: f64) -> (f64, f64) {
+        match self {
+            Self::Portrait if width > height => (height, width),
+            Self::Landscape if width < height => (height, width),
+            _ => (width, height),
+        }
+    }
 }
 
 /// Extracts [`CoralCraftDocData`] from `doc.unknown["coralcraft"]`, if present.
@@ -223,6 +269,366 @@ pub fn sync_coralcraft_extension(doc: &mut VcDocument) -> Result<(), CorelImport
     }
     data.pages = new_pages;
     write_coralcraft_data(doc, &data)
+}
+
+/// Returns the horizontal gap in points between consecutive artboards in `doc`.
+#[must_use]
+pub fn inter_page_gap_pt(doc: &VcDocument) -> f64 {
+    if let (Some(a0), Some(a1)) = (doc.artboards.first(), doc.artboards.get(1)) {
+        let gap = a1.rect.x0 - a0.rect.x1;
+        if gap.is_finite() && gap >= 0.0 {
+            return gap;
+        }
+    }
+    if doc.unknown.contains_key(CORALCRAFT_UNKNOWN_KEY) { PAGE_GAP_PT } else { 20.0 }
+}
+
+/// Collects the top-level object [`NodeId`]s belonging to each page (artboard) in `doc`,
+/// excluding objects on non-`Normal` CorelDRAW layers (`Master*`, `Desktop`, `Guides`, `Grid`).
+#[must_use]
+pub fn collect_objects_for_each_page(doc: &VcDocument, include_locked_and_hidden: bool) -> Vec<Vec<NodeId>> {
+    let mut per_page: Vec<Vec<NodeId>> = vec![Vec::new(); doc.artboards.len()];
+    if doc.artboards.is_empty() {
+        return per_page;
+    }
+    let maybe_meta = read_coralcraft_data(doc);
+    for lnode in &doc.layers {
+        if !include_locked_and_hidden && (!lnode.visible || lnode.locked) {
+            continue;
+        }
+        let lmeta = maybe_meta.as_ref().and_then(|m| m.layer_meta.get(&lnode.id.0));
+        if let Some(lm) = lmeta
+            && lm.role != LayerRole::Normal
+        {
+            continue;
+        }
+        let Some(children) = lnode.children() else { continue };
+        for child in children {
+            if !include_locked_and_hidden && (!child.visible || child.locked) {
+                continue;
+            }
+            let target_page = if let Some(lm) = lmeta
+                && let Some(p_idx) = lm.page_index
+                && maybe_meta.as_ref().is_some_and(|m| m.object_meta.contains_key(&child.id.0))
+            {
+                p_idx.min(doc.artboards.len().saturating_sub(1))
+            } else {
+                best_artboard_for_node(child, &doc.artboards)
+            };
+            if let Some(bucket) = per_page.get_mut(target_page) {
+                bucket.push(child.id);
+            }
+        }
+    }
+    per_page
+}
+
+fn apply_horizontal_page_reflow(doc: &mut VcDocument, base_origin: VcPoint, gap: f64, old_origins: &[VcPoint], page_objects: &[Vec<NodeId>]) {
+    let mut cursor_x = base_origin.x;
+    let base_y = base_origin.y;
+    let mut deltas: Vec<(u32, Vec2)> = Vec::with_capacity(doc.artboards.len());
+    for (idx, ab) in doc.artboards.iter_mut().enumerate() {
+        let w = ab.rect.width().max(1.0);
+        let h = ab.rect.height().max(1.0);
+        let old_orig = old_origins.get(idx).copied().unwrap_or_else(|| ab.rect.origin());
+        let new_rect = VcRect::new(cursor_x, base_y, cursor_x + w, base_y + h);
+        let delta = Vec2::new(new_rect.x0 - old_orig.x, new_rect.y0 - old_orig.y);
+        ab.rect = new_rect;
+        deltas.push((ab.id, delta));
+        cursor_x = new_rect.x1 + gap;
+    }
+
+    for (idx, (ab_id, delta)) in deltas.into_iter().enumerate() {
+        if delta.x.abs() <= 1e-9 && delta.y.abs() <= 1e-9 {
+            continue;
+        }
+        doc.move_artboard_guides(ab_id, delta);
+        let xf = Affine::translate(delta);
+        if let Some(objs) = page_objects.get(idx) {
+            for &nid in objs {
+                if let Some(n) = doc.node_mut(nid) {
+                    n.transform(xf, Scaling::default());
+                }
+            }
+        }
+    }
+}
+
+/// Resizes page `index` (or all pages when `apply_to_all` is `true`) to `(width, height)` and optional
+/// `orientation`, reflows subsequent pages horizontally, translates their artwork and guides, and
+/// synchronizes `doc.unknown["coralcraft"]`.
+#[allow(clippy::too_many_arguments)]
+pub fn resize_page_reflow(
+    doc: &mut VcDocument,
+    index: usize,
+    width: Option<f64>,
+    height: Option<f64>,
+    orientation: Option<PageOrientation>,
+    name: Option<&str>,
+    apply_to_all: bool,
+    include_locked_and_hidden: bool,
+) -> Result<(), CorelImportError> {
+    let Some(target_ab) = doc.artboards.get(index) else {
+        return Err(CorelImportError::Conversion("no such page".to_owned()));
+    };
+    let cur_w = target_ab.rect.width().max(1.0);
+    let cur_h = target_ab.rect.height().max(1.0);
+    let raw_w = width.unwrap_or(cur_w).max(1.0);
+    let raw_h = height.unwrap_or(cur_h).max(1.0);
+    let (target_w, target_h) = orientation.map_or((raw_w, raw_h), |o| o.apply(raw_w, raw_h));
+
+    let base_origin = doc.artboards.first().map_or(VcPoint::ZERO, |a| a.rect.origin());
+    let gap = inter_page_gap_pt(doc);
+    let old_origins: Vec<VcPoint> = doc.artboards.iter().map(|a| a.rect.origin()).collect();
+    let page_objects = collect_objects_for_each_page(doc, include_locked_and_hidden);
+
+    if apply_to_all {
+        let explicit_size = width.is_some() || height.is_some();
+        for ab in &mut doc.artboards {
+            let (w, h) = if explicit_size {
+                (target_w, target_h)
+            } else {
+                let aw = ab.rect.width().max(1.0);
+                let ah = ab.rect.height().max(1.0);
+                orientation.map_or((aw, ah), |o| o.apply(aw, ah))
+            };
+            ab.rect = VcRect::new(ab.rect.x0, ab.rect.y0, ab.rect.x0 + w, ab.rect.y0 + h);
+        }
+    } else if let Some(ab) = doc.artboards.get_mut(index) {
+        ab.rect = VcRect::new(ab.rect.x0, ab.rect.y0, ab.rect.x0 + target_w, ab.rect.y0 + target_h);
+    }
+
+    if let Some(n) = name.map(str::trim)
+        && let Some(ab) = doc.artboards.get_mut(index)
+    {
+        let uses_page_prefix = doc.unknown.contains_key(CORALCRAFT_UNKNOWN_KEY) || ab.name.starts_with("Page ");
+        ab.name = if n.is_empty() {
+            if uses_page_prefix { format!("Page {}", index.saturating_add(1)) } else { format!("Artboard {}", index.saturating_add(1)) }
+        } else {
+            n.to_owned()
+        };
+    }
+
+    apply_horizontal_page_reflow(doc, base_origin, gap, &old_origins, &page_objects);
+    sync_coralcraft_extension(doc)
+}
+
+/// Inserts a new page (artboard) at `insert_index` (`0..=doc.artboards.len()`), reflows subsequent
+/// pages and their artwork horizontally, and updates `doc.unknown["coralcraft"]`.
+pub fn insert_page_at(
+    doc: &mut VcDocument,
+    insert_index: usize,
+    width: Option<f64>,
+    height: Option<f64>,
+    orientation: Option<PageOrientation>,
+    name: Option<&str>,
+    include_locked_and_hidden: bool,
+) -> Result<usize, CorelImportError> {
+    let idx = insert_index.min(doc.artboards.len());
+    let ref_ab = doc.artboards.get(idx.saturating_sub(1)).or_else(|| doc.artboards.first());
+    let def_w = ref_ab.map_or(612.0, |a| a.rect.width().max(1.0));
+    let def_h = ref_ab.map_or(792.0, |a| a.rect.height().max(1.0));
+    let raw_w = width.unwrap_or(def_w).max(1.0);
+    let raw_h = height.unwrap_or(def_h).max(1.0);
+    let (w, h) = orientation.map_or((raw_w, raw_h), |o| o.apply(raw_w, raw_h));
+
+    let base_origin = doc.artboards.first().map_or(VcPoint::ZERO, |a| a.rect.origin());
+    let gap = inter_page_gap_pt(doc);
+    let mut old_origins: Vec<VcPoint> = doc.artboards.iter().map(|a| a.rect.origin()).collect();
+    let mut page_objects = collect_objects_for_each_page(doc, include_locked_and_hidden);
+
+    let uses_page_prefix = doc.unknown.contains_key(CORALCRAFT_UNKNOWN_KEY) || doc.artboards.iter().any(|a| a.name.starts_with("Page "));
+    let ab_id = doc.next_artboard_id();
+    let page_name = match name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(explicit) => explicit.to_owned(),
+        None if uses_page_prefix => format!("Page {}", idx.saturating_add(1)),
+        None => format!("Artboard {}", doc.artboards.len().saturating_add(1)),
+    };
+
+    let init_rect = VcRect::new(base_origin.x, base_origin.y, base_origin.x + w, base_origin.y + h);
+    doc.artboards.insert(idx, Artboard { id: ab_id, name: page_name, rect: init_rect, show_center_mark: false, show_cross_hairs: false });
+    old_origins.insert(idx, init_rect.origin());
+    page_objects.insert(idx, Vec::new());
+
+    // Renumber default "Page N" names when inserting into a Page-numbered document.
+    if uses_page_prefix && name.map(str::trim).filter(|s| !s.is_empty()).is_none() {
+        for (i, ab) in doc.artboards.iter_mut().enumerate() {
+            if ab.name.strip_prefix("Page ").is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit())) {
+                ab.name = format!("Page {}", i.saturating_add(1));
+            }
+        }
+    }
+
+    if let Some(mut data) = read_coralcraft_data(doc) {
+        let default_bleed = F64::new(doc.setup.bleed.first().copied().unwrap_or(0.0).max(0.0)).unwrap_or(F64::ZERO);
+        let size = CdrSize::new(w, h).unwrap_or_default();
+        let insert_meta_idx = idx.min(data.pages.len());
+        data.pages.insert(
+            insert_meta_idx,
+            CoralCraftPageMeta {
+                id: PageId(u64::from(ab_id.max(1))),
+                name: doc.artboards.get(idx).map_or_else(|| format!("Page {}", idx.saturating_add(1)), |a| a.name.clone()),
+                size,
+                bleed: default_bleed,
+                background: Some(FillStyle::uniform(CdrColor::WHITE)),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            },
+        );
+        for lmeta in data.layer_meta.values_mut() {
+            if let Some(pi) = lmeta.page_index.as_mut()
+                && *pi >= idx
+            {
+                *pi = pi.saturating_add(1);
+            }
+        }
+        for ometa in data.object_meta.values_mut() {
+            if let Some(pi) = ometa.page_index.as_mut()
+                && *pi >= idx
+            {
+                *pi = pi.saturating_add(1);
+            }
+        }
+        write_coralcraft_data(doc, &data)?;
+    }
+
+    apply_horizontal_page_reflow(doc, base_origin, gap, &old_origins, &page_objects);
+    sync_coralcraft_extension(doc)?;
+    Ok(idx)
+}
+
+/// Deletes the specified page `indices` (sorted ascending), optionally deleting their page-bound
+/// artwork, reflows remaining pages horizontally, and updates `doc.unknown["coralcraft"]`.
+pub fn delete_pages_reflow(
+    doc: &mut VcDocument,
+    indices: &[usize],
+    delete_art: bool,
+    include_locked_and_hidden: bool,
+) -> Result<(), CorelImportError> {
+    if indices.len() >= doc.artboards.len() {
+        return Err(CorelImportError::Conversion("a document needs at least one artboard".to_owned()));
+    }
+    let base_origin = doc.artboards.first().map_or(VcPoint::ZERO, |a| a.rect.origin());
+    let gap = inter_page_gap_pt(doc);
+    let mut old_origins: Vec<VcPoint> = doc.artboards.iter().map(|a| a.rect.origin()).collect();
+    let mut page_objects = collect_objects_for_each_page(doc, include_locked_and_hidden);
+    let mut maybe_data = read_coralcraft_data(doc);
+    let mut sel = Selection::default();
+
+    for &del_idx in indices.iter().rev() {
+        if del_idx >= doc.artboards.len() {
+            return Err(CorelImportError::Conversion("no such artboard".to_owned()));
+        }
+        if delete_art && let Some(objs) = page_objects.get(del_idx) {
+            for &nid in objs {
+                let _ = doc.remove(nid);
+            }
+        }
+        let ab_id = doc.artboards.remove(del_idx).id;
+        doc.retain_guides(&mut sel, |_, g| g.artboard != Some(ab_id));
+        let _ = old_origins.remove(del_idx);
+        let _ = page_objects.remove(del_idx);
+
+        if let Some(data) = maybe_data.as_mut() {
+            if del_idx < data.pages.len() {
+                let _ = data.pages.remove(del_idx);
+            }
+            if delete_art {
+                let layers_to_remove: Vec<u64> = data
+                    .layer_meta
+                    .iter()
+                    .filter_map(|(&lid, lm)| (lm.role == LayerRole::Normal && lm.page_index == Some(del_idx)).then_some(lid))
+                    .collect();
+                for lid in layers_to_remove {
+                    if doc.layers.len() > 1 {
+                        let _ = doc.remove(NodeId(lid));
+                        data.layer_meta.remove(&lid);
+                    }
+                }
+            }
+            for lmeta in data.layer_meta.values_mut() {
+                if let Some(pi) = lmeta.page_index.as_mut() {
+                    if *pi == del_idx {
+                        *pi = 0;
+                    } else if *pi > del_idx {
+                        *pi = pi.saturating_sub(1);
+                    }
+                }
+            }
+            for ometa in data.object_meta.values_mut() {
+                if let Some(pi) = ometa.page_index.as_mut() {
+                    if *pi == del_idx {
+                        *pi = 0;
+                    } else if *pi > del_idx {
+                        *pi = pi.saturating_sub(1);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(data) = &maybe_data {
+        write_coralcraft_data(doc, data)?;
+    }
+
+    apply_horizontal_page_reflow(doc, base_origin, gap, &old_origins, &page_objects);
+    sync_coralcraft_extension(doc)
+}
+
+/// Moves the page at `from` to `to`, reflows horizontal positions of all pages, translates each
+/// page's artwork and guides to its new slot, and updates `doc.unknown["coralcraft"]`.
+pub fn reorder_page_reflow(doc: &mut VcDocument, from: usize, to: usize, include_locked_and_hidden: bool) -> Result<(), CorelImportError> {
+    if from >= doc.artboards.len() {
+        return Err(CorelImportError::Conversion("no such artboard".to_owned()));
+    }
+    let target = to.min(doc.artboards.len().saturating_sub(1));
+    if from == target {
+        return Ok(());
+    }
+    let base_origin = doc.artboards.first().map_or(VcPoint::ZERO, |a| a.rect.origin());
+    let gap = inter_page_gap_pt(doc);
+    let mut old_origins: Vec<VcPoint> = doc.artboards.iter().map(|a| a.rect.origin()).collect();
+    let mut page_objects = collect_objects_for_each_page(doc, include_locked_and_hidden);
+
+    let ab = doc.artboards.remove(from);
+    doc.artboards.insert(target, ab);
+    let orig = old_origins.remove(from);
+    old_origins.insert(target, orig);
+    let objs = page_objects.remove(from);
+    page_objects.insert(target, objs);
+
+    let remap_index = |pi: usize| -> usize {
+        if pi == from {
+            target
+        } else if from < target && pi > from && pi <= target {
+            pi.saturating_sub(1)
+        } else if target < from && pi >= target && pi < from {
+            pi.saturating_add(1)
+        } else {
+            pi
+        }
+    };
+
+    if let Some(mut data) = read_coralcraft_data(doc) {
+        if from < data.pages.len() && target <= data.pages.len().saturating_sub(1) {
+            let pmeta = data.pages.remove(from);
+            data.pages.insert(target, pmeta);
+        }
+        for lmeta in data.layer_meta.values_mut() {
+            if let Some(pi) = lmeta.page_index.as_mut() {
+                *pi = remap_index(*pi);
+            }
+        }
+        for ometa in data.object_meta.values_mut() {
+            if let Some(pi) = ometa.page_index.as_mut() {
+                *pi = remap_index(*pi);
+            }
+        }
+        write_coralcraft_data(doc, &data)?;
+    }
+
+    apply_horizontal_page_reflow(doc, base_origin, gap, &old_origins, &page_objects);
+    sync_coralcraft_extension(doc)
 }
 
 /// Parses `.cdr` or `.cmx` bytes and maps the resulting document onto a [`vectorcraft_doc::Document`].
@@ -559,14 +965,54 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
     if let Some(meta) = &maybe_meta {
         cdr_doc.master_layers = meta.master_layers.clone();
         // Update any master layers that were represented as active layer nodes in doc.layers
-        for lnode in &doc.layers {
+        for (l_idx, lnode) in doc.layers.iter().enumerate() {
             if let Some(lmeta) = meta.layer_meta.get(&lnode.id.0) {
                 match lmeta.page_index {
                     Some(p_idx) => {
                         let offset = artboard_offsets.get(p_idx).copied().unwrap_or(Vec2::ZERO);
-                        let clayer = convert_vc_layer_to_cdr(lnode, Some(lmeta), offset, doc, Some(meta));
+                        let lid = lmeta.layer_id;
+                        let name = lnode.name.clone().unwrap_or_else(|| "Layer 1".to_owned());
+                        let mut clayer = CdrLayer::new_normal(lid, name.clone());
+                        clayer.visible = lnode.visible;
+                        clayer.locked = lnode.locked;
+                        clayer.opacity = F64::new(f64::from(lnode.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
+                        clayer.role = lmeta.role;
+                        clayer.master_in_front = lmeta.master_in_front;
+                        clayer.residual = lmeta.residual.clone();
+                        clayer.extra = lmeta.extra.clone();
+                        let mut spilled: BTreeMap<usize, Vec<ObjectNode>> = BTreeMap::new();
+                        if let NodeKind::Layer { printable, children, .. } = &lnode.kind {
+                            clayer.printable = *printable;
+                            for ch in children {
+                                let target_ab = if meta.object_meta.contains_key(&ch.id.0) || doc.artboards.len() <= 1 {
+                                    p_idx
+                                } else {
+                                    best_artboard_for_node(ch, &doc.artboards)
+                                };
+                                if target_ab == p_idx {
+                                    clayer.objects.push(convert_vc_node_to_cdr(ch, offset, doc, Some(meta)));
+                                } else {
+                                    let other_off = artboard_offsets.get(target_ab).copied().unwrap_or(Vec2::ZERO);
+                                    spilled.entry(target_ab).or_default().push(convert_vc_node_to_cdr(ch, other_off, doc, Some(meta)));
+                                }
+                            }
+                        }
                         if let Some(page) = cdr_doc.pages.get_mut(p_idx) {
                             page.layers.push(clayer);
+                        }
+                        for (other_p_idx, objs) in spilled {
+                            if let Some(other_page) = cdr_doc.pages.get_mut(other_p_idx) {
+                                if let Some(first_layer) = other_page.layers.first_mut() {
+                                    first_layer.objects.extend(objs);
+                                } else {
+                                    let new_lid = LayerId(
+                                        lnode.id.0.saturating_mul(100).saturating_add(other_p_idx as u64).saturating_add(l_idx as u64).max(1),
+                                    );
+                                    let mut new_clayer = CdrLayer::new_normal(new_lid, name.clone());
+                                    new_clayer.objects = objs;
+                                    other_page.layers.push(new_clayer);
+                                }
+                            }
                         }
                     }
                     None => {
@@ -578,12 +1024,33 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         }
                     }
                 }
-            } else {
-                // Newly added layer in VectorCraft: place on Page 0 (or partition by artboard)
+            } else if cdr_doc.pages.len() <= 1 {
                 let offset = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
                 let clayer = convert_vc_layer_to_cdr(lnode, None, offset, doc, Some(meta));
                 if let Some(page0) = cdr_doc.pages.first_mut() {
                     page0.layers.push(clayer);
+                }
+            } else {
+                for (p_idx, page) in cdr_doc.pages.iter_mut().enumerate() {
+                    let offset = artboard_offsets.get(p_idx).copied().unwrap_or(Vec2::ZERO);
+                    let lid = LayerId(lnode.id.0.saturating_mul(100).saturating_add(p_idx as u64).saturating_add(l_idx as u64).max(1));
+                    let lname = lnode.name.clone().unwrap_or_else(|| format!("Layer {}", l_idx.saturating_add(1)));
+                    let mut clayer = CdrLayer::new_normal(lid, lname);
+                    clayer.visible = lnode.visible;
+                    clayer.locked = lnode.locked;
+                    clayer.opacity = F64::new(f64::from(lnode.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
+                    if let NodeKind::Layer { printable, children, .. } = &lnode.kind {
+                        clayer.printable = *printable;
+                        for child in children {
+                            let target_ab = best_artboard_for_node(child, &doc.artboards);
+                            if target_ab == p_idx {
+                                clayer.objects.push(convert_vc_node_to_cdr(child, offset, doc, Some(meta)));
+                            }
+                        }
+                    }
+                    if !clayer.objects.is_empty() || p_idx == 0 {
+                        page.layers.push(clayer);
+                    }
                 }
             }
         }
@@ -1089,7 +1556,7 @@ fn convert_cdr_node_to_vc(
         }
     };
 
-    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), page_index });
+    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), page_index, initial_local_bounds: None });
 
     let xf = map_affine_to_vc(cdr_node.transform, offset);
     let local_bounds = cdr_node.kind.local_bounds().map(|r| {
@@ -1354,7 +1821,7 @@ fn convert_cdr_node_to_vc(
     base_node.opacity = opacity;
 
     // Wrap in a Clip Group if PowerClip children are present.
-    if !cdr_node.powerclip_children.is_empty() {
+    let result_node = if !cdr_node.powerclip_children.is_empty() {
         let clip_child_id = loop {
             let candidate = doc.alloc_id().0;
             if used_ids.insert(candidate) {
@@ -1378,10 +1845,20 @@ fn convert_cdr_node_to_vc(
         clip_group.visible = cdr_node.visible;
         clip_group.locked = cdr_node.locked;
         clip_group.opacity = base_node.opacity;
-        return clip_group;
+        clip_group
+    } else {
+        base_node
+    };
+
+    if let Some(b) = result_node.geometric_bounds()
+        && let (Ok(x0), Ok(y0), Ok(x1), Ok(y1)) =
+            (F64::new(b.x0 - offset.x), F64::new(b.y0 - offset.y), F64::new(b.x1 - offset.x), F64::new(b.y1 - offset.y))
+        && let Some(om) = object_meta.get_mut(&nid.0)
+    {
+        om.initial_local_bounds = Some([x0, y0, x1, y1]);
     }
 
-    base_node
+    result_node
 }
 
 fn convert_vc_layer_to_cdr(
@@ -1414,11 +1891,21 @@ fn convert_vc_layer_to_cdr(
 
 fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Option<&CoralCraftDocData>) -> ObjectNode {
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
-        // Check if the node's basic properties were untouched in VectorCraft; if so, restore the exact original
-        // ObjectNode (updating any recursive children if it is a Group or PowerClip).
+        // Check if the node's basic properties and page-local bounds were untouched in VectorCraft; if so,
+        // restore the exact original ObjectNode (updating any recursive children if it is a Group or PowerClip).
         let name_matches =
             node.name == ometa.original.name || (ometa.original.name.is_none() && matches!(&ometa.original.kind, ObjectKind::Unsupported(_)));
-        if name_matches && node.visible == ometa.original.visible && node.locked == ometa.original.locked {
+        let bounds_match = matches!(&ometa.original.kind, ObjectKind::Unsupported(_))
+            || match (ometa.initial_local_bounds, node.geometric_bounds()) {
+                (Some([ix0, iy0, ix1, iy1]), Some(b)) => {
+                    ((b.x0 - offset.x) - ix0.get()).abs() < 1e-4
+                        && ((b.y0 - offset.y) - iy0.get()).abs() < 1e-4
+                        && ((b.x1 - offset.x) - ix1.get()).abs() < 1e-4
+                        && ((b.y1 - offset.y) - iy1.get()).abs() < 1e-4
+                }
+                _ => true,
+            };
+        if name_matches && bounds_match && node.visible == ometa.original.visible && node.locked == ometa.original.locked {
             let mut restored = ometa.original.clone();
             match (&node.kind, &mut restored.kind) {
                 (NodeKind::Group { children: vc_ch, clip: false }, ObjectKind::Group { children: cdr_ch }) if vc_ch.len() == cdr_ch.len() => {
@@ -2177,5 +2664,87 @@ mod tests {
         let (zip_doc, zip_warnings) = import_legacy_coralcraft_bytes(&zip_buf).unwrap();
         assert!(zip_warnings.is_empty());
         assert_eq!(export_document(&zip_doc).unwrap(), cdr_doc);
+    }
+
+    #[test]
+    fn multipage_per_page_size_orientation_insert_delete_and_reorder_reflow_v3_1() {
+        let mut cdr_doc = CdrDocument::new_a4_portrait();
+        let p1_obj = cdr_doc.allocate_object_id();
+        cdr_doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            p1_obj,
+            Some("Page 1 Card".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(20.0, 30.0, 120.0, 90.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(200, 40, 40))),
+            None,
+        ));
+
+        let mut p2_layer = CdrLayer::new_normal(LayerId(20), "Page 2 Layer");
+        let p2_obj = cdr_doc.allocate_object_id();
+        p2_layer.objects.push(ObjectNode::new(
+            p2_obj,
+            Some("Page 2 Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(15.0, 25.0, 115.0, 85.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(40, 200, 40))),
+            None,
+        ));
+        cdr_doc.pages.push(CdrPage {
+            id: PageId(2),
+            name: "Page 2".to_owned(),
+            size: CdrSize::new(300.0, 400.0).unwrap(),
+            bleed: F64::ZERO,
+            background: Some(FillStyle::uniform(CdrColor::WHITE)),
+            layers: vec![p2_layer],
+            residual: Residual::default(),
+            extra: BTreeMap::new(),
+        });
+
+        let (mut vdoc, _) = import_document(&cdr_doc).unwrap();
+        assert_eq!(vdoc.artboards.len(), 2);
+        assert_eq!(PageOrientation::of_size(vdoc.artboards[0].rect.width(), vdoc.artboards[0].rect.height()), PageOrientation::Portrait);
+
+        // 1. Flip Page 1 (index 0) to Landscape and verify Page 2 reflows horizontally with its artwork
+        let old_p1_w = vdoc.artboards[0].rect.width();
+        let old_p1_h = vdoc.artboards[0].rect.height();
+        resize_page_reflow(&mut vdoc, 0, None, None, Some(PageOrientation::Landscape), None, false, true).unwrap();
+        assert!((vdoc.artboards[0].rect.width() - old_p1_h).abs() < 1e-6);
+        assert!((vdoc.artboards[0].rect.height() - old_p1_w).abs() < 1e-6);
+        assert_eq!(PageOrientation::of_size(vdoc.artboards[0].rect.width(), vdoc.artboards[0].rect.height()), PageOrientation::Landscape);
+        assert!((vdoc.artboards[1].rect.x0 - (old_p1_h + PAGE_GAP_PT)).abs() < 1e-6);
+
+        // Page 2's object local coordinates relative to Page 2's artboard must still be (15.0, 25.0)
+        let p2_node = vdoc.node(NodeId(p2_obj.0)).unwrap();
+        let p2_b = p2_node.geometric_bounds().unwrap();
+        assert!(((p2_b.x0 - vdoc.artboards[1].rect.x0) - 15.0).abs() < 1e-5);
+        assert!(((p2_b.y0 - vdoc.artboards[1].rect.y0) - 25.0).abs() < 1e-5);
+
+        // 2. Insert a new custom page at index 1 (before old Page 2)
+        let inserted = insert_page_at(&mut vdoc, 1, Some(500.0), Some(250.0), None, Some("Middle Spread"), true).unwrap();
+        assert_eq!(inserted, 1);
+        assert_eq!(vdoc.artboards.len(), 3);
+        assert_eq!(vdoc.artboards[1].name, "Middle Spread");
+        assert!((vdoc.artboards[1].rect.width() - 500.0).abs() < 1e-6);
+        assert!((vdoc.artboards[2].rect.x0 - (old_p1_h + PAGE_GAP_PT + 500.0 + PAGE_GAP_PT)).abs() < 1e-6);
+        let p2_b_after_insert = vdoc.node(NodeId(p2_obj.0)).unwrap().geometric_bounds().unwrap();
+        assert!(((p2_b_after_insert.x0 - vdoc.artboards[2].rect.x0) - 15.0).abs() < 1e-5);
+
+        // 3. Reorder page 2 (old Page 2, width 300) to index 0
+        reorder_page_reflow(&mut vdoc, 2, 0, true).unwrap();
+        assert_eq!(vdoc.artboards[0].name, "Page 2");
+        assert!((vdoc.artboards[0].rect.width() - 300.0).abs() < 1e-6);
+        assert!((vdoc.artboards[0].rect.x0 - 0.0).abs() < 1e-6);
+        let p2_b_reordered = vdoc.node(NodeId(p2_obj.0)).unwrap().geometric_bounds().unwrap();
+        assert!(((p2_b_reordered.x0 - vdoc.artboards[0].rect.x0) - 15.0).abs() < 1e-5);
+        let p1_b_reordered = vdoc.node(NodeId(p1_obj.0)).unwrap().geometric_bounds().unwrap();
+        assert!(((p1_b_reordered.x0 - vdoc.artboards[1].rect.x0) - 20.0).abs() < 1e-5);
+
+        // 4. Delete the middle page (index 2, "Middle Spread") and verify CDR round-trip
+        delete_pages_reflow(&mut vdoc, &[2], true, true).unwrap();
+        assert_eq!(vdoc.artboards.len(), 2);
+        let exported = export_document(&vdoc).unwrap();
+        assert_eq!(exported.pages.len(), 2);
+        assert_eq!(exported.pages[0].name, "Page 2");
+        assert!((exported.pages[0].size.width.get() - 300.0).abs() < 1e-6);
+        assert!((exported.pages[1].size.width.get() - old_p1_h).abs() < 1e-6);
+        assert!((exported.pages[1].size.height.get() - old_p1_w).abs() < 1e-6);
     }
 }

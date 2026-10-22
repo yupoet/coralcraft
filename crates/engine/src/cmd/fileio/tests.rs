@@ -1308,3 +1308,64 @@ fn legacy_coralcraft_json_and_zip_containers_open_and_place_losslessly_v2_3() {
         assert!(target.doc().unwrap().doc.node_count() >= 2);
     }
 }
+
+#[test]
+fn multipage_artboard_commands_support_per_page_size_orientation_and_reflow_v3_1() {
+    let mut s = session(400.0, 600.0, 1);
+    let r_p1 = s.execute("shape.rectangle", &json!({"x": 15.0, "y": 20.0, "width": 90.0, "height": 70.0})).unwrap();
+    let p1_rect_id = vectorcraft_doc::NodeId(r_p1["id"].as_u64().unwrap());
+    let p1_orig_bounds = s.doc().unwrap().doc.node(p1_rect_id).unwrap().geometric_bounds().unwrap();
+
+    // 1. Append a Landscape page via artboard.new with orientation + reflowPages
+    let r_new = s
+        .execute("artboard.new", &json!({"width": 300.0, "height": 500.0, "orientation": "landscape", "name": "Page 2", "reflowPages": true}))
+        .unwrap();
+    assert_eq!(r_new["index"], 1);
+    assert_eq!(s.doc().unwrap().doc.artboards.len(), 2);
+    assert!((s.doc().unwrap().doc.artboards[1].rect.width() - 500.0).abs() < 1e-6);
+    assert!((s.doc().unwrap().doc.artboards[1].rect.height() - 300.0).abs() < 1e-6);
+
+    // Draw an object on Page 2
+    let p2_x0 = s.doc().unwrap().doc.artboards[1].rect.x0;
+    let r_draw = s.execute("shape.rectangle", &json!({"x": p2_x0 + 25.0, "y": 40.0, "width": 80.0, "height": 60.0})).unwrap();
+    let p2_rect_id = vectorcraft_doc::NodeId(r_draw["id"].as_u64().unwrap());
+
+    // 2. Flip Page 1 (index 0) from Portrait (400x600) to Landscape (600x400) with reflowPages
+    s.execute("artboard.setProps", &json!({"index": 0, "orientation": "landscape", "reflowPages": true})).unwrap();
+    assert!((s.doc().unwrap().doc.artboards[0].rect.width() - 600.0).abs() < 1e-6);
+    assert!((s.doc().unwrap().doc.artboards[0].rect.height() - 400.0).abs() < 1e-6);
+    let new_p2_x0 = s.doc().unwrap().doc.artboards[1].rect.x0;
+    assert!((new_p2_x0 - (p2_x0 + 200.0)).abs() < 1e-6, "Page 2 artboard must shift right by +200 pt");
+    let p2_b = s.doc().unwrap().doc.node(p2_rect_id).unwrap().geometric_bounds().unwrap();
+    assert!(((p2_b.x0 - new_p2_x0) - 25.0).abs() < 1e-5, "Page 2 object must stay at local x=25 on Page 2");
+
+    // 3. Insert a page at index 1 (before Page 2)
+    let r_ins = s.execute("artboard.new", &json!({"insertAt": 1, "width": 250.0, "height": 350.0, "name": "Inserted Page"})).unwrap();
+    assert_eq!(r_ins["index"], 1);
+    assert_eq!(s.doc().unwrap().doc.artboards.len(), 3);
+    let p3_x0 = s.doc().unwrap().doc.artboards[2].rect.x0;
+    let p2_b_shifted = s.doc().unwrap().doc.node(p2_rect_id).unwrap().geometric_bounds().unwrap();
+    assert!(((p2_b_shifted.x0 - p3_x0) - 25.0).abs() < 1e-5);
+
+    // 4. Reorder page 2 ("Page 2") to index 0 with reflowPages
+    s.execute("artboard.reorder", &json!({"index": 2, "to": 0, "reflowPages": true})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.artboards[0].name, "Page 2");
+    assert!((s.doc().unwrap().doc.artboards[0].rect.x0 - 0.0).abs() < 1e-6);
+    let p2_b_at_0 = s.doc().unwrap().doc.node(p2_rect_id).unwrap().geometric_bounds().unwrap();
+    assert!((p2_b_at_0.x0 - 25.0).abs() < 1e-5);
+    let p1_b_at_1 = s.doc().unwrap().doc.node(p1_rect_id).unwrap().geometric_bounds().unwrap();
+    let ab1_x0 = s.doc().unwrap().doc.artboards[1].rect.x0;
+    assert!(((p1_b_at_1.x0 - ab1_x0) - p1_orig_bounds.x0).abs() < 1e-5);
+
+    // 5. Delete "Inserted Page" (now at index 2) with deleteArt + reflowPages and export to CDR
+    s.execute("artboard.delete", &json!({"index": 2, "deleteArt": true, "reflowPages": true})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.artboards.len(), 2);
+
+    let cdr_bytes = encode(&s.doc().unwrap().doc, "cdr", &json!({"cdrVersion": "cdrx"})).unwrap();
+    let reopened = super::load::load("multipage.cdr", &cdr_bytes).unwrap();
+    assert_eq!(reopened.doc.artboards.len(), 2);
+    assert!((reopened.doc.artboards[0].rect.width() - 500.0).abs() < 1e-4);
+    assert!((reopened.doc.artboards[0].rect.height() - 300.0).abs() < 1e-4);
+    assert!((reopened.doc.artboards[1].rect.width() - 600.0).abs() < 1e-4);
+    assert!((reopened.doc.artboards[1].rect.height() - 400.0).abs() < 1e-4);
+}

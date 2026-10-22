@@ -4,6 +4,8 @@
 
 ## 1. Current Stage Status
 
+- **V3.1 DONE (2026-10-22): Multi-page documents (per-page size, orientation, and horizontal reflow) on top of VectorCraft artboards.**
+  Added `PageOrientation` (`Portrait` / `Landscape`), `resize_page_reflow`, `insert_page_at`, `delete_pages_reflow`, and `reorder_page_reflow` in `crates/corel-import/src/lib.rs`, and wired `insertAt`/`before`/`after`/`orientation`/`applyToAllPages`/`reflowPages`/`deleteArt` into `artboard.new`, `artboard.setProps`, `artboard.delete`, and `artboard.reorder` in `crates/engine/src/cmd/{layer,panelcmds}.rs`. **Next task: V3.2** (Master layers `All`/`Odd`/`Even` and shared `Desktop` layer in CorelDRAW render order).
 - **V2.4 DONE (2026-10-22): `docs/file-format-parity.md` rewritten and `ROADMAP.md` post-V2 parity metrics updated.**
   Documented all 27 `FORMATS` entries (`OPEN_EXTS` = 34 extensions, `PLACE_EXTS` = 28 extensions), Corel `.cpl`/`.xml` palettes, and CI verification gates in `docs/file-format-parity.md`. **Phase V2 is complete; next task: V3.1** (Multi-page documents on VectorCraft artboards).
 - **V2.3 DONE (2026-10-22): Legacy `.coralcraft` (pre-fork JSON/ZIP) import converter.**

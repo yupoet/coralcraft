@@ -125,7 +125,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Artboard",
             ["Window", "Artboards"],
             None,
-            "{x?, y?, width?, height?, name?} (default: right of the last)",
+            // CoralCraft: include multi-page insertion, orientation, and horizontal reflow parameters.
+            "{x?, y?, width?, height?, name?, insertAt?: n, before?: n, after?: n, orientation?: \"portrait\"|\"landscape\", reflowPages?: bool, lockedAndHidden?: bool} (default: right of the last)",
             has_doc,
             artboard_new
         ),
@@ -134,7 +135,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Artboard",
             ["Window", "Artboards"],
             None,
-            "{index | indices: [index…]} delete artboards (with their guides) in one step; one is always left",
+            // CoralCraft: include `deleteArt?`, `reflowPages?`, and `lockedAndHidden?`.
+            "{index | indices: [index…], deleteArt?: bool, reflowPages?: bool, lockedAndHidden?: bool} delete artboards (with their guides) in one step; one is always left",
             has_doc,
             artboard_delete
         ),
@@ -143,7 +145,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Artboard Options…",
             ["Window", "Artboards"],
             None,
-            "{index, name?, x?, y?, width?, height?, moveArt?: bool (default false; a position-only change moves the contained art with its artboard), scaleArt?: bool (Scale Artwork with Artboard: resized, the artboard takes the art fully inside it (locked and hidden art only with lockedAndHidden?: bool, default prefs moveLockedWithArtboard) and its guides from its old rectangle onto the new one, each side by its own ratio; strokes/corners/patterns as object.scale), strokes?: bool, corners?: bool, patterns?: bool (the three as object.scale, for art that moves or scales with the artboard), lockedAndHidden?: bool (locked and hidden art moves along; default: the preference; recorded in the journal so a replay matches)} → null, or with scaleArt {scaled: the art scaled}",
+            // CoralCraft: include `orientation?`, `applyToAllPages?`, `reflowPages?`, `showCenterMark?`, `showCrossHairs?`.
+            "{index, name?, x?, y?, width?, height?, orientation?: \"portrait\"|\"landscape\", applyToAllPages?: bool, reflowPages?: bool, showCenterMark?: bool, showCrossHairs?: bool, moveArt?: bool (default false; a position-only change moves the contained art with its artboard), scaleArt?: bool (Scale Artwork with Artboard: resized, the artboard takes the art fully inside it (locked and hidden art only with lockedAndHidden?: bool, default prefs moveLockedWithArtboard) and its guides from its old rectangle onto the new one, each side by its own ratio; strokes/corners/patterns as object.scale), strokes?: bool, corners?: bool, patterns?: bool (the three as object.scale, for art that moves or scales with the artboard), lockedAndHidden?: bool (locked and hidden art moves along; default: the preference; recorded in the journal so a replay matches)} → null, or with scaleArt {scaled: the art scaled}",
             has_doc,
             artboard_set
         ),
@@ -805,6 +808,31 @@ fn rect_from(p: &Value, default: Rect) -> Rect {
 
 fn artboard_new(s: &mut Session, p: &Value) -> Result<Value> {
     let d0 = &s.doc()?.doc;
+    // CoralCraft: support multi-page insertion (`insertAt`/`before`/`after`), `orientation`, and horizontal page reflow.
+    let has_page_params = p.get("insertAt").is_some()
+        || p.get("before").is_some()
+        || p.get("after").is_some()
+        || p.get("orientation").is_some()
+        || bool_or(p, "reflowPages", false)
+        || (p.get("x").is_none() && p.get("y").is_none() && d0.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY));
+    if has_page_params {
+        let insert_idx = p
+            .get("insertAt")
+            .and_then(Value::as_u64)
+            .or_else(|| p.get("before").and_then(Value::as_u64))
+            .map(|v| v as usize)
+            .or_else(|| p.get("after").and_then(Value::as_u64).map(|v| (v as usize).saturating_add(1)))
+            .unwrap_or(d0.artboards.len());
+        let width = p.get("width").and_then(Value::as_f64);
+        let height = p.get("height").and_then(Value::as_f64);
+        let orientation = str_param(p, "orientation").and_then(corel_import::PageOrientation::parse);
+        let all = bool_or(p, "lockedAndHidden", s.prefs.move_locked_with_artboard);
+        let idx = s.edit("New Artboard", |d, _| {
+            corel_import::insert_page_at(d, insert_idx, width, height, orientation, str_param(p, "name"), all)
+                .map_err(|e| EngineError::Other(e.to_string()))
+        })?;
+        return Ok(json!({ "index": idx }));
+    }
     let last = d0.artboards.last().map(|a| a.rect).unwrap_or(Rect::new(0.0, 0.0, 612.0, 792.0));
     let def = Rect::new(last.x1 + 20.0, last.y0, last.x1 + 20.0 + last.width(), last.y1);
     let r = rect_from(p, def);
@@ -820,6 +848,16 @@ fn artboard_new(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn artboard_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let indices = super::panelcmds::artboard_indices(&s.doc()?.doc, p, "artboard.delete")?;
+    // CoralCraft: support deleting page artwork and reflowing subsequent pages horizontally.
+    let delete_art = bool_or(p, "deleteArt", false);
+    let reflow = bool_or(p, "reflowPages", false) || delete_art || s.doc()?.doc.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY);
+    if reflow {
+        let all = bool_or(p, "lockedAndHidden", s.prefs.move_locked_with_artboard);
+        s.edit("Delete Artboard", |d, _| {
+            corel_import::delete_pages_reflow(d, &indices, delete_art, all).map_err(|e| EngineError::Other(e.to_string()))
+        })?;
+        return ok();
+    }
     s.edit("Delete Artboard", |d, sel| {
         if indices.len() >= d.artboards.len() {
             return Err(EngineError::Other("a document needs at least one artboard".into()));
@@ -837,11 +875,34 @@ fn artboard_delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn artboard_set(s: &mut Session, p: &Value) -> Result<Value> {
     let i = super::panelcmds::artboard_index(&s.doc()?.doc, p, "artboard.setProps")?;
     let was = s.doc()?.doc.artboards.get(i).map(|a| a.rect).ok_or_else(|| EngineError::Other("no such artboard".into()))?;
+    // CoralCraft: support per-page `orientation`, `applyToAllPages`, and `reflowPages`.
+    let orientation = str_param(p, "orientation").and_then(corel_import::PageOrientation::parse);
+    let apply_to_all = bool_or(p, "applyToAllPages", false);
+    let reflow_pages = bool_or(p, "reflowPages", false) || apply_to_all || orientation.is_some();
+    let scale_art = bool_or(p, "scaleArt", false);
+    if reflow_pages && !scale_art && p.get("x").is_none() && p.get("y").is_none() {
+        let width = p.get("width").and_then(Value::as_f64);
+        let height = p.get("height").and_then(Value::as_f64);
+        let all = bool_or(p, "lockedAndHidden", s.prefs.move_locked_with_artboard);
+        s.edit("Artboard Options", |d, _| {
+            corel_import::resize_page_reflow(d, i, width, height, orientation, str_param(p, "name"), apply_to_all, all)
+                .map_err(|e| EngineError::Other(e.to_string()))?;
+            if let Some(a) = d.artboards.get_mut(i) {
+                if let Some(cm) = p.get("showCenterMark").and_then(Value::as_bool) {
+                    a.show_center_mark = cm;
+                }
+                if let Some(ch) = p.get("showCrossHairs").and_then(Value::as_bool) {
+                    a.show_cross_hairs = ch;
+                }
+            }
+            Ok(())
+        })?;
+        return ok();
+    }
     let now = rect_from(p, was);
     let resized = (now.width() - was.width()).abs() > 1e-6 || (now.height() - was.height()).abs() > 1e-6;
     // Scale Artwork with Artboard: resized, it takes the art fully inside it (as Move Artwork with
     // Artboard gathers it) and its guides from the old rectangle onto the new one.
-    let scale_art = bool_or(p, "scaleArt", false);
     let fit = if scale_art && resized { rect_map(was, now) } else { None };
     // Position fields honor Move Artwork independently of Scale Artwork. A resize still
     // leaves the art alone unless scaling was requested. Fit-to-art callers keep the default.
@@ -880,6 +941,10 @@ fn artboard_set(s: &mut Session, p: &Value) -> Result<Value> {
         } else if !resized {
             // Moved (not resized), it takes its guides along.
             d.move_artboard_guides(id, delta);
+        }
+        // CoralCraft: keep `doc.unknown["coralcraft"]` synchronized when artboard properties change.
+        if d.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY) {
+            let _ = corel_import::sync_coralcraft_extension(d);
         }
         Ok(())
     })?;

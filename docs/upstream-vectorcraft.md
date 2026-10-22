@@ -155,6 +155,11 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 
 - Rewrote `docs/file-format-parity.md` to cover all 27 entries in `FORMATS` (24 upstream VectorCraft formats plus `cdr`, `cmx`, and legacy `coralcraft`), Corel `.cpl`/`.xml` palettes, and V1/V2 verification gates; updated post-V2 measured metrics in `ROADMAP.md`.
 
+### V3.1 Multi-page documents (per-page size, orientation, and horizontal reflow) on VectorCraft artboards (2026-10-22)
+
+- `crates/corel-import/src/lib.rs` adds `PageOrientation` (`Portrait`/`Landscape`), `inter_page_gap_pt`, `collect_objects_for_each_page`, `resize_page_reflow`, `insert_page_at`, `delete_pages_reflow`, and `reorder_page_reflow`, plus cross-page routing for newly created objects in `export_document`.
+- `crates/engine/src/cmd/layer.rs` (`artboard_new`, `artboard_delete`, `artboard_set`) and `crates/engine/src/cmd/panelcmds.rs` (`artboard_reorder`) delegate multi-page insertion (`insertAt`/`before`/`after`), per-page `orientation` (`portrait`/`landscape`), `applyToAllPages`, `deleteArt`, and `reflowPages` to `corel-import` (marked `// CoralCraft:`), keeping pure VectorCraft artboard behavior untouched when those parameters and `"coralcraft"` metadata are absent.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

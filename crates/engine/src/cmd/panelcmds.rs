@@ -10,7 +10,16 @@ use crate::{Clipboard, EngineError};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("artboard.reorder", "Move Artboard Up/Down", [], None, "{index, to} change an artboard's number", has_doc, artboard_reorder),
+        // CoralCraft: include `reflowPages?` and `lockedAndHidden?` on `artboard.reorder`.
+        cmd!(
+            "artboard.reorder",
+            "Move Artboard Up/Down",
+            [],
+            None,
+            "{index, to, reflowPages?: bool, lockedAndHidden?: bool} change an artboard's number",
+            has_doc,
+            artboard_reorder
+        ),
         cmd!(
             "artboard.duplicate",
             "Duplicate Artboard",
@@ -56,6 +65,13 @@ fn artboard_reorder(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "artboard.reorder";
     let i = artboard_index(&s.doc()?.doc, p, C)?;
     let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing to"))? as usize;
+    // CoralCraft: support reflowing page positions and page-bound artwork on reorder.
+    let reflow = bool_or(p, "reflowPages", false) || s.doc()?.doc.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY);
+    if reflow {
+        let all = bool_or(p, "lockedAndHidden", s.prefs.move_locked_with_artboard);
+        s.edit("Reorder Artboards", |d, _| corel_import::reorder_page_reflow(d, i, to, all).map_err(|e| EngineError::Other(e.to_string())))?;
+        return ok();
+    }
     s.edit("Reorder Artboards", |d, _| {
         if i >= d.artboards.len() {
             return Err(EngineError::Other("no such artboard".into()));
