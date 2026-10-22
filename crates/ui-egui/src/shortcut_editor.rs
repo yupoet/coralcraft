@@ -17,8 +17,8 @@ use crate::state::{Dialog, UiState};
 use crate::theme::{self, Tokens};
 use crate::{VectorcraftApp, menus, widgets};
 
-// CoralCraft: rebranded preset name.
-pub const PRESETS: &[&str] = &["CoralCraft Defaults", "Classic Defaults"];
+// CoralCraft: rebranded preset name + public-documentation CorelDRAW shortcut preset.
+pub const PRESETS: &[&str] = &["CoralCraft Defaults", "Classic Defaults", "CorelDRAW"];
 pub const CUSTOM: &str = "Custom";
 /// Set names earlier versions saved: (old name, current name).
 pub const LEGACY_PRESETS: &[(&str, &str)] = &[("Illustrator Defaults", "Classic Defaults")]; // brand-ok: legacy preference value
@@ -374,9 +374,62 @@ pub fn reset_one(overrides: &mut BTreeMap<String, String>, key: &str) {
     overrides.remove(key);
 }
 
-/// Overrides of a preset (both presets are the registry defaults for now).
+/// Overrides of a preset (`CoralCraft Defaults` and `Classic Defaults` are the registry defaults;
+/// `CorelDRAW` applies public-documentation CorelDRAW tool, command, and docker bindings).
 pub fn preset(name: &str) -> Option<BTreeMap<String, String>> {
-    PRESETS.contains(&set_name(name)).then(BTreeMap::new)
+    match set_name(name) {
+        "CorelDRAW" => Some(coreldraw_preset()),
+        n if PRESETS.contains(&n) => Some(BTreeMap::new()),
+        _ => None,
+    }
+}
+
+/// CoralCraft: CorelDRAW shortcut scheme derived strictly from public documentation
+/// (CorelDRAW Help: Default keyboard shortcuts — F5 Freehand, F6 Rectangle, F7 Ellipse,
+/// F8 Text, F10 Shape, Y Polygon, A Spiral, G Interactive Fill, M Mesh Fill, X Eraser,
+/// H Pan, Z Zoom, Ctrl+G Group, Ctrl+U Ungroup, Ctrl+L Combine, Ctrl+K Break Apart,
+/// Ctrl+Q Convert to Curves, F4 Fit Page, Shift+F2 Zoom to Selection, F3 Zoom Out,
+/// F9 Full-Screen Preview, Alt+F7..F10 Dockers, F11 Fountain Fill, F12 Outline Pen).
+fn coreldraw_preset() -> BTreeMap<String, String> {
+    let mut ov = BTreeMap::new();
+    let bindings: &[(&str, &str)] = &[
+        // Tools
+        ("tool:directSelection", "F10"),
+        ("tool:pencil", "F5"),
+        ("tool:rectangle", "F6"),
+        ("tool:ellipse", "F7"),
+        ("tool:type", "F8"),
+        ("tool:polygon", "Y"),
+        ("tool:spiral", "A"),
+        ("tool:gradient", "G"),
+        ("tool:mesh", "M"),
+        ("tool:eraser", "X"),
+        ("tool:hand", "H"),
+        ("tool:zoom", "Z"),
+        // Object & Edit commands
+        ("object.group", "Cmd+G"),
+        ("object.ungroup", "Cmd+U"),
+        ("object.compoundPath.make", "Cmd+L"),
+        ("object.compoundPath.release", "Cmd+K"),
+        ("object.expandShape", "Cmd+Q"),
+        ("edit.duplicate", "Cmd+D"),
+        // View & Zoom commands
+        ("view.fitArtboard", "F4"),
+        ("view.fitSelection", "Shift+F2"),
+        ("view.zoomOut", "F3"),
+        ("view.presentation", "F9"),
+        // Dockers / Panels
+        ("panel:transform", "Alt+F7"),
+        ("panel:align", "Alt+F8"),
+        ("panel:scale", "Alt+F9"),
+        ("panel:info", "Alt+F10"),
+        ("panel:gradient", "F11"),
+        ("panel:stroke", "F12"),
+    ];
+    for &(key, chord) in bindings {
+        let _ = assign(&mut ov, key, Some(chord), true);
+    }
+    ov
 }
 
 /// Export format: `{"format": "vectorcraft-shortcuts", "set": name, "overrides": {...}}`.
@@ -973,10 +1026,44 @@ mod tests {
 
     #[test]
     fn presets_are_the_defaults() {
-        for p in PRESETS {
+        for p in ["CoralCraft Defaults", "Classic Defaults"] {
             assert_eq!(preset(p), Some(BTreeMap::new()));
         }
+        let cdr = preset("CorelDRAW").expect("CorelDRAW preset exists");
+        assert!(!cdr.is_empty());
+        assert!(all_conflicts(&cdr).is_empty(), "CorelDRAW preset must have zero conflicts: {:?}", all_conflicts(&cdr));
         assert!(preset("Nope").is_none());
+    }
+
+    #[test]
+    fn coreldraw_shortcut_preset_is_conflict_free_and_maps_public_shortcuts_v4_2() {
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
+        app.run("shortcuts.preset", json!({ "name": "CorelDRAW" })).unwrap();
+        assert_eq!(app.ui.shortcut_set, "CorelDRAW");
+        assert!(all_conflicts(&app.ui.shortcut_overrides).is_empty());
+
+        assert_eq!(tool_for_key("F10"), Some("directSelection"));
+        assert_eq!(tool_for_key("F5"), Some("pencil"));
+        assert_eq!(tool_for_key("F6"), Some("rectangle"));
+        assert_eq!(tool_for_key("F7"), Some("ellipse"));
+        assert_eq!(tool_for_key("F8"), Some("type"));
+        assert_eq!(tool_for_key("Y"), Some("polygon"));
+        assert_eq!(tool_for_key("A"), Some("spiral"));
+        assert_eq!(tool_for_key("G"), Some("gradient"));
+        assert_eq!(tool_for_key("M"), Some("mesh"));
+        assert_eq!(tool_for_key("X"), Some("eraser"));
+        assert_eq!(tool_for_key("H"), Some("hand"));
+        assert_eq!(tool_for_key("Z"), Some("zoom"));
+
+        assert_eq!(command_shortcut("object.group"), Some("Cmd+G"));
+        assert_eq!(command_shortcut("object.ungroup"), Some("Cmd+U"));
+        assert_eq!(command_shortcut("object.compoundPath.make"), Some("Cmd+L"));
+        assert_eq!(command_shortcut("object.compoundPath.release"), Some("Cmd+K"));
+        assert_eq!(command_shortcut("object.expandShape"), Some("Cmd+Q"));
+        assert_eq!(panel_shortcut("transform"), Some("Alt+F7"));
+        assert_eq!(panel_shortcut("align"), Some("Alt+F8"));
+        assert_eq!(panel_shortcut("gradient"), Some("F11"));
+        assert_eq!(panel_shortcut("stroke"), Some("F12"));
     }
 
     #[test]

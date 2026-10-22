@@ -71,7 +71,7 @@ Rules:
 
 ### V4: CorelDRAW workspace
 - [x] V4.1 CorelDRAW workspace preset on VectorCraft docking: left toolbox, top property bar, right vertical palette bar, bottom page navigator and status bar, right dockers. Saved as a workspace.
-- [ ] V4.2 CorelDRAW shortcut scheme (F5–F12, Ctrl+G/U/L/K/Q, Alt+F7–F11, P, G, ...) as a selectable shortcut set, from public documentation only.
+- [x] V4.2 CorelDRAW shortcut scheme (F5–F12, Ctrl+G/U/L/K/Q, Alt+F7–F11, P, G, ...) as a selectable shortcut set, from public documentation only.
 - [ ] V4.3 CorelDRAW tool mapping onto VectorCraft tools (Pick, Shape F10, Crop, Zoom, Freehand/Bezier/Pen, Rectangle, Ellipse, Polygon/Star, Text F8, Interactive Fill G). Context-sensitive property bar.
 - [ ] V4.4 Dockers: Object Properties (Fill/Outline/Transparency), Objects (Object Manager), Transform, Align & Distribute, Color, Text. Reuse VectorCraft panels; reshape them only where CorelDRAW semantics differ.
 

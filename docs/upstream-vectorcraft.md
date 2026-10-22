@@ -179,6 +179,11 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/ui-egui/src/state.rs` and `crates/ui-egui/src/menus.rs` (marked `// CoralCraft:`) add `ui.palette_bar` and the `window.paletteBar` / `window.pageNavigator` View/Window menu toggles.
 - `crates/ui-egui/src/workspaces.rs` (marked `// CoralCraft:`) adds `page_navigator` and `palette_bar` flags on `Workspace` plus the built-in `"CorelDRAW"` workspace preset (`CORELDRAW`, `coreldraw_docking_layout()`).
 
+### V4.2 CorelDRAW shortcut scheme preset (2026-10-22)
+
+- `crates/ui-egui/src/shortcut_editor.rs` (marked `// CoralCraft:`) adds `"CorelDRAW"` to `PRESETS` and `coreldraw_preset()` mapping public-documentation CorelDRAW shortcuts (`F5`–`F12`, `Cmd+G/U/L/K/Q/D`, `Alt+F7`–`Alt+F10`, `Y`, `A`, `G`, `M`, `X`, `H`, `Z`).
+- `crates/ui-egui/src/shortcuts.rs` (`dispatch`, marked `// CoralCraft:`) dispatches `Key::F1`..=`Key::F12` via `tool_for_key` when bound to a tool.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

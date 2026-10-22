@@ -542,6 +542,29 @@ pub fn handle(app: &mut VectorcraftApp, ctx: &egui::Context) {
     {
         let _ = app.run("edit.clear", json!({}));
     }
+    // CoralCraft: Function-key tool shortcuts (F1..F12 in the CorelDRAW shortcut set, e.g. F5..F8, F10).
+    // egui does not emit `Event::Text` for function keys, so check `Key::F1`..=`Key::F12` directly.
+    for (fkey, name) in [
+        (Key::F1, "F1"),
+        (Key::F2, "F2"),
+        (Key::F3, "F3"),
+        (Key::F4, "F4"),
+        (Key::F5, "F5"),
+        (Key::F6, "F6"),
+        (Key::F7, "F7"),
+        (Key::F8, "F8"),
+        (Key::F9, "F9"),
+        (Key::F10, "F10"),
+        (Key::F11, "F11"),
+        (Key::F12, "F12"),
+    ] {
+        if let Some(t) = crate::shortcut_editor::tool_for_key(name)
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, fkey))
+        {
+            app.select_tool(t);
+            return;
+        }
+    }
     // Single-key tool shortcuts (no Cmd/Ctrl/Alt). With a layout without Latin letters (Persian,
     // Arabic, Russian, Greek…) the key's position stands in for what it types (#793).
     let events: Vec<(String, Modifiers)> = ctx.input(|i| {

@@ -30,7 +30,7 @@ What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX 
 | **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.4` **DONE**: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1, `cdr2raw`/`cmx2raw` oracle & real-sample counts) |
 | **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft`/`.drawcraft`/`.vctemplate` round-trip losslessly with `"coralcraft"` extension block; legacy `.coralcraft` JSON/ZIP converter; `docs/file-format-parity.md` rewritten (`V2.1`–`V2.4` **DONE**) |
 | **V3** | CorelDRAW multi-page model | Pages, master layers (all/odd/even), desktop layer, page navigator (`V3.1`–`V3.3` **DONE**: per-page size/orientation, insert/delete/reorder reflow, Master All/Odd/Even & Desktop layers in CorelDRAW render order, bottom Page Navigator bar & Layer Role UI) |
-| **V4** | CorelDRAW workspace | Toolbox, property bar, palette bar, dockers, CorelDRAW shortcut set (`V4.1` **DONE**: `"CorelDRAW"` workspace preset & right vertical Color Palette bar) |
+| **V4** | CorelDRAW workspace | Toolbox, property bar, palette bar, dockers, CorelDRAW shortcut set (`V4.1`–`V4.2` **DONE**: `"CorelDRAW"` workspace preset, right vertical Color Palette bar, and `"CorelDRAW"` shortcut set) |
 | **V5** | CorelDRAW-specific features | PowerClip, interactive effects with handles, Corel palettes, Smart Fill, PowerTRACE |
 | **V6** | MCP and CLI | VectorCraft MCP server plus CoralCraft-only tools |
 | **V7** | Retire `legacy/` | Pre-fork crates deleted |

@@ -267,7 +267,8 @@ fn clipboard_preferences_name_the_legacy_format_neutrally() {
 fn shortcut_set_old_name_is_accepted() {
     use crate::shortcut_editor::{PRESETS, import_json};
     let (old, _) = crate::shortcut_editor::LEGACY_PRESETS[0];
-    assert_eq!(PRESETS, ["CoralCraft Defaults", "Classic Defaults"]);
+    // CoralCraft: includes the built-in CorelDRAW shortcut preset.
+    assert_eq!(PRESETS, ["CoralCraft Defaults", "Classic Defaults", "CorelDRAW"]);
     // UI preferences saved by an earlier version load (and save again) under the current name.
     let ui: crate::state::UiState = serde_json::from_value(json!({ "shortcut_set": old })).unwrap();
     assert_eq!(ui.shortcut_set, "Classic Defaults");
