@@ -135,6 +135,10 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/corel-import/src/lib.rs` adds `CdrImportMetrics` and `document_metrics(&vectorcraft_doc::Document)` for structural verification (`page_count`, `layer_count`, `object_count`).
 - `crates/corel-import/tests/oracle_and_samples.rs` and `crates/engine/src/cmd/fileio/tests.rs` verify `cdr2raw`/`cmx2raw` differential oracle acceptance and exact page/layer/object counts across all real-world `.cdr` samples in `refs/cdr-samples`.
 
+### V2.1 Compatibility matrix test over every `FORMATS` entry (2026-10-22)
+
+- `crates/engine/src/cmd/fileio/tests.rs` adds `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` gating all 24 upstream VectorCraft formats plus `cdr` and `cmx` in `FORMATS` and testing export/serialize/open across every format and extension.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

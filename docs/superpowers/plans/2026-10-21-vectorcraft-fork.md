@@ -59,7 +59,7 @@ Rules:
 - [x] V1.4 Re-point the libcdr `cdr2raw` differential tests and the real-sample probe (`refs/cdr-samples`) at the new pipeline. A sample counts as passing only if it opens with a correct page/layer/object count, not merely without crashing.
 
 ### V2: Full VectorCraft file compatibility (D7)
-- [ ] V2.1 Compatibility matrix test: for every entry in VectorCraft's `FORMATS` table, CoralCraft opens and saves/exports through the same code path. CI fails if a VectorCraft format is missing.
+- [x] V2.1 Compatibility matrix test: for every entry in VectorCraft's `FORMATS` table, CoralCraft opens and saves/exports through the same code path. CI fails if a VectorCraft format is missing.
 - [ ] V2.2 `.vectorcraft` / `.drawcraft` / `.vctemplate` documents open and save losslessly. CoralCraft-only data (pages, master layers, CDR residuals) is stored in a namespaced extension block that VectorCraft ignores.
 - [ ] V2.3 Legacy `.coralcraft` (pre-fork JSON/ZIP) import converter, so existing files still open.
 - [ ] V2.4 Update `docs/file-format-parity.md`: VectorCraft formats, CDR/CMX, Corel palettes.

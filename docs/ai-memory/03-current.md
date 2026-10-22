@@ -4,6 +4,8 @@
 
 ## 1. Current Stage Status
 
+- **V2.1 DONE (2026-10-22): Compatibility matrix test over every entry in `FORMATS` (`crates/engine/src/cmd/fileio/tests.rs`).**
+  Added `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` verifying that all 24 upstream VectorCraft format IDs plus CoralCraft's `cdr` and `cmx` are present in `FORMATS` with exact `read`, `write`, and `extensions` flags, and exercising every writable format via `document.export` + `document.serialize` and every readable format (across all its extensions) via `document.open`. **Next task: V2.2** (`.vectorcraft` / `.drawcraft` / `.vctemplate` lossless round-trip with CoralCraft extension block).
 - **V1.4 DONE (2026-10-22): `libcdr` (`cdr2raw`/`cmx2raw`) differential tests and real-sample (`refs/cdr-samples`) count verification re-pointed at `corel-import` + `vectorcraft-engine`.**
   Added `CdrImportMetrics` and `document_metrics(&vectorcraft_doc::Document)` in `crates/corel-import/src/lib.rs`, `crates/corel-import/tests/oracle_and_samples.rs`, and `cdr_and_cmx_engine_pipeline_passes_libcdr_oracle_and_real_samples` in `crates/engine/src/cmd/fileio/tests.rs`. Verified that CDR7 and CMX1 exported from `vectorcraft_doc::Document` pass `cdr2raw`/`cmx2raw` with expected `startDocument`/`startPage`/`drawPath` counts, and all 65 valid real-world `.cdr` samples in `refs/cdr-samples` open into `vectorcraft_doc::Document` with exact `page_count`, `layer_count`, and `object_count`. **Phase V1 is complete; next task: V2.1** (compatibility matrix test over every VectorCraft `FORMATS` entry).
 - **V1.3 DONE (2026-10-22): CDR7 / CDRX / CMX1 writers wired into `vectorcraft-engine` Save As, Save, Export, Serialize, and MCP `export`/`save_file`.**

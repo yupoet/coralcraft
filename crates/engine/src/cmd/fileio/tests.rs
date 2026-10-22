@@ -947,3 +947,141 @@ fn cdr_and_cmx_engine_pipeline_passes_libcdr_oracle_and_real_samples() {
         assert!(with_objects >= 20, "expected >= 20 real-world .cdr samples with imported objects, got {with_objects}");
     }
 }
+
+// CoralCraft: V2.1 compatibility matrix test over every entry in VectorCraft's FORMATS table.
+#[test]
+fn vectorcraft_format_compatibility_matrix_covers_every_format_v2_1() {
+    // 1. CI fails if any upstream VectorCraft format or CoralCraft format is missing from FORMATS.
+    let required_formats: &[(&str, bool, bool, &[&str])] = &[
+        ("vectorcraft", true, true, &["vectorcraft", "drawcraft"]),
+        ("svg", true, true, &["svg"]),
+        ("svgz", true, true, &["svgz"]),
+        ("pdf", true, true, &["pdf"]),
+        ("ai", true, true, &["ai"]),
+        ("ait", true, false, &["ait"]),
+        ("png", true, true, &["png"]),
+        ("jpg", true, true, &["jpg", "jpeg"]),
+        ("gif", true, true, &["gif"]),
+        ("webp", true, true, &["webp"]),
+        ("tiff", true, true, &["tif", "tiff"]),
+        ("bmp", true, true, &["bmp"]),
+        ("template", true, true, &["vctemplate"]),
+        ("png8", false, true, &["png"]),
+        ("txt", false, true, &["txt"]),
+        ("dxf", true, true, &["dxf"]),
+        ("eps", true, true, &["eps", "epsf"]),
+        ("emf", true, true, &["emf"]),
+        ("wmf", true, true, &["wmf"]),
+        ("tga", true, true, &["tga", "vda", "icb", "vst"]),
+        ("psd", true, true, &["psd"]),
+        ("affinity", true, false, &["af", "afdesign", "afpub"]),
+        ("psb", true, false, &["psb"]),
+        ("ps", true, false, &["ps"]),
+        ("cdr", true, true, &["cdr"]),
+        ("cmx", true, true, &["cmx"]),
+    ];
+
+    for &(id, want_read, want_write, want_exts) in required_formats {
+        let fmt = FORMATS.iter().find(|f| f.id == id).unwrap_or_else(|| panic!("missing required format `{id}` in FORMATS"));
+        assert_eq!(fmt.read, want_read, "format `{id}` read flag mismatch");
+        assert_eq!(fmt.write, want_write, "format `{id}` write flag mismatch");
+        assert_eq!(fmt.extensions, want_exts, "format `{id}` extensions mismatch");
+    }
+    assert_eq!(FORMATS.len(), required_formats.len(), "every FORMATS entry must be covered by the V2.1 compatibility matrix");
+
+    // 2. Author a document with both vector geometry and point type so every writable format (including txt) exports non-empty output.
+    let mut authored = session(200.0, 120.0, 1);
+    authored.execute("shape.rectangle", &json!({"x": 20, "y": 15, "width": 80, "height": 50})).unwrap();
+    authored.execute("text.create", &json!({"x": 30, "y": 90, "text": "CoralCraft Matrix"})).unwrap();
+
+    // Helper for read-only PSB (2x1 8-bit RGB PSB header + empty sections + raw pixels)
+    let synth_psb = || -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"8BPS");
+        b.extend_from_slice(&2u16.to_be_bytes()); // version 2 = PSB
+        b.extend_from_slice(&[0u8; 6]);
+        b.extend_from_slice(&3u16.to_be_bytes()); // 3 channels
+        b.extend_from_slice(&1u32.to_be_bytes()); // height = 1
+        b.extend_from_slice(&2u32.to_be_bytes()); // width = 2
+        b.extend_from_slice(&8u16.to_be_bytes()); // depth = 8
+        b.extend_from_slice(&3u16.to_be_bytes()); // mode = 3 (RGB)
+        b.extend_from_slice(&0u32.to_be_bytes()); // color mode data length (4B even in PSB)
+        b.extend_from_slice(&0u32.to_be_bytes()); // image resources length (4B even in PSB)
+        b.extend_from_slice(&0u64.to_be_bytes()); // layer/mask section length (8B in PSB)
+        b.extend_from_slice(&0u16.to_be_bytes()); // compression 0 = Raw
+        b.extend_from_slice(&[220, 40, 30, 200, 10, 180]); // R, G, B planes for 2x1
+        b
+    };
+
+    // Helper for read-only Affinity container with embedded PNG preview
+    let synth_affinity = || -> Vec<u8> {
+        let png = image_bytes(2, 2, image::ImageFormat::Png);
+        let mut b = vec![0; 72];
+        b[..4].copy_from_slice(vectorcraft_affinity::MAGIC);
+        b[4..6].copy_from_slice(&12u16.to_le_bytes());
+        b[8..12].copy_from_slice(b"nsrP");
+        b[12..16].copy_from_slice(b"#Inf");
+        b[24..32].copy_from_slice(&72u64.to_le_bytes());
+        b[64..68].copy_from_slice(b"Prot");
+        b.extend_from_slice(b"\xff\xff\xff\xffThmb");
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&(png.len() as u32 + 13).to_le_bytes());
+        b.extend_from_slice(&29u32.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.extend_from_slice(&(png.len() as u32).to_le_bytes());
+        b.push(1);
+        b.extend_from_slice(&png);
+        b
+    };
+
+    // 3. Exercise every entry in FORMATS through export/serialize (when writable) and document.open (when readable).
+    for fmt in FORMATS {
+        let exported_bytes = if fmt.write {
+            let exp = authored
+                .execute("document.export", &json!({"format": fmt.id}))
+                .unwrap_or_else(|e| panic!("document.export failed for `{}`: {e}", fmt.id));
+            assert_eq!(exp["format"], fmt.id);
+            let bytes = b64(&exp);
+            assert!(!bytes.is_empty(), "document.export produced empty bytes for `{}`", fmt.id);
+
+            let ser = authored
+                .execute("document.serialize", &json!({"format": fmt.id}))
+                .unwrap_or_else(|e| panic!("document.serialize failed for `{}`: {e}", fmt.id));
+            if fmt.id == "svg" {
+                assert!(!ser["text"].as_str().unwrap_or_default().is_empty(), "svg serialize text empty");
+            } else {
+                assert!(!b64(&ser).is_empty(), "serialize dataBase64 empty for `{}`", fmt.id);
+            }
+            Some(bytes)
+        } else {
+            None
+        };
+
+        if fmt.read {
+            let sample_bytes = match fmt.id {
+                "ait" => {
+                    let dir = tmp_dir("matrix-ait");
+                    let ait_path = dir.join("matrix.ait").to_string_lossy().into_owned();
+                    authored.execute("file.saveAsTemplate", &json!({"path": ait_path})).unwrap();
+                    let bytes = std::fs::read(&ait_path).unwrap();
+                    let _ = std::fs::remove_dir_all(&dir);
+                    bytes
+                }
+                "ps" => b64(&authored.execute("document.export", &json!({"format": "eps"})).unwrap()),
+                "psb" => synth_psb(),
+                "affinity" => synth_affinity(),
+                _ => exported_bytes.unwrap_or_else(|| panic!("no sample bytes for readable format `{}`", fmt.id)),
+            };
+
+            for &ext in fmt.extensions {
+                let file_name = format!("matrix_test.{ext}");
+                let mut reader_session = Session::new();
+                let opened = open(&mut reader_session, &file_name, &sample_bytes);
+                assert_eq!(opened["format"], fmt.id, "opening `{file_name}` must report format `{}`", fmt.id);
+                let doc = &reader_session.doc().unwrap().doc;
+                assert!(!doc.artboards.is_empty(), "`{file_name}` must have at least 1 artboard");
+                assert!(!doc.layers.is_empty(), "`{file_name}` must have at least 1 layer");
+            }
+        }
+    }
+}
