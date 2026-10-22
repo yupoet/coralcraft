@@ -94,6 +94,13 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<&'static Format> {
     if psdread::is_psd(bytes) {
         return format(if psdread::is_psb(bytes) { "psb" } else { "psd" });
     }
+    // CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx) containers.
+    if let Ok(rep) = coralcraft_cdr::probe(bytes) {
+        return format(match rep.container {
+            coralcraft_cdr::CdrContainer::Riff { kind: coralcraft_cdr::CdrKind::Cmx, .. } => "cmx",
+            _ => "cdr",
+        });
+    }
     if let Some(f) = image::guess_format(bytes).ok().and_then(image_format) {
         return Some(f);
     }
@@ -266,6 +273,11 @@ pub fn load_with(name: &str, bytes: &[u8], opts: &LoadOptions) -> Result<Loaded>
             let i = super::affinity::import(&title, bytes)?;
             preview_only = i.preview_only;
             (i.doc, i.warnings, false)
+        }
+        // CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx).
+        "cdr" | "cmx" => {
+            let out = corel_import::import_cdr_bytes(bytes).map_err(|e| err(format!("can't open `{}`: {e}", file_name(name))))?;
+            (out.document, out.warnings, false)
         }
         _ if format.raster => (raster_doc(&title, bytes)?, vec![], false),
         _ => return Err(err(format!("{} files can't be opened yet", format.label))),

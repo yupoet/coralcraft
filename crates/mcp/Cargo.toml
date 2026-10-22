@@ -25,3 +25,5 @@ image = { workspace = true }
 vectorcraft-testkit = { workspace = true }
 proptest = { workspace = true }
 socket2 = { workspace = true }
+# CoralCraft: synthetic CDR/CMX generation in MCP fileio tests.
+corel-import = { workspace = true }

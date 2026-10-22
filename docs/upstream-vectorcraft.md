@@ -114,6 +114,13 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - Added CoralCraft-owned `crates/corel-import` (`corel-import` in root `Cargo.toml` and registered at L3 in `xtask/src/layers.rs` with `INTRA_LAYER_ORDER = &["coralcraft-cdr", "format", "corel-import"]`).
 - Maps `coralcraft_doc::Document` ↔ `vectorcraft_doc::Document` and preserves lossless residuals (`CoralCraftDocData`) under `Document::unknown["coralcraft"]`. No VectorCraft crate source files were modified in V1.1.
 
+### V1.2 `.cdr`/`.cmx` in Open/Place tables and MCP `open_file` (2026-10-22)
+
+- `crates/engine/Cargo.toml` adds `coralcraft-cdr` and `corel-import` dependencies; `crates/mcp/Cargo.toml` adds `corel-import` dev-dependency (all marked `# CoralCraft:`).
+- `crates/engine/src/cmd/fileio/mod.rs` appends `cdr` and `cmx` entries to `FORMATS`, `OPEN_EXTS`, and `PLACE_EXTS` (marked `// CoralCraft:`).
+- `crates/engine/src/cmd/fileio/load.rs` sniffs CDR/CMX containers via `coralcraft_cdr::probe` in `detect` and loads `.cdr`/`.cmx` via `corel_import::import_cdr_bytes` in `load_with` (marked `// CoralCraft:`).
+- `packaging/macos/Info.plist.in` declares `.cdr` and `.cmx` document types so `the_macos_bundle_opens_every_readable_format` passes.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

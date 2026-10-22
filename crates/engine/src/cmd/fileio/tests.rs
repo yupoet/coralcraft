@@ -777,3 +777,37 @@ fn a_failed_save_does_not_stamp_the_documents_dates() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(!s.doc().unwrap().is_dirty());
 }
+
+// CoralCraft: V1.2 tests for .cdr and .cmx in FORMATS, OPEN_EXTS, PLACE_EXTS, document.open, and file.place.
+#[test]
+fn cdr_and_cmx_are_in_format_tables_and_open_and_place() {
+    assert!(OPEN_EXTS.contains(&"cdr") && OPEN_EXTS.contains(&"cmx"));
+    assert!(PLACE_EXTS.contains(&"cdr") && PLACE_EXTS.contains(&"cmx"));
+    assert!(FORMATS.iter().any(|f| f.id == "cdr" && f.read && f.extensions.contains(&"cdr")));
+    assert!(FORMATS.iter().any(|f| f.id == "cmx" && f.read && f.extensions.contains(&"cmx")));
+
+    let mut authored = session(200.0, 100.0, 1);
+    authored.execute("shape.rectangle", &json!({"x": 20, "y": 15, "width": 80, "height": 50})).unwrap();
+    let vdoc = &authored.doc().unwrap().doc;
+    let cdr7_bytes = corel_import::write_cdr7_document(vdoc).unwrap();
+    let cdrx_bytes = corel_import::write_cdrx_zip_document(vdoc).unwrap();
+    let cmx1_bytes = corel_import::write_cmx1_document(vdoc).unwrap();
+
+    for (name, bytes, expected_fmt) in
+        [("sample.cdr", cdr7_bytes.clone(), "cdr"), ("modern.cdr", cdrx_bytes.clone(), "cdr"), ("exchange.cmx", cmx1_bytes.clone(), "cmx")]
+    {
+        let mut s = Session::new();
+        let r = open(&mut s, name, &bytes);
+        assert_eq!(r["format"], expected_fmt, "{name}");
+        assert_eq!(r["title"], name, "{name}");
+        assert!(s.doc().unwrap().doc.node_count() >= 2, "{name}: rectangle imported");
+
+        // Place into an active document
+        let mut target = session(400.0, 300.0, 1);
+        let pr = target
+            .execute("file.place", &json!({"name": name, "dataBase64": vectorcraft_format::base64_encode(&bytes), "at": [200.0, 150.0]}))
+            .unwrap();
+        assert_eq!(pr["format"], expected_fmt, "file.place {name}");
+        assert!(target.doc().unwrap().doc.node_count() >= 2, "file.place {name} added artwork");
+    }
+}

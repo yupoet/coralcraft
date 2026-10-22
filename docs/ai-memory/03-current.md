@@ -4,6 +4,8 @@
 
 ## 1. Current Stage Status
 
+- **V1.2 DONE (2026-10-22): `.cdr` and `.cmx` wired into `vectorcraft-engine` Open/Place format tables, `Info.plist.in`, and MCP `open_file`.**
+  `FORMATS`, `OPEN_EXTS`, and `PLACE_EXTS` in `crates/engine/src/cmd/fileio/mod.rs` now include `cdr` and `cmx`; `detect` and `load_with` in `crates/engine/src/cmd/fileio/load.rs` probe and import `.cdr` (CDR7, CDRX, legacy WL) and `.cmx` via `coralcraft-cdr` + `corel-import`; `packaging/macos/Info.plist.in` associates `.cdr` and `.cmx`; `file.place` and MCP `open_file` / `file.open` support `.cdr` and `.cmx` out of the box. **Next task: V1.3** (CDR7/CDRX/CMX1 writers on the VectorCraft `Document`; Save As/Export entries).
 - **V1.1 DONE (2026-10-22): `corel-import` crate maps `coralcraft-cdr` documents onto `vectorcraft-doc`.**
   `crates/corel-import` (Layer 3, strict lints) implements `import_cdr_bytes`, `import_document`,
   `export_document`, `write_cdr7_document`, `write_cdrx_zip_document`, and `write_cmx1_document`,

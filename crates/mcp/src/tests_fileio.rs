@@ -224,3 +224,31 @@ fn document_color_mode_puts_rgb_greys_on_the_black_plate() {
     let bad = call_tool(&mut o, "run_command", &json!({"command": "file.documentColorMode", "params": {"mode": "rgb", "grays": "rich"}}));
     assert!(bad.is_error, "{bad:?}");
 }
+
+// CoralCraft: V1.2 test verifying MCP open_file and run_command file.open support .cdr and .cmx.
+#[test]
+fn mcp_opens_cdr_and_cmx_files() {
+    let tools = tool_definitions();
+    let open = tools.iter().find(|t| t["name"] == "open_file").unwrap();
+    let desc = open["description"].as_str().unwrap();
+    assert!(desc.contains(".cdr") && desc.contains(".cmx"), "open_file description must advertise .cdr and .cmx: {desc}");
+
+    let src = two_boards();
+    let vdoc = &src.session.doc().unwrap().doc;
+    let cdr_bytes = corel_import::write_cdr7_document(vdoc).unwrap();
+    let cmx_bytes = corel_import::write_cmx1_document(vdoc).unwrap();
+
+    let cdr_path = tmp("brochure.cdr");
+    let cmx_path = tmp("clipart.cmx");
+    std::fs::write(&cdr_path, &cdr_bytes).unwrap();
+    std::fs::write(&cmx_path, &cmx_bytes).unwrap();
+
+    let mut h = Headless::new();
+    let r_cdr = text(&call_tool(&mut h, "open_file", &json!({"path": cdr_path})));
+    assert_eq!(r_cdr["format"], "cdr");
+    assert_eq!(h.session.doc().unwrap().doc.artboards.len(), 2);
+
+    let r_cmx = text(&call_tool(&mut h, "run_command", &json!({"command": "file.open", "params": {"path": cmx_path}})));
+    assert_eq!(r_cmx["format"], "cmx");
+    assert_eq!(h.session.doc().unwrap().doc.artboards.len(), 2);
+}

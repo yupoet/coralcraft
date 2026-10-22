@@ -665,6 +665,9 @@ pub const FORMATS: &[Format] = &[
     reader("psb", "PSB", &["psb"], "image/x-psb", true),
     // PostScript programs, read as EPS files are; Print to PostScript writes them, exports don't.
     reader("ps", "PostScript", &["ps"], "application/postscript", false),
+    // CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx).
+    reader("cdr", "CorelDRAW", &["cdr"], "application/vnd.corel-draw", false),
+    reader("cmx", "Corel Presentation Exchange", &["cmx"], "image/x-cmx", false),
 ];
 
 /// Every extension `document.open` reads (the "All readable files" filter of open dialogs).
@@ -700,6 +703,9 @@ pub const OPEN_EXTS: &[&str] = &[
     "af",
     "afdesign",
     "afpub",
+    // CoralCraft: CorelDRAW and CMX extensions.
+    "cdr",
+    "cmx",
 ];
 
 /// Extensions in [`OPEN_EXTS`] the desktop packaging doesn't associate with VectorCraft: Photoshop
@@ -763,6 +769,9 @@ pub const PLACE_EXTS: &[&str] = &[
     "af",
     "afdesign",
     "afpub",
+    // CoralCraft: CorelDRAW and CMX extensions.
+    "cdr",
+    "cmx",
     "txt",
     "rtf",
     "docx",

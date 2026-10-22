@@ -35,6 +35,9 @@ vectorcraft-metafile = { workspace = true }
 vectorcraft-plugins = { workspace = true }
 vectorcraft-affinity = { workspace = true }
 vectorcraft-scriptcheck = { workspace = true }
+# CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx) format bridge.
+coralcraft-cdr = { workspace = true }
+corel-import = { workspace = true }
 image = { workspace = true }
 flate2 = { workspace = true }
 # The XML parts of Word documents placed as type (place/docx.rs).
