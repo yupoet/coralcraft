@@ -160,6 +160,13 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/corel-import/src/lib.rs` adds `PageOrientation` (`Portrait`/`Landscape`), `inter_page_gap_pt`, `collect_objects_for_each_page`, `resize_page_reflow`, `insert_page_at`, `delete_pages_reflow`, and `reorder_page_reflow`, plus cross-page routing for newly created objects in `export_document`.
 - `crates/engine/src/cmd/layer.rs` (`artboard_new`, `artboard_delete`, `artboard_set`) and `crates/engine/src/cmd/panelcmds.rs` (`artboard_reorder`) delegate multi-page insertion (`insertAt`/`before`/`after`), per-page `orientation` (`portrait`/`landscape`), `applyToAllPages`, `deleteArt`, and `reflowPages` to `corel-import` (marked `// CoralCraft:`), keeping pure VectorCraft artboard behavior untouched when those parameters and `"coralcraft"` metadata are absent.
 
+### V3.2 Master layers (All / Odd / Even pages) and shared Desktop layer in CorelDRAW render order (2026-10-22)
+
+- `crates/doc/src/coralcraft.rs` (re-exported from `crates/doc/src/lib.rs`, marked `// CoralCraft:`) defines `CorelLayerRole` (`Normal`, `MasterAllPages`, `MasterEvenPages`, `MasterOddPages`, `Desktop`, `Guides`, `Grid`, `Unknown`) and `CorelLayerInfo`, reading and updating `Document::unknown["coralcraft"]["layer_meta"]`.
+- `crates/render/src/lib.rs` (`draw_page` and `skipped`, marked `// CoralCraft:`) partitions layers into Background Master, Normal Page, Foreground Master, and Desktop/Overlay buckets when `doc.has_corel_layer_roles()` is true, repeats Master layers across matching (`All`/`Odd`/`Even`) artboards, and skips non-printable CorelDRAW layers (such as the default `Desktop` layer) when `skip_templates` is set (`render_region` page exports).
+- `crates/engine/src/cmd/layer.rs` (`layer.new`, `layer.newSublayer`, `layer.setProps`, `layer.duplicate`, `layer.delete`, marked `// CoralCraft:`) accepts `role?`, `masterInFront?`, and `pageIndex?`, defaulting `Desktop`/`Guides`/`Grid` layers to `printable: false`.
+- `crates/corel-import/src/lib.rs` (`export_document`) routes layers with non-`Normal` `LayerRole` into `cdr_doc.master_layers`.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

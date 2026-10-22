@@ -11,6 +11,8 @@ pub mod blend;
 pub mod cancel;
 pub mod clipnest;
 pub mod cmyk;
+// CoralCraft: CorelDRAW multi-page layer role and master/desktop layer accessors.
+pub mod coralcraft;
 pub mod corners;
 pub mod depth;
 pub mod dimension;
@@ -90,6 +92,7 @@ pub use appearance::{
     StrokeAlign, StrokeLayer, WidthProfile,
 };
 pub use assets::ExportAsset;
+pub use coralcraft::{CORALCRAFT_UNKNOWN_KEY, CorelLayerInfo, CorelLayerRole};
 pub use corners::LiveCorners;
 pub use depth::MAX_DEPTH;
 pub use graph::{

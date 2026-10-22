@@ -166,3 +166,95 @@ fn guides_draw_on_screen_only() {
     assert!(drawn(false) > 0, "on screen the guide shows");
     assert_eq!(drawn(true), 0, "exports leave it out");
 }
+
+#[test]
+fn coreldraw_master_layers_all_odd_even_and_desktop_render_order_v3_2() {
+    use vectorcraft_doc::{Artboard, CorelLayerRole, LayerColor};
+
+    let mut d = Document::new(100.0, 100.0);
+    d.artboards = vec![
+        Artboard { id: 1, name: "Page 1".into(), rect: Rect::new(0.0, 0.0, 100.0, 100.0), show_center_mark: false, show_cross_hairs: false },
+        Artboard { id: 2, name: "Page 2".into(), rect: Rect::new(140.0, 0.0, 240.0, 100.0), show_center_mark: false, show_cross_hairs: false },
+        Artboard { id: 3, name: "Page 3".into(), rect: Rect::new(280.0, 0.0, 380.0, 100.0), show_center_mark: false, show_cross_hairs: false },
+    ];
+    d.layers.clear();
+
+    let solid = |r: u8, g: u8, b: u8| Appearance::basic(Paint::solid(Color::rgb8(r, g, b)), Paint::None, 0.0);
+
+    // Insert layers in deliberately scrambled order in `d.layers` to verify CorelDRAW bucket ordering:
+    // 1. Desktop layer (non-printable by default, renders on top on screen, skipped in page exports)
+    let mut l_desk = Node::layer(d.alloc_id(), "Desktop", LayerColor::Preset(0));
+    if let NodeKind::Layer { printable, .. } = &mut l_desk.kind {
+        *printable = false;
+    }
+    let desk_id = d.insert(None, usize::MAX, l_desk).unwrap();
+    d.set_corel_layer_info(desk_id, Some(CorelLayerRole::Desktop), Some(false), None);
+    let sq_desk_p1 = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), solid(255, 0, 255));
+    let sq_desk_gap = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(105.0, 10.0, 135.0, 40.0)), solid(255, 0, 255));
+    d.insert(Some(desk_id), usize::MAX, sq_desk_p1).unwrap();
+    d.insert(Some(desk_id), usize::MAX, sq_desk_gap).unwrap();
+
+    // 2. Foreground Master (Odd Pages) — must render in front of normal page layers on Pages 1 and 3 only
+    let l_fg_odd = Node::layer(d.alloc_id(), "Master Odd FG", LayerColor::Preset(1));
+    let fg_odd_id = d.insert(None, usize::MAX, l_fg_odd).unwrap();
+    d.set_corel_layer_info(fg_odd_id, Some(CorelLayerRole::MasterOddPages), Some(true), None);
+    let sq_fg_odd = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(40.0, 40.0, 60.0, 60.0)), solid(0, 0, 255));
+    d.insert(Some(fg_odd_id), usize::MAX, sq_fg_odd).unwrap();
+
+    // 3. Normal Layer — page objects on Pages 1, 2, 3
+    let l_norm = Node::layer(d.alloc_id(), "Layer 1", LayerColor::Preset(2));
+    let norm_id = d.insert(None, usize::MAX, l_norm).unwrap();
+    d.set_corel_layer_info(norm_id, Some(CorelLayerRole::Normal), Some(false), None);
+    for x_off in [0.0, 140.0, 280.0] {
+        let sq = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(x_off + 35.0, 35.0, x_off + 65.0, 65.0)), solid(0, 255, 0));
+        d.insert(Some(norm_id), usize::MAX, sq).unwrap();
+    }
+    let sq_yellow_p1 = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), solid(255, 255, 0));
+    d.insert(Some(norm_id), usize::MAX, sq_yellow_p1).unwrap();
+
+    // 4. Background Master (All Pages) — must render behind normal layers on Pages 1, 2, 3
+    let l_bg_all = Node::layer(d.alloc_id(), "Master All BG", LayerColor::Preset(3));
+    let bg_all_id = d.insert(None, usize::MAX, l_bg_all).unwrap();
+    d.set_corel_layer_info(bg_all_id, Some(CorelLayerRole::MasterAllPages), Some(false), None);
+    let sq_bg_all = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(5.0, 5.0, 95.0, 95.0)), solid(255, 0, 0));
+    d.insert(Some(bg_all_id), usize::MAX, sq_bg_all).unwrap();
+
+    // 5. Background Master (Even Pages) — must render on Page 2 only, above bg_all and behind normal
+    let l_bg_even = Node::layer(d.alloc_id(), "Master Even BG", LayerColor::Preset(4));
+    let bg_even_id = d.insert(None, usize::MAX, l_bg_even).unwrap();
+    d.set_corel_layer_info(bg_even_id, Some(CorelLayerRole::MasterEvenPages), Some(false), None);
+    let sq_bg_even = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(70.0, 10.0, 90.0, 30.0)), solid(0, 255, 255));
+    d.insert(Some(bg_even_id), usize::MAX, sq_bg_even).unwrap();
+
+    let mut renderer = Renderer::new();
+    let opts = RenderOptions { background: Some([255, 255, 255, 255]), ..Default::default() };
+    let screen = renderer.render(&d, 400, 100, Affine::IDENTITY, &opts);
+
+    // MasterAllPages (Red) draws on all 3 pages at local (80, 80)
+    assert_eq!(screen.pixel(80, 80), [255, 0, 0, 255], "Page 1 MasterAllPages background");
+    assert_eq!(screen.pixel(140 + 80, 80), [255, 0, 0, 255], "Page 2 MasterAllPages background");
+    assert_eq!(screen.pixel(280 + 80, 80), [255, 0, 0, 255], "Page 3 MasterAllPages background");
+
+    // Normal layer (Green) draws in front of MasterAllPages (Red) at local (38, 38)
+    assert_eq!(screen.pixel(38, 38), [0, 255, 0, 255], "Page 1 Normal above BG Master");
+    assert_eq!(screen.pixel(140 + 38, 38), [0, 255, 0, 255], "Page 2 Normal above BG Master");
+    assert_eq!(screen.pixel(280 + 38, 38), [0, 255, 0, 255], "Page 3 Normal above BG Master");
+
+    // MasterEvenPages (Cyan) draws at local (80, 20) ONLY on Page 2 (Even)
+    assert_eq!(screen.pixel(80, 20), [255, 0, 0, 255], "Page 1 (Odd) does not show MasterEvenPages");
+    assert_eq!(screen.pixel(140 + 80, 20), [0, 255, 255, 255], "Page 2 (Even) shows MasterEvenPages");
+    assert_eq!(screen.pixel(280 + 80, 20), [255, 0, 0, 255], "Page 3 (Odd) does not show MasterEvenPages");
+
+    // Foreground MasterOddPages (Blue) draws in front of Normal (Green) at local (50, 50) on Pages 1 & 3 only
+    assert_eq!(screen.pixel(50, 50), [0, 0, 255, 255], "Page 1 (Odd) shows FG MasterOddPages in front of Normal");
+    assert_eq!(screen.pixel(140 + 50, 50), [0, 255, 0, 255], "Page 2 (Even) shows Normal Green without MasterOddPages");
+    assert_eq!(screen.pixel(280 + 50, 50), [0, 0, 255, 255], "Page 3 (Odd) shows FG MasterOddPages in front of Normal");
+
+    // Desktop layer (Magenta) draws on screen over Page 1 at (20, 20) and in the pasteboard gap at (120, 20)
+    assert_eq!(screen.pixel(20, 20), [255, 0, 255, 255], "Desktop layer draws on top on screen");
+    assert_eq!(screen.pixel(120, 20), [255, 0, 255, 255], "Desktop layer draws in cross-page pasteboard gap");
+
+    // Exporting Page 1 via `render_region` leaves out the non-printable Desktop layer, revealing Yellow (255, 255, 0)
+    let exported_p1 = renderer.render_region(&d, d.artboards[0].rect, 1.0, true);
+    assert_eq!(exported_p1.pixel(20, 20), [255, 255, 0, 255], "non-printable Desktop layer is excluded from page export");
+}

@@ -26,7 +26,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Layer…",
             ["Window", "Layers"],
             Some("Cmd+L"),
-            "{name?, top?: bool, color?, template?, locked?, visible?, printable?, preview?, dimImages?} a layer directly above the current layer, at its level (a sublayer beside a current sublayer); `top`: above all layers (Ctrl-click the button). Options as layer.setProps → {id}",
+            // CoralCraft: include `role?`, `masterInFront?`, and `pageIndex?` for CorelDRAW master/desktop layers.
+            "{name?, top?: bool, color?, template?, locked?, visible?, printable?, preview?, dimImages?, role?: \"normal\"|\"masterAll\"|\"masterOdd\"|\"masterEven\"|\"desktop\"|\"guides\"|\"grid\", masterInFront?: bool, pageIndex?: n|null} a layer directly above the current layer, at its level (a sublayer beside a current sublayer); `top`: above all layers (Ctrl-click the button). Options as layer.setProps → {id}",
             has_doc,
             new_layer
         ),
@@ -35,7 +36,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Sublayer…",
             ["Window", "Layers"],
             None,
-            "{parent?: layer id (default: the highlighted row's layer, else the current layer), name?, …options as layer.new} a sublayer on top of the parent's contents → {id}",
+            // CoralCraft: include `role?`, `masterInFront?`, and `pageIndex?`.
+            "{parent?: layer id (default: the highlighted row's layer, else the current layer), name?, top?: bool, color?, template?, locked?, visible?, printable?, preview?, dimImages?, role?: \"normal\"|\"masterAll\"|\"masterOdd\"|\"masterEven\"|\"desktop\"|\"guides\"|\"grid\", masterInFront?: bool, pageIndex?: n|null} a sublayer on top of the parent's contents → {id}",
             has_doc,
             new_sublayer
         ),
@@ -80,7 +82,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Layer Options…",
             ["Window", "Layers"],
             None,
-            "{ids?|id? (default: the highlighted rows, else the current layer), name? (with prefs.identifyObjectsBy xmlId: a valid XML ID, stored as the object name), visible?, locked?, template?, printable?, preview?, dimImages?: 0..100|false, color?: index 0..26|\"#rrggbb\"|preset name} Layer Options; rows that are not layers take name, visible and locked. Template on also locks the layer and dims its images to 50% (unless given); off unlocks it and stops dimming. One undo step",
+            // CoralCraft: include `role?`, `masterInFront?`, and `pageIndex?` for CorelDRAW master/desktop layers.
+            "{ids?|id? (default: the highlighted rows, else the current layer), name? (with prefs.identifyObjectsBy xmlId: a valid XML ID, stored as the object name), visible?, locked?, template?, printable?, preview?, dimImages?: 0..100|false, color?: index 0..26|\"#rrggbb\"|preset name, role?: \"normal\"|\"masterAll\"|\"masterOdd\"|\"masterEven\"|\"desktop\"|\"guides\"|\"grid\", masterInFront?: bool, pageIndex?: n|null} Layer Options; rows that are not layers take name, visible and locked. Template on also locks the layer and dims its images to 50% (unless given); off unlocks it and stops dimming. One undo step",
             has_doc,
             set_props
         ),
@@ -344,6 +347,11 @@ fn apply_options(n: &mut Node, p: &Value, xml_id: bool) {
         }
         if let Some(v) = p.get("printable").and_then(Value::as_bool) {
             *printable = v;
+        } else if let Some(role) = str_param(p, "role").and_then(vectorcraft_doc::CorelLayerRole::parse)
+            && role.is_desktop_or_overlay()
+        {
+            // CoralCraft: CorelDRAW Desktop / Guides / Grid layers are non-printing by default unless `printable` is explicitly given.
+            *printable = false;
         }
         if let Some(v) = p.get("preview").and_then(Value::as_bool) {
             *preview = v;
@@ -374,10 +382,24 @@ fn check_options(cmd: &str, p: &Value, xml_id: bool) -> Result<()> {
     if let Some(v) = p.get("color") {
         layer_color_param(v).map_err(|e| bad(cmd, e))?;
     }
-    for k in ["visible", "locked", "template", "printable", "preview"] {
+    for k in ["visible", "locked", "template", "printable", "preview", "masterInFront"] {
         if p.get(k).is_some_and(|v| !v.is_boolean()) {
             return Err(bad(cmd, format!("`{k}` is true or false")));
         }
+    }
+    // CoralCraft: validate optional CorelDRAW `role` and `pageIndex` layer options.
+    if let Some(v) = p.get("role") {
+        let Some(s) = v.as_str() else {
+            return Err(bad(cmd, "`role` must be a layer role string"));
+        };
+        if vectorcraft_doc::CorelLayerRole::parse(s).is_none() {
+            return Err(bad(cmd, format!("`{s}` is not a valid CorelDRAW layer role")));
+        }
+    }
+    if let Some(v) = p.get("pageIndex")
+        && !(v.is_null() || v.as_u64().is_some())
+    {
+        return Err(bad(cmd, "`pageIndex` is a 0-based page index or null"));
     }
     if let Some(v) = p.get("dimImages")
         && !(v.is_boolean() || v.is_null() || v.as_f64().is_some_and(f64::is_finite))
@@ -469,6 +491,24 @@ fn clip_toggle(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "clip": clip }))
 }
 
+/// CoralCraft: apply optional CorelDRAW layer role (`role`), foreground master flag (`masterInFront`),
+/// and page binding (`pageIndex`) to layer `id` in `d`.
+fn apply_corel_layer_options(d: &mut Document, id: NodeId, p: &Value) {
+    if !d.node(id).is_some_and(Node::is_layer) {
+        return;
+    }
+    let role = str_param(p, "role").and_then(vectorcraft_doc::CorelLayerRole::parse);
+    let master_in_front = p.get("masterInFront").and_then(Value::as_bool);
+    let page_index = match p.get("pageIndex") {
+        Some(Value::Null) => Some(None),
+        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).map(Some),
+        None => None,
+    };
+    if role.is_some() || master_in_front.is_some() || page_index.is_some() {
+        d.set_corel_layer_info(id, role, master_in_front, page_index);
+    }
+}
+
 /// A new layer with the options in `p`, at `parent`/`index`; it becomes current and highlighted.
 fn add_layer(s: &mut Session, p: &Value, cmd: &str, label: &str, place: impl FnOnce(&Document) -> Result<(Option<NodeId>, usize)>) -> Result<Value> {
     let xml_id = s.prefs.identify_objects_by == "xmlId";
@@ -478,7 +518,10 @@ fn add_layer(s: &mut Session, p: &Value, cmd: &str, label: &str, place: impl FnO
         let (parent, index) = place(d)?;
         let mut n = make_layer(d, name.as_deref());
         apply_options(&mut n, p, xml_id);
-        Ok(d.insert(parent, index, n)?)
+        let id = d.insert(parent, index, n)?;
+        // CoralCraft: store CorelDRAW layer role / masterInFront / pageIndex metadata when specified.
+        apply_corel_layer_options(d, id, p);
+        Ok(id)
     })?;
     let st = s.doc_mut()?;
     st.active_layer = Some(id);
@@ -520,6 +563,8 @@ fn delete_rows(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Delete Selection", |d, sel| {
         d.remove_many(&ids)?;
+        // CoralCraft: remove CorelDRAW layer role entries for deleted layers.
+        d.remove_corel_layer_info(&ids);
         // The guides on the deleted layers go with them.
         d.drop_guides_of_deleted_layers(sel);
         sel.prune(d);
@@ -544,6 +589,8 @@ fn duplicate_rows(s: &mut Session, p: &Value) -> Result<Value> {
             if n.is_layer() {
                 c.name = Some(format!("{} copy", n.display_name()));
                 d.copy_layer_guides(n, c);
+                // CoralCraft: duplicate CorelDRAW layer role metadata alongside the layer.
+                d.copy_corel_layer_info(n.id, c.id);
             }
         })
     })?;
@@ -603,6 +650,8 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Layer Options", |d, sel| {
         for id in &ids {
             apply_options(d.node_mut(*id).ok_or(EngineError::NoNode(*id))?, p, xml_id);
+            // CoralCraft: update CorelDRAW layer role / masterInFront / pageIndex metadata when specified.
+            apply_corel_layer_options(d, *id, p);
         }
         sel.deselect_uneditable(d);
         Ok(())
@@ -1004,4 +1053,57 @@ fn artboard_fit_sel(s: &mut Session, p: &Value) -> Result<Value> {
     let i = if p.get("index").is_none() { 0 } else { super::panelcmds::artboard_index(&st.doc, p, "artboard.fitToSelection")? };
     let b = st.doc.bounds_of(&st.selection.objects, true).ok_or_else(|| EngineError::Other("no selection bounds".into()))?;
     s.execute("artboard.setProps", &json!({"index": i, "x": b.x0, "y": b.y0, "width": b.width(), "height": b.height()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use vectorcraft_doc::{CorelLayerRole, NodeId, NodeKind};
+
+    use crate::Session;
+
+    #[test]
+    fn coreldraw_master_and_desktop_layer_commands_and_roundtrip_v3_2() {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 200.0, "height": 200.0})).unwrap();
+        s.execute("artboard.new", &json!({"width": 200.0, "height": 200.0})).unwrap();
+
+        // Create a Master (All Pages) background layer via `layer.new`
+        let m_all = s.execute("layer.new", &json!({"name": "Master All BG", "role": "masterAll", "masterInFront": false})).unwrap();
+        let m_all_id = NodeId(m_all["id"].as_u64().unwrap());
+        let doc = &s.doc().unwrap().doc;
+        assert!(doc.has_corel_layer_roles());
+        let info_all = doc.corel_layer_info(m_all_id);
+        assert_eq!(info_all.role, CorelLayerRole::MasterAllPages);
+        assert!(!info_all.master_in_front);
+        assert_eq!(info_all.page_index, None);
+
+        // Create a Desktop layer via `layer.new` and verify `printable` defaults to `false`
+        let desk = s.execute("layer.new", &json!({"name": "Desktop", "role": "desktop"})).unwrap();
+        let desk_id = NodeId(desk["id"].as_u64().unwrap());
+        let doc = &s.doc().unwrap().doc;
+        assert_eq!(doc.corel_layer_info(desk_id).role, CorelLayerRole::Desktop);
+        if let NodeKind::Layer { printable, .. } = &doc.node(desk_id).unwrap().kind {
+            assert!(!*printable, "Desktop layer should default to non-printing");
+        } else {
+            panic!("expected layer node");
+        }
+
+        // Convert `m_all_id` to Foreground Master (Odd Pages) via `layer.setProps`
+        s.execute("layer.setProps", &json!({"id": m_all_id.0, "role": "masterOdd", "masterInFront": true})).unwrap();
+        let info_odd = s.doc().unwrap().doc.corel_layer_info(m_all_id);
+        assert_eq!(info_odd.role, CorelLayerRole::MasterOddPages);
+        assert!(info_odd.master_in_front);
+
+        // Duplicate `m_all_id` and verify the duplicate inherits its CorelDRAW role & masterInFront
+        let dup = s.execute("layer.duplicate", &json!({"id": m_all_id.0})).unwrap();
+        let dup_id = NodeId(dup["ids"][0].as_u64().unwrap());
+        let info_dup = s.doc().unwrap().doc.corel_layer_info(dup_id);
+        assert_eq!(info_dup.role, CorelLayerRole::MasterOddPages);
+        assert!(info_dup.master_in_front);
+
+        // Delete `dup_id` and verify its CorelDRAW layer role entry is cleaned up
+        s.execute("layer.delete", &json!({"id": dup_id.0})).unwrap();
+        assert_eq!(s.doc().unwrap().doc.corel_layer_info(dup_id).role, CorelLayerRole::Normal);
+    }
 }

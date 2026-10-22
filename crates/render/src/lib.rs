@@ -818,7 +818,15 @@ impl Renderer {
         let knockout = page_group && doc.page_knockout;
         let mut draw = |r: &mut Self, c: &mut RenderContext, fr: &Frame| {
             r.knockout = knockout;
-            r.draw_children(c, fr, &layers, knockout);
+            // CoralCraft: when CorelDRAW layer roles (`MasterAllPages`, `MasterOddPages`,
+            // `MasterEvenPages`, `Desktop`) are present, draw in CorelDRAW's documented stack order:
+            // (1) background master layers across matching pages, (2) normal page layers,
+            // (3) foreground master layers across matching pages, (4) shared Desktop/overlay layers.
+            if doc.has_corel_layer_roles() {
+                r.draw_corel_layers(c, fr, &layers, knockout);
+            } else {
+                r.draw_children(c, fr, &layers, knockout);
+            }
             r.knockout = false;
         };
         if page_group {
@@ -826,6 +834,68 @@ impl Renderer {
             self.group(ctx, f, Composite { isolated: doc.page_isolate, blends, ..Default::default() }, &mut draw);
         } else {
             draw(self, ctx, f);
+        }
+    }
+
+    // CoralCraft: partition layers into Background Master, Normal, Foreground Master, and Desktop/Overlay
+    // buckets and draw Master layers across all/odd/even artboards.
+    fn draw_corel_layers(&mut self, ctx: &mut RenderContext, fr: &Frame, layers: &[Arc<Node>], knockout: bool) {
+        let doc = fr.doc;
+        let mut bg_masters = Vec::new();
+        let mut normal_layers = Vec::new();
+        let mut fg_masters = Vec::new();
+        let mut desktop_layers = Vec::new();
+        for layer in layers {
+            let info = doc.corel_layer_info(layer.id);
+            if info.role.is_master() {
+                if info.master_in_front {
+                    fg_masters.push(layer.clone());
+                } else {
+                    bg_masters.push(layer.clone());
+                }
+            } else if info.role.is_desktop_or_overlay() {
+                desktop_layers.push(layer.clone());
+            } else {
+                normal_layers.push(layer.clone());
+            }
+        }
+        if !bg_masters.is_empty() {
+            self.draw_master_layers(ctx, fr, &bg_masters, knockout);
+        }
+        if !normal_layers.is_empty() {
+            self.draw_children(ctx, fr, &normal_layers, knockout);
+        }
+        if !fg_masters.is_empty() {
+            self.draw_master_layers(ctx, fr, &fg_masters, knockout);
+        }
+        if !desktop_layers.is_empty() {
+            self.draw_children(ctx, fr, &desktop_layers, knockout);
+        }
+    }
+
+    // CoralCraft: draw each master layer across every artboard that matches its role (`All`, `Odd`, `Even`).
+    fn draw_master_layers(&mut self, ctx: &mut RenderContext, fr: &Frame, master_layers: &[Arc<Node>], knockout: bool) {
+        let doc = fr.doc;
+        if doc.artboards.is_empty() {
+            self.draw_children(ctx, fr, master_layers, knockout);
+            return;
+        }
+        let (mx, my) = doc.artboards.first().map_or((0.0, 0.0), |a| (a.rect.x0, a.rect.y0));
+        for layer in master_layers {
+            let info = doc.corel_layer_info(layer.id);
+            let single = std::slice::from_ref(layer);
+            for (page_idx, ab) in doc.artboards.iter().enumerate() {
+                if !info.role.applies_to_page(page_idx) {
+                    continue;
+                }
+                let (dx, dy) = (ab.rect.x0 - mx, ab.rect.y0 - my);
+                let page_fr = Frame {
+                    view: fr.view * Affine::translate((dx, dy)),
+                    visible: Rect::new(fr.visible.x0 - dx, fr.visible.y0 - dy, fr.visible.x1 - dx, fr.visible.y1 - dy),
+                    ..*fr
+                };
+                self.draw_children(ctx, &page_fr, single, knockout);
+            }
         }
     }
 
@@ -1036,7 +1106,9 @@ impl Renderer {
     /// Whether `a` is left out of this frame: hidden, a skipped template or guide, or culled.
     fn skipped(&mut self, f: &Frame, a: &Arc<Node>) -> bool {
         let skipped_template = (f.opts.skip_templates || f.opts.hide_templates) && matches!(a.kind, NodeKind::Layer { template: true, .. })
-            || f.opts.skip_templates && matches!(a.kind, NodeKind::Path { guide: true, .. });
+            || f.opts.skip_templates && matches!(a.kind, NodeKind::Path { guide: true, .. })
+            // CoralCraft: non-printable CorelDRAW layers (such as the default Desktop / Guides / Grid layers) are left out of page exports.
+            || (f.opts.skip_templates && f.doc.has_corel_layer_roles() && matches!(a.kind, NodeKind::Layer { printable: false, .. }));
         if !a.visible || skipped_template || f.opts.hidden.contains(&a.id) {
             return true;
         }

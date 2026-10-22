@@ -66,7 +66,7 @@ Rules:
 
 ### V3: CorelDRAW multi-page model
 - [x] V3.1 Multi-page documents (per-page size and orientation) on top of VectorCraft artboards (study `refs/designcraft` for spreads and master pages).
-- [ ] V3.2 Master layers (all / odd / even pages) and the shared Desktop layer. Render order matches CorelDRAW's public documentation.
+- [x] V3.2 Master layers (all / odd / even pages) and the shared Desktop layer. Render order matches CorelDRAW's public documentation.
 - [ ] V3.3 Page navigator (tabs, add/delete/rename/reorder pages).
 
 ### V4: CorelDRAW workspace

@@ -123,9 +123,12 @@ pub struct CoralCraftPageMeta {
 /// Per-layer CorelDRAW metadata keyed by `vectorcraft_doc::NodeId` (`u64`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoralCraftLayerMeta {
+    #[serde(default)]
     pub layer_id: LayerId,
     /// `Some(page_idx)` for a per-page layer, `None` for a document-wide master/desktop/guide/grid layer.
+    #[serde(default)]
     pub page_index: Option<usize>,
+    #[serde(default)]
     pub role: LayerRole,
     #[serde(default)]
     pub master_in_front: bool,
@@ -963,14 +966,17 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
 
     // Reconstruct layers and objects.
     if let Some(meta) = &maybe_meta {
-        cdr_doc.master_layers = meta.master_layers.clone();
+        if !meta.master_layers.is_empty() {
+            cdr_doc.master_layers = meta.master_layers.clone();
+        }
         // Update any master layers that were represented as active layer nodes in doc.layers
         for (l_idx, lnode) in doc.layers.iter().enumerate() {
             if let Some(lmeta) = meta.layer_meta.get(&lnode.id.0) {
-                match lmeta.page_index {
+                let effective_page = if lmeta.role == LayerRole::Normal { lmeta.page_index } else { None };
+                match effective_page {
                     Some(p_idx) => {
                         let offset = artboard_offsets.get(p_idx).copied().unwrap_or(Vec2::ZERO);
-                        let lid = lmeta.layer_id;
+                        let lid = if lmeta.layer_id.0 > 0 { lmeta.layer_id } else { LayerId(lnode.id.0.max(1)) };
                         let name = lnode.name.clone().unwrap_or_else(|| "Layer 1".to_owned());
                         let mut clayer = CdrLayer::new_normal(lid, name.clone());
                         clayer.visible = lnode.visible;
@@ -1016,8 +1022,17 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         }
                     }
                     None => {
-                        let clayer = convert_vc_layer_to_cdr(lnode, Some(lmeta), Vec2::ZERO, doc, Some(meta));
-                        if let Some(existing) = cdr_doc.master_layers.iter_mut().find(|ml| ml.id == lmeta.layer_id) {
+                        let master_off = if matches!(lmeta.role, LayerRole::MasterAllPages | LayerRole::MasterOddPages | LayerRole::MasterEvenPages) {
+                            artboard_offsets.first().copied().unwrap_or(Vec2::ZERO)
+                        } else {
+                            Vec2::ZERO
+                        };
+                        let clayer = convert_vc_layer_to_cdr(lnode, Some(lmeta), master_off, doc, Some(meta));
+                        if let Some(existing) = cdr_doc.master_layers.iter_mut().find(|ml| ml.id == clayer.id) {
+                            *existing = clayer;
+                        } else if matches!(clayer.role, LayerRole::Desktop | LayerRole::Guides | LayerRole::Grid)
+                            && let Some(existing) = cdr_doc.master_layers.iter_mut().find(|ml| ml.role == clayer.role && ml.objects.is_empty())
+                        {
                             *existing = clayer;
                         } else {
                             cdr_doc.master_layers.push(clayer);
@@ -1868,7 +1883,7 @@ fn convert_vc_layer_to_cdr(
     doc: &VcDocument,
     meta: Option<&CoralCraftDocData>,
 ) -> CdrLayer {
-    let lid = lmeta.map_or(LayerId(lnode.id.0.max(1)), |m| m.layer_id);
+    let lid = lmeta.map_or(LayerId(lnode.id.0.max(1)), |m| if m.layer_id.0 > 0 { m.layer_id } else { LayerId(lnode.id.0.max(1)) });
     let name = lnode.name.clone().unwrap_or_else(|| "Layer 1".to_owned());
     let mut clayer = CdrLayer::new_normal(lid, name);
     clayer.visible = lnode.visible;
@@ -2746,5 +2761,84 @@ mod tests {
         assert!((exported.pages[0].size.width.get() - 300.0).abs() < 1e-6);
         assert!((exported.pages[1].size.width.get() - old_p1_h).abs() < 1e-6);
         assert!((exported.pages[1].size.height.get() - old_p1_w).abs() < 1e-6);
+    }
+
+    #[test]
+    fn master_layers_all_odd_even_and_desktop_roundtrip_v3_2() {
+        use vectorcraft_doc::CorelLayerRole;
+
+        let mut cdr_doc = CdrDocument::new_a4_portrait();
+        // Add a background MasterAllPages layer, a foreground MasterOddPages layer, a background MasterEvenPages layer,
+        // and place an object on the default Desktop layer.
+        let mut m_all = CdrLayer::new_normal(LayerId(70), "Master All BG");
+        m_all.role = LayerRole::MasterAllPages;
+        m_all.master_in_front = false;
+        m_all.objects.push(ObjectNode::new(
+            ObjectId(701),
+            Some("All Pages Footer".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(10.0, 10.0, 90.0, 30.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(200, 30, 30))),
+            None,
+        ));
+        cdr_doc.master_layers.insert(0, m_all);
+
+        let mut m_even = CdrLayer::new_normal(LayerId(71), "Master Even BG");
+        m_even.role = LayerRole::MasterEvenPages;
+        m_even.master_in_front = false;
+        m_even.objects.push(ObjectNode::new(
+            ObjectId(702),
+            Some("Even Header".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(10.0, 50.0, 90.0, 70.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(30, 200, 30))),
+            None,
+        ));
+        cdr_doc.master_layers.push(m_even);
+
+        let mut m_odd_fg = CdrLayer::new_normal(LayerId(72), "Master Odd FG");
+        m_odd_fg.role = LayerRole::MasterOddPages;
+        m_odd_fg.master_in_front = true;
+        m_odd_fg.objects.push(ObjectNode::new(
+            ObjectId(703),
+            Some("Odd Stamp".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(20.0, 80.0, 80.0, 120.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(30, 30, 200))),
+            None,
+        ));
+        cdr_doc.master_layers.push(m_odd_fg);
+
+        if let Some(desk) = cdr_doc.master_layers.iter_mut().find(|l| l.role == LayerRole::Desktop) {
+            desk.objects.push(ObjectNode::new(
+                ObjectId(704),
+                Some("Pasteboard Note".to_owned()),
+                ObjectKind::Rect(RectSpec::sharp(CdrRect::new(-120.0, 20.0, -20.0, 80.0).unwrap())),
+                Some(FillStyle::uniform(CdrColor::rgb8(255, 0, 255))),
+                None,
+            ));
+        }
+        cdr_doc.next_id = 705;
+
+        let (vdoc, warnings) = import_document(&cdr_doc).unwrap();
+        assert!(warnings.is_empty());
+        assert!(vdoc.has_corel_layer_roles());
+
+        // Verify stack order imported into `vdoc.layers`:
+        // Background master layers (`Master All BG`, `Master Even BG`) -> Page normal layer (`Layer 1`)
+        // -> Foreground master / Desktop layers (`Desktop`, `Master Odd FG`).
+        let roles: Vec<(String, CorelLayerRole, bool)> = vdoc
+            .layers
+            .iter()
+            .map(|l| {
+                let info = vdoc.corel_layer_info(l.id);
+                (l.display_name(), info.role, info.master_in_front)
+            })
+            .collect();
+        assert_eq!(roles[0], ("Master All BG".to_owned(), CorelLayerRole::MasterAllPages, false));
+        assert_eq!(roles[1], ("Master Even BG".to_owned(), CorelLayerRole::MasterEvenPages, false));
+        assert_eq!(roles[2], ("Layer 1".to_owned(), CorelLayerRole::Normal, false));
+        assert!(roles.contains(&("Master Odd FG".to_owned(), CorelLayerRole::MasterOddPages, true)));
+        assert!(roles.contains(&("Desktop".to_owned(), CorelLayerRole::Desktop, true)));
+
+        let exported = export_document(&vdoc).unwrap();
+        assert_eq!(exported, cdr_doc);
     }
 }
