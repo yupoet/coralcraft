@@ -529,7 +529,8 @@ fn ask_before_losing(app: &mut VectorcraftApp, path: &str, command: &str, params
 fn asks_options(mode: SaveMode, f: &Format) -> bool {
     !f.options.is_empty()
         && match f.id {
-            "vectorcraft" | "ai" => mode == SaveMode::SaveAs,
+            // CoralCraft: "cdr" asks options only on Save As, like "vectorcraft" and "ai".
+            "vectorcraft" | "ai" | "cdr" => mode == SaveMode::SaveAs,
             "template" | "ait" => false,
             _ => true,
         }

@@ -410,7 +410,9 @@ fn export_extensions_name_every_writable_format() {
             "emf",
             "wmf",
             "tga",
-            "psd"
+            "psd",
+            "cdr",
+            "cmx"
         ]
     );
     for e in exts {
@@ -445,7 +447,9 @@ fn formats_query_lists_readers_writers_and_options() {
             "emf",
             "wmf",
             "tga",
-            "psd"
+            "psd",
+            "cdr",
+            "cmx"
         ]
     );
     assert!(ids("readable").contains(&"tiff".to_string()) && ids("readable").contains(&"ait".to_string()));
@@ -810,4 +814,65 @@ fn cdr_and_cmx_are_in_format_tables_and_open_and_place() {
         assert_eq!(pr["format"], expected_fmt, "file.place {name}");
         assert!(target.doc().unwrap().doc.node_count() >= 2, "file.place {name} added artwork");
     }
+}
+
+// CoralCraft: V1.3 tests for CDR7 / CDRX / CMX1 writers via document.export, document.serialize, file.saveAs, and document.save.
+#[test]
+fn cdr_and_cmx_writers_export_serialize_and_save_as() {
+    assert!(SAVE_FORMATS.contains(&"cdr") && SAVE_FORMATS.contains(&"cmx"));
+    assert!(FORMATS.iter().any(|f| f.id == "cdr" && f.write));
+    assert!(FORMATS.iter().any(|f| f.id == "cmx" && f.write));
+
+    let mut s = session(200.0, 100.0, 2);
+    s.execute("shape.rectangle", &json!({"x": 20, "y": 15, "width": 80, "height": 50})).unwrap();
+    s.execute("shape.ellipse", &json!({"x": 250, "y": 20, "width": 60, "height": 40})).unwrap();
+
+    // 1. Export CDR7 (default)
+    let cdr7_exp = s.execute("document.export", &json!({"format": "cdr"})).unwrap();
+    assert_eq!(cdr7_exp["format"], "cdr");
+    let cdr7_bytes = b64(&cdr7_exp);
+    assert!(cdr7_bytes.starts_with(b"RIFF"), "default CDR export is CDR7 RIFF");
+
+    // 2. Export CDRX (modern X4+ ZIP+RIFF)
+    let cdrx_exp = s.execute("document.export", &json!({"format": "cdr", "cdrVersion": "cdrx"})).unwrap();
+    let cdrx_bytes = b64(&cdrx_exp);
+    assert!(cdrx_bytes.starts_with(b"PK\x03\x04"), "cdrx version exports ZIP+RIFF container");
+
+    // 3. Invalid cdrVersion is rejected
+    assert!(s.execute("document.export", &json!({"format": "cdr", "cdrVersion": "cdr3"})).is_err());
+
+    // 4. Serialize CMX1
+    let cmx_ser = s.execute("document.serialize", &json!({"format": "cmx"})).unwrap();
+    let cmx_bytes = b64(&cmx_ser);
+    assert!(cmx_bytes.starts_with(b"RIFF") && &cmx_bytes[8..12] == b"CMX1");
+
+    // 5. Save As .cdr and .cmx, then Save and reopen
+    let dir = std::env::temp_dir().join(format!("vc-cdr-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let cdr_path = dir.join("layout.cdr").to_string_lossy().into_owned();
+    let saved_cdr = s.execute("file.saveAs", &json!({"path": cdr_path, "options": {"cdrVersion": "cdrx"}})).unwrap();
+    assert_eq!(saved_cdr["format"], "cdr");
+    assert_eq!(s.doc().unwrap().format, "cdr");
+    assert!(std::fs::read(&cdr_path).unwrap().starts_with(b"PK\x03\x04"));
+
+    // Subsequent document.save reuses remembered cdrVersion option
+    s.execute("shape.rectangle", &json!({"x": 40, "y": 30, "width": 25, "height": 25})).unwrap();
+    let resaved = s.execute("document.save", &json!({})).unwrap();
+    assert_eq!(resaved["format"], "cdr");
+    assert!(std::fs::read(&cdr_path).unwrap().starts_with(b"PK\x03\x04"));
+
+    let mut reopened = Session::new();
+    reopened.execute("document.open", &json!({"path": cdr_path})).unwrap();
+    assert_eq!(reopened.doc().unwrap().format, "cdr");
+    assert_eq!(reopened.doc().unwrap().doc.artboards.len(), 2);
+
+    let cmx_path = dir.join("drawing.cmx").to_string_lossy().into_owned();
+    let saved_cmx = s.execute("file.saveAs", &json!({"path": cmx_path})).unwrap();
+    assert_eq!(saved_cmx["format"], "cmx");
+    assert_eq!(s.doc().unwrap().format, "cmx");
+    assert!(&std::fs::read(&cmx_path).unwrap()[8..12] == b"CMX1");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

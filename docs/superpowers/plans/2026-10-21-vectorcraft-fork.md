@@ -53,9 +53,9 @@ Rules:
 - [x] V0.4 `coralcraft-cli` rebased on `vectorcraft-cli`. Keep the `probe` subcommand from the old CLI.
 
 ### V1: CDR/CMX on the VectorCraft document model
-- [ ] V1.1 Port `coralcraft-cdr` `parse_document` output to the VectorCraft `Document` (via a `corel-import` mapping layer). Unsupported CDR objects keep a lossless residual.
-- [ ] V1.2 `.cdr` / `.cmx` appear in the Open/Place format tables (`FORMATS`, `OPEN_EXTS`, `PLACE_EXTS`) and in MCP `file.open`.
-- [ ] V1.3 CDR7 / CDRX / CMX1 writers consume the VectorCraft `Document`. Add Save As / Export entries.
+- [x] V1.1 Port `coralcraft-cdr` `parse_document` output to the VectorCraft `Document` (via a `corel-import` mapping layer). Unsupported CDR objects keep a lossless residual.
+- [x] V1.2 `.cdr` / `.cmx` appear in the Open/Place format tables (`FORMATS`, `OPEN_EXTS`, `PLACE_EXTS`) and in MCP `file.open`.
+- [x] V1.3 CDR7 / CDRX / CMX1 writers consume the VectorCraft `Document`. Add Save As / Export entries.
 - [ ] V1.4 Re-point the libcdr `cdr2raw` differential tests and the real-sample probe (`refs/cdr-samples`) at the new pipeline. A sample counts as passing only if it opens with a correct page/layer/object count, not merely without crashing.
 
 ### V2: Full VectorCraft file compatibility (D7)

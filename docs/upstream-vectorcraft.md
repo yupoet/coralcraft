@@ -121,6 +121,15 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/engine/src/cmd/fileio/load.rs` sniffs CDR/CMX containers via `coralcraft_cdr::probe` in `detect` and loads `.cdr`/`.cmx` via `corel_import::import_cdr_bytes` in `load_with` (marked `// CoralCraft:`).
 - `packaging/macos/Info.plist.in` declares `.cdr` and `.cmx` document types so `the_macos_bundle_opens_every_readable_format` passes.
 
+### V1.3 CDR7 / CDRX / CMX1 writers in Save As and Export (2026-10-22)
+
+- `crates/engine/src/cmd/fileio/mod.rs` sets `write: true` on `cdr` (with `CDR_OPTIONS` for `cdrVersion: "cdr7" | "cdrx"`) and `cmx`, and lists `cdr|cmx` in `document.serialize`, `document.export`, and `document.exportSelection` (marked `// CoralCraft:`).
+- `crates/engine/src/cmd/fileio/save.rs` appends `"cdr"` and `"cmx"` to `SAVE_FORMATS` and updates `document.save` and `file.saveAs` specs (marked `// CoralCraft:`).
+- `crates/engine/src/cmd/fileio/encode.rs` encodes `"cdr"` (`cdr7` or `cdrx`) and `"cmx"` (`cmx1`) via `corel_import` (marked `// CoralCraft:`).
+- `crates/engine/src/cmd/fileio/screens.rs` excludes `"cdr"` and `"cmx"` from `Export for Screens` rows (marked `// CoralCraft:`).
+- `crates/ui-egui/src/io.rs` asks `"cdr"` options on `SaveMode::SaveAs` only, matching `"vectorcraft"` and `"ai"`.
+- `crates/mcp/src/tools.rs` mentions `cdr` and `cmx` in the `export` tool description.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

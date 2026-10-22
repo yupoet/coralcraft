@@ -78,7 +78,9 @@ fn export_tool_lists_engine_formats_and_options() {
             "emf",
             "wmf",
             "tga",
-            "psd"
+            "psd",
+            "cdr",
+            "cmx"
         ])
     );
     for k in ["artboard", "range", "options"] {
@@ -251,4 +253,20 @@ fn mcp_opens_cdr_and_cmx_files() {
     let r_cmx = text(&call_tool(&mut h, "run_command", &json!({"command": "file.open", "params": {"path": cmx_path}})));
     assert_eq!(r_cmx["format"], "cmx");
     assert_eq!(h.session.doc().unwrap().doc.artboards.len(), 2);
+
+    // CoralCraft: V1.3 MCP export and save_file for .cdr (cdr7/cdrx) and .cmx.
+    let exp_cdr7 = tmp("out_cdr7.cdr");
+    let r_exp_cdr7 = text(&call_tool(&mut h, "export", &json!({"format": "cdr", "path": exp_cdr7})));
+    assert_eq!(r_exp_cdr7["format"], "cdr");
+    assert!(std::fs::read(&exp_cdr7).unwrap().starts_with(b"RIFF"));
+
+    let exp_cdrx = tmp("out_cdrx.cdr");
+    let r_exp_cdrx = text(&call_tool(&mut h, "export", &json!({"format": "cdr", "path": exp_cdrx, "options": {"cdrVersion": "cdrx"}})));
+    assert_eq!(r_exp_cdrx["format"], "cdr");
+    assert!(std::fs::read(&exp_cdrx).unwrap().starts_with(b"PK\x03\x04"));
+
+    let saved_cmx = tmp("saved.cmx");
+    let r_save_cmx = text(&call_tool(&mut h, "save_file", &json!({"path": saved_cmx})));
+    assert_eq!(r_save_cmx["format"], "cmx");
+    assert_eq!(&std::fs::read(&saved_cmx).unwrap()[8..12], b"CMX1");
 }

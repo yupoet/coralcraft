@@ -84,7 +84,7 @@ fn save_as_takes_on_path_format_and_options() {
     let svg = s.execute("file.formatOptions", &json!({"format": "svg"})).unwrap();
     assert_eq!(svg["options"]["outlineText"]["value"], false, "another format shows its defaults");
     let ids: Vec<&str> = o["saveFormats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["vectorcraft", "template", "pdf", "svg", "svgz", "ai"]);
+    assert_eq!(ids, ["vectorcraft", "template", "pdf", "svg", "svgz", "ai", "cdr", "cmx"]);
     // SVGZ is gzip-compressed SVG and reopens as SVGZ.
     let svgz = path(&d, "doc.svgz");
     s.execute("file.saveAs", &json!({"path": svgz})).unwrap();

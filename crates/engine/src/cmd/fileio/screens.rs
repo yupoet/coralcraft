@@ -196,7 +196,8 @@ impl Row {
             return Err(bad(C, "each format is an object {format, scale?, suffix?}"));
         }
         let format = writable(C, Some(str_param(row, "format").unwrap_or("png")), None)?;
-        if matches!(format.id, "template" | "txt" | "dxf" | "emf" | "wmf") {
+        // CoralCraft: "cdr" and "cmx" are document/exchange exports, not Export for Screens rows.
+        if matches!(format.id, "template" | "txt" | "dxf" | "emf" | "wmf" | "cdr" | "cmx") {
             return Err(bad(C, "Export for Screens writes png, png8, jpg, webp, gif, tiff, bmp, tga, psd, svg, svgz, pdf, eps, ai or vectorcraft"));
         }
         // Vector formats have no pixel size: it doesn't apply and adds no @2x suffix (not even one

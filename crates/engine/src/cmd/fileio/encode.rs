@@ -471,6 +471,17 @@ fn encode_files(doc: &Document, f: &Format, p: &Value) -> Result<Encoded> {
         "emf" => return super::metafile::encode(doc, p, use_artboards, vectorcraft_metafile::Kind::Emf),
         "wmf" => return super::metafile::encode(doc, p, use_artboards, vectorcraft_metafile::Kind::Wmf),
         "ai" => return super::save::encode_ai(C, f, doc, p),
+        // CoralCraft: CorelDRAW (.cdr) — CDR7 classic RIFF or CDRX modern X4+ ZIP+RIFF.
+        "cdr" => {
+            let ver = p.get("cdrVersion").or_else(|| p.get("version")).and_then(Value::as_str).unwrap_or("cdr7");
+            match ver.to_ascii_lowercase().as_str() {
+                "cdr7" | "7" | "riff" => corel_import::write_cdr7_document(doc).map_err(|e| bad(C, format!("CDR7 encode failed: {e}")))?,
+                "cdrx" | "x4" | "zip" => corel_import::write_cdrx_zip_document(doc).map_err(|e| bad(C, format!("CDRX encode failed: {e}")))?,
+                other => return Err(bad(C, format!("cdrVersion `{other}`: cdr7 or cdrx"))),
+            }
+        }
+        // CoralCraft: Corel Presentation Exchange (.cmx) — CMX1 RIFF container.
+        "cmx" => corel_import::write_cmx1_document(doc).map_err(|e| bad(C, format!("CMX1 encode failed: {e}")))?,
         "pdf" => {
             let (bytes, warnings) = super::pdf::encode(C, doc, p)?;
             return Ok(Encoded { warnings, ..Encoded::one(bytes) });
