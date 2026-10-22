@@ -27,6 +27,12 @@ pub struct Workspace {
     pub dock_collapsed: bool,
     pub open_panel: Option<String>,
     pub status_bar: bool,
+    /// CoralCraft: whether the bottom CorelDRAW Page Navigator bar is visible in this workspace.
+    #[serde(default)]
+    pub page_navigator: bool,
+    /// CoralCraft: whether the right-hand CorelDRAW vertical Color Palette bar is visible.
+    #[serde(default)]
+    pub palette_bar: bool,
     /// Tool groups torn off the toolbar into floating strips (built-in workspaces: none).
     pub floating_flyouts: Vec<FloatingFlyout>,
     /// Panels dragged out of the dock, where they float (built-in workspaces: none).
@@ -54,8 +60,22 @@ impl Default for Workspace {
 }
 
 pub const ESSENTIALS: &str = "Essentials";
+/// CoralCraft: built-in CorelDRAW workspace preset name.
+pub const CORELDRAW: &str = "CorelDRAW";
 
-/// Built-in workspaces, in Illustrator's menu order (Essentials first).
+/// CoralCraft: pre-configured right docker stack for the CorelDRAW workspace (`Object Properties`,
+/// `Objects`, `Transform`, `Align & Distribute`, `Color`, `Text`).
+pub fn coreldraw_docking_layout() -> craft_ui::docking::Layout<String> {
+    craft_ui::docking::Layout {
+        root: Some(craft_ui::docking::Node::Tabs {
+            panels: vec!["properties".into(), "layers".into(), "transform".into(), "align".into(), "color".into(), "character".into()],
+            active: 0,
+        }),
+        floating: Vec::new(),
+    }
+}
+
+/// Built-in workspaces, in Illustrator's menu order (Essentials first), plus CoralCraft's CorelDRAW preset.
 pub fn builtins() -> Vec<Workspace> {
     let base = Workspace::default();
     let w = |name: &str, f: &dyn Fn(&mut Workspace)| {
@@ -115,6 +135,23 @@ pub fn builtins() -> Vec<Workspace> {
             x.toolbar_advanced = true;
             x.open_panel = Some("symbols".into());
         }),
+        // CoralCraft: CorelDRAW workspace preset (left toolbox, top property bar, right vertical
+        // palette bar, bottom page navigator & status bar, and CorelDRAW right dockers).
+        w(CORELDRAW, &|x| {
+            x.control_bar = true;
+            x.rulers = true;
+            x.toolbar = true;
+            x.toolbar_double = false;
+            x.toolbar_advanced = false;
+            x.task_bar = false;
+            x.dock = true;
+            x.dock_collapsed = false;
+            x.dock_tab = DockTab::Properties;
+            x.status_bar = true;
+            x.page_navigator = true;
+            x.palette_bar = true;
+            x.docking = Some(coreldraw_docking_layout());
+        }),
     ]
 }
 
@@ -137,6 +174,8 @@ pub fn capture(ui: &UiState, name: &str) -> Workspace {
         dock_collapsed: ui.dock_collapsed,
         open_panel: ui.open_panel.clone(),
         status_bar: ui.status_bar,
+        page_navigator: ui.page_navigator,
+        palette_bar: ui.palette_bar,
         floating_flyouts: ui.floating_flyouts.clone(),
         floating_panels: ui.floating_panels.clone(),
         docking: ui.docking.clone(),
@@ -161,6 +200,9 @@ pub fn apply(ui: &mut UiState, w: &Workspace) {
     ui.dock_collapsed = w.dock_collapsed;
     ui.open_panel = w.open_panel.clone();
     ui.status_bar = w.status_bar;
+    // CoralCraft: apply CorelDRAW Page Navigator and Color Palette bar visibility.
+    ui.page_navigator = w.page_navigator;
+    ui.palette_bar = w.palette_bar;
     ui.floating_flyouts = w.floating_flyouts.clone();
     ui.floating_panels = w.floating_panels.clone();
     ui.docking_generation = ui.docking_generation.wrapping_add(1);
@@ -513,5 +555,30 @@ mod tests {
         assert_eq!(ui.dock_width, Some(260.0));
         let back: UiState = serde_json::from_value(serde_json::to_value(&ui).unwrap()).unwrap();
         assert_eq!(back.custom_workspaces[1].dock_width, Some(260.0));
+    }
+
+    #[test]
+    fn coreldraw_workspace_preset_configures_bars_and_dockers_and_round_trips_v4_1() {
+        let mut ui = UiState::default();
+        assert!(!ui.palette_bar && !ui.page_navigator);
+        let corel = find(&ui, CORELDRAW).expect("CorelDRAW workspace exists");
+        apply(&mut ui, &corel);
+        assert_eq!(ui.workspace, CORELDRAW);
+        assert!(ui.control_bar && ui.view.rulers && ui.toolbar && !ui.toolbar_double && !ui.task_bar);
+        assert!(ui.dock && !ui.dock_collapsed && ui.status_bar);
+        assert!(ui.palette_bar, "CorelDRAW workspace enables vertical palette bar");
+        assert!(ui.page_navigator, "CorelDRAW workspace enables bottom page navigator");
+        let docking = ui.docking.as_ref().expect("CorelDRAW docking layout");
+        for panel in ["properties", "layers", "transform", "align", "color", "character"] {
+            assert!(docking.contains(&panel.to_string()), "missing CorelDRAW docker `{panel}`");
+        }
+        // Save a customized CorelDRAW workspace and round-trip through JSON
+        save_as(&mut ui, "My Corel").unwrap();
+        let essentials = find(&ui, ESSENTIALS).unwrap();
+        apply(&mut ui, &essentials);
+        assert!(!ui.palette_bar && !ui.page_navigator);
+        let custom = find(&ui, "My Corel").unwrap();
+        apply(&mut ui, &custom);
+        assert!(ui.palette_bar && ui.page_navigator);
     }
 }

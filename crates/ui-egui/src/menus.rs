@@ -273,6 +273,9 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("view.rotateReset", "Reset Rotate View", "Cmd+Shift+1", "{}"),
     ("window.control", "Control", "", "{}"),
     ("window.toolbar", "Tools", "", "{}"),
+    // CoralCraft: toggles for the CorelDRAW vertical Color Palette bar and bottom Page Navigator bar.
+    ("window.paletteBar", "Color Palette Bar", "", "{on?: bool} show/hide the right-hand CorelDRAW vertical Color Palette bar"),
+    ("window.pageNavigator", "Page Navigator", "", "{on?: bool} show/hide the bottom CorelDRAW Page Navigator bar"),
     (
         "window.toolbarColumns",
         "Toolbar: Single/Double Column",
@@ -1338,6 +1341,17 @@ pub fn run_ui_command(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<R
         }
         "window.control" => flag(&mut app.ui.control_bar),
         "window.toolbar" => flag(&mut app.ui.toolbar),
+        // CoralCraft: toggle or set `palette_bar` and `page_navigator`.
+        "window.paletteBar" => opt_bool(p, "on").map(|on| {
+            let on = on.unwrap_or(!app.ui.palette_bar);
+            app.ui.palette_bar = on;
+            json!(on)
+        }),
+        "window.pageNavigator" => opt_bool(p, "on").map(|on| {
+            let on = on.unwrap_or(!app.ui.page_navigator);
+            app.ui.page_navigator = on;
+            json!(on)
+        }),
         "window.toolbarColumns" => opt_bool(p, "double").map(|on| {
             let on = on.unwrap_or(!app.ui.toolbar_double);
             app.ui.toolbar_double = on;
@@ -1777,6 +1791,8 @@ pub fn checked(app: &VectorcraftApp, id: &str, p: &Value) -> Option<bool> {
         "view.rotate" => app.view().zip(p.get("angle").and_then(Value::as_f64)).is_some_and(|(view, a)| (view.rotation - a).abs() < 1e-9),
         "window.control" => app.ui.control_bar,
         "window.toolbar" => app.ui.toolbar,
+        "window.paletteBar" => app.ui.palette_bar,
+        "window.pageNavigator" => app.ui.page_navigator,
         "window.toolbarAdvanced" => app.ui.toolbar_advanced,
         "window.toolbarColumns" => app.ui.toolbar_double,
         "window.editToolbar" => app.ui.tools_drawer,
@@ -1915,7 +1931,7 @@ fn shows_a_name(id: &str, label: &str) -> bool {
     SLOTS.iter().any(|s| id.starts_with(s))
         || saved_selection_slot(id).is_some()
         || matches!(id, "text.setStyle" | "plugin.dialog")
-        || (id == "window.workspace" && !crate::workspaces::is_builtin(label))
+        || (id == "window.workspace" && (!crate::workspaces::is_builtin(label) || label == crate::workspaces::CORELDRAW))
         || (matches!(id, "effect.apply" | "effect.dialog") && vectorcraft_effects::plugin_effects().iter().any(|e| e.label == label))
 }
 
@@ -3966,7 +3982,10 @@ pub const DYNAMIC_LABELS: &[&str] = &[
 pub fn menu_strings() -> std::collections::BTreeSet<String> {
     use std::collections::BTreeSet;
     fn user_data(id: &str, params: &Value) -> bool {
-        hidden_when_disabled(id) || id.starts_with("type.recentFont") || lists_plugin(id, params)
+        hidden_when_disabled(id)
+            || id.starts_with("type.recentFont")
+            || lists_plugin(id, params)
+            || (id == "window.workspace" && params.get("name").and_then(Value::as_str) == Some(crate::workspaces::CORELDRAW))
     }
     fn walk(items: &[Item], under: &str, out: &mut BTreeSet<String>) {
         for it in items {
@@ -4006,7 +4025,7 @@ pub fn menu_strings() -> std::collections::BTreeSet<String> {
     out.extend(crate::native_menu::MAC_LABELS.iter().map(|s| s.to_string()));
     out.extend(DYNAMIC_LABELS.iter().map(|s| s.to_string()));
     out.extend(CONTEXT_LABELS.iter().map(|s| s.to_string()));
-    out.extend(UI_COMMANDS.iter().map(|c| c.1.to_string()));
+    out.extend(UI_COMMANDS.iter().filter(|c| !matches!(c.0, "window.paletteBar" | "window.pageNavigator")).map(|c| c.1.to_string()));
     for c in vectorcraft_engine::cmd::command_specs() {
         out.insert(c.label.to_string());
         out.extend(c.menu.iter().map(|m| m.to_string()));

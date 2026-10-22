@@ -22,7 +22,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] V3.1 Multi-page documents on VectorCraft artboards (study `refs/designcraft`).
 - [x] V3.2 Master layers (all/odd/even) and Desktop layer.
 - [x] V3.3 Page navigator.
-- [ ] V4.1 CorelDRAW workspace preset on VectorCraft docking.
+- [x] V4.1 CorelDRAW workspace preset on VectorCraft docking.
 - [ ] V4.2 CorelDRAW shortcut set (public documentation only).
 - [ ] V4.3 CorelDRAW tool mapping and context-sensitive property bar.
 - [ ] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels.

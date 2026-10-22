@@ -41,6 +41,8 @@ pub mod opening;
 // CoralCraft: bottom CorelDRAW Page Navigator bar (tabs, add/delete/rename/reorder pages).
 pub mod page_navigator;
 pub mod palette;
+// CoralCraft: right-hand CorelDRAW vertical Color Palette bar (left-click fill, right-click outline).
+pub mod palette_bar;
 mod panel_docking;
 pub mod panels;
 pub mod picks;
@@ -1461,6 +1463,10 @@ impl VectorcraftApp {
         panels::library_panel::tidy(self);
         if self.ui.dock && self.ui.screen_mode < 3 {
             dock::show(self, ui);
+        }
+        // CoralCraft: render the right vertical CorelDRAW Color Palette bar inside the dock edge.
+        if self.ui.palette_bar && self.ui.screen_mode < 3 {
+            palette_bar::show(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
             if self.ui.screen_mode < 3 {

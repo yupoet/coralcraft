@@ -173,6 +173,12 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/ui-egui/src/panels/layers.rs` (`row_widget`, marked `// CoralCraft:`) renders a compact role badge (`M:All`, `M:Odd`, `M:Even`, `Desk`) on top-level layers when `doc.has_corel_layer_roles()` is true and adds CorelDRAW layer role quick-assignment items to the layer row context menu.
 - `crates/ui-egui/src/dialogs/layer_options.rs` (`fields_of`, `open_new`, `body`, `params`, marked `// CoralCraft:`) adds a CorelDRAW `Role:` dropdown (`Normal Page Layer`, `Master (All Pages)`, `Master (Odd Pages)`, `Master (Even Pages)`, `Desktop (Pasteboard)`) and a `Master in Front` checkbox, emitting `role`/`masterInFront` only when non-default or changed from the original layer role.
 
+### V4.1 CorelDRAW workspace preset and vertical Color Palette bar (2026-10-22)
+
+- `crates/ui-egui/src/palette_bar.rs` (new CoralCraft module wired into `crates/ui-egui/src/lib.rs`, marked `// CoralCraft:`) renders the right-hand vertical Color Palette bar (`[X]` No-Color cell + document/color-group swatches; Left-click sets Fill via `paint.setFill`, Right-click sets Outline via `paint.setStroke`).
+- `crates/ui-egui/src/state.rs` and `crates/ui-egui/src/menus.rs` (marked `// CoralCraft:`) add `ui.palette_bar` and the `window.paletteBar` / `window.pageNavigator` View/Window menu toggles.
+- `crates/ui-egui/src/workspaces.rs` (marked `// CoralCraft:`) adds `page_navigator` and `palette_bar` flags on `Workspace` plus the built-in `"CorelDRAW"` workspace preset (`CORELDRAW`, `coreldraw_docking_layout()`).
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

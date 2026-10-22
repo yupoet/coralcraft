@@ -368,6 +368,9 @@ pub struct UiState {
     /// CoralCraft: whether the bottom CorelDRAW Page Navigator bar is explicitly shown.
     #[serde(default)]
     pub page_navigator: bool,
+    /// CoralCraft: whether the right-hand CorelDRAW vertical Color Palette bar is shown.
+    #[serde(default)]
+    pub palette_bar: bool,
     pub dock: bool,
     /// The bars that Tab (`window.dock`) hid, which the next Tab shows again; none when Tab has not
     /// hidden them since it last showed them, or a workspace was applied since.
@@ -786,6 +789,7 @@ impl Default for UiState {
             toolbar_pos: None,
             status_bar: true,
             page_navigator: false,
+            palette_bar: false,
             dock: true,
             tab_hid: None,
             view: ViewFlags::default(),
