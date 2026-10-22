@@ -151,6 +151,10 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/engine/src/cmd/fileio/load.rs` detects and loads `"coralcraft"` with `converted = true` (marked `// CoralCraft:`), so saving upgrades legacy documents to `.vectorcraft`.
 - `packaging/macos/Info.plist.in` declares `<string>coralcraft</string>` under imported document types.
 
+### V2.4 `docs/file-format-parity.md` rewrite (2026-10-22)
+
+- Rewrote `docs/file-format-parity.md` to cover all 27 entries in `FORMATS` (24 upstream VectorCraft formats plus `cdr`, `cmx`, and legacy `coralcraft`), Corel `.cpl`/`.xml` palettes, and V1/V2 verification gates; updated post-V2 measured metrics in `ROADMAP.md`.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

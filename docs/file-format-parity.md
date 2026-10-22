@@ -1,43 +1,59 @@
 # File Format Parity Matrix
 
 > [!IMPORTANT]
-> **Target changed 2026-10-21 (decision D7):** CoralCraft must open and save/export **every format VectorCraft supports**: native `.vectorcraft`/`.drawcraft`/templates (lossless), SVG/SVGZ, PDF, AI/AIT, EPS/PS, DXF, EMF/WMF, PNG/JPEG/GIF/WebP/TIFF/BMP/TGA, PSD/PSB, and Affinity `.af`/`.afdesign`/`.afpub` (see `refs/vectorcraft/crates/engine/src/cmd/fileio/mod.rs` `FORMATS`/`OPEN_EXTS`). It must also keep CDR/CMX. This is reached by porting VectorCraft's I/O, not by extending the pre-fork importers below. The matrix below describes the pre-fork state and will be rewritten in task V2.4.
+> **Updated 2026-10-22 (Phase V1 & V2 completed, operator decision D7):** CoralCraft is built on the VectorCraft file I/O pipeline (`crates/engine/src/cmd/fileio/`) extended with `coralcraft-cdr` and `corel-import`. CoralCraft opens, places, saves, and exports **every format VectorCraft supports** (`FORMATS` = 27 entries, `OPEN_EXTS` = 34 extensions, `PLACE_EXTS` = 28 extensions) plus CorelDRAW `.cdr`/`.cmx`, legacy `.coralcraft` containers, and Corel `.cpl`/`.xml` palettes. CI enforces full coverage via `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1`.
 
-> [!NOTE]
-> **Updated 2026-10-21 (`R0.1`–`R8.1` completed):** All format parsers and writers are backed by behavioural tests, deterministic hostile-input mutation tests, nightly `cargo-fuzz` targets (`fuzz/`), and `libcdr` (`cdr2raw` / `cmx2raw`) differential oracle verification. Re-estimated per-dimension scores are tracked in [`ROADMAP.md`](../ROADMAP.md) and the completed work queue is in [`gaps.md`](gaps.md).
-
-
-CoralCraft treats CorelDRAW `.cdr` and `.cmx` as first-class citizens alongside our open native `.coralcraft` format and standard vector interchange formats.
-
-All `.cdr` and `.cmx` format knowledge is clean-room derived from public specifications:
+All `.cdr` and `.cmx` format support is clean-room derived from public specifications:
 - [Photopea CDR Format Specification](https://www.photopea.com/tuts/cdr-format-specification/)
 - [Kaitai Struct `coreldraw_cdr.ksy`](https://formats.kaitai.io/coreldraw_cdr/)
 - [LibreOffice `libcdr` Public Architecture Notes](https://wiki.documentfoundation.org/DLP/Libraries/libcdr)
 
-## Format Support Overview
+## 1. Document & Interchange Formats (`FORMATS` in `vectorcraft-engine`)
 
-| Format | Extension | Generation / Variant | Probe (`M1`) | Open / Import | Save / Export | Target Milestone |
-| --- | --- | --- | --- | --- | --- | --- |
-| **CorelDRAW Legacy WL** | `.cdr` | v1 – v2 (`WL` header) | **Yes** (`CdrWl`, v100–v200) | Graceful diagnostic (`UnsupportedContainer`) | No | M1 (Probe) |
-| **CorelDRAW RIFF** | `.cdr` | v3 – X3 (v300 – v1300, bare `RIFF` + `CDR*`) | **Yes** (`Riff` + `vrsn`, `LIST cmpr`/`stlt` safe) | **Yes** (`parse_document`, `LIST cmpr` zlib/raw inflate, `mcfg`/`page`/`layr`/`obj `/`bbox`/`trfd`/`loda`/`fild`/`outl`/`CDIB`/`txtd`/`enve` + `ObjectKind::Unsupported` fallback) | **Yes** (`coralcraft_cdr::write_cdr7`) | M3 / M6–M11 (Delivered) |
-| **CorelDRAW ZIP+RIFF** | `.cdr`, `.cdrx` | X4 – 2025+ (v1400 – v2600+, ZIP + `content/riffData.cdr` or `content/root.dat`) | **Yes** (`ZipCdr` EOCD + Central Directory + Stored/Deflate inner RIFF) | **Yes** (`extract_zip_primary_riff` Stored & Deflate + `parse_document`, 64/64 real-world samples green) | **Yes** (`coralcraft_cdr::write_cdrx_zip`) | M3 / M7 (Delivered) |
-| **Corel Presentation Exchange** | `.cmx` | CMX1 (`RIFF` LE / `RIFX` BE + `CMX1` / `cdr6`) | **Yes** (`Cmx` LE/BE) | **Yes** (`parse_document` baseline) | **Yes** (`coralcraft_cdr::write_cmx1`) | M3 / M6 (Delivered) |
-| **CoralCraft Native** | `.coralcraft` | Open ZIP container (`manifest.json` + `document.json` + `blobs/`) or single-file JSON | — | **Yes** (`Document::load_bytes`) | **Yes** (`save_json` / `save_zip`) | M2 (Delivered) |
-| **Scalable Vector Graphics** | `.svg` | SVG 1.1 | — | **Yes** (`coralcraft_doc::import_svg`) | **Yes** (`coralcraft_render::export_svg`) | M3 / M14 (Delivered) |
-| **Portable Document Format** | `.pdf` | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`, RGB `rg`/`RG`) | — | **Yes** (`coralcraft_doc::import_pdf`) | **Yes** (`coralcraft_render::export_pdf`) | M3 / M9 / M88 (Delivered) |
-| **Portable Network Graphics** | `.png` | RGBA8 PNG with 4×4 MSAA | — | — | **Yes** (`coralcraft_render::encode_png`) | M2 (Delivered) |
-| **Encapsulated PostScript** | `.eps` | PostScript / `EPSF-3.0` (`%%BoundingBox`, `%%HiResBoundingBox`, CMYK `setcmykcolor`, RGB `setrgbcolor`) | — | **Yes** (`coralcraft_doc::import_eps`) | **Yes** (`coralcraft_render::export_eps`) | M14 / M88 (Delivered) |
-| **AutoCAD Drawing Exchange** | `.dxf` | ASCII DXF (`AC1009` / R12 `ENTITIES`: `LINE`, `POLYLINE`/`VERTEX`/`SEQEND`, `LWPOLYLINE`, `CIRCLE`) | — | **Yes** (`coralcraft_doc::import_dxf`) | **Yes** (`coralcraft_render::export_dxf`) | M14 (Delivered) |
-| **Corel Palette** | `.cpl`, `.xml` | User-imported spot/process color palettes (`0xCDDC` RGB, `0xCCDC` CMYK, `0xCDCD` Spot) | — | **Yes** (`parse_xml_palette` / `parse_binary_cpl`) | **Yes** (`to_xml_palette` / `serialize_binary_cpl`) | M2 / M7 / R5.4 (Delivered) |
+| Format ID | Name | Extensions | Open | Place | Save / Export | Implementation & Notes |
+| --- | --- | --- | :---: | :---: | :---: | --- |
+| `vectorcraft` | VectorCraft Document | `.vectorcraft`, `.drawcraft` | Yes | No | Yes | Native binary/compressed container (`vectorcraft-format` v1–v4). Preserves CoralCraft multi-page, master-layer, palette, and CDR residual metadata losslessly in `document.unknown["coralcraft"]` (`V2.2`). |
+| `template` | VectorCraft Template | `.vctemplate` | Yes | No | Yes | Native template container (`Save As Template…` / `New from Template…`); preserves `document.unknown["coralcraft"]` losslessly (`V2.2`). |
+| `cdr` | CorelDRAW | `.cdr` | Yes | Yes | Yes | **Read:** RIFF `CDR3`–`CDRD` (v3–X3) and ZIP+RIFF `CDRE`+ (X4–2025+, `content/riffData.cdr` & `content/root.dat`), plus `WL` v1–v2 container probe (`coralcraft-cdr` + `corel-import`). **Write:** `cdrVersion: "cdr7"` (RIFF CDR7) and `"cdrx"` (X4+ ZIP+RIFF) (`V1.1`–`V1.4`). |
+| `cmx` | Corel Presentation Exchange | `.cmx` | Yes | Yes | Yes | **Read:** Little-endian `RIFF` and big-endian `RIFX` `CMX1`/`cdr6`. **Write:** Clean-room `CMX1` RIFF (`coralcraft_cdr::write_cmx1`, `V1.2`–`V1.4`). |
+| `coralcraft` | CoralCraft (Legacy) | `.coralcraft` | Yes | Yes | Upgrade to `.vectorcraft` | Pre-fork single-file JSON (`save_json`) and Stored/Deflated ZIP (`manifest.json` + `document.json` + `blobs/<sha256>.bin`) converter (`converted = true`, `V2.3`). |
+| `svg` | SVG | `.svg` | Yes | Yes | Yes | SVG 1.1 / SVG 2 (`vectorcraft-svg`), CSS styling, text/outlines, linked/embedded images, multi-artboard export, and Preserve Editing native restoration. |
+| `svgz` | Compressed SVG | `.svgz` | Yes | Yes | Yes | Gzip-compressed SVG read, place, save, and export. |
+| `pdf` | PDF | `.pdf` | Yes | Yes | Yes | ISO 32000-1 PDF 1.4–1.7 & PDF/X (`vectorcraft-pdf`), multi-page import/export, page boxes (`crop`/`trim`/`bleed`/`media`/`art`), CMYK/RGB/Gray/Spot inks, passwords, and Preserve Editing restoration. |
+| `ai` | Adobe Illustrator | `.ai` | Yes | Yes | Yes | PDF-compatible `.ai` and legacy PostScript `.ai` (`legacy_ai`), with native editing-data restoration. |
+| `ait` | Adobe Illustrator Template | `.ait` | Yes | Yes | Yes | Opens as an untitled document from template; written via `file.saveAsTemplate`. |
+| `eps` | EPS / PostScript | `.eps`, `.ps`, `.epsf`, `.epsi` | Yes | Yes | Yes | Clean-room PostScript interpreter (`vectorcraft-eps`), TIFF preview fallback, transparency flattening, and Preserve Editing restoration. |
+| `dxf` | AutoCAD DXF | `.dxf` | Yes | Yes | Yes | ASCII DXF (`vectorcraft-cad` R12–2018), model/paper layouts, blocks/symbols, layers, unit scaling, and multi-artboard export. |
+| `emf` | Enhanced Metafile | `.emf` | Yes | Yes | Yes | Windows Enhanced Metafile (`vectorcraft-metafile`), Bezier curves, clipping, gradients, and images. |
+| `wmf` | Windows Metafile | `.wmf` | Yes | Yes | Yes | Placeable 16-bit Windows Metafile (`vectorcraft-metafile`). |
+| `affinity` | Affinity | `.af`, `.afdesign`, `.afpub`, `.afphoto` | Yes | Yes | No | Affinity Designer / Publisher / Photo container reader (`vectorcraft-affinity`). |
+| `png` | PNG | `.png` | Yes | Yes | Yes | 8/16-bit RGBA/RGB/Gray PNG, pHYs PPI metadata, sRGB/ICC profile embedding, Adam7 interlacing, and HTML/NCSA image maps. |
+| `png8` | PNG-8 | `.png` | — | — | Yes | Indexed 2–256 color PNG export with perceptual/selective/adaptive/web quantization and diffusion/pattern/noise dithering. |
+| `jpg` | JPEG | `.jpg`, `.jpeg`, `.jpe`, `.jfif` | Yes | Yes | Yes | Baseline, optimized, and progressive JPEG (`rgb`/`cmyk`/`gray`), quality 0–100, and ICC profile embedding. |
+| `webp` | WebP | `.webp` | Yes | Yes | Yes | Lossless RGBA WebP read, place, and export. |
+| `gif` | GIF | `.gif` | Yes | Yes | Yes | Indexed 2–256 color GIF read, place, and export with transparency, matte color, interlacing, and dithering. |
+| `tiff` | TIFF | `.tif`, `.tiff` | Yes | Yes | Yes | Little/big-endian TIFF (`rgb`/`cmyk`/`gray`), LZW compression, alpha channel, and ICC profile embedding. |
+| `bmp` | BMP | `.bmp`, `.dib` | Yes | Yes | Yes | Windows and OS/2 BMP/DIB (1, 4, 8, 16, 24, 32-bit, RLE4/RLE8, top-down/bottom-up rows). |
+| `tga` | TGA | `.tga`, `.icb`, `.vda`, `.vst` | Yes | Yes | Yes | Truevision TGA (16, 24, 32-bit uncompressed and RLE). |
+| `psd` | Photoshop PSD / PSB | `.psd`, `.psb` | Yes | Yes | Yes | Layered Photoshop PSD/PSB (`rgb`/`cmyk`/`gray`), layer groups, blend modes, opacity, and `maxEditability` object layers. |
+| `txt` | Plain Text | `.txt` | No | Yes | Yes | Places text into text frames; exports document text stories in stacking order (UTF-8 or UTF-16 BOM, LF/CRLF). |
 
-## M1–M3 Format Capabilities (`coralcraft-cdr`, `coralcraft-doc`, `coralcraft-render`)
+## 2. Color Palette Formats (`coralcraft-color` & `vectorcraft-color`)
 
-1. **Three-Generation Container Recognition & Decompression**:
-   - **Legacy `WL` (`CdrWl`)**: Detects `b"WL"` headers (`v100`–`v200`).
-   - **Bare `RIFF` / `RIFX` (`Riff`)**: Parses little-endian `RIFF` and big-endian `RIFX` headers, decodes ASCII version tags (`"CDR "`/`"CDR3"` through `"CDRR"`, plus `"CMX1"`/`"cdr6"`), and decompresses `LIST cmpr` blocks (4-byte header + zlib/CPng/raw Deflate stream via `crates/cdr/src/inflate.rs`).
-   - **Modern `ZIP` (`ZipCdr`, X4 / v1400+)**: Scans the ZIP End of Central Directory (EOCD) and Central Directory and extracts both Stored (`0`) and Deflate (`8`) `content/riffData.cdr` / `content/root.dat` streams.
-2. **Object-Tree Decoding (`coralcraft_cdr::parse_document`)**:
-   - Extracts document/page metrics (`mcfg`), pages (`LIST page`), layers (`LIST layr`), and objects (`LIST obj ` with `bbox`, `trfd`, `loda`, `fild`, `outl`), mapping unrecognized chunks losslessly into `ObjectKind::Unsupported` with structured `ParseWarning` diagnostics.
-   - Passes **64/64 (100%)** real-world `.cdr` samples in `refs/cdr-samples/`.
-3. **Clean-Room Vector & Raster Export (`coralcraft-cli export` / `render`)**:
-   - Exports any `.cdr` or `.coralcraft` file to SVG 1.1 (`.svg`), multi-page ISO 32000-1 PDF 1.4 (`.pdf`), 4×4 MSAA `.png`, or `.coralcraft`.
+| Format | Extensions | Open / Import | Save / Export | Details |
+| --- | --- | :---: | :---: | --- |
+| **Corel Binary Palette** | `.cpl` | Yes | Yes | Clean-room binary `.cpl` parser and serializer supporting `0xCDDC` (RGB), `0xCCDC` (CMYK), and `0xCDCD` (Spot / Pantone) color models (`coralcraft_color::parse_binary_cpl` / `serialize_binary_cpl`). |
+| **Corel XML Palette** | `.xml` | Yes | Yes | Clean-room Corel XML palette parser and serializer with normalized `0.0..=1.0` / percentage tint handling (`coralcraft_color::parse_xml_palette` / `to_xml_palette`). |
+| **VectorCraft Swatch Libraries** | `.ase`, `.aco`, `.gpl`, `.svg` | Yes | Yes | Adobe Swatch Exchange (`.ase`), Photoshop Color Swatches (`.aco`), GIMP Palette (`.gpl`), and SVG swatch libraries in the Swatches panel. |
+
+## 3. Verification & Regression Gates
+
+1. **Full Format Matrix Gate (`V2.1`)**:
+   - `cmd::fileio::tests::vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` verifies that all 24 upstream VectorCraft format IDs plus `cdr`, `cmx`, and `coralcraft` are registered in `FORMATS` with exact `read`, `write`, `extensions`, `OPEN_EXTS`, and `PLACE_EXTS` membership, and exercises `document.export`, `document.serialize`, and `document.open` across every format and file extension.
+   - `cmd::fileio::tests::the_macos_bundle_opens_every_readable_format` verifies that `packaging/macos/Info.plist.in` declares every extension in `OPEN_EXTS`.
+2. **Lossless CoralCraft Extension Block (`V2.2`)**:
+   - `cmd::fileio::tests::vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_losslessly_v2_2` verifies that multi-page CorelDRAW documents, master layers (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`, `Desktop`), Corel palettes, unknown RIFF chunks (`Residual`), and `ObjectKind::Unsupported` nodes survive `.vectorcraft` (v1–v4, compressed and uncompressed), `.drawcraft`, and `.vctemplate` round-trips bit-for-bit, while pure VectorCraft documents do not gain a `"coralcraft"` key.
+3. **Legacy `.coralcraft` Import Converter (`V2.3`)**:
+   - `cmd::fileio::tests::legacy_coralcraft_json_and_zip_containers_open_and_place_losslessly_v2_3` verifies that pre-fork `.coralcraft` JSON and ZIP files open and place into `vectorcraft-engine` with `converted = true` and lossless `document.unknown["coralcraft"]` preservation.
+4. **`libcdr` Differential Oracle & Real-World Sample Suite (`V1.4`)**:
+   - `crates/corel-import/tests/oracle_and_samples.rs` and `cmd::fileio::tests::cdr_and_cmx_engine_pipeline_passes_libcdr_oracle_and_real_samples` verify that exported `CDR7` and `CMX1` streams pass `cdr2raw` / `cmx2raw` with expected page and path counts, and that all **65/65 valid real-world `.cdr` samples** in `refs/cdr-samples` open into `vectorcraft_doc::Document` with exact `page_count`, `layer_count`, and `object_count`.

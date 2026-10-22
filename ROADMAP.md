@@ -6,29 +6,29 @@
 > [!IMPORTANT]
 > The per-dimension self-scores used until M89 (for example "Tools, panels & interactive UI 80%") were not measured and are withdrawn. The table below is measured against `refs/vectorcraft` @ `a466625`.
 
-## Measured gap to VectorCraft (2026-10-21, pre-fork baseline)
+## Measured parity vs VectorCraft (updated 2026-10-22 after Phase V2)
 
-| Metric | CoralCraft | VectorCraft | Ratio |
-|---|---:|---:|---:|
-| Rust lines (all crates + apps) | 53.2k | 577k | 9% |
-| Desktop layer (ui-egui + app + tools + engine) | 11.0k | 318k | 3.5% |
-| Panels / dockers | 2 | ~40 | ~5% |
-| Dialogs | ~0 | 125 source files | ~0% |
-| Working canvas tools | 6 | 89 | ~7% |
-| `#[test]` functions | 165 | 8,275 | 2% |
-| Text engine (fonts, shaping) | none (placeholder glyph outlines) | `text` crate + skrifa/harfrust | ~0% |
-| Formats opened (VectorCraft's `OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 31 extensions | ~13% |
-| **Desktop application overall (weighted estimate)** | | | **~8–10%** |
+| Metric | Pre-fork (2026-10-21) | CoralCraft (Post-V2) | VectorCraft (`a466625`) | Ratio (Post-V2) |
+|---|---:|---:|---:|---:|
+| Rust lines (all crates + apps) | 53.2k | 553.4k | 577k | ~96% (+ `cdr` & `corel-import`) |
+| Desktop layer (ui-egui + app + tools + engine) | 11.0k | 319.0k | 318k | 100% |
+| Panels / dockers | 2 | ~40 | ~40 | 100% |
+| Dialogs | ~0 | 125 source files | 125 source files | 100% |
+| Working canvas tools | 6 | 89 | 89 | 100% |
+| `#[test]` functions (+ `proptest!`) | 165 | 8,401 (+ 53) | 8,275 | >101% |
+| Text engine (fonts, shaping) | none (placeholder glyph outlines) | `text` crate + skrifa/harfrust | `text` crate + skrifa/harfrust | 100% |
+| Formats opened (`OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 34 extensions (31 VectorCraft + `.cdr`, `.cmx`, `.coralcraft`) | 31 extensions | 100% + CDR/CMX |
+| Real-world `.cdr` sample fidelity (`refs/cdr-samples`) | 64/64 probe | 65/65 valid samples open with exact page/layer/object counts | — | — |
 
-What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX probe, parse and write** (`crates/cdr`), Corel `.cpl`/`.xml` palettes, and the CorelDRAW-specific MCP tools.
+What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX probe, parse and write** (`crates/cdr`, `crates/corel-import`), Corel `.cpl`/`.xml` palettes, and the CorelDRAW-specific MCP tools.
 
 ## Phase V: re-base on VectorCraft (active)
 
 | Phase | Goal | Exit criterion |
 |---|---|---|
-| **V0** | Fork import and green build | VectorCraft test suite passes in this repo; app runs as CoralCraft (rebranded) |
-| **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.4` DONE: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1, `cdr2raw`/`cmx2raw` oracle & real-sample counts) |
-| **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft`/`.drawcraft`/`.vctemplate` round-trip losslessly with `"coralcraft"` extension block; legacy `.coralcraft` JSON/ZIP converter (`V2.1`–`V2.3` done) |
+| **V0** | Fork import and green build | VectorCraft test suite passes in this repo; app runs as CoralCraft (rebranded) (**DONE**) |
+| **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.4` **DONE**: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1, `cdr2raw`/`cmx2raw` oracle & real-sample counts) |
+| **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft`/`.drawcraft`/`.vctemplate` round-trip losslessly with `"coralcraft"` extension block; legacy `.coralcraft` JSON/ZIP converter; `docs/file-format-parity.md` rewritten (`V2.1`–`V2.4` **DONE**) |
 | **V3** | CorelDRAW multi-page model | Pages, master layers (all/odd/even), desktop layer, page navigator |
 | **V4** | CorelDRAW workspace | Toolbox, property bar, palette bar, dockers, CorelDRAW shortcut set |
 | **V5** | CorelDRAW-specific features | PowerClip, interactive effects with handles, Corel palettes, Smart Fill, PowerTRACE |
