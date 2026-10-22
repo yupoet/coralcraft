@@ -181,7 +181,7 @@ pub(super) fn encode_to(cmd: &str, f: &Format, doc: &Document, p: &Value, w: imp
         // Every artboard as PDF pages (no editing data: the file is the native document).
         so.pdf = Some(super::pdf::encode(cmd, &full, &json!({ "range": "all", "preserveEditing": false }))?.0);
     }
-    let native = match full {
+    let mut native = match full {
         Cow::Owned(full) if so.include_linked && so.version >= vectorcraft_format::VERSION => {
             // Include available bytes without replacing missing, relinkable placed objects.
             let mut original = doc.clone();
@@ -190,6 +190,10 @@ pub(super) fn encode_to(cmd: &str, f: &Format, doc: &Document, p: &Value, w: imp
         }
         other => other,
     };
+    // CoralCraft: synchronize the namespaced `document.unknown["coralcraft"]` extension block if present.
+    if native.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY) {
+        let _ = corel_import::sync_coralcraft_extension(native.to_mut());
+    }
     vectorcraft_format::save_to(&native, &so, w).map_err(|e| bad(cmd, e.to_string()))
 }
 

@@ -139,6 +139,11 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 
 - `crates/engine/src/cmd/fileio/tests.rs` adds `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` gating all 24 upstream VectorCraft formats plus `cdr` and `cmx` in `FORMATS` and testing export/serialize/open across every format and extension.
 
+### V2.2 `.vectorcraft` / `.drawcraft` / `.vctemplate` lossless round-trip with `"coralcraft"` extension block (2026-10-22)
+
+- `crates/corel-import/src/lib.rs` adds `sync_coralcraft_extension(&mut vectorcraft_doc::Document)` and re-exports `coralcraft_color`, `coralcraft_doc`, and `coralcraft_geom`.
+- `crates/engine/src/cmd/fileio/native.rs` synchronizes `document.unknown["coralcraft"]` on save when present (marked `// CoralCraft:`), leaving pure VectorCraft documents untouched.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

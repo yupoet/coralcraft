@@ -32,6 +32,10 @@ use vectorcraft_geom::{
     shapes::{self, CornerKind as VcCornerKind},
 };
 
+pub use coralcraft_color;
+pub use coralcraft_doc;
+pub use coralcraft_geom;
+
 /// Horizontal spacing in typographic points between consecutive pages laid out as VectorCraft artboards.
 pub const PAGE_GAP_PT: f64 = 40.0;
 
@@ -175,6 +179,50 @@ pub fn write_coralcraft_data(doc: &mut VcDocument, data: &CoralCraftDocData) -> 
     let val = serde_json::to_value(data).map_err(|e| CorelImportError::Conversion(e.to_string()))?;
     doc.unknown.insert(CORALCRAFT_UNKNOWN_KEY.to_owned(), val);
     Ok(())
+}
+
+/// Synchronizes an existing `doc.unknown["coralcraft"]` extension block with the current
+/// [`vectorcraft_doc::Document`] state (artboard names/dimensions, units, and master layers)
+/// while preserving CorelDRAW-only data (per-page bleed/background/residuals, master layers,
+/// object/layer/document residuals, and palette). Does nothing if `doc.unknown["coralcraft"]`
+/// is absent so pure VectorCraft documents remain untouched.
+pub fn sync_coralcraft_extension(doc: &mut VcDocument) -> Result<(), CorelImportError> {
+    let Some(mut data) = read_coralcraft_data(doc) else {
+        return Ok(());
+    };
+    data.units = map_unit_to_cdr(doc.units);
+    let default_bleed = F64::new(doc.setup.bleed.first().copied().unwrap_or(0.0).max(0.0)).unwrap_or(F64::ZERO);
+    let old_pages = std::mem::take(&mut data.pages);
+    let mut new_pages = Vec::with_capacity(doc.artboards.len());
+    for (idx, ab) in doc.artboards.iter().enumerate() {
+        let w = ab.rect.width().max(1.0);
+        let h = ab.rect.height().max(1.0);
+        let size = CdrSize::new(w, h).unwrap_or_default();
+        if let Some(prev) = old_pages.get(idx) {
+            let p_size = if (prev.size.width.get() - w).abs() < 1e-6 && (prev.size.height.get() - h).abs() < 1e-6 { prev.size } else { size };
+            new_pages.push(CoralCraftPageMeta {
+                id: prev.id,
+                name: ab.name.clone(),
+                size: p_size,
+                bleed: prev.bleed,
+                background: prev.background.clone(),
+                residual: prev.residual.clone(),
+                extra: prev.extra.clone(),
+            });
+        } else {
+            new_pages.push(CoralCraftPageMeta {
+                id: PageId(u64::from(ab.id.max(1))),
+                name: ab.name.clone(),
+                size,
+                bleed: default_bleed,
+                background: Some(FillStyle::uniform(CdrColor::WHITE)),
+                residual: Residual::default(),
+                extra: BTreeMap::new(),
+            });
+        }
+    }
+    data.pages = new_pages;
+    write_coralcraft_data(doc, &data)
 }
 
 /// Parses `.cdr` or `.cmx` bytes and maps the resulting document onto a [`vectorcraft_doc::Document`].

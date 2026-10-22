@@ -1085,3 +1085,138 @@ fn vectorcraft_format_compatibility_matrix_covers_every_format_v2_1() {
         }
     }
 }
+
+// CoralCraft: V2.2 lossless round-trip for .vectorcraft / .drawcraft / .vctemplate with namespaced "coralcraft" extension block.
+#[test]
+fn vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_losslessly_v2_2() {
+    use corel_import::coralcraft_color::{Color as CdrColor, PaletteSwatch};
+    use corel_import::coralcraft_doc::{
+        ChunkTag, Document as CdrDocument, FillStyle, Layer as CdrLayer, LayerId, LayerRole, ObjectId, ObjectKind, ObjectNode, RawChunk, RawPayload,
+        UnsupportedObject,
+    };
+    use corel_import::coralcraft_geom::{F64, Rect as CdrRect, RectSpec};
+
+    // 1. Pure VectorCraft document saves and opens without injecting "coralcraft" into unknown.
+    let mut pure = session(300.0, 200.0, 1);
+    pure.execute("shape.rectangle", &json!({"x": 10, "y": 10, "width": 100, "height": 80})).unwrap();
+    let pure_bytes = b64(&pure.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap());
+    let pure_loaded = vectorcraft_format::load(&pure_bytes).unwrap();
+    assert!(!pure_loaded.unknown.contains_key(corel_import::CORALCRAFT_UNKNOWN_KEY));
+
+    // 2. Construct a rich CorelDRAW document with pages, master layers, CDR residuals, and an unsupported object.
+    let mut cdr_doc = CdrDocument::new_a4_portrait();
+    cdr_doc.title = "CorelExtensionRoundtrip".to_owned();
+    cdr_doc.palette.swatches.push(PaletteSwatch { name: "Coral Red".to_owned(), color: CdrColor::rgb8(230, 50, 40) });
+    cdr_doc.residual.chunks.push(RawChunk {
+        tag: ChunkTag(*b"cdoc"),
+        flags: 0,
+        slot: 0,
+        payload: RawPayload(vec![0xCA, 0xFE, 0xBA, 0xBE]),
+        src_offset: 0,
+    });
+
+    let mut master_odd = CdrLayer::new_normal(LayerId(77), "Odd Page Header");
+    master_odd.role = LayerRole::MasterOddPages;
+    master_odd.master_in_front = true;
+    master_odd.residual.chunks.push(RawChunk { tag: ChunkTag(*b"modd"), flags: 0, slot: 0, payload: RawPayload(vec![1, 2, 3]), src_offset: 0 });
+    cdr_doc.master_layers.push(master_odd);
+
+    cdr_doc.pages[0].name = "Cover Page".to_owned();
+    cdr_doc.pages[0].bleed = F64::new(9.0).unwrap();
+    cdr_doc.pages[0].background = Some(FillStyle::uniform(CdrColor::rgb8(250, 248, 240)));
+    cdr_doc.pages[0].residual.chunks.push(RawChunk {
+        tag: ChunkTag(*b"cpag"),
+        flags: 0,
+        slot: 0,
+        payload: RawPayload(vec![0x10, 0x20, 0x30]),
+        src_offset: 0,
+    });
+
+    let unsup = ObjectNode::new(
+        ObjectId(88),
+        Some("CustomEffectPlugin".to_owned()),
+        ObjectKind::Unsupported(UnsupportedObject {
+            tag: ChunkTag(*b"fx99"),
+            class_hint: Some("CustomPlugin".to_owned()),
+            payload: RawPayload(vec![9, 8, 7, 6, 5]),
+            fallback_bounds: Some(CdrRect::new(40.0, 50.0, 140.0, 120.0).unwrap()),
+            absolute_geometry: true,
+            children: Vec::new(),
+            residual: Default::default(),
+        }),
+        None,
+        None,
+    );
+    cdr_doc.pages[0].layers[0].objects.push(unsup);
+    cdr_doc.pages[0].layers[0].objects.push(ObjectNode::new(
+        ObjectId(89),
+        Some("CoverBox".to_owned()),
+        ObjectKind::Rect(RectSpec::sharp(CdrRect::new(20.0, 30.0, 120.0, 90.0).unwrap())),
+        Some(FillStyle::uniform(CdrColor::rgb8(230, 50, 40))),
+        None,
+    ));
+
+    let cdr_bytes = coralcraft_cdr::write_cdr7(&cdr_doc).unwrap();
+    let mut s = Session::new();
+    open(&mut s, "brochure.cdr", &cdr_bytes);
+
+    // Also insert a non-CoralCraft foreign key into `document.unknown` to verify coexistence.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().doc).unknown.insert("thirdPartyPlugin".to_owned(), json!({"enabled": true}));
+
+    // 3. Round-trip through .vectorcraft (uncompressed & compressed, versions 1..=4), .drawcraft, and .vctemplate.
+    let dir = tmp_dir("v2-2-ext");
+    for (file_name, fmt_id, compress, version) in [
+        ("doc_v4.vectorcraft", "vectorcraft", false, 4u32),
+        ("doc_v4_gz.vectorcraft", "vectorcraft", true, 4u32),
+        ("doc_v3.vectorcraft", "vectorcraft", true, 3u32),
+        ("doc_v2.drawcraft", "vectorcraft", false, 2u32),
+        ("doc_v1.drawcraft", "vectorcraft", false, 1u32),
+        ("tpl.vctemplate", "template", true, 4u32),
+    ] {
+        let path = dir.join(file_name).to_string_lossy().into_owned();
+        s.execute("document.export", &json!({"path": path, "format": fmt_id, "compress": compress, "version": version}))
+            .unwrap_or_else(|e| panic!("export {file_name} failed: {e}"));
+        let raw_bytes = std::fs::read(&path).unwrap();
+
+        // Plain VectorCraft format loader reads the file cleanly and keeps both unknown blocks intact.
+        let vdoc = vectorcraft_format::load(&raw_bytes).unwrap_or_else(|e| panic!("vectorcraft_format::load({file_name}) failed: {e}"));
+        assert_eq!(vdoc.unknown.get("thirdPartyPlugin"), Some(&json!({"enabled": true})), "{file_name} preserved third-party unknown key");
+        let ext = corel_import::read_coralcraft_data(&vdoc).unwrap_or_else(|| panic!("{file_name} missing coralcraft extension block"));
+        assert_eq!(ext.pages.len(), 1);
+        assert_eq!(ext.pages[0].name, "Cover Page");
+        assert!((ext.pages[0].bleed.get() - 9.0).abs() < 1e-6);
+        assert!(ext.pages[0].residual.chunks.iter().any(|c| &c.tag.0 == b"cpag"));
+        assert!(ext.residual.chunks.iter().any(|c| &c.tag.0 == b"cdoc"));
+        assert!(ext.master_layers.iter().any(|ml| ml.name == "Odd Page Header" && ml.role == LayerRole::MasterOddPages));
+
+        // Open through engine and export back to CDR: all CorelDRAW residuals and unsupported objects survive.
+        let mut r_sess = Session::new();
+        let opened = open(&mut r_sess, file_name, &raw_bytes);
+        assert_eq!(opened["format"], fmt_id, "{file_name}");
+        let exported_cdr = corel_import::export_document(&r_sess.doc().unwrap().doc).unwrap();
+        assert_eq!(exported_cdr.pages[0].name, "Cover Page");
+        assert_eq!(exported_cdr.pages[0].background, Some(FillStyle::uniform(CdrColor::rgb8(250, 248, 240))));
+        assert!(exported_cdr.residual.chunks.iter().any(|c| &c.tag.0 == b"cdoc" && c.payload.0 == vec![0xCA, 0xFE, 0xBA, 0xBE]));
+        assert!(exported_cdr.pages[0].residual.chunks.iter().any(|c| &c.tag.0 == b"cpag"));
+        assert!(exported_cdr.master_layers.iter().any(|ml| ml.role == LayerRole::MasterOddPages));
+        assert!(
+            exported_cdr.pages[0].layers[0]
+                .objects
+                .iter()
+                .any(|o| matches!(&o.kind, ObjectKind::Unsupported(u) if &u.tag.0 == b"fx99" && u.payload.0 == vec![9, 8, 7, 6, 5]))
+        );
+    }
+
+    // 4. Editing artboards in engine and saving updates the "coralcraft" extension block's page list while keeping residuals.
+    s.execute("artboard.setProps", &json!({"index": 0, "name": "Renamed Cover"})).unwrap();
+    s.execute("artboard.new", &json!({"name": "Back Cover", "width": 595, "height": 842})).unwrap();
+    let edited_bytes = b64(&s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap());
+    let edited_vdoc = vectorcraft_format::load(&edited_bytes).unwrap();
+    let edited_ext = corel_import::read_coralcraft_data(&edited_vdoc).unwrap();
+    assert_eq!(edited_ext.pages.len(), 2);
+    assert_eq!(edited_ext.pages[0].name, "Renamed Cover");
+    assert!((edited_ext.pages[0].bleed.get() - 9.0).abs() < 1e-6, "page 0 bleed preserved across artboard rename");
+    assert_eq!(edited_ext.pages[1].name, "Back Cover");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

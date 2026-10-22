@@ -4,6 +4,8 @@
 
 ## 1. Current Stage Status
 
+- **V2.2 DONE (2026-10-22): `.vectorcraft` / `.drawcraft` / `.vctemplate` lossless round-trip with namespaced `document.unknown["coralcraft"]` extension block.**
+  Added `sync_coralcraft_extension(&mut VcDocument)` in `crates/corel-import/src/lib.rs` and wired it into `crates/engine/src/cmd/fileio/native.rs` (`encode_to`) when `document.unknown["coralcraft"]` is present; pure VectorCraft documents stay untouched. Verified lossless round-trip of pages, master layers, CDR residuals, unsupported CDR objects, and Corel palettes across `.vectorcraft` (v1..v4, compressed & uncompressed), `.drawcraft`, and `.vctemplate`. **Next task: V2.3** (Legacy `.coralcraft` import converter).
 - **V2.1 DONE (2026-10-22): Compatibility matrix test over every entry in `FORMATS` (`crates/engine/src/cmd/fileio/tests.rs`).**
   Added `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` verifying that all 24 upstream VectorCraft format IDs plus CoralCraft's `cdr` and `cmx` are present in `FORMATS` with exact `read`, `write`, and `extensions` flags, and exercising every writable format via `document.export` + `document.serialize` and every readable format (across all its extensions) via `document.open`. **Next task: V2.2** (`.vectorcraft` / `.drawcraft` / `.vctemplate` lossless round-trip with CoralCraft extension block).
 - **V1.4 DONE (2026-10-22): `libcdr` (`cdr2raw`/`cmx2raw`) differential tests and real-sample (`refs/cdr-samples`) count verification re-pointed at `corel-import` + `vectorcraft-engine`.**

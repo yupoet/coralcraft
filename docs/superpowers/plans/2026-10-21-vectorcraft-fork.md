@@ -60,7 +60,7 @@ Rules:
 
 ### V2: Full VectorCraft file compatibility (D7)
 - [x] V2.1 Compatibility matrix test: for every entry in VectorCraft's `FORMATS` table, CoralCraft opens and saves/exports through the same code path. CI fails if a VectorCraft format is missing.
-- [ ] V2.2 `.vectorcraft` / `.drawcraft` / `.vctemplate` documents open and save losslessly. CoralCraft-only data (pages, master layers, CDR residuals) is stored in a namespaced extension block that VectorCraft ignores.
+- [x] V2.2 `.vectorcraft` / `.drawcraft` / `.vctemplate` documents open and save losslessly. CoralCraft-only data (pages, master layers, CDR residuals) is stored in a namespaced extension block that VectorCraft ignores.
 - [ ] V2.3 Legacy `.coralcraft` (pre-fork JSON/ZIP) import converter, so existing files still open.
 - [ ] V2.4 Update `docs/file-format-parity.md`: VectorCraft formats, CDR/CMX, Corel palettes.
 
