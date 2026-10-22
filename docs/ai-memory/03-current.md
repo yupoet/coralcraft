@@ -1,9 +1,15 @@
 # 03 — Current Milestone Status, Active Tasks & Next Steps
 
-> Last updated: 2026-10-21
+> Last updated: 2026-10-22
 
 ## 1. Current Stage Status
 
+- **V1.1 DONE (2026-10-22): `corel-import` crate maps `coralcraft-cdr` documents onto `vectorcraft-doc`.**
+  `crates/corel-import` (Layer 3, strict lints) implements `import_cdr_bytes`, `import_document`,
+  `export_document`, `write_cdr7_document`, `write_cdrx_zip_document`, and `write_cmx1_document`,
+  mapping pages to horizontally spaced artboards, layers to `NodeKind::Layer`, shapes/paths/text/bitmaps/groups/PowerClips/appearances/effects/transparencies
+  to `vectorcraft_doc::Node`, and preserving lossless CorelDRAW residuals (`CoralCraftDocData`)
+  under `Document::unknown["coralcraft"]`. **Next task: V1.2** (`.cdr`/`.cmx` in Open/Place tables and MCP `file.open`).
 - **V0.4 DONE (2026-10-21): `coralcraft-cli` rebased on `vectorcraft-cli`.**
   `apps/coralcraft-cli` (package/bin `coralcraft-cli`) keeps the upstream CLI
   (mcp/run/convert/info/bench/perf) and gains the pre-fork `probe` subcommand

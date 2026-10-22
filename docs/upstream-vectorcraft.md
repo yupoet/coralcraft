@@ -109,6 +109,11 @@ pre-fork CLI's `probe` subcommand is ported as `apps/coralcraft-cli/src/probe.rs
 fixtures enter the tree (clean-room). All `vectorcraft-cli` references across the tree follow
 the rename (binary names in packaging, workflows, the layer table, doc comments).
 
+### V1.1 `corel-import` bridge crate (2026-10-22)
+
+- Added CoralCraft-owned `crates/corel-import` (`corel-import` in root `Cargo.toml` and registered at L3 in `xtask/src/layers.rs` with `INTRA_LAYER_ORDER = &["coralcraft-cdr", "format", "corel-import"]`).
+- Maps `coralcraft_doc::Document` ↔ `vectorcraft_doc::Document` and preserves lossless residuals (`CoralCraftDocData`) under `Document::unknown["coralcraft"]`. No VectorCraft crate source files were modified in V1.1.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

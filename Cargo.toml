@@ -53,6 +53,7 @@ coralcraft-doc = { path = "legacy/crates/doc" }
 coralcraft-geom = { path = "legacy/crates/geom" }
 # The CDR/CMX format crate: the only workspace crate the coralcraft-cli probe subcommand needs.
 coralcraft-cdr = { path = "crates/cdr" }
+corel-import = { path = "crates/corel-import" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }

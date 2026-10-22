@@ -1,0 +1,33 @@
+[package]
+name = "corel-import"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Map CorelDRAW (.cdr / .cmx) documents to and from vectorcraft-doc."
+
+[dependencies]
+coralcraft-cdr.workspace = true
+coralcraft-color.workspace = true
+coralcraft-doc.workspace = true
+coralcraft-geom.workspace = true
+image = { workspace = true, default-features = false, features = ["png"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+vectorcraft-color.workspace = true
+vectorcraft-doc.workspace = true
+vectorcraft-geom.workspace = true
+
+[dev-dependencies]
+vectorcraft-format.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"

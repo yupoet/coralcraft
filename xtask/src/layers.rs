@@ -68,6 +68,7 @@ pub const TABLE: &[(&str, Class)] = &[
     // CoralCraft: the CDR/CMX format crate (full name; it keeps the coralcraft- prefix).
     // A format-layer crate like svg/pdf/format: depends on color (L0), geom (L0), doc (L1).
     ("coralcraft-cdr", Class::Layer(3)),
+    ("corel-import", Class::Layer(3)),
 ];
 
 /// Explicit orderings *within* a layer (earlier may be used by later).
@@ -88,6 +89,8 @@ pub const INTRA_LAYER_ORDER: &[&[&str]] = &[
     &["three-d", "effects"],
     // Inflate cuts its surface's grid cells to the shape with Pathfinder's booleans.
     &["pathops", "three-d"],
+    // CoralCraft: corel-import bridges coralcraft-cdr and vectorcraft-doc.
+    &["coralcraft-cdr", "format", "corel-import"],
 ];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
