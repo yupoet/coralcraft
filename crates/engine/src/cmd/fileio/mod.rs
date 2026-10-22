@@ -695,6 +695,8 @@ pub const FORMATS: &[Format] = &[
         raster: false,
         options: &[],
     },
+    // CoralCraft: Pre-fork legacy .coralcraft container (JSON or Stored ZIP), opened losslessly.
+    reader("coralcraft", "CoralCraft (Legacy)", &["coralcraft"], "application/x-coralcraft", false),
 ];
 
 /// Every extension `document.open` reads (the "All readable files" filter of open dialogs).
@@ -730,9 +732,10 @@ pub const OPEN_EXTS: &[&str] = &[
     "af",
     "afdesign",
     "afpub",
-    // CoralCraft: CorelDRAW and CMX extensions.
+    // CoralCraft: CorelDRAW, CMX, and legacy .coralcraft extensions.
     "cdr",
     "cmx",
+    "coralcraft",
 ];
 
 /// Extensions in [`OPEN_EXTS`] the desktop packaging doesn't associate with VectorCraft: Photoshop
@@ -796,9 +799,10 @@ pub const PLACE_EXTS: &[&str] = &[
     "af",
     "afdesign",
     "afpub",
-    // CoralCraft: CorelDRAW and CMX extensions.
+    // CoralCraft: CorelDRAW, CMX, and legacy .coralcraft extensions.
     "cdr",
     "cmx",
+    "coralcraft",
     "txt",
     "rtf",
     "docx",

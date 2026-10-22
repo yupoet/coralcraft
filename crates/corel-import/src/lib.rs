@@ -235,6 +235,30 @@ pub fn import_cdr_bytes(bytes: &[u8]) -> Result<CorelImportOutcome, CorelImportE
     Ok(CorelImportOutcome { document, report: parsed.probe_report, warnings })
 }
 
+/// Returns `true` if `bytes` is a pre-fork `.coralcraft` container (single-file JSON or Stored ZIP).
+#[must_use]
+pub fn is_legacy_coralcraft(bytes: &[u8]) -> bool {
+    if bytes.starts_with(b"PK\x03\x04") {
+        if !bytes.windows(13).any(|w| w == b"manifest.json") || !bytes.windows(13).any(|w| w == b"document.json") {
+            return false;
+        }
+        return coralcraft_doc::load_bytes(bytes).is_ok();
+    }
+    let trimmed = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let first = trimmed.iter().copied().find(|b| !b.is_ascii_whitespace());
+    if first != Some(b'{') {
+        return false;
+    }
+    coralcraft_doc::load_bytes(bytes).is_ok()
+}
+
+/// Imports a legacy pre-fork `.coralcraft` file (single-file JSON or Stored ZIP container) into a
+/// [`vectorcraft_doc::Document`], preserving all CorelDRAW metadata and residuals losslessly.
+pub fn import_legacy_coralcraft_bytes(bytes: &[u8]) -> Result<(VcDocument, Vec<String>), CorelImportError> {
+    let cdr_doc = coralcraft_doc::load_bytes(bytes).map_err(|e| CorelImportError::Conversion(e.to_string()))?;
+    import_document(&cdr_doc)
+}
+
 /// Encodes a [`vectorcraft_doc::Document`] as a CorelDRAW v7 RIFF `.cdr` byte stream.
 pub fn write_cdr7_document(doc: &VcDocument) -> Result<Vec<u8>, CorelImportError> {
     let cdr_doc = export_document(doc)?;
@@ -2127,5 +2151,31 @@ mod tests {
         assert_eq!(import_cdr_bytes(&cdr7).unwrap().document.artboards.len(), 1);
         assert_eq!(import_cdr_bytes(&cdrx).unwrap().document.artboards.len(), 1);
         assert_eq!(import_cdr_bytes(&cmx1).unwrap().document.artboards.len(), 1);
+    }
+
+    #[test]
+    fn import_legacy_coralcraft_bytes_parses_json_and_zip_containers() {
+        let mut cdr_doc = CdrDocument::new_a4_portrait();
+        cdr_doc.title = "Legacy CoralCraft".to_owned();
+        let oid = cdr_doc.allocate_object_id();
+        cdr_doc.pages[0].layers[0].objects.push(ObjectNode::new(
+            oid,
+            Some("Legacy Box".to_owned()),
+            ObjectKind::Rect(RectSpec::sharp(CdrRect::new(10.0, 20.0, 110.0, 90.0).unwrap())),
+            Some(FillStyle::uniform(CdrColor::rgb8(40, 120, 200))),
+            None,
+        ));
+        let json_bytes = coralcraft_doc::save_json(&cdr_doc).unwrap();
+        assert!(is_legacy_coralcraft(&json_bytes));
+        let (json_doc, json_warnings) = import_legacy_coralcraft_bytes(&json_bytes).unwrap();
+        assert!(json_warnings.is_empty());
+        assert_eq!(json_doc.title, "Legacy CoralCraft");
+        assert_eq!(export_document(&json_doc).unwrap(), cdr_doc);
+
+        let zip_buf = coralcraft_doc::save_zip(&cdr_doc).unwrap();
+        assert!(is_legacy_coralcraft(&zip_buf));
+        let (zip_doc, zip_warnings) = import_legacy_coralcraft_bytes(&zip_buf).unwrap();
+        assert!(zip_warnings.is_empty());
+        assert_eq!(export_document(&zip_doc).unwrap(), cdr_doc);
     }
 }

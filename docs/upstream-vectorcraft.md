@@ -144,6 +144,13 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/corel-import/src/lib.rs` adds `sync_coralcraft_extension(&mut vectorcraft_doc::Document)` and re-exports `coralcraft_color`, `coralcraft_doc`, and `coralcraft_geom`.
 - `crates/engine/src/cmd/fileio/native.rs` synchronizes `document.unknown["coralcraft"]` on save when present (marked `// CoralCraft:`), leaving pure VectorCraft documents untouched.
 
+### V2.3 Legacy `.coralcraft` (pre-fork JSON/ZIP) import converter (2026-10-22)
+
+- `crates/corel-import/src/lib.rs` adds `is_legacy_coralcraft` and `import_legacy_coralcraft_bytes`, decoding both plain JSON (`coralcraft_doc::Document::load_json`) and Stored/Deflated ZIP containers (`document.json`) into `vectorcraft_doc::Document` with lossless `"coralcraft"` extension metadata.
+- `crates/engine/src/cmd/fileio/mod.rs` appends `reader("coralcraft", "CoralCraft (Legacy)", &["coralcraft"], "application/x-coralcraft", false)` to `FORMATS` and `"coralcraft"` to `OPEN_EXTS` and `PLACE_EXTS` (marked `// CoralCraft:`), keeping upstream `.vectorcraft`/`.drawcraft`/`.vctemplate` entries untouched.
+- `crates/engine/src/cmd/fileio/load.rs` detects and loads `"coralcraft"` with `converted = true` (marked `// CoralCraft:`), so saving upgrades legacy documents to `.vectorcraft`.
+- `packaging/macos/Info.plist.in` declares `<string>coralcraft</string>` under imported document types.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs

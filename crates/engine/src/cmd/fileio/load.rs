@@ -94,12 +94,15 @@ pub fn detect(name: &str, bytes: &[u8]) -> Option<&'static Format> {
     if psdread::is_psd(bytes) {
         return format(if psdread::is_psb(bytes) { "psb" } else { "psd" });
     }
-    // CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx) containers.
+    // CoralCraft: CorelDRAW (.cdr), Corel Presentation Exchange (.cmx), and pre-fork (.coralcraft) containers.
     if let Ok(rep) = coralcraft_cdr::probe(bytes) {
         return format(match rep.container {
             coralcraft_cdr::CdrContainer::Riff { kind: coralcraft_cdr::CdrKind::Cmx, .. } => "cmx",
             _ => "cdr",
         });
+    }
+    if corel_import::is_legacy_coralcraft(bytes) {
+        return format("coralcraft");
     }
     if let Some(f) = image::guess_format(bytes).ok().and_then(image_format) {
         return Some(f);
@@ -274,10 +277,16 @@ pub fn load_with(name: &str, bytes: &[u8], opts: &LoadOptions) -> Result<Loaded>
             preview_only = i.preview_only;
             (i.doc, i.warnings, false)
         }
-        // CoralCraft: CorelDRAW (.cdr) and Corel Presentation Exchange (.cmx).
+        // CoralCraft: CorelDRAW (.cdr), Corel Presentation Exchange (.cmx), and pre-fork (.coralcraft).
         "cdr" | "cmx" => {
             let out = corel_import::import_cdr_bytes(bytes).map_err(|e| err(format!("can't open `{}`: {e}", file_name(name))))?;
             (out.document, out.warnings, false)
+        }
+        "coralcraft" => {
+            let (d, warnings) =
+                corel_import::import_legacy_coralcraft_bytes(bytes).map_err(|e| err(format!("can't open `{}`: {e}", file_name(name))))?;
+            converted = true;
+            (d, warnings, false)
         }
         _ if format.raster => (raster_doc(&title, bytes)?, vec![], false),
         _ => return Err(err(format!("{} files can't be opened yet", format.label))),

@@ -4,6 +4,8 @@
 
 ## 1. Current Stage Status
 
+- **V2.3 DONE (2026-10-22): Legacy `.coralcraft` (pre-fork JSON/ZIP) import converter.**
+  Added `is_legacy_coralcraft` and `import_legacy_coralcraft_bytes` in `crates/corel-import/src/lib.rs`, registered `"coralcraft"` as a read-only entry in `FORMATS` and `OPEN_EXTS`/`PLACE_EXTS` (`crates/engine/src/cmd/fileio/mod.rs`), wired content detection and `load_with` (`converted = true`) in `crates/engine/src/cmd/fileio/load.rs`, and added `coralcraft` to `packaging/macos/Info.plist.in`. Pre-fork `.coralcraft` JSON and Stored/Deflated ZIP containers open and place losslessly into `vectorcraft_doc::Document`. **Next task: V2.4** (Rewrite `docs/file-format-parity.md`).
 - **V2.2 DONE (2026-10-22): `.vectorcraft` / `.drawcraft` / `.vctemplate` lossless round-trip with namespaced `document.unknown["coralcraft"]` extension block.**
   Added `sync_coralcraft_extension(&mut VcDocument)` in `crates/corel-import/src/lib.rs` and wired it into `crates/engine/src/cmd/fileio/native.rs` (`encode_to`) when `document.unknown["coralcraft"]` is present; pure VectorCraft documents stay untouched. Verified lossless round-trip of pages, master layers, CDR residuals, unsupported CDR objects, and Corel palettes across `.vectorcraft` (v1..v4, compressed & uncompressed), `.drawcraft`, and `.vctemplate`. **Next task: V2.3** (Legacy `.coralcraft` import converter).
 - **V2.1 DONE (2026-10-22): Compatibility matrix test over every entry in `FORMATS` (`crates/engine/src/cmd/fileio/tests.rs`).**

@@ -979,6 +979,7 @@ fn vectorcraft_format_compatibility_matrix_covers_every_format_v2_1() {
         ("ps", true, false, &["ps"]),
         ("cdr", true, true, &["cdr"]),
         ("cmx", true, true, &["cmx"]),
+        ("coralcraft", true, false, &["coralcraft"]),
     ];
 
     for &(id, want_read, want_write, want_exts) in required_formats {
@@ -1070,6 +1071,10 @@ fn vectorcraft_format_compatibility_matrix_covers_every_format_v2_1() {
                 "ps" => b64(&authored.execute("document.export", &json!({"format": "eps"})).unwrap()),
                 "psb" => synth_psb(),
                 "affinity" => synth_affinity(),
+                "coralcraft" => {
+                    let cdoc = corel_import::export_document(&authored.doc().unwrap().doc).unwrap();
+                    corel_import::coralcraft_doc::save_json(&cdoc).unwrap()
+                }
                 _ => exported_bytes.unwrap_or_else(|| panic!("no sample bytes for readable format `{}`", fmt.id)),
             };
 
@@ -1219,4 +1224,87 @@ fn vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_loss
     assert_eq!(edited_ext.pages[1].name, "Back Cover");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// CoralCraft: V2.3 legacy .coralcraft (single-file JSON and Stored ZIP with content-addressed blobs) import converter tests.
+#[test]
+fn legacy_coralcraft_json_and_zip_containers_open_and_place_losslessly_v2_3() {
+    use corel_import::coralcraft_color::Color as CdrColor;
+    use corel_import::coralcraft_doc::{
+        ChunkTag, Document as CdrDocument, FillStyle, ObjectId, ObjectKind, ObjectNode, RawChunk, RawPayload, UnsupportedObject, save_json, save_zip,
+    };
+    use corel_import::coralcraft_geom::{Rect as CdrRect, RectSpec};
+
+    assert!(OPEN_EXTS.contains(&"coralcraft") && PLACE_EXTS.contains(&"coralcraft"));
+    assert!(!SAVE_FORMATS.contains(&"coralcraft"), "saving an opened legacy .coralcraft file prompts Save As in today's .vectorcraft format");
+
+    let mut legacy_doc = CdrDocument::new_a4_portrait();
+    legacy_doc.title = "LegacyPreForkDoc".to_owned();
+    legacy_doc.pages[0].name = "Legacy Sheet 1".to_owned();
+    legacy_doc.pages[0].layers[0].objects.push(ObjectNode::new(
+        ObjectId(10),
+        Some("LegacyRect".to_owned()),
+        ObjectKind::Rect(RectSpec::sharp(CdrRect::new(25.0, 35.0, 125.0, 95.0).unwrap())),
+        Some(FillStyle::uniform(CdrColor::rgb8(30, 150, 220))),
+        None,
+    ));
+
+    // Include a >= 64 byte payload so save_zip externalizes it to blobs/<sha256>.bin
+    let large_payload: Vec<u8> = (0u8..96).collect();
+    legacy_doc.pages[0].layers[0].objects.push(ObjectNode::new(
+        ObjectId(11),
+        Some("LegacyBlobObject".to_owned()),
+        ObjectKind::Unsupported(UnsupportedObject {
+            tag: ChunkTag(*b"blob"),
+            class_hint: Some("ExternalizedBlob".to_owned()),
+            payload: RawPayload(large_payload.clone()),
+            fallback_bounds: Some(CdrRect::new(150.0, 40.0, 230.0, 100.0).unwrap()),
+            absolute_geometry: true,
+            children: Vec::new(),
+            residual: Default::default(),
+        }),
+        None,
+        None,
+    ));
+    legacy_doc.residual.chunks.push(RawChunk {
+        tag: ChunkTag(*b"lgcy"),
+        flags: 0,
+        slot: 0,
+        payload: RawPayload(vec![0x12, 0x34, 0x56]),
+        src_offset: 0,
+    });
+
+    let json_bytes = save_json(&legacy_doc).expect("save_json");
+    let zip_bytes = save_zip(&legacy_doc).expect("save_zip");
+    assert!(corel_import::is_legacy_coralcraft(&json_bytes));
+    assert!(corel_import::is_legacy_coralcraft(&zip_bytes));
+
+    for (name, bytes) in [("legacy_json.coralcraft", &json_bytes), ("legacy_zip.coralcraft", &zip_bytes)] {
+        let loaded = super::load::load(name, bytes).unwrap_or_else(|e| panic!("load({name}) failed: {e}"));
+        assert_eq!(loaded.format.id, "coralcraft");
+        assert!(loaded.converted, "{name} should be marked converted so Save upgrades to .vectorcraft");
+
+        let mut s = Session::new();
+        let r = open(&mut s, name, bytes);
+        assert_eq!(r["format"], "coralcraft", "{name}");
+        assert_eq!(s.doc().unwrap().path, None, "read-only legacy format opens without binding Save to .coralcraft");
+
+        let roundtripped = corel_import::export_document(&s.doc().unwrap().doc).unwrap();
+        assert_eq!(roundtripped.pages[0].name, "Legacy Sheet 1");
+        assert!(roundtripped.residual.chunks.iter().any(|c| &c.tag.0 == b"lgcy" && c.payload.0 == vec![0x12, 0x34, 0x56]));
+        assert!(
+            roundtripped.pages[0].layers[0]
+                .objects
+                .iter()
+                .any(|o| matches!(&o.kind, ObjectKind::Unsupported(u) if &u.tag.0 == b"blob" && u.payload.0 == large_payload))
+        );
+
+        // Also verify file.place works for legacy .coralcraft files
+        let mut target = session(400.0, 300.0, 1);
+        let pr = target
+            .execute("file.place", &json!({"name": name, "dataBase64": vectorcraft_format::base64_encode(bytes), "at": [200.0, 150.0]}))
+            .unwrap();
+        assert_eq!(pr["format"], "coralcraft", "file.place {name}");
+        assert!(target.doc().unwrap().doc.node_count() >= 2);
+    }
 }
