@@ -67,7 +67,7 @@ Rules:
 ### V3: CorelDRAW multi-page model
 - [x] V3.1 Multi-page documents (per-page size and orientation) on top of VectorCraft artboards (study `refs/designcraft` for spreads and master pages).
 - [x] V3.2 Master layers (all / odd / even pages) and the shared Desktop layer. Render order matches CorelDRAW's public documentation.
-- [ ] V3.3 Page navigator (tabs, add/delete/rename/reorder pages).
+- [x] V3.3 Page navigator (tabs, add/delete/rename/reorder pages).
 
 ### V4: CorelDRAW workspace
 - [ ] V4.1 CorelDRAW workspace preset on VectorCraft docking: left toolbox, top property bar, right vertical palette bar, bottom page navigator and status bar, right dockers. Saved as a workspace.

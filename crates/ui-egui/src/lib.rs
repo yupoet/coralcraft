@@ -38,6 +38,8 @@ pub mod io;
 pub mod menus;
 pub mod native_menu;
 pub mod opening;
+// CoralCraft: bottom CorelDRAW Page Navigator bar (tabs, add/delete/rename/reorder pages).
+pub mod page_navigator;
 pub mod palette;
 mod panel_docking;
 pub mod panels;
@@ -1442,6 +1444,13 @@ impl VectorcraftApp {
         if self.ui.status_bar && self.ui.screen_mode < 3 {
             chrome::status_bar(self, ui);
             chrome::hint_bar(self, ui);
+            // CoralCraft: render the CorelDRAW bottom Page Navigator bar when enabled by the
+            // workspace/window toggle or when a CorelDRAW document (`doc.unknown["coralcraft"]`) is open.
+            let show_page_nav = self.ui.page_navigator
+                || self.session.active().is_some_and(|st| st.doc.unknown.contains_key(vectorcraft_doc::CORALCRAFT_UNKNOWN_KEY));
+            if show_page_nav {
+                page_navigator::show(self, ui);
+            }
         } else {
             // Keeps the previous frame's value valid for menus drawn above, before the bars.
             widgets::set_menu_floor(&ctx, ctx.content_rect().bottom());

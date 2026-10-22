@@ -8,7 +8,8 @@
 //! `dimPercent`. OK runs `layer.setProps`, `layer.new` or `layer.newSublayer`.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{LAYER_COLORS, LayerColor, Node, NodeId, NodeKind};
+// CoralCraft: CorelDRAW layer role (`Normal`, `MasterAll`, `MasterOdd`, `MasterEven`, `Desktop`) support.
+use vectorcraft_doc::{CorelLayerRole, LAYER_COLORS, LayerColor, Node, NodeId, NodeKind};
 
 use super::swatch_options::{grid, label};
 use super::{DialogSpec, form, run_and_close};
@@ -32,9 +33,28 @@ fn color_field(c: LayerColor) -> String {
     }
 }
 
+/// CoralCraft: human-readable label for a [`CorelLayerRole`] key in Layer Options.
+const COREL_ROLES: &[(&str, &str)] = &[
+    ("normal", "Normal Page Layer"),
+    ("masterAll", "Master (All Pages)"),
+    ("masterOdd", "Master (Odd Pages)"),
+    ("masterEven", "Master (Even Pages)"),
+    ("desktop", "Desktop (Pasteboard)"),
+];
+
+fn role_key(role: CorelLayerRole) -> &'static str {
+    match role {
+        CorelLayerRole::Normal | CorelLayerRole::Guides | CorelLayerRole::Grid | CorelLayerRole::Unknown => "normal",
+        CorelLayerRole::MasterAllPages => "masterAll",
+        CorelLayerRole::MasterOddPages => "masterOdd",
+        CorelLayerRole::MasterEvenPages => "masterEven",
+        CorelLayerRole::Desktop => "desktop",
+    }
+}
+
 /// The fields for `n` (a layer or any other row).
 /// `xml_id`: Preferences › Units › Identify Objects By › XML ID.
-fn fields_of(n: &Node, xml_id: bool) -> serde_json::Map<String, Value> {
+fn fields_of(doc: &vectorcraft_doc::Document, n: &Node, xml_id: bool) -> serde_json::Map<String, Value> {
     let mut f = serde_json::Map::new();
     f.insert("name".into(), json!(n.identify_label(xml_id)));
     f.insert("visible".into(), json!(n.visible));
@@ -47,6 +67,13 @@ fn fields_of(n: &Node, xml_id: bool) -> serde_json::Map<String, Value> {
         f.insert("preview".into(), json!(preview));
         f.insert("dimImages".into(), json!(dim_images.is_some()));
         f.insert("dimPercent".into(), json!(dim_images.unwrap_or(50)));
+        // CoralCraft: populate CorelDRAW layer role and foreground master flag.
+        let info = doc.corel_layer_info(n.id);
+        let rk = role_key(info.role);
+        f.insert("role".into(), json!(rk));
+        f.insert("origRole".into(), json!(rk));
+        f.insert("masterInFront".into(), json!(info.master_in_front));
+        f.insert("origMasterInFront".into(), json!(info.master_in_front));
     }
     f
 }
@@ -72,7 +99,7 @@ pub fn open(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
     };
     let first = ids.first().and_then(|id| st.doc.node(*id)).ok_or("no such layer or object")?;
     let xml_id = app.session.prefs.identify_objects_by == "xmlId";
-    let mut f = fields_of(first, xml_id);
+    let mut f = fields_of(&st.doc, first, xml_id);
     f.insert("ids".into(), json!(ids.iter().map(|i| i.0).collect::<Vec<_>>()));
     f.insert("mode".into(), json!("edit"));
     app.ui.dialog = Some(Dialog { kind: KIND.into(), fields: f });
@@ -100,6 +127,7 @@ pub fn open_new(app: &mut VectorcraftApp, p: &Value) -> Result<Value, String> {
     let fields = json!({
         "mode": if sublayer { "newSublayer" } else { "new" }, "layer": true, "name": name, "color": color_field(color),
         "template": false, "locked": false, "visible": true, "printable": true, "preview": true, "dimImages": false, "dimPercent": 50,
+        "role": "normal", "origRole": "normal", "masterInFront": false, "origMasterInFront": false,
     });
     app.ui.dialog = Some(Dialog::new(KIND, fields));
     Ok(Value::Null)
@@ -173,6 +201,25 @@ fn body(_: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                 }
             });
             ui.end_row();
+            // CoralCraft: CorelDRAW layer role dropdown (Normal, Master All/Odd/Even, Desktop).
+            label(ui, crate::i18n::t("Role:"));
+            let cur_role = {
+                let s = d.str("role");
+                if s.is_empty() { "normal".to_string() } else { s }
+            };
+            let cur_label = COREL_ROLES.iter().find(|(k, _)| *k == cur_role).map_or("Normal Page Layer", |(_, l)| *l);
+            if let Some(chosen_key) = widgets::combo(ui, "layer-corel-role", crate::i18n::t(cur_label), 190.0, false, |ui| {
+                let mut picked = None;
+                for (k, lbl) in COREL_ROLES {
+                    if ui.add(egui::Button::selectable(*k == cur_role, crate::i18n::t(lbl))).clicked() {
+                        picked = Some(*k);
+                    }
+                }
+                picked
+            }) {
+                d.fields.insert("role".into(), json!(chosen_key));
+            }
+            ui.end_row();
         }
     });
     ui.add_space(8.0);
@@ -201,6 +248,9 @@ fn body(_: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                 let template = d.bool("template");
                 toggle(ui, d, "locked", tl!("Lock"), !template);
                 toggle(ui, d, "printable", tl!("Print"), !template);
+                // CoralCraft: when a Master role is selected, allow toggling Master in Front vs Background.
+                let is_master = matches!(d.str("role").as_str(), "masterAll" | "masterOdd" | "masterEven");
+                toggle(ui, d, "masterInFront", crate::i18n::t("Master in Front"), is_master);
             });
         });
     } else {
@@ -225,6 +275,24 @@ pub(crate) fn params(d: &Dialog) -> (&'static str, Value) {
         p.insert("printable".into(), json!(d.bool("printable")));
         p.insert("preview".into(), json!(d.bool("preview")));
         p.insert("dimImages".into(), if d.bool("dimImages") { json!(d.f64("dimPercent", 50.0).clamp(0.0, 100.0)) } else { json!(false) });
+        // CoralCraft: only emit `role` / `masterInFront` when non-default or changed from original
+        // so pure VectorCraft documents do not gain `doc.unknown["coralcraft"]` on routine edits.
+        let role = {
+            let s = d.str("role");
+            if s.is_empty() { "normal".to_string() } else { s }
+        };
+        let orig_role = {
+            let s = d.str("origRole");
+            if s.is_empty() { "normal".to_string() } else { s }
+        };
+        let in_front = d.bool("masterInFront");
+        let orig_front = d.bool("origMasterInFront");
+        if role != "normal" || role != orig_role {
+            p.insert("role".into(), json!(role));
+        }
+        if in_front || in_front != orig_front {
+            p.insert("masterInFront".into(), json!(in_front));
+        }
     }
     match d.str("mode").as_str() {
         "new" => ("layer.new", Value::Object(p)),
@@ -330,5 +398,19 @@ mod tests {
         super::super::confirm(&mut app).unwrap();
         let n = app.session.doc().unwrap().doc.node(NodeId(rect)).unwrap().clone();
         assert_eq!((n.display_name(), n.locked), ("Box".to_string(), true));
+    }
+
+    #[test]
+    fn layer_options_support_coreldraw_master_and_desktop_roles_v3_3() {
+        let mut app = app();
+        let layer = app.session.doc().unwrap().doc.layers[0].id;
+        app.run("ui.layerOptions", json!({})).unwrap();
+        set(&mut app, "role", json!("masterOdd"));
+        set(&mut app, "masterInFront", json!(true));
+        draw(&mut app);
+        super::super::confirm(&mut app).unwrap();
+        let info = app.session.doc().unwrap().doc.corel_layer_info(layer);
+        assert_eq!(info.role, CorelLayerRole::MasterOddPages);
+        assert!(info.master_in_front);
     }
 }

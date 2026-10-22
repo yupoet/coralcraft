@@ -44,7 +44,8 @@ use std::sync::{Arc, Weak};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use vectorcraft_doc::{Document, LiveShape, Node, NodeId, NodeKind};
+// CoralCraft: CorelDRAW layer role (`Normal`, `MasterAll`, `MasterOdd`, `MasterEven`, `Desktop`) badge & menu.
+use vectorcraft_doc::{CorelLayerRole, Document, LiveShape, Node, NodeId, NodeKind};
 use vectorcraft_engine::OpenRows;
 
 use crate::theme::Tokens;
@@ -995,6 +996,30 @@ fn row(ui: &mut Ui, view: &View, item: &Row, out: &mut Out) {
             } else if n.extras().mask.is_some() {
                 painter.extend(egui::Shape::dashed_line(&[text.left_bottom(), text.right_bottom()], Stroke::new(1.0, t.text), 3.0, 2.0));
             }
+            // CoralCraft: render a compact CorelDRAW layer role badge (`M:All`, `M:Odd`, `M:Even`, `Desk`)
+            // when a top-level layer has a non-Normal CorelDRAW role.
+            if n.is_layer() && doc.has_corel_layer_roles() {
+                let info = doc.corel_layer_info(n.id);
+                let badge = match info.role {
+                    CorelLayerRole::Normal | CorelLayerRole::Guides | CorelLayerRole::Grid | CorelLayerRole::Unknown => None,
+                    CorelLayerRole::MasterAllPages => Some(if info.master_in_front { "M:All↑" } else { "M:All" }),
+                    CorelLayerRole::MasterOddPages => Some(if info.master_in_front { "M:Odd↑" } else { "M:Odd" }),
+                    CorelLayerRole::MasterEvenPages => Some(if info.master_in_front { "M:Even↑" } else { "M:Even" }),
+                    CorelLayerRole::Desktop => Some("Desk"),
+                };
+                if let Some(badge_txt) = badge {
+                    let badge_font = egui::FontId::proportional(9.5);
+                    let galley = painter.layout_no_wrap(badge_txt.to_owned(), badge_font, t.accent);
+                    let bx = (name_end + 6.0).min(name_rect.right() - galley.size().x - 6.0);
+                    if bx > name_end + 2.0 {
+                        let pill =
+                            egui::Rect::from_min_size(egui::pos2(bx, r.center().y - galley.size().y / 2.0 - 1.5), galley.size() + vec2(6.0, 3.0));
+                        painter.rect_filled(pill, 2.0, t.accent.gamma_multiply(0.16));
+                        painter.rect_stroke(pill, 2.0, Stroke::new(1.0, t.accent.gamma_multiply(0.55)), StrokeKind::Inside);
+                        painter.galley(egui::pos2(pill.left() + 3.0, pill.top() + 1.5), galley, t.accent);
+                    }
+                }
+            }
         }
     }
     // Target circle and selection square.
@@ -1034,10 +1059,35 @@ fn row(ui: &mut Ui, view: &View, item: &Row, out: &mut Out) {
     }
     // Row menu: Collect for Export on this row (or every highlighted row when this is one of them).
     let collect_ids: Vec<u64> = if view.rows.contains(&n.id) { view.rows.iter().map(|id| id.0).collect() } else { vec![n.id.0] };
+    let is_layer_row = n.is_layer();
+    let cur_corel_info = if is_layer_row { Some(doc.corel_layer_info(n.id)) } else { None };
     resp.context_menu(|ui| {
         collect_for_export_menu(ui, true, |multiple| {
             out.actions.push(("assets.add".into(), json!({ "ids": collect_ids.clone(), "multiple": multiple })));
         });
+        // CoralCraft: CorelDRAW layer role quick-assignment in the layer row context menu.
+        if let Some(info) = cur_corel_info {
+            ui.separator();
+            for (rk, label, role_val) in [
+                ("normal", crate::i18n::t("Normal Page Layer"), CorelLayerRole::Normal),
+                ("masterAll", crate::i18n::t("Master Layer (All Pages)"), CorelLayerRole::MasterAllPages),
+                ("masterOdd", crate::i18n::t("Master Layer (Odd Pages)"), CorelLayerRole::MasterOddPages),
+                ("masterEven", crate::i18n::t("Master Layer (Even Pages)"), CorelLayerRole::MasterEvenPages),
+                ("desktop", crate::i18n::t("Desktop Layer (Pasteboard)"), CorelLayerRole::Desktop),
+            ] {
+                if widgets::menu_item(ui, label, true, info.role == role_val) {
+                    out.actions.push(("layer.setProps".into(), json!({ "ids": collect_ids.clone(), "role": rk })));
+                    ui.close();
+                }
+            }
+            if info.role.is_master() {
+                ui.separator();
+                if widgets::menu_item(ui, crate::i18n::t("Master in Front of Page Layers"), true, info.master_in_front) {
+                    out.actions.push(("layer.setProps".into(), json!({ "ids": collect_ids.clone(), "masterInFront": !info.master_in_front })));
+                    ui.close();
+                }
+            }
+        }
     });
     // Dragging rows: the highlighted rows when this is one of them, else this row.
     if resp.drag_started() && view.column.is_none() {

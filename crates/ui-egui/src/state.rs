@@ -365,6 +365,9 @@ pub struct UiState {
     #[serde(default)]
     pub toolbar_pos: Option<[f32; 2]>,
     pub status_bar: bool,
+    /// CoralCraft: whether the bottom CorelDRAW Page Navigator bar is explicitly shown.
+    #[serde(default)]
+    pub page_navigator: bool,
     pub dock: bool,
     /// The bars that Tab (`window.dock`) hid, which the next Tab shows again; none when Tab has not
     /// hidden them since it last showed them, or a workspace was applied since.
@@ -782,6 +785,7 @@ impl Default for UiState {
             dock_width_pending: false,
             toolbar_pos: None,
             status_bar: true,
+            page_navigator: false,
             dock: true,
             tab_hid: None,
             view: ViewFlags::default(),

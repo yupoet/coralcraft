@@ -167,6 +167,12 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 - `crates/engine/src/cmd/layer.rs` (`layer.new`, `layer.newSublayer`, `layer.setProps`, `layer.duplicate`, `layer.delete`, marked `// CoralCraft:`) accepts `role?`, `masterInFront?`, and `pageIndex?`, defaulting `Desktop`/`Guides`/`Grid` layers to `printable: false`.
 - `crates/corel-import/src/lib.rs` (`export_document`) routes layers with non-`Normal` `LayerRole` into `cdr_doc.master_layers`.
 
+### V3.3 Page navigator (tabs, add/delete/rename/reorder pages) and CorelDRAW layer role UI (2026-10-22)
+
+- `crates/ui-egui/src/page_navigator.rs` (new CoralCraft module wired into `crates/ui-egui/src/lib.rs`, marked `// CoralCraft:`) renders the bottom CorelDRAW Page Navigator bar (`1 of N` counter, `|<` First, `<` Previous, `+|` Insert Page Before, scrollable page tabs with orientation sheet icons, `+` Add Page After, `>` Next, `>|` Last, and Delete Current Page) with inline double-click page renaming, drag-and-drop page reordering (`PageTabDrag`), and right-click page tab context menu (`Insert Page After/Before`, `Duplicate Page`, `Rename Page…`, `Switch to Landscape/Portrait`, `Delete Page`).
+- `crates/ui-egui/src/panels/layers.rs` (`row_widget`, marked `// CoralCraft:`) renders a compact role badge (`M:All`, `M:Odd`, `M:Even`, `Desk`) on top-level layers when `doc.has_corel_layer_roles()` is true and adds CorelDRAW layer role quick-assignment items to the layer row context menu.
+- `crates/ui-egui/src/dialogs/layer_options.rs` (`fields_of`, `open_new`, `body`, `params`, marked `// CoralCraft:`) adds a CorelDRAW `Role:` dropdown (`Normal Page Layer`, `Master (All Pages)`, `Master (Odd Pages)`, `Master (Even Pages)`, `Desktop (Pasteboard)`) and a `Master in Front` checkbox, emitting `role`/`masterInFront` only when non-default or changed from the original layer role.
+
 ### CI divergences
 
 - Our `ci.yml` (not upstream's — upstream has no `ci.yml` at this commit) runs
