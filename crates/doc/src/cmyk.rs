@@ -576,7 +576,8 @@ mod tests {
             f
         };
         assert_eq!(oversized_tiff(&header(2)), Some((u32::MAX, u32::MAX)));
-        assert_eq!(oversized_tiff(&header(1)), None, "one plane: (2^32 − 1)² tiles can be counted in 64 bits");
+        let one_plane = (usize::BITS == 32).then_some((u32::MAX, u32::MAX));
+        assert_eq!(oversized_tiff(&header(1)), one_plane, "one plane overflows the tile count only on 32-bit hosts");
         assert!(tiff(&header(2)).is_none(), "not decoded");
     }
 

@@ -100,8 +100,9 @@ jobs:
       - name: Install and run on Debian 11 (glibc 2.31)
         run: |
           docker run --rm -v "$PWD/dist/release":/r:ro debian:11 bash -eo pipefail -c '
+            sed -i -e "s|http://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g" -e "s|http://deb.debian.org/debian|https://archive.debian.org/debian|g" /etc/apt/sources.list
             apt-get update
-            apt-get install -y /r/coralcraft-*-linux-x86_64.deb
+            apt-get install -y --no-install-recommends /r/coralcraft-*-linux-x86_64.deb
             coralcraft-cli --version
             coralcraft --version
             printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""
