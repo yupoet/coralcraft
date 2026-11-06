@@ -16,6 +16,7 @@ on:
       - "crates/ui-egui/src/print.rs"
       - "crates/ui-egui/src/tests_printps.rs"
       - "packaging/windows/windows7.ps1"
+      - "docs/windows7.md"
       - ".github/workflows/windows7.yml"
   schedule:
     - cron: "23 5 * * 1" # weekly

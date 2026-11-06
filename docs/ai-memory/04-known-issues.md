@@ -81,7 +81,7 @@
 - **Clean-room scan**: `cargo xtask cleanroom` must keep blocking Corel strings and `.cdr`/`.cmx` binaries. VectorCraft legitimately mentions Adobe/Illustrator; that is not a violation. Adjust the scanner allow-list rather than editing upstream text.
 - **Brand assets**: VectorCraft's logo, splash, and app icons must not ship in CoralCraft. Every remaining file under `assets/` needs an `ASSETS.md` row.
 - **Upstream mergeability**: keep upstream directory and package names (`vectorcraft-*`). Rebrand only user-visible strings, app IDs, and bundle IDs. Put large CorelDRAW features in `corel-*` crates instead of editing upstream files.
-- **Fork base**: `refs/vectorcraft` is a single-commit snapshot (`a466625`), so `git subtree` history is not available. Record the base commit and every later sync in `docs/upstream-vectorcraft.md`.
+- **Fork base**: the imported fork base remains `a466625`; the local `refs/vectorcraft` reference is newer and pinned in `refs/REFS.md`. Record the base commit and every later sync in `docs/upstream-vectorcraft.md`.
 - **Post-V0.1 state quirks**:
   1. Two workspaces share the repository tree: the main one and `legacy/` (plus `fuzz/`). Run legacy checks with `--manifest-path legacy/Cargo.toml`; `legacy/target/` is git-ignored.
   2. `crates/cdr` still builds against `legacy/crates/{color,doc,geom}` through root workspace path deps; V1 replaces those with the VectorCraft document model. Until then CDR tests run in the main `cargo test --workspace` (our `ci.yml` still installs `libcdr-tools` for them).
@@ -90,3 +90,11 @@
   5. Upstream CI workflows (`freebsd`, `packaging-lint`, `print`, `windows7`, `windows-arm64`, `affinity-corpus`) were copied and rebranded where they name the app; `nix` was dropped (no flake at the fork base). The freebsd/windows-arm64 jobs call shared `storytold/craft-common-actions` reusable workflows at `@main` — their internals are upstream's and may name vectorcraft.
   6. After the V0.3 rebrand, **library-level env vars keep upstream names** (`VECTORCRAFT_SYNC_RENDER`, `VECTORCRAFT_LOCALE`, `VECTORCRAFT_SYSTEM_CURSORS`, `VECTORCRAFT_I18N_DUMP*`, `VECTORCRAFT_SYNC_OPEN`, `VECTORCRAFT_TRACE_CAPTURE`); app-level ones are `CORALCRAFT_*`. `vectorcraft-cli` keeps its binary/package name until V0.4 but already reads `CORALCRAFT_*` prefs env vars (it shares the app's `profile.rs`).
   7. macOS format identity stays upstream's on purpose: the UTI `ai.storyteller.vectorcraft.document`, the `application/x-vectorcraft` MIME, the "VectorCraft (Document|Template)" filter labels, and `.vectorcraft`/`.drawcraft`/`.vctemplate` extensions (D7). Don't "rebrand" those in future sweeps.
+
+## 14. [Resolved] CI regressions identified in October 2026
+
+- **Compound insertion invariant**: Paste in Front / Paste in Back and Draw Behind / Inside used a raw selected compound member as the insertion anchor, allowing new art inside a compound or its member. Resolve anchors through `selected_roots`. Draw Inside mask copies recursively reassign ids with `d.reid`, not only the root id. Keep deterministic regressions in `tests_clipboard.rs` and `tests_file.rs`.
+- **32-bit oversized values**: write explicit `u64` counts into serialized native JSON before opening it. Do not saturate the in-memory `usize` first, because that skips the reader's `u64 > usize::MAX` branch on 32-bit targets.
+- **Linux package baseline**: build with cargo-zigbuild for glibc 2.31, make nfpm metadata declare that floor, and install with `apt` on Debian 11 so dependencies are resolved. The MCP smoke pipeline runs under `bash -eo pipefail`.
+- **nfpm installation**: the retired `gosu-nfpm.sh` URL returned 404 and the workflow pipeline did not fail. Install the fixed Go module release with strict shell error handling and verify the binary.
+- **Package identity**: the ARM64 smoke test must use `app-dir: CoralCraft`, matching the MSI. Linux desktop entries and Windows portable instructions must use CoralCraft names and executable paths; `packaging/check-app-specific.sh` guards them. The Windows 7 portable script requires `docs/windows7.md`; host tests alone never establish Windows 7 support.

@@ -643,7 +643,8 @@ fn paste_clip(s: &mut Session, p: &Value, mode: PasteMode, clip: &Clipboard, cho
     // nothing selected, the top / bottom of the current layer.
     let anchor = match mode {
         PasteMode::Front | PasteMode::Back => {
-            let order = st.selection.in_paint_order(&st.doc);
+            // CoralCraft: a selected member anchors the paste beside its whole compound.
+            let order = selected_roots(s)?;
             let a = if mode == PasteMode::Front { order.last() } else { order.first() };
             a.and_then(|id| st.doc.position(*id))
         }

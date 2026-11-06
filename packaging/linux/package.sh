@@ -14,8 +14,8 @@
 # smoke-test the CLI), and pass --formats tar.
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool for the AppImage
-# (downloaded into $CARGO_TARGET_DIR if missing). Build on an old distro (CI: Ubuntu 22.04,
-# glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
+# (downloaded into $CARGO_TARGET_DIR if missing). CI uses cargo-zigbuild with a glibc 2.31 target
+# and installs the package on Debian 11. Optional: desktop-file-validate, appstreamcli,
 # zsyncmake (the zsync package) for the AppImage's .zsync.
 set -euo pipefail
 # shellcheck source=../env.sh

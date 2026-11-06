@@ -60,9 +60,8 @@ jobs:
           done
 
   linux-package-smoke:
-    # Build the .deb and install it on an older distribution, so a package that only works on the
-    # build host can't pass (docs/ai-memory/04-known-issues.md #10). Re-enabled in V0.3 with the
-    # rebranded packaging; the CLI binary keeps its upstream name coralcraft-cli until V0.4.
+    # Build for Debian 11's glibc and install there, so a package that only works on the build host
+    # can't pass (docs/ai-memory/04-known-issues.md #10).
     name: Linux .deb install smoke test
     runs-on: ubuntu-24.04
     steps:
@@ -71,18 +70,29 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - name: Install nfpm
+      - name: Install nfpm and the glibc-targeted build tools
         run: |
+          set -euo pipefail
           go_binary="${HOME}/go/bin/nfpm"
-          if [ -x "$go_binary" ]; then echo "$go_binary" >> "$GITHUB_PATH"; exit 0; fi
-          curl -fsSL https://nfpm.goreleaser.com/gosu-nfpm.sh | sh -s -- -b "$HOME/go/bin"
+          if [ ! -x "$go_binary" ]; then
+            GOBIN="${HOME}/go/bin" go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          fi
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
-      - name: Build .deb and .tar.gz
-        run: bash packaging/linux/package.sh --formats "deb tar"
+          "$go_binary" --version
+          python3 -m pip install --disable-pip-version-check ziglang==0.15.2
+          cargo install --locked cargo-zigbuild --version 0.24.1
+          zig version
+          cargo zigbuild --version
+      - name: Build .deb and .tar.gz for glibc 2.31
+        run: |
+          set -euo pipefail
+          cargo zigbuild --release --locked -p coralcraft -p coralcraft-cli --target x86_64-unknown-linux-gnu.2.31
+          CROSS_TARGET=x86_64-unknown-linux-gnu bash packaging/linux/package.sh --skip-build --formats "deb tar"
       - name: Install and run on Debian 11 (glibc 2.31)
         run: |
-          docker run --rm -v "$PWD/dist/release":/r:ro debian:11 sh -ec '
-            dpkg -i /r/coralcraft-*-linux-x86_64.deb
+          docker run --rm -v "$PWD/dist/release":/r:ro debian:11 bash -eo pipefail -c '
+            apt-get update
+            apt-get install -y /r/coralcraft-*-linux-x86_64.deb
             coralcraft-cli --version
             coralcraft --version
             printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | coralcraft-cli mcp | grep -q "\"tools\""

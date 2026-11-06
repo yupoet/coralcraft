@@ -13,5 +13,13 @@ for name in ("io.github.yupoet.coralcraft.yml", "io.github.yupoet.coralcraft.bun
     manifests.append(manifest)
 for key in ("runtime", "runtime-version", "sdk", "finish-args"):
     assert manifests[0][key] == manifests[1][key], f"Flatpak manifests disagree on {key}"
+from pathlib import Path
+desktop = Path("packaging/linux/io.github.yupoet.coralcraft.desktop").read_text()
+for entry in ("Name=CoralCraft", "Exec=coralcraft %F", "TryExec=coralcraft"):
+    assert entry in desktop, f"desktop entry missing {entry}"
+portable = Path("packaging/windows/portable.txt").read_text()
+for expected in ("CoralCraft portable mode", "coralcraft.exe", "CoralCraftData", "%APPDATA%\\CoralCraft"):
+    assert expected in portable, f"portable instructions missing {expected}"
+assert "VectorCraft" not in portable and "vectorcraft.exe" not in portable
 print("CoralCraft package identity ok")
 PYEOF
