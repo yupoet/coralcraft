@@ -483,7 +483,8 @@ pub(crate) fn write(pdf: &[u8], plan: &Plan, cipher: Option<&mut Cipher>) -> Res
     let entries_at = main_at + format!("xref\n0 {}\n", plan.first).len();
     let tail = format!("trailer\n<</Size {}>>\nstartxref\n{}\n%%EOF\n", plan.first, head.len() + lin_len);
     let total = main_at + main.len() + tail.len();
-    if total >= 10usize.pow(WIDTH as u32) {
+    // CoralCraft: a wide offset can be valid even when its decimal limit exceeds 32-bit usize.
+    if total >= 10usize.checked_pow(WIDTH as u32).unwrap_or(usize::MAX) {
         return Err(failed("the file is too large"));
     }
     let lin = linearization(plan, [total, hint_at, hint.len(), shift(first_end), entries_at - 1]);

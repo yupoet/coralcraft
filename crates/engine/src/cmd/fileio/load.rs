@@ -540,8 +540,16 @@ pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
         _ => None,
     };
     if let Some(kept) = kept {
-        let (width, height) = reader.into_dimensions().map_err(err)?;
-        return stored(kept, f.mime, (width, height), ppi);
+        match reader.into_dimensions() {
+            Ok(size) => return stored(kept, f.mime, size, ppi),
+            Err(image::ImageError::Limits(_)) => {
+                // CoralCraft: a header-only read must not lose an image already kept without decoding.
+                let header = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(err)?;
+                let size = header.into_dimensions().map_err(err)?;
+                return stored(kept, f.mime, size, ppi);
+            }
+            Err(e) => return Err(err(e)),
+        }
     }
     let extra_samples = || {
         let cms = vectorcraft_color::cms::active();

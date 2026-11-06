@@ -100,7 +100,7 @@ jobs:
       - name: Install and run on Debian 11 (glibc 2.31)
         run: |
           docker run --rm -v "$PWD/dist/release":/r:ro debian:11 bash -eo pipefail -c '
-            sed -i -e "s|http://deb.debian.org/debian-security|https://archive.debian.org/debian-security|g" -e "s|http://deb.debian.org/debian|https://archive.debian.org/debian|g" /etc/apt/sources.list
+            sed -i -e "s|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|g" -e "s|http://deb.debian.org/debian|http://archive.debian.org/debian|g" /etc/apt/sources.list
             apt-get update
             apt-get install -y --no-install-recommends /r/coralcraft-*-linux-x86_64.deb
             coralcraft-cli --version
