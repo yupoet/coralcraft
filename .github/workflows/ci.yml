@@ -37,6 +37,12 @@ jobs:
       - name: Install libcdr-tools differential oracle (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libcdr-tools
+      - name: Free unused disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: cargo xtask ci
         run: cargo xtask ci
 
@@ -80,6 +86,9 @@ jobs:
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
           "$go_binary" --version
           python3 -m pip install --disable-pip-version-check ziglang==0.15.2
+          zig_dir="$(python3 -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)')"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          export PATH="$zig_dir:$PATH"
           cargo install --locked cargo-zigbuild --version 0.24.1
           zig version
           cargo zigbuild --version

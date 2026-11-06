@@ -832,7 +832,9 @@ fn area_type_lays_out_in_at_most_100_rows_and_100_columns() {
     let most = with(100, 100);
     assert_eq!(most.frames.len(), 10_000);
     assert!(!most.overflow && most.lines.len() > 10, "{:?}", line_places(&most));
-    for (rows, columns) in [(1 << 60, 100), (100, 1 << 60), (1 << 32, 1 << 32), (usize::MAX, usize::MAX)] {
+    for (rows, columns) in [(1u64 << 60, 100), (100, 1u64 << 60), (1u64 << 32, 1u64 << 32), (usize::MAX as u64, usize::MAX as u64)] {
+        let rows = usize::try_from(rows).unwrap_or(usize::MAX);
+        let columns = usize::try_from(columns).unwrap_or(usize::MAX);
         let l = with(rows, columns);
         assert_eq!((&l.frames, line_places(&l)), (&most.frames, line_places(&most)), "{rows} by {columns}");
     }
