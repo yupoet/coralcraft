@@ -144,6 +144,18 @@ mod tests {
         panic!("the pen check ran")
     }
 
+    fn key_bitmap() -> String {
+        let word = usize::try_from(BTN_TOOL_PEN / usize::BITS).unwrap();
+        let mut words = vec![0u64; word + 1];
+        words[word] = 1u64 << (BTN_TOOL_PEN % usize::BITS);
+        words.iter().rev().map(|word| format!("{word:x}")).collect::<Vec<_>>().join(" ")
+    }
+
+    fn sample_with_pen_key(sample: &str) -> String {
+        let key = format!("B: KEY={}", key_bitmap());
+        sample.lines().map(|line| if line.starts_with("B: KEY=") { key.clone() } else { line.to_string() }).collect::<Vec<_>>().join("\n")
+    }
+
     #[test]
     fn xwayland_only_when_chosen_on_wayland_with_an_x_display() {
         let wayland = env(&[("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")]);
@@ -201,26 +213,29 @@ mod tests {
 
     #[test]
     fn a_pen_is_a_device_with_btn_tool_pen_and_absolute_axes() {
-        assert!(has_pen(WITH_PEN));
-        let without = WITH_PEN.split("\n\n").take(2).collect::<Vec<_>>().join("\n\n");
+        let with_pen = WITH_PEN.replace("B: KEY=1c03 0 0 0 0 0", &format!("B: KEY={}", key_bitmap()));
+        assert!(has_pen(&with_pen));
+        let without = with_pen.split("\n\n").take(2).collect::<Vec<_>>().join("\n\n");
         assert!(!has_pen(&without), "a touchpad's BTN_TOOL_FINGER (0x145) is not a pen");
+        let key = key_bitmap();
         // A pen display reports the pen with its own axes.
-        assert!(has_pen("N: Name=\"Wacom One Pen\"\nB: KEY=1c03 0 0 0 0 0\nB: ABS=3\n"));
+        assert!(has_pen(&format!("N: Name=\"Wacom One Pen\"\nB: KEY={key}\nB: ABS=3\n")));
         // Axes without ABS_X or ABS_Y, or no axes at all, are no pen.
-        assert!(!has_pen("B: KEY=1c03 0 0 0 0 0\nB: ABS=1000f000002\n"));
-        assert!(!has_pen("B: KEY=1c03 0 0 0 0 0\nB: ABS=1000f000001\n"));
-        let pen_without_axes = WITH_PEN.lines().filter(|l| !l.starts_with("B: ABS=1000f")).collect::<Vec<_>>().join("\n");
+        assert!(!has_pen(&format!("B: KEY={key}\nB: ABS=1000f000002\n")));
+        assert!(!has_pen(&format!("B: KEY={key}\nB: ABS=1000f000001\n")));
+        let pen_without_axes = with_pen.lines().filter(|l| !l.starts_with("B: ABS=1000f")).collect::<Vec<_>>().join("\n");
         assert!(!has_pen(&pen_without_axes));
         // The virtual keyboard claims the key but is no pen, and a real pen beside it is still found.
-        assert!(VIRTUAL_KEYBOARD.lines().find_map(|l| l.strip_prefix("B: KEY=")).is_some_and(|k| bit_set(k, BTN_TOOL_PEN)));
-        assert!(!has_pen(VIRTUAL_KEYBOARD));
-        assert!(has_pen(&format!("{VIRTUAL_KEYBOARD}\n{WITH_PEN}")));
+        let virtual_keyboard = sample_with_pen_key(VIRTUAL_KEYBOARD);
+        assert!(virtual_keyboard.lines().find_map(|l| l.strip_prefix("B: KEY=")).is_some_and(|k| bit_set(k, BTN_TOOL_PEN)));
+        assert!(!has_pen(&virtual_keyboard));
+        assert!(has_pen(&format!("{virtual_keyboard}\n{with_pen}")));
         // Short or malformed bitmaps are no pen, never a panic.
         for keys in ["", "B: KEY=", "B: KEY=1", "B: KEY=zz 0 0 0 0 0", "B: KEY=ffffffffffffffffff 0 0 0 0 0", "B: KEY=0 0 0 0 0 0 0 0"] {
             assert!(!has_pen(&format!("{keys}\nB: ABS=3")), "{keys:?}");
         }
         for abs in ["B: ABS=", "B: ABS=zz", "B: ABS=ffffffffffffffffff", "B: ABS=0 0"] {
-            assert!(!has_pen(&format!("B: KEY=1c03 0 0 0 0 0\n{abs}")), "{abs:?}");
+            assert!(!has_pen(&format!("B: KEY={key}\n{abs}")), "{abs:?}");
         }
     }
 

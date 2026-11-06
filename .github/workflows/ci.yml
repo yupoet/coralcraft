@@ -91,7 +91,7 @@ jobs:
           export PATH="$zig_dir:$PATH"
           cargo install --locked cargo-zigbuild --version 0.24.1
           zig version
-          cargo zigbuild --version
+          cargo zigbuild --help >/dev/null
       - name: Build .deb and .tar.gz for glibc 2.31
         run: |
           set -euo pipefail
