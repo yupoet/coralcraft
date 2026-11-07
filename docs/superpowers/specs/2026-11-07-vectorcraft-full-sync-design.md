@@ -1,7 +1,8 @@
 # VectorCraft Full Sync — Design
 
 Date: 2026-11-07
-Status: approved design; implementation plan pending
+Status: approved design and implementation plan
+Implementation plan: `docs/superpowers/plans/2026-11-07-vectorcraft-full-sync.md`
 
 ## 1. Decision and context
 
