@@ -218,3 +218,4 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 |---|---|---|---|
 | 2026-10-21 | `a466625` | Initial fork import (V0.1) | Everything above; pre-fork code moved to `legacy/`. |
 | 2026-11-06 | `36ef34dfdd8dfd1abc19fd209678860a00583558` | Reference refresh only | Updated the local reference pin; no upstream source was merged in this change. |
+| 2026-11-07 | `36ef34dfdd8dfd1abc19fd209678860a00583558` | Full source sync from `a466625c8987550635cda951ebf36e08e1e80a56` | Integration in progress; completion requires the hash audit and all gates in the approved design. |

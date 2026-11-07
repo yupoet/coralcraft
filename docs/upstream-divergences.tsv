@@ -1,0 +1,11 @@
+path	class	reason
+AGENTS.md	project-policy	CoralCraft agent rules remain authoritative
+README.md	project-policy	CoralCraft product and measured status remain authoritative
+ROADMAP.md	project-policy	CoralCraft roadmap and measured scores remain authoritative
+ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets
+NOTICE	asset-ownership	Retain applicable upstream notices without adding brand grants
+crates/cdr	coralcraft-owned	CDR and CMX parser and writer
+crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless CoralCraft metadata
+legacy	coralcraft-owned	Pre-fork compatibility code retained until V7
+apps/coralcraft	coralcraft-adaptation	Upstream desktop advances under the CoralCraft package identity
+apps/coralcraft-cli	coralcraft-adaptation	Upstream CLI advances under the CoralCraft package identity and probe command
