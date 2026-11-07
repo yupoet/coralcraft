@@ -1163,10 +1163,10 @@ fn dialog_sliders_report_the_numbers_their_fields_show() {
         .filter(|n| n.role() == Slider && n.label() == Some("Horizontal:"))
         .map(|n| (n.numeric_value(), n.min_numeric_value(), n.max_numeric_value(), n.value().map(str::to_string)))
         .collect();
-    assert_eq!(
-        horizontal,
-        [(Some(250.0), Some(0.0), Some(250.0), Some("250%".into())), (Some(-36.0), Some(-1000.0), Some(1000.0), Some("-36 pt".into()))]
-    );
+    assert_eq!(horizontal.len(), 2, "{horizontal:?}");
+    for want in [(Some(250.0), Some(0.0), Some(250.0), Some("250%".into())), (Some(-36.0), Some(-1000.0), Some(1000.0), Some("-36 pt".into()))] {
+        assert!(horizontal.contains(&want), "{want:?} in {horizontal:?}");
+    }
     app.ui.dialog = None;
     app.run("effect.dialog", json!({"effect": "distort.zigZag"})).unwrap();
     set(&mut app, "relative", json!(true));

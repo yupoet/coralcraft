@@ -110,7 +110,8 @@ jobs:
 
   test-32bit:
     # usize is 32 bits on wasm32/i686: offset arithmetic that cannot overflow on 64-bit hosts can
-    # overflow here (docs/gaps.md R1.4). Run the whole test suite on i686 Linux.
+    # overflow here (docs/gaps.md R1.4). Run the whole test suite on i686 Linux, with serial tests
+    # so concurrent UI fixtures cannot exhaust the 32-bit process address space.
     name: tests (i686, 32-bit usize)
     runs-on: ubuntu-24.04
     steps:
@@ -125,4 +126,4 @@ jobs:
       - name: Install 32-bit C toolchain
         run: sudo apt-get update && sudo apt-get install -y gcc-multilib
       - name: cargo test (i686)
-        run: cargo test --workspace --target i686-unknown-linux-gnu
+        run: cargo test --workspace --target i686-unknown-linux-gnu -- --test-threads=1
