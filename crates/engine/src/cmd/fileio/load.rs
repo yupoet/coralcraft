@@ -493,12 +493,16 @@ pub(crate) fn too_large_note(bytes: &[u8]) -> Option<String> {
     if let Some((w, h)) = vectorcraft_doc::cmyk::oversized_tiff(bytes) {
         return Some(format!("an image of {w} × {h} pixels is too large to draw"));
     }
-    let d = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
-    let (w, h) = d.dimensions();
+    let reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
+    let ((w, h), decoded_bytes) = match reader.into_decoder() {
+        Ok(d) => (d.dimensions(), Some(d.total_bytes())),
+        Err(image::ImageError::Limits(_)) if matches!(image::guess_format(bytes), Ok(image::ImageFormat::Png)) => (png_dimensions(bytes)?, None),
+        Err(_) => return None,
+    };
     // The allowance also counts the pixels as RGBA: an image of fewer than 4 bytes a pixel (gray,
     // gray with alpha, RGB) takes more than the decoder counts (#1717).
     let rgba_over = u64::from(w) * u64::from(h) > MAX_RASTER_ALLOC / 4;
-    (rgba_over || d.total_bytes() > MAX_RASTER_ALLOC).then(|| format!("an image of {w} × {h} pixels is too large to draw"))
+    (rgba_over || decoded_bytes.is_some_and(|n| n > MAX_RASTER_ALLOC)).then(|| format!("an image of {w} × {h} pixels is too large to draw"))
 }
 
 /// Decode an image's header (and, for formats stored as PNG, its pixels). CMYK TIFFs are kept as
@@ -512,8 +516,9 @@ pub(crate) fn too_large_note(bytes: &[u8]) -> Option<String> {
 /// either, become RGBA too, whether they store their channels together or one plane per channel.
 /// A Targa file, which starts with no signature, is recognized by its header
 /// ([`super::tgaread::is_targa`]) and becomes RGBA with the transparency it stores
-/// ([`super::tgaread::fix_alpha`]). An image stored as PNG whose decoded samples, or whose pixels
-/// as RGBA, need more than [`MAX_RASTER_ALLOC`] is refused as too large to draw.
+/// ([`super::tgaread::fix_alpha`]). An image that must be converted to PNG and whose decoded
+/// samples, or whose pixels as RGBA, need more than [`MAX_RASTER_ALLOC`] is refused as too large
+/// to draw. Formats kept in their original encoding retain their header dimensions without decoding.
 /// A TIFF with more strips or tiles than the decoder can count
 /// ([`vectorcraft_doc::cmyk::oversized_tiff`]) is refused as too large to draw.
 pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
@@ -544,8 +549,14 @@ pub fn raster_image(bytes: &[u8]) -> Result<RasterImage> {
             Ok(size) => return stored(kept, f.mime, size, ppi),
             Err(image::ImageError::Limits(_)) => {
                 // CoralCraft: a header-only read must not lose an image already kept without decoding.
-                let header = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(err)?;
-                let size = header.into_dimensions().map_err(err)?;
+                // PNG's decoder also sizes its output buffer, which can overflow a 32-bit usize.
+                let size = if f.id == "png" {
+                    png_dimensions(bytes).ok_or_else(|| err("the PNG header can't be read"))?
+                } else {
+                    let mut header = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(err)?;
+                    header.no_limits();
+                    header.into_dimensions().map_err(err)?
+                };
                 return stored(kept, f.mime, size, ppi);
             }
             Err(e) => return Err(err(e)),
@@ -624,6 +635,16 @@ pub fn texture_image(bytes: &[u8]) -> Result<String> {
         }
     };
     texture.and_then(|t| t.to_stored()).ok_or_else(|| err("the image can't be read as a texture"))
+}
+
+/// Width and height from a PNG's fixed-position IHDR fields, without constructing a pixel decoder.
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(8..16)? != b"\0\0\0\rIHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    Some((width, height))
 }
 
 /// An image's encoded `bytes`, `width` × `height` pixels, ready to embed.
