@@ -135,6 +135,10 @@ cognitive_complexity = "deny"
 too_many_arguments = "deny"
 wildcard_imports = "deny"
 dbg_macro = "warn"
+# CoralCraft: clippy 1.95+ drift in code imported verbatim from VectorCraft (is_none_or
+# rewrites and drop(closure)); removed when a later upstream sync clears them.
+nonminimal_bool = "allow"
+drop_non_drop = "allow"
 # VectorCraft never crashes: shipped code returns `Result`/`Option` instead of panicking (see
 # AGENTS.md › Robustness). Tests may unwrap (clippy.toml).
 unwrap_used = "deny"

@@ -76,7 +76,7 @@ fn draw_contents(app: &mut VectorcraftApp, ui: &mut Ui) {
                 // 1. Top `[X]` No-Color cell
                 let (none_rect, none_resp) = ui.allocate_exact_size(vec2(CHIP_SIZE, CHIP_SIZE), Sense::click());
                 let none_resp = none_resp.on_hover_text(crate::i18n::t("No Color (Left-click: clear fill, Right-click: clear outline)"));
-                none_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "No Color"));
+                none_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "No Color"));
                 widgets::swatch_tile(ui, none_rect, &Paint::None, false, none_resp.hovered());
                 if none_resp.clicked() {
                     pending = Some((None, false));
@@ -89,7 +89,7 @@ fn draw_contents(app: &mut VectorcraftApp, ui: &mut Ui) {
                     let (rect, resp) = ui.allocate_exact_size(vec2(CHIP_SIZE, CHIP_SIZE), Sense::click());
                     let tip = format!("{name} (Left-click: set fill, Right-click: set outline)");
                     let resp = resp.on_hover_text(tip);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
                     widgets::swatch_tile(ui, rect, paint, false, resp.hovered());
                     if resp.clicked() {
                         pending = Some((Some(name.clone()), false));

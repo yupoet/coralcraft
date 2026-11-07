@@ -37,7 +37,7 @@ pub const ID_DELETE: &str = "page_nav_delete";
 pub struct PageTabDrag(pub usize);
 
 fn rename_state_id() -> egui::Id {
-    egui::Id::new("coralcraft_page_nav_rename")
+    egui::Id::unique("coralcraft_page_nav_rename")
 }
 
 /// Starts inline renaming for page `index` with initial text `current_name`.

@@ -343,32 +343,9 @@ pub(super) fn row(ui: &mut Ui, view: &View, item: &Row, out: &mut Out) {
             } else if n.extras().mask.is_some() {
                 painter.extend(egui::Shape::dashed_line(&[text.left_bottom(), text.right_bottom()], Stroke::new(1.0, t.text), 3.0, 2.0));
             }
-            // CoralCraft: a compact CorelDRAW layer role badge (M:All, M:Odd, M:Even, Desk)
-            // when a top-level layer has a non-Normal CorelDRAW role.
+            // CoralCraft: a compact CorelDRAW layer role badge on a top-level layer.
             if n.is_layer() && item.depth == 0 && doc.has_corel_layer_roles() {
-                let info = doc.corel_layer_info(n.id);
-                let badge = match info.role {
-                    vectorcraft_doc::CorelLayerRole::Normal
-                    | vectorcraft_doc::CorelLayerRole::Guides
-                    | vectorcraft_doc::CorelLayerRole::Grid
-                    | vectorcraft_doc::CorelLayerRole::Unknown => None,
-                    vectorcraft_doc::CorelLayerRole::MasterAllPages => Some(if info.master_in_front { "M:All↑" } else { "M:All" }),
-                    vectorcraft_doc::CorelLayerRole::MasterOddPages => Some(if info.master_in_front { "M:Odd↑" } else { "M:Odd" }),
-                    vectorcraft_doc::CorelLayerRole::MasterEvenPages => Some(if info.master_in_front { "M:Even↑" } else { "M:Even" }),
-                    vectorcraft_doc::CorelLayerRole::Desktop => Some("Desk"),
-                };
-                if let Some(badge_txt) = badge {
-                    let badge_font = egui::FontId::proportional(9.5);
-                    let galley = painter.layout_no_wrap(badge_txt.to_owned(), badge_font, t.accent);
-                    let bx = (name_end + 6.0).min(name_rect.right() - galley.size().x - 6.0);
-                    if bx > name_end + 2.0 {
-                        let pill =
-                            egui::Rect::from_min_size(egui::pos2(bx, r.center().y - galley.size().y / 2.0 - 1.5), galley.size() + vec2(6.0, 3.0));
-                        painter.rect_filled(pill, 2.0, t.accent.gamma_multiply(0.16));
-                        painter.rect_stroke(pill, 2.0, Stroke::new(1.0, t.accent.gamma_multiply(0.55)), StrokeKind::Inside);
-                        painter.galley(egui::pos2(pill.left() + 3.0, pill.top() + 1.5), galley, t.accent);
-                    }
-                }
+                corel_role_badge(ui, doc, n.id, name_end, name_rect, r, t);
             }
         }
     }
@@ -420,22 +397,7 @@ pub(super) fn row(ui: &mut Ui, view: &View, item: &Row, out: &mut Out) {
             out.actions.push(("assets.add".into(), json!({ "ids": collect_ids.clone(), "multiple": multiple })));
         });
         // CoralCraft: CorelDRAW layer role quick-assignment in the layer row context menu.
-        if n.is_layer() && doc.has_corel_layer_roles() {
-            let info = doc.corel_layer_info(n.id);
-            ui.separator();
-            for (rk, label, role_val) in [
-                ("normal", crate::i18n::t("Normal Page Layer"), vectorcraft_doc::CorelLayerRole::Normal),
-                ("masterAll", crate::i18n::t("Master Layer (All Pages)"), vectorcraft_doc::CorelLayerRole::MasterAllPages),
-                ("masterOdd", crate::i18n::t("Master Layer (Odd Pages)"), vectorcraft_doc::CorelLayerRole::MasterOddPages),
-                ("masterEven", crate::i18n::t("Master Layer (Even Pages)"), vectorcraft_doc::CorelLayerRole::MasterEvenPages),
-                ("desktop", crate::i18n::t("Desktop Layer (Pasteboard)"), vectorcraft_doc::CorelLayerRole::Desktop),
-            ] {
-                if crate::widgets::menu_item(ui, label, true, info.role == role_val) {
-                    out.actions.push(("layer.setProps".into(), json!({ "id": n.id.0, "role": rk })));
-                    ui.close();
-                }
-            }
-        }
+        corel_role_menu(ui, doc, n, &mut out.actions);
     });
     // Dragging rows: the highlighted rows when this is one of them, else this row.
     if resp.drag_started() && view.column.is_none() {
@@ -451,6 +413,59 @@ pub(super) fn row(ui: &mut Ui, view: &View, item: &Row, out: &mut Out) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
     drop_target(ui, view, n, r, x - 16.0, open, &resp, out);
+}
+
+// CoralCraft: the layer row context menu's CorelDRAW role quick-assignment items.
+fn corel_role_menu(ui: &mut Ui, doc: &vectorcraft_doc::Document, n: &vectorcraft_doc::Node, actions: &mut Vec<(String, serde_json::Value)>) {
+    if !n.is_layer() || !doc.has_corel_layer_roles() {
+        return;
+    }
+    let info = doc.corel_layer_info(n.id);
+    ui.separator();
+    for (rk, label, role_val) in [
+        ("normal", crate::i18n::t("Normal Page Layer"), vectorcraft_doc::CorelLayerRole::Normal),
+        ("masterAll", crate::i18n::t("Master Layer (All Pages)"), vectorcraft_doc::CorelLayerRole::MasterAllPages),
+        ("masterOdd", crate::i18n::t("Master Layer (Odd Pages)"), vectorcraft_doc::CorelLayerRole::MasterOddPages),
+        ("masterEven", crate::i18n::t("Master Layer (Even Pages)"), vectorcraft_doc::CorelLayerRole::MasterEvenPages),
+        ("desktop", crate::i18n::t("Desktop Layer (Pasteboard)"), vectorcraft_doc::CorelLayerRole::Desktop),
+    ] {
+        if crate::widgets::menu_item(ui, label, true, info.role == role_val) {
+            actions.push(("layer.setProps".into(), serde_json::json!({ "id": n.id.0, "role": rk })));
+            ui.close();
+        }
+    }
+}
+
+// CoralCraft: the CorelDRAW role badge pill painted beside a top-level layer's name.
+fn corel_role_badge(
+    ui: &Ui,
+    doc: &vectorcraft_doc::Document,
+    id: vectorcraft_doc::NodeId,
+    name_end: f32,
+    name_rect: egui::Rect,
+    r: egui::Rect,
+    t: &crate::theme::Tokens,
+) {
+    use vectorcraft_doc::CorelLayerRole;
+    let painter = ui.painter();
+    let info = doc.corel_layer_info(id);
+    let badge = match info.role {
+        CorelLayerRole::Normal | CorelLayerRole::Guides | CorelLayerRole::Grid | CorelLayerRole::Unknown => None,
+        CorelLayerRole::MasterAllPages => Some(if info.master_in_front { "M:All↑".to_string() } else { "M:All".into() }),
+        CorelLayerRole::MasterOddPages => Some(if info.master_in_front { "M:Odd↑".to_string() } else { "M:Odd".into() }),
+        CorelLayerRole::MasterEvenPages => Some(if info.master_in_front { "M:Even↑".to_string() } else { "M:Even".into() }),
+        CorelLayerRole::Desktop => Some("Desk".into()),
+    };
+    let Some(badge_txt) = badge else { return };
+    let galley = painter.layout_no_wrap(badge_txt, egui::FontId::proportional(9.5), t.accent);
+    let bx = (name_end + 6.0).min(name_rect.right() - galley.size().x - 6.0);
+    if bx <= name_end + 2.0 {
+        return;
+    }
+    let pill = egui::Rect::from_min_size(egui::pos2(bx, r.center().y - galley.size().y / 2.0 - 1.5), galley.size() + vec2(6.0, 3.0));
+    painter.rect_filled(pill, 2.0, t.accent.gamma_multiply(0.16));
+    painter.rect_stroke(pill, 2.0, Stroke::new(1.0, t.accent.gamma_multiply(0.55)), StrokeKind::Inside);
+    painter.galley(egui::pos2(pill.left() + 3.0, pill.top() + 1.5), galley, t.accent);
 }
 
 /// Alt-clicking row `n`'s eye (`eye`) or lock: Hide Others or Lock Others, every top-level layer

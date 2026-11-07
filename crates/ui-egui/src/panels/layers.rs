@@ -47,7 +47,7 @@ use egui::{Color32, Sense, Stroke, StrokeKind, Ui, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 // CoralCraft: CorelDRAW layer role (`Normal`, `MasterAll`, `MasterOdd`, `MasterEven`, `Desktop`) badge & menu.
-use vectorcraft_doc::{CorelLayerRole, Document, LiveShape, Node, NodeId, NodeKind};
+use vectorcraft_doc::{Document, LiveShape, Node, NodeId, NodeKind};
 use vectorcraft_engine::OpenRows;
 
 use crate::theme::Tokens;
