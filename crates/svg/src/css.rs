@@ -4,7 +4,7 @@
 //! here, colours are `#rrggbb` (or `rgba()` where CSS has no separate opacity), gradients take the
 //! stops SVG export writes, and numbers go through [`fmt_num`].
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use vectorcraft_color::{BlendMode, Color, GradientKind, GradientPaint, Paint};
@@ -26,7 +26,28 @@ pub(crate) fn declarations<'a>(props: impl IntoIterator<Item = &'a (&'static str
 
 /// A CSS string.
 pub(crate) fn css_string(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    quoted(s, '"')
+}
+
+/// `s` as a CSS string in `quote`s. A backslash and the quote are escaped, and so are line breaks
+/// and other control characters (a newline would end the string and let the rest be rules) and
+/// `<` and `>` (which could end a `<style>` element), as hex escapes.
+fn quoted(s: &str, quote: char) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() || matches!(c, '<' | '>') => out.push_str(&format!("\\{:x} ", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
 }
 
 pub(crate) fn blend_css(b: BlendMode) -> &'static str {
@@ -85,6 +106,22 @@ pub(crate) fn font_stretch(st: &CharStyle) -> Option<f64> {
     st.font_axes.get("wdth").copied().filter(|w| w.is_finite() && *w > 0.0)
 }
 
+/// The generic family to list after `family`, with its leading comma, so a viewer without the font draws
+/// the kind of face it was (the font's class, as the font menu's filters know it) rather than its default
+/// serif. Nothing when `family` is a generic family itself.
+fn generic_fallback(family: &str) -> &'static str {
+    const GENERIC: [&str; 5] = ["serif", "sans-serif", "monospace", "cursive", "fantasy"];
+    if GENERIC.iter().any(|g| family.trim().eq_ignore_ascii_case(g)) {
+        return "";
+    }
+    match vectorcraft_text::FontDb::global().family_traits(family).class {
+        vectorcraft_text::FontClass::Serif => ", serif",
+        vectorcraft_text::FontClass::Monospaced => ", monospace",
+        vectorcraft_text::FontClass::Script => ", cursive",
+        _ => ", sans-serif",
+    }
+}
+
 /// The font of character style `st`: family, size (the vertical scale; writers stretch the
 /// horizontal one), weight and style, and its Variable Font settings, lengths written by `len`.
 /// The weight is the style's number (600 for Semibold, 300 for Light) or the `wght` setting,
@@ -92,13 +129,12 @@ pub(crate) fn font_stretch(st: &CharStyle) -> Option<f64> {
 /// and the `wdth` setting is `font-stretch` too ([`font_stretch`]).
 pub(crate) fn font_props(st: &CharStyle, len: &dyn Fn(f64) -> String) -> Props {
     let mut p = Props::new();
-    // A quoted family escapes `\` and `'`, which would otherwise end the string early.
-    let fam = if st.font_family.contains(|c: char| c.is_whitespace() || matches!(c, ',' | '\'' | '\\')) {
-        format!("'{}'", st.font_family.replace('\\', "\\\\").replace('\'', "\\'"))
-    } else {
-        st.font_family.clone()
-    };
-    p.push(("font-family", fam));
+    // A quoted family escapes `\`, `'` and line breaks, which would otherwise end the string early.
+    // Only a plain identifier (no leading digit) can be written bare; anything else is quoted.
+    let bare = st.font_family.chars().next().is_some_and(|c| !c.is_ascii_digit() && c != '-')
+        && st.font_family.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_'));
+    let fam = if !bare { quoted(&st.font_family, '\'') } else { st.font_family.clone() };
+    p.push(("font-family", format!("{fam}{}", generic_fallback(&st.font_family))));
     p.push(("font-size", len(st.size * st.v_scale / 100.0)));
     let (weight, italic) = font_descriptor(st);
     match weight {
@@ -137,9 +173,12 @@ pub(crate) fn type_props(st: &CharStyle, len: &dyn Fn(f64) -> String) -> Props {
         .features
         .iter()
         .map(|t| match t.strip_prefix('-') {
-            Some(off) => format!("\"{off}\" 0"),
-            None => format!("\"{t}\" 1"),
+            Some(off) => (off, 0),
+            None => (t.as_str(), 1),
         })
+        // A feature tag is four letters or digits: anything else could end the CSS string.
+        .filter(|(tag, _)| tag.len() == 4 && tag.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(|(tag, on)| format!("\"{tag}\" {on}"))
         .collect();
     // Proportional Metrics: `palt` (SVG writes vertical type as outlines).
     if st.proportional_metrics {
@@ -290,7 +329,7 @@ impl CssSheet {
 /// paragraph's alignment; shadows and glows give `box-shadow` (`text-shadow`), a Gaussian blur
 /// `filter: blur()`. Other art is described as its box (see [`CssOptions::rasterize`]).
 pub fn css_rules(doc: &Document, ids: &[NodeId], opts: &CssOptions) -> CssSheet {
-    let mut w = Rules { doc, opts, sheet: CssSheet::default(), seen: HashSet::new(), names: HashSet::new() };
+    let mut w = Rules { doc, opts, sheet: CssSheet::default(), seen: HashSet::new(), names: HashSet::new(), next_suffix: HashMap::new() };
     for n in ids.iter().filter_map(|id| doc.node(*id)) {
         w.object(n);
     }
@@ -305,6 +344,8 @@ struct Rules<'a> {
     seen: HashSet<NodeId>,
     /// Class names given, lower case.
     names: HashSet<String>,
+    /// The next suffix to try for each base class name, lower case.
+    next_suffix: HashMap<String, usize>,
 }
 
 /// The CSS of one object's art, and why it is approximate.
@@ -349,14 +390,18 @@ impl Rules<'_> {
     /// A class name for `name` (an object's, or its kind's), unique in the sheet.
     fn class_name(&mut self, name: &str) -> String {
         let base = sanitize_id(name).replace('.', "_");
-        let mut cand = base.clone();
-        for i in 2.. {
-            if self.names.insert(cand.to_lowercase()) {
-                break;
-            }
-            cand = format!("{base}-{i}");
+        if self.names.insert(base.to_lowercase()) {
+            return base;
         }
-        cand
+        // Each base goes on from the suffix it last gave: objects sharing a name take linear work.
+        let next = self.next_suffix.entry(base.to_lowercase()).or_insert(2);
+        loop {
+            let cand = format!("{base}-{next}");
+            *next += 1;
+            if self.names.insert(cand.to_lowercase()) {
+                return cand;
+            }
+        }
     }
 
     fn rule(&mut self, n: &Node) {
@@ -549,14 +594,24 @@ impl Rules<'_> {
         }
     }
 
-    /// Type: its first character style's font, colour and spacing, its paragraph's alignment.
+    /// Type: its first character style's font, colour and spacing, its paragraph's alignment. The
+    /// font size is the em size the characters are drawn at
+    /// ([`vectorcraft_text::FontDb::font_heights_resolved`]).
     fn type_art(&mut self, n: &Node, t: &vectorcraft_doc::TextObject, art: &mut Art) {
+        let resolved = vectorcraft_text::FontDb::global().font_heights_resolved(t);
+        let t = &*resolved;
         if matches!(t.kind, TextKind::OnPath { .. }) {
             art.unsupported("type on a path");
         }
         if n.appearance.items.iter().any(|i| i.visible() && !i.paint().is_none()) {
             art.unsupported("fills or strokes on the type object");
         }
+        // Area type that Shrink Text to Fit scales down is written in the styles it draws in.
+        let fitted = matches!((&t.kind, t.area.fit), (TextKind::Area { .. }, vectorcraft_doc::AreaFit::ShrinkText { .. }))
+            .then(|| vectorcraft_text::layout(vectorcraft_text::FontDb::global(), t).fit_scale)
+            .filter(|f| *f != 1.0)
+            .map(|f| vectorcraft_text::scaled(t, f));
+        let t = fitted.as_ref().unwrap_or(t);
         let st = t.first_style();
         if t.runs.iter().any(|r| r.style != st) {
             self.warn("type with several character styles is written in its first one");
@@ -613,7 +668,7 @@ impl Rules<'_> {
                 RasterFx::InnerGlow { opacity, blur, color, center: false, .. } if !text => {
                     shadows.push(format!("inset 0 0 {} {}", self.len(blur), color_css(&color, opacity)))
                 }
-                RasterFx::GaussianBlur { radius } => filter = Some(format!("blur({})", self.len(radius / 2.0))),
+                RasterFx::GaussianBlur { radius, .. } => filter = Some(format!("blur({})", self.len(radius / 2.0))),
                 RasterFx::InnerGlow { .. } | RasterFx::Feather { .. } => art.unsupported("inner glows or feathering"),
                 RasterFx::Pixel(_) | RasterFx::Rasterize(_) => art.unsupported("pixel effects"),
             }
@@ -643,12 +698,15 @@ fn corners(path: &PathData, live: Option<&LiveShape>) -> Option<Corners> {
     // Sizes and radii in document units.
     match live.map(LiveShape::folded).as_ref() {
         // CSS rounds corners only: an inverted round or chamfered corner has no border radius.
-        Some(LiveShape::Rectangle { w, h, radii, kinds, xf })
+        Some(LiveShape::Rectangle { w, h, radii, kinds, radii_relative, xf })
             if upright(xf) && radii.iter().zip(kinds).all(|(r, k)| *r <= 0.0 || *k == CornerKind::Round) =>
         {
             // The radii as drawn: no two neighbours' cuts add up to more than their side, so CSS
             // draws them as they are.
-            let radii = shapes::fitted_corner_radii(*w, *h, *radii);
+            let base = shapes::rectangle(vectorcraft_geom::Rect::new(0.0, 0.0, *w, *h));
+            let resolved = vectorcraft_doc::corners::resolve_stored_radii(&base, radii, *radii_relative);
+            let stored = std::array::from_fn(|i| resolved.get(i).copied().unwrap_or(0.0));
+            let radii = shapes::fitted_corner_radii(*w, *h, stored);
             if radii.iter().all(|r| *r <= 0.0) {
                 Some(Corners::Square)
             } else if radii.iter().all(|r| (r - radii[0]).abs() < 1e-9) {
@@ -678,4 +736,47 @@ fn is_upright_rectangle(path: &PathData) -> bool {
         && sp.anchors.iter().all(|a| corner(a.p))
         && b.width() > 0.0
         && b.height() > 0.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn family(name: &str) -> String {
+        let st = CharStyle { font_family: name.into(), ..CharStyle::default() };
+        let p = font_props(&st, &|v| format!("{v}px"));
+        p.into_iter().find(|(k, _)| *k == "font-family").unwrap().1
+    }
+
+    #[test]
+    fn font_family_quoted_unless_plain_identifier() {
+        assert!(family("04b03").starts_with("'04b03'"), "{}", family("04b03"));
+        assert!(family("a;b").starts_with("'a;b'"));
+        assert!(family("a\"b").starts_with("'a\"b'"));
+        assert!(family("a(b").starts_with("'a(b'"));
+        assert!(family("Arial").starts_with("Arial,"));
+    }
+
+    #[test]
+    fn class_names_sharing_a_base_take_the_next_free_suffix() {
+        let doc = Document::new(10.0, 10.0);
+        let opts = CssOptions::default();
+        let mut w =
+            Rules { doc: &doc, opts: &opts, sheet: CssSheet::default(), seen: HashSet::new(), names: HashSet::new(), next_suffix: HashMap::new() };
+        assert_eq!(w.class_name("a-3"), "a-3");
+        let names: Vec<String> = (0..4).map(|_| w.class_name("A")).collect();
+        assert_eq!(names, ["A", "A-2", "A-4", "A-5"]);
+        // Many objects of one name: each suffix is tried once.
+        for _ in 0..20_000 {
+            w.class_name("b");
+        }
+        assert_eq!(w.next_suffix["b"], 20_001);
+    }
+
+    #[test]
+    fn line_breaks_and_tags_cannot_end_a_string() {
+        assert!(family("a\n} * {color:red").starts_with(r"'a\a } * {color:red'"), "{}", family("a\n} * {color:red"));
+        assert_eq!(css_string("w\r\"</style>"), r#""w\d \"\3c /style\3e ""#);
+        assert_eq!(css_string("wght"), "\"wght\"");
+    }
 }

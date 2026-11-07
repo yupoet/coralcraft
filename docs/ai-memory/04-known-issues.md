@@ -1,5 +1,15 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0. VectorCraft Sync (2026-11-07): API drift map for the 36ef34d merge
+
+- **`egui` fork (rev 6d518fc) renamed accessibility types**: `egui::WidgetType::SelectableLabel`/`Button`/`Label` → `egui::Role::*`, and `ui.close_menu()` → `ui.close()`. CoralCraft UI modules (e.g. `page_navigator.rs`) must use the `Role` API.
+- **`craft_keymap::Overrides` replaced `BTreeMap<String, String>`**: shortcut presets build with `Overrides::new()` + `assign(&mut Overrides, …)`; `preset()` returns `Option<Overrides>`. Multi-binding values are `Vec<String>`.
+- **Docking layouts must contain the canvas**: `panel_docking::valid` rejects any `Layout` without the `canvas` panel; build workspace presets through `panel_docking::with_canvas(columns, floating)`.
+- **`vectorcraft_doc::Document::unknown` is copy-on-write `Shared<Map>`**: reads go through `Deref`; mutations through `to_mut()`/`DerefMut` — the `sync_coralcraft_extension` hook in `fileio/native.rs` already matches this.
+- **New required struct fields** (serde defaults, must be set in struct literals): `Artboard` `locked/show_video_safe_areas/video_ruler_pixel_aspect_ratio(1.0)/color(None)`; `Gradient` `dither(false)/method(GradientMethod::Classic)`; `LiveShape::Rectangle|Polygon` `radii_relative(false)`; `TextObject` `ruby/first_para_continues/system_layout/fractional_widths/list_count`; `ImageObject` `pixels(None)`; `Unit` gained `Q|Ha` (quarter-mm → `CdrUnit::Mm`).
+- **Shallow `--depth=1` fetches break `merge-base`**: fetching the sync base and target with `--depth=1` leaves them as shallow boundaries; deepen from the local `refs/vectorcraft` clone with `--depth=10000` before the graft and merge.
+- **`git merge-tree --name-only` overcounts conflicts** (~386 vs the real merge's 130): it lists per-stage entries; the authoritative conflict inventory is `git diff --name-only --diff-filter=U` from the actual merge.
+
 ## 1. [Resolved] Short SHAs in `scripts/bootstrap-refs.sh` Rejected by GitHub `git fetch --depth 1`
 
 - **Symptom**: 7-character short SHAs in `scripts/bootstrap-refs.sh` caused `git fetch -q --depth 1 origin <short-sha>` to fail with `fatal: couldn't find remote ref`, triggering the fallback branch clone.

@@ -90,8 +90,8 @@ impl Node {
     /// ([`Node::geometric_bounds_with`]).
     pub fn bounds_in(&self, symbols: &SymbolBoxes, a: Affine, visual: bool) -> Option<Rect> {
         match &self.kind {
-            NodeKind::Group { children, clip: false } => {
-                let b = children.iter().fold(None, |acc, c| union_opt(acc, c.bounds_in(symbols, a, visual)));
+            NodeKind::Group { clip: false, .. } => {
+                let b = self.editing_children().iter().fold(None, |acc, c| union_opt(acc, c.bounds_in(symbols, a, visual)));
                 // The group's own strokes paint around its members (as in `visual_bounds`).
                 let o = if visual { self.appearance.outset() } else { 0.0 };
                 b.map(|b| b.inflate(o, o))
@@ -125,9 +125,19 @@ impl Document {
         if angle == 0.0 {
             return self.bounds_of(ids, visual).map(OrientedBox::aligned);
         }
+        self.oriented_bounds_with(ids, visual, &self.symbol_boxes())
+    }
+
+    /// [`oriented_bounds`](Document::oriented_bounds) measuring symbol instances from `symbols`,
+    /// a cache shared across calls: measuring many instances one by one otherwise measures their
+    /// art again for each.
+    pub fn oriented_bounds_with(&self, ids: &[NodeId], visual: bool, symbols: &crate::SymbolBoxes) -> Option<OrientedBox> {
+        let angle = self.bbox_angle(ids);
+        if angle == 0.0 {
+            return self.bounds_of_with(ids, visual, symbols).map(OrientedBox::aligned);
+        }
         let to_local = OrientedBox { angle, rect: Rect::ZERO }.to_doc().inverse();
-        let symbols = self.symbol_boxes();
-        let rect = ids.iter().filter_map(|id| self.node(*id)).fold(None, |acc, n| union_opt(acc, n.bounds_in(&symbols, to_local, visual)))?;
+        let rect = ids.iter().filter_map(|id| self.node(*id)).fold(None, |acc, n| union_opt(acc, n.bounds_in(symbols, to_local, visual)))?;
         Some(OrientedBox { angle, rect })
     }
 }
@@ -200,7 +210,7 @@ mod tests {
     fn oriented_bounds_hug_a_rotated_symbol_instances_art() {
         let mut d = Document::new(500.0, 500.0);
         let bar = Node::path(d.alloc_id(), shapes::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0)), Appearance::default_art());
-        d.symbols.push(crate::Symbol { name: "Bar".into(), art: std::sync::Arc::new(bar) });
+        d.symbols.push(crate::Symbol { dynamic: false, name: "Bar".into(), art: std::sync::Arc::new(bar) });
         let (l, id) = (d.layers[0].id, d.alloc_id());
         d.insert(Some(l), 0, Node::new(id, NodeKind::SymbolInstance { symbol: "Bar".into(), xf: Affine::translate((100.0, 100.0)) })).unwrap();
         let c = Point::new(120.0, 105.0);

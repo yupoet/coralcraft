@@ -17,7 +17,7 @@ fn main() -> Result<(), String> {
         .set("ProductName", "CoralCraft")
         .set("FileDescription", "CoralCraft vector illustration editor")
         .set("CompanyName", "The CoralCraft project authors")
-        .set("LegalCopyright", "Copyright (c) the CoralCraft and VectorCraft authors. MIT OR Apache-2.0.")
+        .set("LegalCopyright", "Copyright (c) the CoralCraft and CoralCraft authors. MIT OR Apache-2.0.")
         .set("OriginalFilename", "coralcraft.exe")
         .set("InternalName", "coralcraft");
     if let Err(e) = res.compile() {

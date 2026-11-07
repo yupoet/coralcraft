@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use vectorcraft_color::{
-    Color as VcColor, Gradient, GradientGeom, GradientKind, GradientPaint, GradientStop, Paint, Swatch, default_swatches, swatch::REGISTRATION,
+    Color as VcColor, Gradient, GradientGeom, GradientKind, GradientMethod, GradientPaint, GradientStop, Paint, Swatch, default_swatches,
+    swatch::REGISTRATION,
 };
 use vectorcraft_doc::{
     Appearance, AppearanceItem, AreaOptions, Arrowhead, Artboard, CharStyle, ColorMode, Dash, Document as VcDocument, Effect, FillLayer, ImageBlob,
@@ -449,7 +450,20 @@ pub fn insert_page_at(
     };
 
     let init_rect = VcRect::new(base_origin.x, base_origin.y, base_origin.x + w, base_origin.y + h);
-    doc.artboards.insert(idx, Artboard { id: ab_id, name: page_name, rect: init_rect, show_center_mark: false, show_cross_hairs: false });
+    doc.artboards.insert(
+        idx,
+        Artboard {
+            id: ab_id,
+            name: page_name,
+            rect: init_rect,
+            show_center_mark: false,
+            show_cross_hairs: false,
+            locked: false,
+            show_video_safe_areas: false,
+            video_ruler_pixel_aspect_ratio: 1.0,
+            color: None,
+        },
+    );
     old_origins.insert(idx, init_rect.origin());
     page_objects.insert(idx, Vec::new());
 
@@ -721,7 +735,17 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
         let h = page.size.height.get().max(1.0);
         let rect = VcRect::new(cursor_x, 0.0, cursor_x + w, h);
         let ab_id = u32::try_from(idx.saturating_add(1)).unwrap_or(u32::MAX);
-        doc.artboards.push(Artboard { id: ab_id, name: page.name.clone(), rect, show_center_mark: false, show_cross_hairs: false });
+        doc.artboards.push(Artboard {
+            id: ab_id,
+            name: page.name.clone(),
+            rect,
+            show_center_mark: false,
+            show_cross_hairs: false,
+            locked: false,
+            show_video_safe_areas: false,
+            video_ruler_pixel_aspect_ratio: 1.0,
+            color: None,
+        });
         page_offsets.push(Vec2::new(cursor_x, 0.0));
         cursor_x += w + PAGE_GAP_PT;
 
@@ -743,6 +767,10 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             rect: VcRect::new(0.0, 0.0, 595.275_590_551_181_2, 841.889_763_779_527_6),
             show_center_mark: false,
             show_cross_hairs: false,
+            locked: false,
+            show_video_safe_areas: false,
+            video_ruler_pixel_aspect_ratio: 1.0,
+            color: None,
         });
         page_offsets.push(Vec2::ZERO);
     }
@@ -1142,6 +1170,8 @@ fn map_unit_to_cdr(u: VcUnit) -> CdrUnit {
         VcUnit::Millimeters | VcUnit::Centimeters | VcUnit::Meters => CdrUnit::Mm,
         VcUnit::Inches | VcUnit::Feet | VcUnit::FeetInches | VcUnit::Yards => CdrUnit::Inch,
         VcUnit::Pixels => CdrUnit::Px,
+        // CoralCraft: Q/Ha (quarter-millimetre Japanese units) round-trip through the mm family.
+        VcUnit::Q | VcUnit::Ha => CdrUnit::Mm,
     }
 }
 
@@ -1389,7 +1419,7 @@ fn map_cdr_fill_to_paint(fill: &FillStyle, bounds: Option<VcRect>) -> Paint {
                 FountainGeometry::Conical { angle_deg, .. } => (GradientKind::Radial, angle_deg.get(), None),
                 FountainGeometry::Square { angle_deg, .. } => (GradientKind::Radial, angle_deg.get(), None),
             };
-            let mut gp = GradientPaint::new(Gradient { kind, stops: vc_stops });
+            let mut gp = GradientPaint::new(Gradient { kind, stops: vc_stops, dither: false, method: GradientMethod::Classic });
             gp.angle = angle;
             gp.geom = geom;
             Paint::Gradient(Box::new(gp))
@@ -1593,7 +1623,7 @@ fn convert_cdr_node_to_vc(
                 map_cdr_corner_kind_to_vc(rspec.corner_kinds[3]),
             ];
             let shape_xf = affine_mul(xf, Affine::translate((rspec.rect.x0.get(), rspec.rect.y0.get())));
-            let live = LiveShape::Rectangle { w, h, radii, kinds, xf: shape_xf };
+            let live = LiveShape::Rectangle { w, h, radii, kinds, xf: shape_xf, radii_relative: false };
             let path = live.to_path();
             let mut n = Node::new(nid, NodeKind::Path { path, rule: VcFillRule::NonZero, live: Some(Box::new(live)), clipping: false, guide: false });
             n.appearance = appearance.clone().into();
@@ -1638,8 +1668,14 @@ fn convert_cdr_node_to_vc(
                 n
             } else {
                 let poly_xf = affine_mul(affine_mul(xf, Affine::translate(center.to_vec2())), Affine::rotate(pspec.rotation_deg.get().to_radians()));
-                let live =
-                    LiveShape::Polygon { radius: pspec.radius.get(), sides: pspec.points.max(3), xf: poly_xf, radii: Vec::new(), kinds: Vec::new() };
+                let live = LiveShape::Polygon {
+                    radius: pspec.radius.get(),
+                    sides: pspec.points.max(3),
+                    xf: poly_xf,
+                    radii: Vec::new(),
+                    kinds: Vec::new(),
+                    radii_relative: false,
+                };
                 let path = live.to_path();
                 let mut n =
                     Node::new(nid, NodeKind::Path { path, rule: VcFillRule::NonZero, live: Some(Box::new(live)), clipping: false, guide: false });
@@ -1730,6 +1766,11 @@ fn convert_cdr_node_to_vc(
                 path_spacing: 0.0,
                 wrap: Vec::new(),
                 optical_margin: false,
+                ruby: Vec::new(),
+                first_para_continues: false,
+                system_layout: false,
+                fractional_widths: false,
+                list_count: 0,
                 cached_bounds: None,
                 cached_baselines: Vec::new(),
             };
@@ -1773,7 +1814,7 @@ fn convert_cdr_node_to_vc(
             let sx = 72.0 / dpi_x.get().max(1.0);
             let sy = 72.0 / dpi_y.get().max(1.0);
             let img_xf = affine_mul(xf, Affine::scale_non_uniform(sx, sy));
-            let im = ImageObject { key, width: w_px, height: h_px, xf: img_xf, link: None, placement: Default::default() };
+            let im = ImageObject { key, width: w_px, height: h_px, xf: img_xf, link: None, placement: Default::default(), pixels: None };
             let mut n = Node::new(nid, NodeKind::Image(Box::new(im)));
             if !appearance.effects.is_empty() {
                 n.appearance = Appearance { items: vec![], effects: appearance.effects.clone(), contents_index: None }.into();
@@ -1946,7 +1987,7 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
     let neg_offset = Vec2::new(-offset.x, -offset.y);
     let kind = match &node.kind {
         NodeKind::Path { path, rule, live, .. } => match live.as_deref() {
-            Some(LiveShape::Rectangle { w, h, radii, kinds, xf }) => {
+            Some(LiveShape::Rectangle { w, h, radii, kinds, xf, radii_relative: _ }) => {
                 let local_xf = affine_mul(Affine::translate(neg_offset), *xf);
                 let [a0, a1, a2, a3, tx, ty] = local_xf.as_coeffs();
                 let is_pure_translate = (a0 - 1.0).abs() < 1e-9 && a1.abs() < 1e-9 && a2.abs() < 1e-9 && (a3 - 1.0).abs() < 1e-9;
@@ -2634,8 +2675,14 @@ mod tests {
         let mut vdoc = VcDocument::new(612.0, 792.0);
         vdoc.title = "Fresh Poster".to_owned();
         let nid = vdoc.alloc_id();
-        let live =
-            LiveShape::Rectangle { w: 120.0, h: 80.0, radii: [8.0; 4], kinds: [VcCornerKind::Chamfer; 4], xf: Affine::translate((40.0, 60.0)) };
+        let live = LiveShape::Rectangle {
+            w: 120.0,
+            h: 80.0,
+            radii: [8.0; 4],
+            kinds: [VcCornerKind::Chamfer; 4],
+            xf: Affine::translate((40.0, 60.0)),
+            radii_relative: false,
+        };
         let path = live.to_path();
         let mut node = Node::new(nid, NodeKind::Path { path, rule: VcFillRule::NonZero, live: Some(Box::new(live)), clipping: false, guide: false });
         node.name = Some("Chamfer Box".to_owned());

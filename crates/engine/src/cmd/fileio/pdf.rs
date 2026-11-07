@@ -11,7 +11,7 @@ use vectorcraft_doc::{Document, Node, NodeKind};
 use vectorcraft_pdf::{Overprint, PdfError, PdfOptions, PdfPreset, PdfSettings, Standard, THUMBNAIL_SIZE, Thumbnail};
 
 use super::super::flatten::{FlattenOptions, flatten_document, see_through_images};
-use super::super::*;
+use super::super::{CommandSpec, Result, Session, always, bad, bool_or, cmd, has_doc, str_param};
 use super::{ArtboardPick, FormatOption, write_or_return};
 use crate::EngineError;
 
@@ -243,7 +243,14 @@ pub fn options(cmd: &str, doc: &Document, p: &Value) -> Result<PdfOptions> {
     let pick = if p.is_object() { ArtboardPick::deserialize(p).map_err(|e| bad(cmd, format!("PDF options: {e}")))? } else { ArtboardPick::default() };
     let artboards = pick.resolve(doc.artboards.len()).map_err(|e| bad(cmd, e))?;
     let now = vectorcraft_doc::metadata::output_time();
-    Ok(PdfOptions { settings: settings(cmd, p)?, artboards, created: doc.metadata.created.or(now), modified: now, ..Default::default() })
+    Ok(PdfOptions {
+        settings: settings(cmd, p)?,
+        artboards,
+        display_doc_title: bool_or(p, "_displayDocTitle", super::has_own_title(doc)),
+        created: doc.metadata.created.or(now),
+        modified: now,
+        ..Default::default()
+    })
 }
 
 /// Why a PDF of some artboards carries no editing data.
@@ -256,7 +263,7 @@ pub const EDITING_NEEDS_EVERY_ARTBOARD: &str =
 pub fn encode(cmd: &str, doc: &Document, p: &Value) -> Result<(Vec<u8>, Vec<String>)> {
     // Keep the editable object tree independent of preview fallbacks used by the drawn pages.
     let (full, mut warnings) = crate::cmd::place::document::full_documents(doc);
-    let (bytes, drawn_warnings) = encode_carrying(cmd, &full, p, || Ok(vectorcraft_format::save(doc, false)))?;
+    let (bytes, drawn_warnings) = encode_carrying(cmd, &full, p, || Ok(vectorcraft_format::save(doc, false)), || Ok(None))?;
     warnings.extend(drawn_warnings);
     warnings.extend(overflow_warning(cmd, &full, p)?);
     Ok((bytes, warnings))
@@ -274,9 +281,20 @@ fn overflow_warning(cmd: &str, doc: &Document, p: &Value) -> Result<Option<Strin
 }
 
 /// [`encode`] the pages of `doc`, carrying `native()` as the editing data (a `.ai` file: the
-/// native document with its save options, whose pages may be left blank).
-pub(super) fn encode_carrying(cmd: &str, doc: &Document, p: &Value, native: impl FnOnce() -> Result<Vec<u8>>) -> Result<(Vec<u8>, Vec<String>)> {
+/// native document with its save options, whose pages may be left blank), and `private()`, the
+/// editing copy of the art for other apps with what it couldn't hold, on every page.
+pub(super) fn encode_carrying(
+    cmd: &str,
+    doc: &Document,
+    p: &Value,
+    native: impl FnOnce() -> Result<Vec<u8>>,
+    private: impl FnOnce() -> Result<Option<(vectorcraft_pdf::PrivateData, Vec<String>)>>,
+) -> Result<(Vec<u8>, Vec<String>)> {
     let mut opts = options(cmd, doc, p)?;
+    // The pages' background colors, behind the art (the editing data keeps them as colors).
+    let pages = opts.artboards.clone().unwrap_or_else(|| (0..doc.artboards.len()).collect());
+    let filled = super::export::with_artboard_fills(doc, p, pages).map_err(|e| bad(cmd, e))?;
+    let doc = &*filled;
     if opts.settings.thumbnails {
         opts.thumbnails = thumbnails(doc, &opts).map_err(|e| pdf_error(cmd, e))?;
     }
@@ -284,6 +302,10 @@ pub(super) fn encode_carrying(cmd: &str, doc: &Document, p: &Value, native: impl
     if opts.settings.preserve_editing {
         if opts.artboards.as_ref().is_none_or(|v| v.iter().copied().eq(0..doc.artboards.len())) {
             opts.native = Some(native()?);
+            if let Some((data, lost)) = private()? {
+                opts.private_data = Some(data);
+                warnings.extend(lost);
+            }
         } else {
             opts.settings.preserve_editing = false;
             warnings.push(EDITING_NEEDS_EVERY_ARTBOARD.to_string());
@@ -310,9 +332,9 @@ pub const DEFAULT_FLATTENER: &str = "High Resolution";
 
 /// `doc` with its transparency flattened for a PDF 1.3 file (asked for, or PDF/X-1a and PDF/X-3,
 /// whose files have none), with `flattenerPreset` (default High Resolution) and `p`'s `flattener`
-/// options over it; images with see-through pixels count as transparency, rasterized areas are
-/// clipped to their regions, and discarded overprints are dropped. `None` when nothing changes (or
-/// the file keeps transparency).
+/// options over it; images with see-through pixels and colorized images, including those in
+/// pattern tiles, count as transparency. Rasterized areas are clipped to their regions, and
+/// discarded overprints are dropped. `None` when nothing changes (or the file keeps transparency).
 fn flatten_for(cmd: &str, doc: &Document, set: &PdfSettings, p: &Value) -> Result<Option<Document>> {
     if !set.pdf13() {
         return Ok(None);
@@ -387,8 +409,15 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let expanded = expand_preset(s, C, p)?;
     let p = &*expanded;
     let st = s.doc()?;
+    let display_doc_title = super::has_own_title(&st.doc);
     let titled = super::titled_for_export(&st.doc, st.path.as_deref(), "pdf");
-    let (bytes, warnings) = encode(C, titled.as_ref().unwrap_or(&st.doc), p)?;
+    let mut q = p.clone();
+    if let Some(o) = q.as_object_mut() {
+        o.insert("_displayDocTitle".into(), json!(display_doc_title));
+    } else {
+        q = json!({ "_displayDocTitle": display_doc_title });
+    }
+    let (bytes, warnings) = encode(C, titled.as_ref().unwrap_or(&st.doc), &q)?;
     write_or_return(str_param(p, "path"), &bytes, json!({ "warnings": warnings }))
 }
 

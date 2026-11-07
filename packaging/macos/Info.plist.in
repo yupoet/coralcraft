@@ -6,6 +6,36 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). Keep in sync with the interface languages. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>bg</string>
+    <string>cs</string>
+    <string>da</string>
+    <string>de</string>
+    <string>el</string>
+    <string>es</string>
+    <string>fi</string>
+    <string>fr</string>
+    <string>hu</string>
+    <string>id</string>
+    <string>it</string>
+    <string>ja</string>
+    <string>ka</string>
+    <string>ko</string>
+    <string>nl</string>
+    <string>pl</string>
+    <string>pt-BR</string>
+    <string>ru</string>
+    <string>sv</string>
+    <string>tr</string>
+    <string>uk</string>
+    <string>vi</string>
+    <string>zh-Hans</string>
+    <string>zh-Hant</string>
+  </array>
   <key>CFBundleDisplayName</key>
   <string>CoralCraft</string>
   <key>CFBundleName</key>
@@ -24,9 +54,9 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>VectorCraftVersion</key>
+  <key>CoralCraftVersion</key>
   <string>@VERSION@</string>
-  <key>VectorCraftBuildCommit</key>
+  <key>CoralCraftBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
   <string>CoralCraft</string>
@@ -45,7 +75,7 @@
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the CoralCraft authors. MIT OR Apache-2.0.</string>
 
-  <!-- Every format File › Open reads (OPEN_EXTS in crates/engine/src/cmd/fileio/mod.rs; a test in
+  <!-- Every format File › Open reads (OPEN_EXTS in crates/engine/src/cmd/fileio/formats.rs; a test in
        apps/coralcraft checks this list), so Finder offers CoralCraft for them (Open With,
        double-click, Dock drop). CoralCraft owns its own formats; for the others it is an
        alternate, so it doesn't take over another app's files. The app isn't NSDocument-based (no
@@ -54,7 +84,7 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key><string>CoralCraft Document</string>
-      <key>LSItemContentTypes</key><array><string>ai.storyteller.vectorcraft.document</string></array>
+      <key>LSItemContentTypes</key><array><string>io.github.yupoet.coralcraft.document</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Owner</string>
     </dict>
@@ -129,7 +159,7 @@
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>ai.storyteller.vectorcraft.document</string>
+      <string>io.github.yupoet.coralcraft.document</string>
       <key>UTTypeDescription</key>
       <string>CoralCraft Document</string>
       <key>UTTypeConformsTo</key>
@@ -142,9 +172,9 @@
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
-        <array><string>vectorcraft</string><string>drawcraft</string></array>
+        <array><string>coralcraft</string><string>drawcraft</string></array>
         <key>public.mime-type</key>
-        <array><string>application/x-vectorcraft</string></array>
+        <array><string>application/x-coralcraft</string></array>
       </dict>
     </dict>
   </array>
