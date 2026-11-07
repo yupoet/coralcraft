@@ -536,6 +536,34 @@ fn front_and_back_without_a_selection_use_the_current_layers_ends() {
 }
 
 #[test]
+fn paste_into_a_selected_compound_member_keeps_compounds_at_the_same_level() {
+    let mut s = session();
+    let a = rect(&mut s, 0.0, 0.0, 10.0, 10.0);
+    let b = rect(&mut s, 20.0, 0.0, 10.0, 10.0);
+    sel(&mut s, &[a, b]);
+    let compound = id_of(&s.execute("object.compoundPath.make", &json!({})).unwrap());
+    copy(&mut s, &[compound]);
+    let member = node(&s, compound).children().unwrap()[0].id;
+    let mut expected = vec![compound];
+
+    for command in ["edit.pasteInFront", "edit.pasteInBack"] {
+        sel(&mut s, &[member]);
+        let pasted = ids_of(&s.execute(command, &json!({})).unwrap());
+        assert_eq!(pasted.len(), 1);
+        let parent = doc(&s).parent_of(pasted[0]).and_then(|id| doc(&s).node(id)).unwrap();
+        assert!(!matches!(parent.kind, NodeKind::Compound { .. }), "{command}");
+        if command == "edit.pasteInFront" {
+            expected.push(pasted[0])
+        } else {
+            expected.insert(0, pasted[0])
+        }
+        let children = doc(&s).layers[0].children().unwrap().iter().map(|n| n.id).collect::<Vec<_>>();
+        assert_eq!(children, expected, "{command}");
+        vectorcraft_testkit::invariants::check_document(doc(&s)).unwrap();
+    }
+}
+
+#[test]
 fn paste_on_all_artboards_keeps_the_offset_to_the_source_artboard() {
     let mut s = Session::new();
     s.execute("file.new", &json!({"width": 200, "height": 100, "artboards": 3})).unwrap();

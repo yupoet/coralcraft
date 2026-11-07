@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=VectorCraft
+Name=CoralCraft
 GenericName=Vector Graphics Editor
 Comment=Draw and edit vector illustrations, SVG and PDF
-Exec=vectorcraft %F
-TryExec=vectorcraft
+Exec=coralcraft %F
+TryExec=coralcraft
 Icon=io.github.yupoet.coralcraft
 Terminal=false
 StartupNotify=true

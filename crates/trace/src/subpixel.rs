@@ -57,7 +57,10 @@ impl Crack {
 
 fn pixel(p: (i32, i32), w: usize, h: usize) -> Option<usize> {
     let (x, y) = (usize::try_from(p.0).ok()?, usize::try_from(p.1).ok()?);
-    (x < w && y < h).then(|| y * w + x)
+    if x >= w || y >= h {
+        return None;
+    }
+    y.checked_mul(w)?.checked_add(x)
 }
 
 /// A stretch of an outline with one neighbour along it: its points, and whether its edge is hard.

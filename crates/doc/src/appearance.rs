@@ -385,7 +385,13 @@ fn thin(pts: Vec<(f64, f64)>, max: usize) -> Vec<(f64, f64)> {
     if n <= max || max < 2 {
         return pts;
     }
-    (0..max).filter_map(|i| pts.get(i * (n - 1) / (max - 1)).copied()).collect()
+    // CoralCraft: the wide intermediate cannot overflow a 32-bit usize.
+    (0..max)
+        .filter_map(|i| {
+            let at = usize::try_from(i as u128 * (n - 1) as u128 / (max - 1) as u128).ok()?;
+            pts.get(at).copied()
+        })
+        .collect()
 }
 
 /// Douglas–Peucker over a function sampled at `pts`: which samples to keep so the polyline through

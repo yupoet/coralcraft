@@ -14,6 +14,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
+      - "apps/**"
   pull_request:
     branches: [main]
     paths:
@@ -22,6 +23,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/**"
+      - "apps/**"
   workflow_dispatch:
 
 concurrency:
@@ -37,4 +39,4 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/windows-arm64.yml@main
     with:
       app-name: coralcraft
-      app-dir: VectorCraft
+      app-dir: CoralCraft

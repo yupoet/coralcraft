@@ -22,7 +22,8 @@ fi
 # name|url|pinned-sha (must match refs/REFS.md §D; full 40-char SHA required for git fetch --depth 1)[|sparse-subdir]
 # sparse-subdir is for monorepos where only one subdirectory is relevant (cone-mode sparse checkout).
 ENTRIES=(
-  "vectorcraft|https://github.com/storytold/vectorcraft.git|a466625c8987550635cda951ebf36e08e1e80a56"
+  "vectorcraft|https://github.com/storytold/vectorcraft.git|36ef34dfdd8dfd1abc19fd209678860a00583558"
+  "craft-anything|https://github.com/storytold/craft-anything.git|6e0978a08598ef0e46a81b29c11471dac23cd95b"
   "designcraft|https://github.com/storytold/designcraft.git|443ea4640ca368fcf0241b04813bd3817acd5df8"
   "cadcraft|https://github.com/storytold/cadcraft.git|0b32c2e6a14c761835ea62c01e7b20845971d781"
   "craft-libs|https://github.com/storytold/craft-libs.git|ae2f796b673f29cf3161f36eb6a8933f0a3fe028"

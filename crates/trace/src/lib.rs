@@ -122,6 +122,24 @@ pub struct Raster {
     pub rgba: Vec<u8>,
 }
 
+/// Read image dimensions without letting PNG's output-buffer sizing overflow a 32-bit target.
+fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), TraceError> {
+    let decode_err = |e: image::ImageError| TraceError::Decode(e.to_string());
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| TraceError::Decode(e.to_string()))?;
+    match reader.into_dimensions() {
+        Ok(size) => Ok(size),
+        Err(image::ImageError::Limits(_)) if matches!(image::guess_format(bytes), Ok(image::ImageFormat::Png)) => {
+            if bytes.get(..8) != Some(b"\x89PNG\r\n\x1a\n") || bytes.get(8..16) != Some(b"\0\0\0\rIHDR") {
+                return Err(TraceError::Decode("the PNG header can't be read".to_string()));
+            }
+            let width = bytes.get(16..20).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
+            let height = bytes.get(20..24).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
+            width.zip(height).ok_or_else(|| TraceError::Decode("the PNG header can't be read".to_string()))
+        }
+        Err(e) => Err(decode_err(e)),
+    }
+}
+
 impl Raster {
     /// A raster from RGBA bytes, which must be exactly `width * height * 4` of them: any other
     /// length (bytes from a file, a plug-in or a message) is a [`TraceError::Decode`] error, not
@@ -146,8 +164,7 @@ impl Raster {
     /// Decode PNG / JPEG / WebP / GIF bytes (at most [`MAX_PIXELS`], checked before decoding).
     pub fn decode(bytes: &[u8]) -> Result<Self, TraceError> {
         let decode_err = |e: image::ImageError| TraceError::Decode(e.to_string());
-        let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| TraceError::Decode(e.to_string()))?;
-        let (w, h) = reader.into_dimensions().map_err(decode_err)?;
+        let (w, h) = image_dimensions(bytes)?;
         if w == 0 || h == 0 {
             return Err(TraceError::Empty);
         }
@@ -164,8 +181,7 @@ impl Raster {
     /// less than its own resolution. The caller maps the result back with `width` / `height`.
     pub fn decode_to_fit(bytes: &[u8]) -> Result<Self, TraceError> {
         let decode_err = |e: image::ImageError| TraceError::Decode(e.to_string());
-        let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| TraceError::Decode(e.to_string()))?;
-        let (w, h) = reader.into_dimensions().map_err(decode_err)?;
+        let (w, h) = image_dimensions(bytes)?;
         if w == 0 || h == 0 {
             return Err(TraceError::Empty);
         }

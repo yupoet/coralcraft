@@ -50,12 +50,16 @@ fn bad_predictor(params: &Dict<'_>) -> bool {
     if params.get::<u8>(b"Predictor").unwrap_or(1) == 1 {
         return false;
     }
-    let colors = usize::from(params.get::<u8>(b"Colors").unwrap_or(1));
-    let bits = usize::from(params.get::<u8>(b"BitsPerComponent").unwrap_or(8));
-    let columns = params.get::<usize>(b"Columns").unwrap_or(1);
+    let colors = i64::from(params.get::<u8>(b"Colors").unwrap_or(1));
+    let bits = i64::from(params.get::<u8>(b"BitsPerComponent").unwrap_or(8));
+    let columns = match params.get::<i64>(b"Columns") {
+        Some(columns) => columns,
+        None if params.contains_key(b"Columns") => return true,
+        None => 1,
+    };
     let pixel = colors * bits;
-    let row = columns.checked_mul(pixel).map(|b| b.div_ceil(8));
-    !(matches!(bits, 1 | 2 | 4 | 8 | 16) && colors > 0 && pixel <= 255 && columns > 0 && row.is_some_and(|r| r <= MAX_ROW))
+    let row = columns.checked_mul(pixel).map(|b| b / 8 + i64::from(b % 8 != 0));
+    !(matches!(bits, 1 | 2 | 4 | 8 | 16) && colors > 0 && pixel <= 255 && columns > 0 && row.is_some_and(|r| r <= MAX_ROW as i64))
 }
 
 /// `data` inflated, up to one byte past `max` (zlib, or raw deflate as the reader also takes);

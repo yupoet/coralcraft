@@ -104,7 +104,8 @@ pub(crate) fn insert_look(s: &mut Session, label: &str, kind: NodeKind, look: Ne
     let parent = s.doc()?.target_parent()?;
     let mode = s.draw_mode;
     let inside = s.draw_inside;
-    let behind_of = s.doc()?.selection.in_paint_order(&s.doc()?.doc).first().copied();
+    // CoralCraft: draw behind the whole compound when one of its members is selected.
+    let behind_of = super::edit::selected_roots(s)?.first().copied();
     let id = s.edit(label, |d, sel| {
         let id = d.alloc_id();
         let mut n = Node::new(id, kind);
@@ -117,8 +118,9 @@ pub(crate) fn insert_look(s: &mut Session, label: &str, kind: NodeKind, look: Ne
                     Some((p, NodeKind::Group { clip: true, children })) if children.get(1).is_some_and(|c| c.id == target) => p,
                     _ => {
                         let (par, idx, _) = d.position(target).ok_or(crate::EngineError::NoNode(target))?;
-                        let mut mask = d.node(target).cloned().ok_or(crate::EngineError::NoNode(target))?;
-                        mask.id = d.alloc_id();
+                        let source = d.node(target).cloned().ok_or(crate::EngineError::NoNode(target))?;
+                        // CoralCraft: compound masks need fresh ids for every member too.
+                        let mut mask = d.reid(&source);
                         mask.appearance = Appearance::basic(vectorcraft_color::Paint::None, vectorcraft_color::Paint::None, 0.0).into();
                         if let NodeKind::Path { clipping, .. } = &mut mask.kind {
                             *clipping = true;
@@ -165,10 +167,11 @@ fn draw_mode(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if mode == crate::DrawMode::Inside {
         let st = s.doc()?;
-        let target =
-            st.selection.objects.first().copied().filter(|id| {
-                matches!(st.doc.node(*id).map(|n| &n.kind), Some(NodeKind::Path { .. } | NodeKind::Compound { .. } | NodeKind::Text(_)))
-            });
+        // CoralCraft: draw inside the whole compound when one of its members is selected.
+        let target = super::edit::selected_roots(s)?
+            .first()
+            .copied()
+            .filter(|id| matches!(st.doc.node(*id).map(|n| &n.kind), Some(NodeKind::Path { .. } | NodeKind::Compound { .. } | NodeKind::Text(_))));
         match target {
             Some(t) if st.selection.len() == 1 => s.draw_inside = Some(t),
             _ => return Err(bad("view.drawMode", "Draw Inside needs exactly one selected path, compound path or text")),

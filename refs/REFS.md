@@ -7,6 +7,7 @@
 | Directory | License | How We Use It | Clean-Room & License Boundary |
 | --- | --- | --- | --- |
 | `vectorcraft/` | MIT OR Apache-2.0 | **Fork base (operator decision 2026-10-21)**: CoralCraft is a copy of VectorCraft (`a466625`) extended toward CorelDRAW. Reuse every existing subsystem (geometry, pathops, color/CMS, render, text, effects, trace, SVG/PDF/EPS/AI/DXF/EMF/WMF/PSD/Affinity I/O, egui docking/widgets, MCP, packaging); CoralCraft-owned work is only the CorelDRAW extension | License-compatible (`MIT OR Apache-2.0`); copy freely with notices kept; attributed in [`NOTICE`](../NOTICE); syncs logged in `docs/upstream-vectorcraft.md` |
+| `craft-anything/` | MIT OR Apache-2.0 | Evidence-backed Study → Build → Check → Refine loop, headless-first tools, typed outcomes, bounded agent iterations, and small roadmap units | Methodology reference only; do not add its source or assets to CoralCraft |
 | `designcraft/` | Apache-2.0 | **Multi-page layout foundation**: reuse and adapt multi-page spreads, master pages, guides, and page-panel mechanics for CorelDRAW's multi-page publication model | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
 | `cadcraft/` | Apache-2.0 | **Clean-room binary format & CAD precedent**: DXF/DWG handling and clean-room binary format test patterns | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
 | `craft-libs/` | Apache-2.0 | Shared `craft-pdf` / `craft-print` / `craft-docpath` / `craft-ui` libraries | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
@@ -38,11 +39,12 @@
 
 ## D. Pinned Commits (`scripts/bootstrap-refs.sh`)
 
-Pinned on 2026-10-19, `vector-studio/` added 2026-10-21 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
+Pinned on 2026-10-19, `vector-studio/` added 2026-10-21; `vectorcraft/` updated and `craft-anything/` added 2026-11-06 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
 
 | Directory | Upstream | Pinned Commit |
 | --- | --- | --- |
-| `vectorcraft/` | `github.com/storytold/vectorcraft` | `a466625c8987550635cda951ebf36e08e1e80a56` |
+| `vectorcraft/` | `github.com/storytold/vectorcraft` | `36ef34dfdd8dfd1abc19fd209678860a00583558` |
+| `craft-anything/` | `github.com/storytold/craft-anything` | `6e0978a08598ef0e46a81b29c11471dac23cd95b` |
 | `designcraft/` | `github.com/storytold/designcraft` | `443ea4640ca368fcf0241b04813bd3817acd5df8` |
 | `cadcraft/` | `github.com/storytold/cadcraft` | `0b32c2e6a14c761835ea62c01e7b20845971d781` |
 | `craft-libs/` | `github.com/storytold/craft-libs` | `ae2f796b673f29cf3161f36eb6a8933f0a3fe028` |

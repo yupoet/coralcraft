@@ -110,6 +110,42 @@ fn draw_behind_and_inside() {
     assert!(s.draw_inside.is_none());
 }
 
+#[test]
+fn draw_behind_a_selected_compound_member_inserts_beside_the_compound() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("shape.rectangle", &json!({"x": 20, "y": 0, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [a, b]})).unwrap();
+    let compound = NodeId(s.execute("object.compoundPath.make", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let d = &s.doc().unwrap().doc;
+    let member = d.node(compound).unwrap().children().unwrap()[0].id;
+    s.execute("select.set", &json!({"ids": [member.0]})).unwrap();
+    s.execute("view.drawMode", &json!({"mode": "behind"})).unwrap();
+    let drawn = NodeId(s.execute("shape.ellipse", &json!({"x": 0, "y": 0, "width": 5, "height": 5})).unwrap()["id"].as_u64().unwrap());
+    let d = &s.doc().unwrap().doc;
+    let parent = d.parent_of(drawn).and_then(|id| d.node(id)).unwrap();
+    assert!(!matches!(parent.kind, NodeKind::Compound { .. }));
+    let order = d.layers[0].children().unwrap().iter().map(|n| n.id).collect::<Vec<_>>();
+    assert_eq!(order, [drawn, compound]);
+    vectorcraft_testkit::invariants::check_document(d).unwrap();
+}
+
+#[test]
+fn draw_inside_a_selected_compound_member_targets_the_whole_compound() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("shape.rectangle", &json!({"x": 20, "y": 0, "width": 10, "height": 10})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [a, b]})).unwrap();
+    let compound = NodeId(s.execute("object.compoundPath.make", &json!({})).unwrap()["id"].as_u64().unwrap());
+    let d = &s.doc().unwrap().doc;
+    let member = d.node(compound).unwrap().children().unwrap()[0].id;
+    s.execute("select.set", &json!({"ids": [member.0]})).unwrap();
+    s.execute("view.drawMode", &json!({"mode": "inside"})).unwrap();
+    assert_eq!(s.draw_inside, Some(compound));
+    s.execute("shape.ellipse", &json!({"x": 0, "y": 0, "width": 5, "height": 5})).unwrap();
+    vectorcraft_testkit::invariants::check_document(&s.doc().unwrap().doc).unwrap();
+}
+
 /// In Draw Inside, a double-click with a selection tool outside the object being drawn into sets
 /// the drawing mode to Draw Normal, and the tool still takes the double-click. Inside the object's
 /// bounds, grown by the selection tolerance, and with other tools, Draw Inside stays on.
