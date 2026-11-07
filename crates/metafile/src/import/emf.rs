@@ -86,9 +86,9 @@ fn bitmap(rec: &[u8], off_bmi: u32, cb_bmi: u32, off_bits: u32, cb_bits: u32, al
 
 /// The rows a DIB's source rectangle counts from the bottom in (StretchDIBits on a bottom-up DIB).
 fn bottom_up(rec: &[u8], off_bmi: u32) -> bool {
-    let at = off_bmi as usize;
-    let size = rec.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let height = rec.get(at + 8..at + 12).and_then(|b| b.try_into().ok()).map(i32::from_le_bytes);
+    let header = slice(rec, off_bmi, 12);
+    let size = header.and_then(|b| b.get(..4)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    let height = header.and_then(|b| b.get(8..12)).and_then(|b| b.try_into().ok()).map(i32::from_le_bytes);
     size.is_some_and(|s| s >= 40) && height.is_some_and(|h| h > 0)
 }
 
