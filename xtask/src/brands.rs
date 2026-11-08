@@ -45,7 +45,9 @@ const CURSOR_MANIFEST: &str = "crates/tools/src/cursors.toml";
 
 /// Packaging files whose comments take whole lines (a desktop entry has no end-of-line comments):
 /// in these, a `#` line marked `brand-ok` also covers the line just below it.
-const MARK_ABOVE: &[&str] = &["packaging/linux/ai.storyteller.vectorcraft.desktop"];
+// CoralCraft: the desktop file moved to our app id and lists shared-mime-info's own type
+// names (application/illustrator among them), which a `# brand-ok:` line above marks.
+const MARK_ABOVE: &[&str] = &["packaging/linux/io.github.yupoet.coralcraft.desktop"];
 
 /// A denied name found in a file.
 #[derive(Debug, PartialEq)]
