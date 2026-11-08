@@ -578,8 +578,11 @@ fn control_bar_nodes(ctx: &egui::Context, app: &mut VectorcraftApp, width: f32, 
 }
 
 /// The control named `name` (a button's or link's label, a label's text).
+// CoralCraft: match by label first: on 32-bit targets the accesskit node order differs and a
+// bare `TextRun` holding the text as its value shadows the named control itself.
 fn control_bar_node(nodes: &Nodes, name: &str) -> Option<egui::accesskit::Node> {
-    nodes.iter().find(|(_, n)| n.label() == Some(name) || n.value() == Some(name)).map(|(_, n)| n.clone())
+    let by_label = nodes.iter().find(|(_, n)| n.label() == Some(name)).map(|(_, n)| n.clone());
+    by_label.or_else(|| nodes.iter().find(|(_, n)| n.value() == Some(name)).map(|(_, n)| n.clone()))
 }
 
 /// Where the control named `name` ends, if it shows.

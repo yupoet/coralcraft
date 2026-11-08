@@ -134,6 +134,7 @@ crates/ui-egui/src/native_menu.rs	coralcraft-adaptation	app identity strings and
 crates/ui-egui/src/panel_docking.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/panels/layers.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/panels/layers/rows.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panels/paragraph/tests.rs	coralcraft-adaptation	control_bar_node matches by label before value: accesskit node order differs on 32-bit targets and a TextRun shadows the control
 crates/ui-egui/src/prefs_dialog.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/prefs_dialog/tests.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/shortcut_editor.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
