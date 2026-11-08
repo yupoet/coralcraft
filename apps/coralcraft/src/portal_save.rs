@@ -181,6 +181,18 @@ fn save_file(conn: &zbus::blocking::Connection, request: &SaveRequest) -> Result
     const REQUEST: &str = "org.freedesktop.portal.Request";
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let chooser = Proxy::new(conn, DESKTOP, "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser").map_err(|e| e.to_string())?;
+    let token = format!("coralcraft_save_{}_{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed));
+    // Listen before asking, on every request path: a portal older than version 0.9 ignores
+    // `handle_token` and answers on the request path it returns, and its answer can come before
+    // the call's reply. The stream keeps every `Response` from the time it is made.
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(DESKTOP)
+        .and_then(|b| b.interface(REQUEST))
+        .and_then(|b| b.member("Response"))
+        .map_err(|e| e.to_string())?
+        .build();
+    let responses = MessageIterator::for_match_rule(rule, conn, None).map_err(|e| e.to_string())?;
     // The title is empty, as rfd sends it for a save.
     let call = chooser.call_method("SaveFile", &(request.parent.as_str(), "", options(request, &token))).map_err(|e| e.to_string())?;
     let handle: OwnedObjectPath = call.body().deserialize().map_err(|e| e.to_string())?;
