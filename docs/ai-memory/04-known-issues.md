@@ -16,6 +16,12 @@
 - **Ground truth**: the test fails identically on the pristine upstream target `36ef34df` checked out standalone on this machine — it is libm sensitivity inherited from upstream, not a sync regression. Upstream's own CI (and ours) run on ubuntu / windows / arm64-macOS where the values come out exact.
 - **Handling**: not "fixed" locally (that would diverge engine files upstream owns); the sync PR's platform checks are the authoritative green signal for it.
 
+## 0c. Pre-existing: legacy `docs_sync` test cannot find its fixture (fails at 8208a6c1e too)
+
+- **Symptom**: `cargo test --manifest-path legacy/Cargo.toml` fails `docs_mcp_md_tool_list_matches_live_registry` — it reads `legacy/docs/mcp.md`, which does not exist after the fork moved the pre-fork tree into `legacy/`.
+- **Ground truth**: the failure reproduces on the pre-sync baseline `8208a6c1e`, so it predates this sync (the fixture moved at V0.1).
+- **Handling**: out of the sync's scope (legacy code is frozen until V7); recorded here so the milestone gate accounts for it as pre-existing.
+
 ## 1. [Resolved] Short SHAs in `scripts/bootstrap-refs.sh` Rejected by GitHub `git fetch --depth 1`
 
 - **Symptom**: 7-character short SHAs in `scripts/bootstrap-refs.sh` caused `git fetch -q --depth 1 origin <short-sha>` to fail with `fatal: couldn't find remote ref`, triggering the fallback branch clone.
