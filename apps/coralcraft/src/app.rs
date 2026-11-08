@@ -3,7 +3,7 @@ use super::gpu;
 use super::prefs::{save_prefs, save_prefs_soon};
 #[cfg(not(target_os = "macos"))]
 use super::single_instance;
-#[cfg(all(windows, not(target_vendor = "win7")))]
+#[cfg(windows)]
 use super::windows_stylus;
 use super::{App, VectorcraftApp, file_access, window};
 #[cfg(target_os = "macos")]

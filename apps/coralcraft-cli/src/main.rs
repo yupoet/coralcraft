@@ -49,7 +49,7 @@ mod prefs_dir;
 // CoralCraft: CDR/CMX container inspection (from the pre-fork CLI).
 mod probe;
 /// The desktop app's DirectWrite font lister, shared: exports and MCP find the same fonts.
-#[cfg(all(windows, not(target_vendor = "win7")))]
+#[cfg(windows)]
 #[path = "../../coralcraft/src/system_fonts.rs"]
 mod system_fonts;
 /// The desktop app's affinity-mask reader, shared: renders start workers only for usable cores.

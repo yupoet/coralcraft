@@ -2,7 +2,7 @@
 use super::portal_save;
 #[cfg(target_os = "linux")]
 use super::tablet;
-#[cfg(all(windows, not(target_vendor = "win7")))]
+#[cfg(windows)]
 use super::windows_stylus;
 use super::{ClipboardProbeFactory, FilePick, PickRequest, Services, clipboard, cursor_theme, fileio, printing};
 #[cfg(target_os = "macos")]

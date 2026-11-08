@@ -30,7 +30,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 
 The sync itself (plan [`superpowers/plans/2026-11-07-vectorcraft-full-sync.md`](superpowers/plans/2026-11-07-vectorcraft-full-sync.md)) is complete: 130 conflicts resolved, the ledger explains all 189 differing target paths, and the platform gates ran on PR #5. It opened these items:
 
-- [ ] S1 Windows 7: upstream removed its support and the win7 build fails against the target dependencies (`vendor/windows-link` patch no longer matches; run 42435320094). Code retained; **operator decision required** (rebuild a win7-compatible dependency arrangement or drop the support) — evidence in `docs/windows7.md`.
+- [x] S1 Windows 7: **dropped (operator decision 2026-11-08)** — the unbuildable `windows7.ps1` and `printing/windows7.rs` are removed, the `win7` target-vendor guards match the target again, and `docs/windows7.md` records the decision and evidence. Minimum platform set: macOS, Linux, Windows, FreeBSD, Windows ARM64, wasm32.
 - [ ] S2 Run the libcdr differential oracle and the real-sample checks where `libcdr-tools` and `refs/cdr-samples` exist (they are absent on the 2026-11-08 development machine; the tests ran in self-skipping mode).
 - [ ] S3 Remove the `nonminimal_bool` / `drop_non_drop` workspace-lint allowances once a later upstream sync clears the clippy drift (root `Cargo.toml`, marked `# CoralCraft:`).
 - [ ] S4 Regenerate `docs/mcp.md` against the synced MCP registry (the legacy `docs_sync` fixture failure is pre-existing; the fresh list comes from the merged `vectorcraft-mcp`).
