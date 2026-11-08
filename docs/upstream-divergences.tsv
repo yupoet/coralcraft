@@ -45,6 +45,7 @@ crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless Co
 crates/doc/src/appearance/profile.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
 crates/doc/src/cmyk.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
 crates/doc/src/lib.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
+crates/doc/src/links.rs	coralcraft-adaptation	oversized-PNG IHDR fallback in checked_with_pixels (PR #3 class, 32-bit targets)
 crates/engine/Cargo.toml	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/colormgmt.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/create.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion

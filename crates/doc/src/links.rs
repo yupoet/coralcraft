@@ -157,7 +157,16 @@ impl ImageBlob {
     pub fn checked_with_pixels(mut self, proxy: bool) -> Option<(Self, Option<image::DynamicImage>)> {
         let max = crate::MAX_RASTER_ALLOC;
         let reader = || image::ImageReader::new(Cursor::new(self.bytes.as_slice())).with_guessed_format().ok();
-        let (w, h) = reader()?.into_dimensions().ok()?;
+        // CoralCraft: on a 32-bit target, PNG's decoder sizes its output buffer while reading the
+        // dimensions and overflows; an oversized header-only PNG still reports its size.
+        let dims = match reader()?.into_dimensions() {
+            Ok(size) => Some(size),
+            Err(image::ImageError::Limits(_)) if matches!(image::guess_format(&self.bytes), Ok(image::ImageFormat::Png)) => {
+                png_dimensions(&self.bytes)
+            }
+            Err(_) => None,
+        };
+        let (w, h) = dims?;
         if u64::from(w) * u64::from(h) > max / 4 {
             return Some((self, None));
         }
@@ -632,4 +641,15 @@ mod tests {
         image(&mut d, "c", None);
         assert_eq!(d.linked_only_images().into_iter().collect::<Vec<_>>(), ["a"]);
     }
+}
+
+/// Width and height from a PNG's fixed-position IHDR fields, without constructing a pixel decoder
+/// (CoralCraft: the 32-bit safe read `checked_with_pixels` falls back to).
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(8..16)? != b"\0\0\0\rIHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    Some((width, height))
 }

@@ -40,3 +40,5 @@ jobs:
     with:
       app-name: coralcraft
       app-dir: CoralCraft
+      install-relative-path: Programs/CoralCraft
+      install-scope: perUser
