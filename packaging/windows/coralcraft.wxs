@@ -77,7 +77,7 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="CoralCraft $(var.DisplayVersion) is installed. You can start it any time from the Start menu." />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch CoralCraft" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
-    <Property Id="WixShellExecTarget" Value="[#VectorcraftExe]" />
+    <Property Id="WixShellExecTarget" Value="[#CoralcraftExe]" />
     <!-- Runs in the wizard's own (unelevated) process, so the app starts as the user, not as admin. -->
     <CustomAction Id="LaunchVectorcraft" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec" Impersonate="yes" Return="ignore" />
   </Package>
@@ -88,11 +88,11 @@
     </ComponentGroup>
     <ComponentGroup Id="VectorcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="VectorcraftApp" Guid="0E8C6C5E-DE4A-4E1D-9DB0-44E8E38C2103">
-        <File Id="VectorcraftExe" Source="$(var.BinDir)\coralcraft.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="CoralCraft" Description="CoralCraft vector illustration app" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="VectorcraftIcon.ico" IconIndex="0" />
+        <File Id="CoralcraftExe" Source="$(var.BinDir)\coralcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="CoralCraft" Description="CoralCraft vector illustration app" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="CoralcraftIcon.ico" IconIndex="0" />
         </File>
 
-        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\coralcraft.exe" Value="[#VectorcraftExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\coralcraft.exe" Value="[#CoralcraftExe]" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\CoralCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
       </Component>
 
@@ -105,7 +105,7 @@
          app. A per-machine install puts it on the common desktop. `wix msi validate` reports ICE38,
          ICE43 and ICE57 for it: they take a desktop shortcut for per-user data, which it isn't here. -->
     <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="498F2D4C-E655-47F6-B406-2D4C449B8D26" Condition="INSTALLDESKTOPSHORTCUT">
-      <Shortcut Id="DesktopShortcut" Name="CoralCraft" Description="CoralCraft vector illustration app" Target="[#VectorcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="VectorcraftIcon.ico" IconIndex="0" />
+      <Shortcut Id="DesktopShortcut" Name="CoralCraft" Description="CoralCraft vector illustration app" Target="[#CoralcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="CoralcraftIcon.ico" IconIndex="0" />
       <RegistryValue Root="HKMU" Key="Software\CoralCraft" Name="DesktopShortcut" Value="1" Type="integer" KeyPath="yes" />
     </Component>
   </Fragment>
