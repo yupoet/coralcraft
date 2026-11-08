@@ -33,7 +33,7 @@ fn read(path: &Path) -> String {
 #[test]
 fn the_default_filter_shows_vectorcraft_info_and_other_crates_warnings() {
     let f = Filter::parse(DEFAULT_FILTER);
-    assert_eq!(f.level_for("vectorcraft"), LevelFilter::Info);
+    assert_eq!(f.level_for("coralcraft"), LevelFilter::Info);
     assert_eq!(f.level_for("vectorcraft::window"), LevelFilter::Info);
     assert_eq!(f.level_for("vectorcraft_engine::guard"), LevelFilter::Info);
     assert_eq!(f.level_for("vectorcraft_ui_egui::io"), LevelFilter::Info);
@@ -59,8 +59,8 @@ fn directives_follow_env_logger_and_the_most_specific_one_wins() {
     assert_eq!(Filter::parse("naga").level_for("naga::front"), LevelFilter::Trace);
     assert_eq!(Filter::parse("naga").level_for("eframe"), LevelFilter::Error);
     // Levels are case-insensitive and surrounding blanks are ignored.
-    assert_eq!(Filter::parse(" WARN , vectorcraft = Debug ").level_for("vectorcraft"), LevelFilter::Debug);
-    assert_eq!(Filter::parse(" WARN , vectorcraft = Debug ").level_for("eframe"), LevelFilter::Warn);
+    assert_eq!(Filter::parse(" WARN , coralcraft = Debug ").level_for("coralcraft"), LevelFilter::Debug);
+    assert_eq!(Filter::parse(" WARN , coralcraft = Debug ").level_for("eframe"), LevelFilter::Warn);
 }
 
 #[test]
@@ -87,15 +87,15 @@ fn hostile_specs_never_panic_and_fall_back_sensibly() {
         &many,
     ] {
         let f = Filter::parse(spec);
-        for target in ["", "vectorcraft", "🦀", "a::b", "*"] {
+        for target in ["", "coralcraft", "🦀", "a::b", "*"] {
             let _ = f.level_for(target);
         }
         let _ = f.max();
     }
-    assert_eq!(Filter::parse("warn,,vectorcraft=DEBUG").level_for("vectorcraft"), LevelFilter::Debug);
+    assert_eq!(Filter::parse("warn,,coralcraft=DEBUG").level_for("coralcraft"), LevelFilter::Debug);
     // An unknown level is skipped: that target keeps the default.
     assert_eq!(Filter::parse("nonsense=loud").level_for("nonsense"), LevelFilter::Error);
-    assert_eq!(Filter::parse("vectorcraft=").level_for("vectorcraft"), LevelFilter::Error);
+    assert_eq!(Filter::parse("coralcraft=").level_for("coralcraft"), LevelFilter::Error);
     assert_eq!(Filter::parse("=debug").max(), LevelFilter::Error);
     assert_eq!(Filter::parse("🦀=info").level_for("🦀::claw"), LevelFilter::Info);
 }
@@ -132,8 +132,8 @@ fn timestamps_are_utc_with_milliseconds() {
 #[test]
 fn a_line_carries_time_level_thread_target_and_message() {
     assert_eq!(
-        format_line("2026-10-08T07:59:17.728Z", log::Level::Info, "main", "vectorcraft", "rendering with Mesa (Vulkan, IntegratedGpu)"),
-        "2026-10-08T07:59:17.728Z INFO  [main] vectorcraft: rendering with Mesa (Vulkan, IntegratedGpu)\n"
+        format_line("2026-10-08T07:59:17.728Z", log::Level::Info, "main", "coralcraft", "rendering with Mesa (Vulkan, IntegratedGpu)"),
+        "2026-10-08T07:59:17.728Z INFO  [main] coralcraft: rendering with Mesa (Vulkan, IntegratedGpu)\n"
     );
     // A multi-line message keeps its lines; the record still ends in one newline.
     assert!(format_line("t", log::Level::Error, "w", "x", "a\nb\n").ends_with("x: a\nb\n"));
@@ -240,13 +240,13 @@ fn the_logger_filters_records_and_writes_them_to_the_attached_file() {
     let record = |level, target: &'static str, msg: &'static str| {
         logger.log(&log::Record::builder().level(level).target(target).args(format_args!("{msg}")).build());
     };
-    record(log::Level::Info, "vectorcraft", "before the settings directory");
+    record(log::Level::Info, "coralcraft", "before the settings directory");
     record(log::Level::Info, "wgpu_core::device", "too chatty");
     let path = logger.attach_dir(&dir).expect("attach");
     assert_eq!(path, dir.join(LOG_FILE));
     record(log::Level::Warn, "wgpu_hal::vulkan", "a real warning");
     record(log::Level::Error, "vectorcraft_engine::guard", "recovered from a panic: boom");
-    record(log::Level::Debug, "vectorcraft", "below info");
+    record(log::Level::Debug, "coralcraft", "below info");
     let text = read(&path);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 3, "{text}");
@@ -272,7 +272,7 @@ fn records_from_many_threads_are_whole_lines() {
             let l = std::sync::Arc::clone(&logger);
             std::thread::spawn(move || {
                 for i in 0..100 {
-                    l.log(&log::Record::builder().level(log::Level::Info).target("vectorcraft").args(format_args!("thread {t} record {i}")).build());
+                    l.log(&log::Record::builder().level(log::Level::Info).target("coralcraft").args(format_args!("thread {t} record {i}")).build());
                 }
             })
         })
@@ -282,7 +282,7 @@ fn records_from_many_threads_are_whole_lines() {
     }
     let text = read(&path);
     assert_eq!(text.lines().count(), 800);
-    assert!(text.lines().all(|l| l.contains(" vectorcraft: thread ")), "{text}");
+    assert!(text.lines().all(|l| l.contains(" coralcraft: thread ")), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -313,7 +313,7 @@ fn a_poisoned_sink_still_logs() {
     .join();
     assert!(logger.sink.is_poisoned());
     let path = logger.attach_dir(&dir).expect("attach");
-    logger.log(&log::Record::builder().level(log::Level::Warn).target("vectorcraft").args(format_args!("after the poison")).build());
+    logger.log(&log::Record::builder().level(log::Level::Warn).target("coralcraft").args(format_args!("after the poison")).build());
     assert!(read(&path).contains("coralcraft: after the poison"));
     let _ = std::fs::remove_dir_all(&dir);
 }

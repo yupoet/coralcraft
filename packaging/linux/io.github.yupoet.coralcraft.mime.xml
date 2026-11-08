@@ -31,4 +31,20 @@
       </match>
     </magic>
   </mime-type>
+  <!-- CoralCraft: the CorelDRAW containers and the pre-fork legacy container. -->
+  <mime-type type="application/vnd.corel-draw">
+    <comment>CorelDRAW document</comment>
+    <icon name="io.github.yupoet.coralcraft"/>
+    <glob pattern="*.cdr"/>
+  </mime-type>
+  <mime-type type="image/x-cmx">
+    <comment>Corel Presentation Exchange</comment>
+    <icon name="io.github.yupoet.coralcraft"/>
+    <glob pattern="*.cmx"/>
+  </mime-type>
+  <mime-type type="application/x-coralcraft">
+    <comment>CoralCraft (legacy) document</comment>
+    <icon name="io.github.yupoet.coralcraft"/>
+    <glob pattern="*.coralcraft"/>
+  </mime-type>
 </mime-info>

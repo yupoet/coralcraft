@@ -84,7 +84,7 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key><string>CoralCraft Document</string>
-      <key>LSItemContentTypes</key><array><string>io.github.yupoet.coralcraft.document</string></array>
+      <key>LSItemContentTypes</key><array><string>ai.storyteller.vectorcraft.document</string></array>
       <key>CFBundleTypeRole</key><string>Editor</string>
       <key>LSHandlerRank</key><string>Owner</string>
     </dict>
@@ -159,7 +159,7 @@
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>io.github.yupoet.coralcraft.document</string>
+      <string>ai.storyteller.vectorcraft.document</string>
       <key>UTTypeDescription</key>
       <string>CoralCraft Document</string>
       <key>UTTypeConformsTo</key>
@@ -172,7 +172,7 @@
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
-        <array><string>coralcraft</string><string>drawcraft</string></array>
+        <array><string>vectorcraft</string><string>drawcraft</string></array>
         <key>public.mime-type</key>
         <array><string>application/x-coralcraft</string></array>
       </dict>

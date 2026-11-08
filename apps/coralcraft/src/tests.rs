@@ -221,6 +221,10 @@ const LINUX_TYPES: &[(&str, &str)] = &[
     ("af", "application/x-affinity"),
     ("afdesign", "application/x-affinity"),
     ("afpub", "application/x-affinity"),
+    // CoralCraft: the CorelDRAW containers and the pre-fork legacy container.
+    ("cdr", "application/vnd.corel-draw"),
+    ("cmx", "image/x-cmx"),
+    ("coralcraft", "application/x-coralcraft"),
 ];
 
 /// The types in `LINUX_TYPES` that shared-mime-info defines. The MIME package declares every
