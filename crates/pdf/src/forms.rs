@@ -1,11 +1,13 @@
-//! What the PDF writer has no operators for — optional content (PDF layers) and overprint — drawn
-//! as form XObjects of their own (without a transparency group, so they draw as if in place),
-//! each starting with a mark: an empty clip whose first point says what the form is. Marked
-//! forms also stay apart (the writer shares identical forms). [`finish`] completes them in the
-//! written file: a layer's form is drawn as the layer's optional content (`/OC … BDC`), and an
-//! overprinting form sets a graphics state that overprints first.
+//! What the PDF writer has no operators for — optional content (PDF layers), overprint and
+//! invisible text — drawn as form XObjects of their own (without a transparency group, so they
+//! draw as if in place), each starting with a mark: an empty clip whose first point says what the
+//! form is. Marked forms also stay apart (the writer shares identical forms). [`finish`] completes
+//! them in the written file: a layer's form is drawn as the layer's optional content (`/OC …
+//! BDC`), an overprinting form sets a graphics state that overprints first, and the text of an
+//! invisible form is drawn in rendering mode 3 (neither filled nor stroked). It also removes the
+//! marks, so no form keeps an empty clip far off the page (#2181).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 
 use craft_pdf::write::backend as krilla;
@@ -28,6 +30,8 @@ pub(crate) enum Mark {
     Layer(usize),
     /// A fill or stroke that overprints.
     Overprint,
+    /// Text that draws nothing (rendering mode 3): characters with neither fill nor stroke.
+    Invisible,
 }
 
 /// A layer written as a PDF layer (an optional content group).
@@ -58,6 +62,8 @@ pub(crate) fn pdf_layers(doc: &Document) -> Vec<PdfLayer<'_>> {
 const LAYER_X: i32 = -32000;
 /// The x coordinate of an overprint mark's first point.
 const OVERPRINT_X: i32 = -32001;
+/// The x coordinate of an invisible text mark's first point.
+const INVISIBLE_X: i32 = -32002;
 
 impl Mark {
     fn at(self) -> (f32, f32) {
@@ -65,19 +71,37 @@ impl Mark {
             // Exact in `f32` up to 2^24 layers.
             Self::Layer(i) => (LAYER_X as f32, i as f32),
             Self::Overprint => (OVERPRINT_X as f32, 0.0),
+            Self::Invisible => (INVISIBLE_X as f32, 0.0),
         }
     }
 }
 
 /// Draw `draw` as a form of its own, marked `mark`.
 pub(crate) fn form(s: &mut Surface, mark: Mark, draw: impl FnOnce(&mut Surface)) {
+    let (x, y) = mark.at();
+    marked(s, mark, [(x + 1.0, y), (x + 1.0, y + 1.0)], draw);
+}
+
+/// Draw `draw` (the art of layer `i` of [`pdf_layers`]) as a form of its own, marked as the
+/// layer's. The mark's other two points are the corners of `paper` (the page's paper in the
+/// form's drawing space), rounded outwards to whole units: [`finish`] gives the form a box that
+/// covers the paper and the art.
+pub(crate) fn layer_form(s: &mut Surface, i: usize, paper: vectorcraft_geom::Rect, draw: impl FnOnce(&mut Surface)) {
+    let corner = |x: f64, y: f64| (x as f32, y as f32);
+    marked(s, Mark::Layer(i), [corner(paper.x0.floor(), paper.y0.floor()), corner(paper.x1.ceil(), paper.y1.ceil())], draw);
+}
+
+/// Draw `draw` as a form of its own, marked `mark`: an empty clip from the mark's first point
+/// through `rest`.
+fn marked(s: &mut Surface, mark: Mark, rest: [(f32, f32); 2], draw: impl FnOnce(&mut Surface)) {
     let mut sb = s.stream_builder();
     let mut fs = sb.surface();
     let (x, y) = mark.at();
     let mut pb = PathBuilder::new();
     pb.move_to(x, y);
-    pb.line_to(x + 1.0, y);
-    pb.line_to(x + 1.0, y + 1.0);
+    for (x, y) in rest {
+        pb.line_to(x, y);
+    }
     pb.close();
     // A form's drawing space is its own: the mark's points are written as they are.
     if let Some(p) = pb.finish() {
@@ -96,11 +120,12 @@ pub(crate) fn form(s: &mut Surface, mark: Mark, draw: impl FnOnce(&mut Surface))
 const OVERPRINT_GS: &str = "VCop";
 /// The prefix of the resource names of the layers' optional content groups (then the index).
 const LAYER_OC: &str = "VCoc";
-/// The most bytes of a form's content read to find its mark.
-const HEAD: u64 = 64;
+/// The most bytes of a form's content read to find its mark (a layer's mark holds four more
+/// numbers of up to 11 characters each).
+const HEAD: u64 = 128;
 
 fn bad(why: &str) -> PdfError {
-    PdfError::Write(format!("can't write PDF layers or overprint: {why}"))
+    PdfError::Write(format!("can't write PDF layers, overprint or invisible text: {why}"))
 }
 
 /// An object of the written file with a dictionary, and its stream's [`StreamSpans`].
@@ -149,9 +174,35 @@ impl Object<'_> {
         match x {
             _ if x == i64::from(LAYER_X) => usize::try_from(y).ok().map(Mark::Layer),
             _ if x == i64::from(OVERPRINT_X) && y == 0 => Some(Mark::Overprint),
+            _ if x == i64::from(INVISIBLE_X) && y == 0 => Some(Mark::Invisible),
             _ => None,
         }
     }
+
+    /// The paper a layer's form's mark gives ([`layer_form`]): its left, top, right and bottom.
+    fn paper(&self, pdf: &[u8]) -> Option<[i64; 4]> {
+        let head = self.data(pdf, HEAD)?;
+        let mut lx = Lexer::at(&head, 0);
+        let mut word = || match lx.next() {
+            Some((Tok::Word(w), ..)) => Some(w),
+            _ => None,
+        };
+        let words = [(); 10].map(|_| word());
+        let [Some(b"q"), _, _, Some(b"m"), x0, y0, Some(b"l"), x1, y1, Some(b"l")] = words else { return None };
+        Some([x0.and_then(int)?, y0.and_then(int)?, x1.and_then(int)?, y1.and_then(int)?])
+    }
+}
+
+/// `content` (a marked form's) without its mark: what follows the mark's `Q`.
+fn unmarked(content: &[u8]) -> Option<&[u8]> {
+    let mut lx = Lexer::at(content, 0);
+    while let Some((tok, _, end)) = lx.next() {
+        if let Tok::Word(b"Q") = tok {
+            let rest = content.get(end..)?;
+            return rest.get(rest.iter().take_while(|c| c.is_ascii_whitespace()).count()..);
+        }
+    }
+    None
 }
 
 /// The objects of the written file that have a dictionary, by number.
@@ -225,14 +276,52 @@ fn mark_layers(content: &[u8], forms: &HashMap<&[u8], usize>) -> Option<(Vec<u8>
     Some((out, layers))
 }
 
+/// `content` (an invisible form's) with its text drawn in rendering mode 3: the mode set first,
+/// and every mode the writer sets (it sets one for each run of glyphs) made 3. `None` when the
+/// content can't be read to its end.
+fn invisible_text(content: &[u8]) -> Option<Vec<u8>> {
+    let mut lx = Lexer::at(content, 0);
+    let mut operand = None;
+    let mut modes = vec![];
+    let mut read = 0;
+    while let Some((tok, start, end)) = lx.next() {
+        read = end;
+        operand = match tok {
+            Tok::Word(b"Tr") => {
+                modes.extend(operand);
+                None
+            }
+            Tok::Word(w) if int(w).is_some() => Some((start, end)),
+            // Inline image data isn't PDF syntax (the writer writes none).
+            Tok::Word(b"ID") => return None,
+            _ => None,
+        };
+    }
+    // The lexer also stops at a string it can't read: a mode after it would be missed.
+    if !content.get(read..)?.iter().all(u8::is_ascii_whitespace) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(content.len() + 8);
+    out.extend_from_slice(b"3 Tr\n");
+    let mut at = 0;
+    for (start, end) in modes {
+        out.extend_from_slice(content.get(at..start)?);
+        out.push(b'3');
+        at = end;
+    }
+    out.extend_from_slice(content.get(at..)?);
+    Some(out)
+}
+
 /// Finish the marked forms of `pdf` (as [`crate::export`] writes `doc` with `set`): with
 /// `layers`, each layer and sublayer (but template layers) becomes an optional content group —
 /// named as the layer, off when it is hidden, not printed (`/PrintState /OFF`) when its Print
 /// option is off, locked when it is locked — and the uses of its forms its optional content;
 /// with `overprint`, the overprinting forms get a graphics state that overprints (`/OP`, `/op`,
-/// `/OPM 1`; `/OPM 0` in PDF/A, which allows no other with ICC-based CMYK colours).
-pub(crate) fn finish(pdf: Vec<u8>, doc: &Document, set: &PdfSettings, layers: bool, overprint: bool) -> Result<Vec<u8>, PdfError> {
-    if !layers && !overprint {
+/// `/OPM 1`; `/OPM 0` in PDF/A, which allows no other with ICC-based CMYK colours); with
+/// `invisible`, the text of the invisible forms is drawn in rendering mode 3.
+pub(crate) fn finish(pdf: Vec<u8>, doc: &Document, set: &PdfSettings, layers: bool, overprint: bool, invisible: bool) -> Result<Vec<u8>, PdfError> {
+    if !layers && !overprint && !invisible {
         return Ok(pdf);
     }
     let xref = Xref::read(&pdf).ok_or_else(|| bad("the written PDF has no cross-reference table"))?;
@@ -248,17 +337,28 @@ pub(crate) fn finish(pdf: Vec<u8>, doc: &Document, set: &PdfSettings, layers: bo
                 return Err(bad("an overprinting form can't be read"));
             };
             let mut new = format!("/{OVERPRINT_GS} gs\n").into_bytes();
-            new.extend_from_slice(&content);
+            new.extend_from_slice(unmarked(&content).ok_or_else(|| bad("an overprinting form can't be read"))?);
             o.rewrite(&mut patch, &new)?;
             add_resources(&mut patch, res, "ExtGState", &format!("/{OVERPRINT_GS} {gs} 0 R"))?;
         }
     }
+    if invisible {
+        for (n, _) in marks.iter().filter(|(_, m)| **m == Mark::Invisible) {
+            let Some(o) = objects.get(n) else { continue };
+            let content = o.data(&pdf, u64::MAX).ok_or_else(|| bad("an invisible text form can't be read"))?;
+            let text = unmarked(&content).and_then(invisible_text).ok_or_else(|| bad("an invisible text form can't be read"))?;
+            o.rewrite(&mut patch, &text)?;
+        }
+    }
     if layers {
-        write_layers(&pdf, &xref, &objects, &marks, &mut patch, doc, set)?;
+        let rewritten = write_layers(&pdf, &xref, &objects, &marks, &mut patch, doc, set)?;
         for (n, _) in marks.iter().filter(|(_, m)| matches!(m, Mark::Layer(_))) {
-            if let Some(o) = objects.get(n) {
-                unbox(&pdf, o, &mut patch)?;
+            let Some(o) = objects.get(n) else { continue };
+            if !rewritten.contains(n) {
+                let content = o.data(&pdf, u64::MAX).ok_or_else(|| bad("a layer's form can't be read"))?;
+                o.rewrite(&mut patch, unmarked(&content).ok_or_else(|| bad("a layer's form can't be read"))?)?;
             }
+            rebox(&pdf, o, &mut patch)?;
         }
     }
     let pdf = patch.apply(&pdf, &xref)?;
@@ -269,7 +369,7 @@ pub(crate) fn finish(pdf: Vec<u8>, doc: &Document, set: &PdfSettings, layers: bo
 
 /// The optional content groups of `doc`'s layers and sublayers ([`pdf_layers`]), the uses of their
 /// forms marked as their content, and the catalog's `/OCProperties`, listing sublayers under their
-/// layers.
+/// layers. Returns the content streams it rewrote (a layer's form among them without its mark).
 fn write_layers(
     pdf: &[u8],
     xref: &Xref,
@@ -278,7 +378,7 @@ fn write_layers(
     patch: &mut Patch,
     doc: &Document,
     set: &PdfSettings,
-) -> Result<(), PdfError> {
+) -> Result<HashSet<u32>, PdfError> {
     // One group per layer, in paint order (bottom first).
     let layers = pdf_layers(doc);
     let mut groups: HashMap<usize, u32> = HashMap::new();
@@ -305,13 +405,14 @@ fn write_layers(
         }
     }
     // Every content stream drawing layers' forms: the pages' and the forms'.
-    for o in objects.values() {
+    let mut rewritten = HashSet::new();
+    for (n, o) in objects {
         let content = match o.dict.get(b"Contents") {
-            Some(Obj::Ref(c, _)) if o.dict.name(b"Type") == Some(b"Page") => objects.get(c),
-            _ if o.dict.name(b"Subtype") == Some(b"Form") => Some(o),
+            Some(Obj::Ref(c, _)) if o.dict.name(b"Type") == Some(b"Page") => objects.get(c).map(|o| (*c, o)),
+            _ if o.dict.name(b"Subtype") == Some(b"Form") => Some((*n, o)),
             _ => None,
         };
-        let (Some(content), Some(res)) = (content, resources(objects, o)) else { continue };
+        let (Some((number, content)), Some(res)) = (content, resources(objects, o)) else { continue };
         let Some(Obj::Dict { entries, .. }) = res.get(b"XObject") else { continue };
         let forms: HashMap<&[u8], usize> = entries
             .iter()
@@ -327,8 +428,11 @@ fn write_layers(
             continue;
         }
         let data = content.data(pdf, u64::MAX).ok_or_else(|| bad("a content stream can't be read"))?;
-        let Some((new, marked)) = mark_layers(&data, &forms) else { continue };
+        // A layer's form drawing its sublayers' forms loses its own mark here too.
+        let data = if marks.contains_key(&number) { unmarked(&data).ok_or_else(|| bad("a layer's form can't be read"))? } else { &data[..] };
+        let Some((new, marked)) = mark_layers(data, &forms) else { continue };
         content.rewrite(patch, &new)?;
+        rewritten.insert(number);
         let entries: String = marked.iter().filter_map(|i| Some(format!("/{LAYER_OC}{i} {} 0 R", groups.get(i)?))).collect();
         add_resources(patch, res, "Properties", &entries)?;
     }
@@ -347,24 +451,41 @@ fn write_layers(
     let root = xref.trailer_ref(pdf, b"/Root").and_then(|n| objects.get(&n));
     let Some(Object { dict: Obj::Dict { start, .. }, .. }) = root else { return Err(bad("the written PDF has no catalog")) };
     patch.replace(start + 2, start + 2, format!("/OCProperties<</OCGs[{}]/D<<{config}>>>>", refs(&all)).into_bytes());
-    Ok(())
+    Ok(rewritten)
 }
 
-/// A form's box as large as a page can be: the box of a layer's form is only the bounds of its
-/// art, and a reader that makes a clipping group of a form's box (as importers do) would gather a
-/// layer's art and its sublayers' in one group, which no layer can hold. A box round the whole
-/// page clips nothing.
+/// A form's box as large as a page can be, for a layer's form whose mark gives no paper.
 const UNBOXED: &[u8] = b"[-32767 -32767 32767 32767]";
 
-/// Give the layer's form `o` the [`UNBOXED`] box.
-fn unbox(pdf: &[u8], o: &Object<'_>, patch: &mut Patch) -> Result<(), PdfError> {
+/// Give the layer's form `o` a box round its art and the paper its mark gives ([`layer_form`]):
+/// the box of a layer's form is only the bounds of its art, and a reader that makes a clipping
+/// group of a form's box (as importers do) would gather a layer's art and its sublayers' in one
+/// group, which no layer can hold. A box round the whole paper clips nothing, and its bounds stay
+/// those of the page and the art (#2181).
+fn rebox(pdf: &[u8], o: &Object<'_>, patch: &mut Patch) -> Result<(), PdfError> {
     let Obj::Dict { start, end, .. } = o.dict else { return Err(bad("a layer's form has no dictionary")) };
     let dict = pdf.get(start..end).ok_or_else(|| bad("a layer's form can't be read"))?;
     // The writer writes the box as an array of numbers.
     let at = dict.windows(5).position(|w| w == b"/BBox").ok_or_else(|| bad("a layer's form has no box"))? + 5;
     let open = at + dict.get(at..).and_then(|d| d.iter().position(|&c| c == b'[')).ok_or_else(|| bad("a layer's form box isn't an array"))?;
     let close = open + dict.get(open..).and_then(|d| d.iter().position(|&c| c == b']')).ok_or_else(|| bad("a layer's form box isn't an array"))? + 1;
-    patch.replace(start + open, start + close, UNBOXED.to_vec());
+    let art: Vec<f64> = std::str::from_utf8(dict.get(open + 1..close - 1).unwrap_or_default())
+        .unwrap_or_default()
+        .split_ascii_whitespace()
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    let new = match (o.paper(pdf), art.as_slice()) {
+        (Some([x0, y0, x1, y1]), &[a0, b0, a1, b1]) if [a0, b0, a1, b1].iter().all(|v| v.is_finite()) => {
+            let (a0, a1, b0, b1) = (a0.min(a1), a0.max(a1), b0.min(b1), b0.max(b1));
+            // Whole units, outwards (the art's box is written to a few decimals).
+            let lo = |v: i64, a: f64| (v as f64).min(a.floor());
+            let hi = |v: i64, a: f64| (v as f64).max(a.ceil());
+            format!("[{} {} {} {}]", lo(x0, a0), lo(y0, b0), hi(x1, a1), hi(y1, b1)).into_bytes()
+        }
+        (Some([x0, y0, x1, y1]), _) => format!("[{x0} {y0} {x1} {y1}]").into_bytes(),
+        _ => UNBOXED.to_vec(),
+    };
+    patch.replace(start + open, start + close, new);
     Ok(())
 }
 

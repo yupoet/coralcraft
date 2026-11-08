@@ -24,7 +24,17 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] V3.3 Page navigator.
 - [x] V4.1 CorelDRAW workspace preset on VectorCraft docking.
 - [x] V4.2 CorelDRAW shortcut set (public documentation only).
-- [ ] V4.3 CorelDRAW tool mapping and context-sensitive property bar.
+- [ ] V4.3 CorelDRAW tool mapping and context-sensitive property bar. **Start here after the 2026-11-08 sync**: from the synced `crates/tools/src/catalog.rs`, `crates/ui-egui/src/toolbar.rs`, and `crates/ui-egui/src/chrome/control_bar.rs`, one small tool group at a time through `tool.select`, `tool.setOption`, and shared engine commands; public CorelDRAW behavior source is the user guide registered in `refs/REFS.md` (`https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf`).
+
+## Follow-ups opened by the VectorCraft full sync (2026-11-08)
+
+The sync itself (plan [`superpowers/plans/2026-11-07-vectorcraft-full-sync.md`](superpowers/plans/2026-11-07-vectorcraft-full-sync.md)) is complete: 130 conflicts resolved, the ledger explains all 189 differing target paths, and the platform gates ran on PR #5. It opened these items:
+
+- [x] S1 Windows 7: **dropped (operator decision 2026-11-08)** — the unbuildable `windows7.ps1` and `printing/windows7.rs` are removed, the `win7` target-vendor guards match the target again, and `docs/windows7.md` records the decision and evidence. Minimum platform set: macOS, Linux, Windows, FreeBSD, Windows ARM64, wasm32.
+- [ ] S2 Run the libcdr differential oracle and the real-sample checks where `libcdr-tools` and `refs/cdr-samples` exist (they are absent on the 2026-11-08 development machine; the tests ran in self-skipping mode).
+- [ ] S3 Remove the `nonminimal_bool` / `drop_non_drop` workspace-lint allowances once a later upstream sync clears the clippy drift (root `Cargo.toml`, marked `# CoralCraft:`).
+- [ ] S4 Regenerate `docs/mcp.md` against the synced MCP registry (the legacy `docs_sync` fixture failure is pre-existing; the fresh list comes from the merged `vectorcraft-mcp`).
+- [ ] S5 Fold upstream's technical-doc changes (formats, tracing, three-d, plugins) into CoralCraft's own docs where they matter; the upstream files were taken verbatim at the sync (see `docs/upstream-divergences.tsv`).
 - [ ] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels.
 - [ ] V5.1 PowerClip.
 - [ ] V5.2 Interactive effects with on-canvas handles (Blend, Contour, Distort, Envelope, Extrude, Drop Shadow, Transparency).

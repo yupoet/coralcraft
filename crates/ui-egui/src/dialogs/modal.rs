@@ -1,8 +1,9 @@
 //! The modal dialog window: a backdrop that keeps the rest of the app from taking clicks, and a
 //! window with no title bar that opens centred and moves by dragging its heading (the band from its
-//! top edge down to the heading), as a title bar would. Where it was moved to stays, per window, for
-//! the session, and the window never leaves the screen. Rows too many for the screen's height
-//! scroll inside it ([`scrolled_rows`]), so its heading and buttons stay in view.
+//! top edge down to the heading), as a title bar would, showing the arrow until it is dragged. Where
+//! it was moved to stays, per window, for the session, and the window never leaves the screen. Rows
+//! too many for the screen's height scroll inside it ([`scrolled_rows`]), so its heading and buttons
+//! stay in view.
 
 use egui::{Id, Rect, Vec2};
 
@@ -21,7 +22,8 @@ pub(crate) fn show_at<R>(ctx: &egui::Context, title: &str, id: Id, initial: Vec2
     let dim = backdrop();
     egui::Area::new(dim.id).order(dim.order).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
         // Modal, but the canvas isn't dimmed so previews stay readable (as in the reference app).
-        ui.allocate_rect(ctx.content_rect(), egui::Sense::click());
+        // Not focusable (`Sense::click()` is): Tab goes through the dialog's controls, not the backdrop.
+        ui.allocate_rect(ctx.content_rect(), egui::Sense::CLICK);
     });
     let shown = egui::Window::new(title)
         .id(id)
@@ -39,7 +41,7 @@ pub(crate) fn show_at<R>(ctx: &egui::Context, title: &str, id: Id, initial: Vec2
 /// The layer of the backdrop behind a modal dialog window, which takes the clicks the rest of
 /// the app would get.
 pub(crate) fn backdrop() -> egui::LayerId {
-    egui::LayerId::new(egui::Order::Middle, Id::new("modal-dim"))
+    egui::LayerId::new(egui::Order::Middle, Id::unique("modal-dim"))
 }
 
 /// The dialog's heading, which also moves the window ([`drag_band`]).
@@ -57,22 +59,19 @@ pub(crate) fn drag_band(ui: &mut egui::Ui, bottom: f32) {
     // Last frame's rectangle: none while the window measures itself the first time it shows.
     let Some(outer) = ui.ctx().memory(|m| m.area_rect(id)) else { return };
     let band = Rect::from_x_y_ranges(outer.x_range(), outer.top()..=bottom.max(outer.top()));
-    let r = ui.interact(band, handle(id), egui::Sense::drag());
+    // Not focusable (`Sense::drag()` is): Tab goes through the dialog's controls, not the band.
+    let r = ui.interact(band, handle(id), egui::Sense::DRAG);
+    // Hovered, it keeps the arrow, as a title bar does (the grab cursor is Windows' four-way move
+    // arrows: #5246); only while it is dragged does it show the window being carried.
     if r.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    } else if r.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
 }
 
 /// The drag handle of window `id`.
-fn handle(id: Id) -> Id {
+pub(super) fn handle(id: Id) -> Id {
     id.with("modal-drag")
 }
-
-/// The least height of [`scrolled_rows`] in a window too short for the rest of its contents: about
-/// three rows.
-const MIN_ROWS_H: f32 = 100.0;
 
 /// Under a modal window's id: how tall its [`scrolled_rows`] were drawn this frame, and how tall
 /// the rest of it was when last drawn.
@@ -81,12 +80,12 @@ const REST_KEY: &str = "modal-rest";
 
 /// Rows of the modal window `ui` is in (one list of them per window) that scroll if the window
 /// would be taller than the screen. Their height is the screen's less the rest of the window as
-/// last drawn (a frame late, as only the drawn window knows its height), and at least
-/// [`MIN_ROWS_H`]. Rows that fit are as tall as they are.
+/// last drawn (a frame late, as only the drawn window knows its height).
+/// Rows that fit are as tall as they are.
 pub(crate) fn scrolled_rows<R>(ui: &mut egui::Ui, salt: impl egui::AsIdSalt, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let id = ui.layer_id().id;
     let rest = ui.ctx().data(|m| m.get_temp::<f32>(id.with(REST_KEY))).unwrap_or(0.0);
-    let room = (ui.ctx().content_rect().height() - rest - 2.0 * super::EDGE_GAP).max(MIN_ROWS_H);
+    let room = (ui.ctx().content_rect().height() - rest - 2.0 * super::EDGE_GAP).max(0.0);
     // As tall as the room at once: by itself a scroll area grows a frame at a time with the window.
     let rows = ui.scope(|ui| egui::ScrollArea::vertical().id_salt(salt).max_height(room).min_scrolled_height(room).show(ui, add).inner);
     ui.ctx().data_mut(|m| m.insert_temp(id.with(ROWS_KEY), rows.response.rect.height()));

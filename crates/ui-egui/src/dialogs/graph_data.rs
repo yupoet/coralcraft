@@ -106,8 +106,11 @@ pub(crate) fn grid_from_data(v: &Value) -> Grid {
 /// columns past the data.
 pub(crate) fn data_from_grid(grid: &Grid) -> Value {
     let filled = |s: &String| !s.trim().is_empty();
-    let rows = grid.iter().rposition(|r| r.iter().any(filled)).map_or(1, |i| i + 1).max(1);
-    let cols = grid.iter().take(rows).filter_map(|r| r.iter().rposition(filled)).max().map_or(1, |i| i + 1).max(1);
+    // At most a graph's rows and columns, as a file gives (`grid_from_text`): a grid sent by
+    // automation is any size, and the values are their product.
+    let grid = &grid[..grid.len().min(MAX_ROWS)];
+    let rows = grid.iter().rposition(|r| r.iter().take(MAX_COLS).any(filled)).map_or(1, |i| i + 1).max(1);
+    let cols = grid.iter().take(rows).filter_map(|r| r.iter().take(MAX_COLS).rposition(filled)).max().map_or(1, |i| i + 1).max(1);
     let label = |s: &str| {
         let s = s.trim();
         // A label typed in straight quotes (as the CSV form takes a number as a label) is the text inside.
@@ -163,7 +166,7 @@ fn clean(s: &str) -> String {
     s.chars().map(|c| if matches!(c, '\t' | '\r' | '\n') { ' ' } else { c }).take(MAX_CELL).collect()
 }
 
-fn cell(grid: &Grid, r: usize, c: usize) -> String {
+fn cell(grid: &[Vec<String>], r: usize, c: usize) -> String {
     grid.get(r).and_then(|row| row.get(c)).cloned().unwrap_or_default()
 }
 
@@ -327,7 +330,7 @@ fn revert(app: &mut VectorcraftApp, d: &mut Dialog) -> Result<(), String> {
 
 /// Import Data: a tab-separated text file's rows into the sheet.
 fn import(app: &mut VectorcraftApp, d: &mut Dialog) -> Result<(), String> {
-    let pick = crate::FilePick { filters: vec![("Text", &["txt", "tsv", "csv"])], ..Default::default() };
+    let pick = crate::FilePick { filters: vec![crate::FilePick::filter("Text", &["txt", "tsv", "csv"])], ..Default::default() };
     let path = crate::picks::open(app, &pick).ok_or("cancelled")?;
     // The button is off where files can't be read.
     let Some(read) = app.services.read.as_ref() else { return Ok(()) };
@@ -336,8 +339,10 @@ fn import(app: &mut VectorcraftApp, d: &mut Dialog) -> Result<(), String> {
     Ok(())
 }
 
+/// Draw the graph-data sheet: keyboard cell movement, block paste, import, transpose, switch-x/y
+/// and revert actions, decimals and column width, and only the cells in view.
 fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
-    let entry_id = egui::Id::new("graph-data-entry");
+    let entry_id = egui::Id::unique("graph-data-entry");
     if ui.memory(|m| m.has_focus(entry_id)) {
         // Tab, Enter (Shift: the other way) and the arrow keys move the picked cell while the entry box
         // has the keys; the entry keeps them (egui would move the focus on with Tab).
@@ -377,7 +382,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
         let mut text = d.str("entry");
         // The entry box has the keys when the window opens, so Enter moves down instead of applying.
         widgets::take_dialog_focus(ui, entry_id, &text);
-        let r = ui.add(egui::TextEdit::singleline(&mut text).id(entry_id).desired_width(260.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut text).id(entry_id).align(egui::Align2::LEFT_CENTER).desired_width(260.0));
         if r.changed() {
             d.fields.insert("entry".into(), json!(clean(&text)));
         }
@@ -513,6 +518,16 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_sent_wider_and_taller_than_a_graph_is_cut_to_one() {
+        // One long row and one long column: their product would be ten billion cells.
+        let mut grid: Grid = vec![vec!["1".to_string(); 100_000]];
+        grid.extend((0..100_000).map(|_| vec!["2".to_string()]));
+        let p = data_from_grid(&grid);
+        assert_eq!(p["rows"].as_array().unwrap().len(), MAX_ROWS - 1);
+        assert_eq!(p["series"].as_array().unwrap().len(), MAX_COLS - 1);
+    }
+
+    #[test]
     fn transpose_switch_and_moves() {
         assert_eq!(transpose(&g(&[&["", "a", "b"], &["Q1", "1", "2"]])), g(&[&["", "Q1"], &["a", "1"], &["b", "2"]]));
         assert_eq!(step((0, 1), Move::Right), (0, 2));
@@ -593,21 +608,26 @@ mod tests {
         assert_eq!(sel(app.ui.dialog.as_ref().unwrap()), (0, 1), "Up");
     }
 
-    #[test]
-    fn a_full_size_sheet_draws_only_what_is_in_view() {
-        let rows: Vec<Vec<f64>> = (0..MAX_GRAPH_CATEGORIES).map(|i| vec![i as f64; 256]).collect();
+    /// How many buttons (the sheet's cells and the window's own) Graph Data draws in the second of two
+    /// frames in a 1280 × 900 window, for a graph of `categories` rows of `series` values.
+    fn buttons_drawn(categories: usize, series: usize) -> usize {
+        let rows: Vec<Vec<f64>> = (0..categories).map(|i| vec![i as f64; series]).collect();
         let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.run("graph.create", json!({"type": "column", "x": 0, "y": 0, "width": 200, "height": 150, "rows": rows})).unwrap();
         open(&mut app).unwrap();
-        let ctx = egui::Context::default();
-        crate::theme::install_fonts(&ctx);
-        let t = std::time::Instant::now();
-        for _ in 0..3 {
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| super::super::show(&mut app, ui.ctx()));
-            out.textures_delta.clear();
-        }
-        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+        let tree = crate::widgets::accessibility_tests::tree(|ui| super::super::show(&mut app, ui.ctx()));
         assert_eq!(app.ui.dialog.as_ref().map(|d| d.kind.as_str()), Some(KIND));
+        tree.iter().filter(|n| n.role() == egui::accesskit::Role::Button).count()
+    }
+
+    #[test]
+    fn a_full_size_sheet_draws_only_what_is_in_view() {
+        // 40 categories of 40 values fill 41 × 41 cells of a 42 × 42 sheet, larger than the view both ways: it
+        // draws some cells, but fewer than the data fill.
+        let some = buttons_drawn(40, 40);
+        assert!(some > 20 && some < 41 * 41, "{some} buttons");
+        // A full-size sheet draws the same cells in view, and none more.
+        assert_eq!(buttons_drawn(MAX_GRAPH_CATEGORIES, MAX_GRAPH_SERIES), some);
     }
 }

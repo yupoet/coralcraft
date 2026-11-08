@@ -37,7 +37,7 @@ pub const ID_DELETE: &str = "page_nav_delete";
 pub struct PageTabDrag(pub usize);
 
 fn rename_state_id() -> egui::Id {
-    egui::Id::new("coralcraft_page_nav_rename")
+    egui::Id::unique("coralcraft_page_nav_rename")
 }
 
 /// Starts inline renaming for page `index` with initial text `current_name`.
@@ -99,7 +99,7 @@ fn draw_contents(app: &mut VectorcraftApp, ui: &mut Ui, t: &Tokens) {
         let counter_text = format!("{} {} {}", cur + 1, crate::i18n::t("of"), nab);
         let counter_galley = ui.painter().layout_no_wrap(counter_text.clone(), theme::semibold(11.5), t.text_dim);
         let (counter_rect, counter_resp) = ui.allocate_exact_size(vec2((counter_galley.size().x + 10.0).max(46.0), 20.0), Sense::hover());
-        counter_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &counter_text));
+        counter_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &counter_text));
         ui.painter().galley(
             Pos2::new(counter_rect.left() + 4.0, counter_rect.center().y - counter_galley.size().y / 2.0),
             counter_galley,
@@ -222,7 +222,7 @@ fn draw_page_tab(ui: &mut Ui, index: usize, cur: usize, nab: usize, name: &str, 
         name,
         if is_landscape { "Landscape" } else { "Portrait" }
     ));
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, is_active, name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_active, name));
 
     let bg = if is_active {
         t.row_selected
@@ -313,7 +313,7 @@ fn draw_page_tab(ui: &mut Ui, index: usize, cur: usize, nab: usize, name: &str, 
 fn nav_icon_button(ui: &mut Ui, id_str: &str, icon: &str, tip: &str, enabled: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), if enabled { Sense::click() } else { Sense::hover() });
     let resp = resp.on_hover_text(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, id_str));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, id_str));
     if enabled && resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(3), t.hover);
     }
@@ -331,7 +331,7 @@ fn nav_icon_button(ui: &mut Ui, id_str: &str, icon: &str, tip: &str, enabled: bo
 fn nav_text_button(ui: &mut Ui, id_str: &str, text: &str, tip: &str, enabled: bool, t: &Tokens) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(20.0, 18.0), if enabled { Sense::click() } else { Sense::hover() });
     let resp = resp.on_hover_text(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, id_str));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, id_str));
     if enabled && resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(3), t.hover);
     }

@@ -1,7 +1,7 @@
 # File Format Parity Matrix
 
 > [!IMPORTANT]
-> **Updated 2026-10-22 (Phase V1 & V2 completed, operator decision D7):** CoralCraft is built on the VectorCraft file I/O pipeline (`crates/engine/src/cmd/fileio/`) extended with `coralcraft-cdr` and `corel-import`. CoralCraft opens, places, saves, and exports **every format VectorCraft supports** (`FORMATS` = 27 entries, `OPEN_EXTS` = 34 extensions, `PLACE_EXTS` = 28 extensions) plus CorelDRAW `.cdr`/`.cmx`, legacy `.coralcraft` containers, and Corel `.cpl`/`.xml` palettes. CI enforces full coverage via `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1`.
+> **Updated 2026-11-08 (after the full VectorCraft sync to `36ef34df`):** CoralCraft is built on the VectorCraft file I/O pipeline (`crates/engine/src/cmd/fileio/`) extended with `coralcraft-cdr` and `corel-import`. CoralCraft opens, places, saves, and exports **every format VectorCraft supports** (`FORMATS` = 30 entries — the sync added PCX, Pixar and JPEG 2000 readers — `OPEN_EXTS` = 46 extensions, `PLACE_EXTS` = 50 extensions) plus CorelDRAW `.cdr`/`.cmx`, legacy `.coralcraft` containers, and Corel `.cpl`/`.xml` palettes. CI enforces full coverage via `vectorcraft_format_compatibility_matrix_covers_every_format_v2_1`.
 
 All `.cdr` and `.cmx` format support is clean-room derived from public specifications:
 - [Photopea CDR Format Specification](https://www.photopea.com/tuts/cdr-format-specification/)
@@ -49,7 +49,7 @@ All `.cdr` and `.cmx` format support is clean-room derived from public specifica
 ## 3. Verification & Regression Gates
 
 1. **Full Format Matrix Gate (`V2.1`)**:
-   - `cmd::fileio::tests::vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` verifies that all 24 upstream VectorCraft format IDs plus `cdr`, `cmx`, and `coralcraft` are registered in `FORMATS` with exact `read`, `write`, `extensions`, `OPEN_EXTS`, and `PLACE_EXTS` membership, and exercises `document.export`, `document.serialize`, and `document.open` across every format and file extension.
+   - `cmd::fileio::tests::vectorcraft_format_compatibility_matrix_covers_every_format_v2_1` verifies that all 27 upstream VectorCraft format IDs (24 at the fork base plus PCX, Pixar and JPEG 2000 from the sync) plus `cdr`, `cmx`, and `coralcraft` are registered in `FORMATS` with exact `read`, `write`, `extensions`, `OPEN_EXTS`, and `PLACE_EXTS` membership, and exercises `document.export`, `document.serialize`, and `document.open` across every format and file extension.
    - `cmd::fileio::tests::the_macos_bundle_opens_every_readable_format` verifies that `packaging/macos/Info.plist.in` declares every extension in `OPEN_EXTS`.
 2. **Lossless CoralCraft Extension Block (`V2.2`)**:
    - `cmd::fileio::tests::vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_losslessly_v2_2` verifies that multi-page CorelDRAW documents, master layers (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`, `Desktop`), Corel palettes, unknown RIFF chunks (`Residual`), and `ObjectKind::Unsupported` nodes survive `.vectorcraft` (v1–v4, compressed and uncompressed), `.drawcraft`, and `.vctemplate` round-trips bit-for-bit, while pure VectorCraft documents do not gain a `"coralcraft"` key.

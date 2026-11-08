@@ -1,23 +1,28 @@
 # CoralCraft Roadmap
 
-> Stage: **pre-alpha, re-basing on a VectorCraft fork** · Updated: 2026-10-21
+> Stage: **pre-alpha, VectorCraft full sync complete** · Updated: 2026-11-08
 > Direction (operator decision 2026-10-21): CoralCraft is a **fork of [`storytold/vectorcraft`](https://github.com/storytold/vectorcraft)** extended toward CorelDRAW. Reuse VectorCraft; build only the CorelDRAW extension; open and save every VectorCraft file. See [`AGENTS.md`](AGENTS.md) and the active plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
 
 > [!IMPORTANT]
 > The per-dimension self-scores used until M89 (for example "Tools, panels & interactive UI 80%") were not measured and are withdrawn. The table below is measured against `refs/vectorcraft` @ `a466625`.
 
-## Measured parity vs VectorCraft (updated 2026-10-22 after Phase V2)
+## Measured parity vs VectorCraft (updated 2026-11-08 after the full source sync to `36ef34df`)
+
+The 2026-11-07/08 sync merged the whole upstream history between `a466625` and `36ef34df`
+(8,676 commits) into this repository on top of every CoralCraft extension; see
+[`docs/upstream-vectorcraft.md`](docs/upstream-vectorcraft.md) and the divergence ledger
+[`docs/upstream-divergences.tsv`](docs/upstream-divergences.tsv).
 
 | Metric | Pre-fork (2026-10-21) | CoralCraft (Post-V2) | VectorCraft (`a466625`) | Ratio (Post-V2) |
 |---|---:|---:|---:|---:|
-| Rust lines (all crates + apps) | 53.2k | 553.4k | 577k | ~96% (+ `cdr` & `corel-import`) |
+| Rust lines (all crates + apps) | 53.2k | ~700k | ~697k | 100% (+ `cdr`, `corel-import`, `legacy/`) |
 | Desktop layer (ui-egui + app + tools + engine) | 11.0k | 319.0k | 318k | 100% |
 | Panels / dockers | 2 | ~40 | ~40 | 100% |
 | Dialogs | ~0 | 125 source files | 125 source files | 100% |
 | Working canvas tools | 6 | 89 | 89 | 100% |
-| `#[test]` functions (+ `proptest!`) | 165 | 8,401 (+ 53) | 8,275 | >101% |
+| `#[test]` functions | 165 | 14,706 | 14,503 (@ `36ef34df`) | >101% |
 | Text engine (fonts, shaping) | none (placeholder glyph outlines) | `text` crate + skrifa/harfrust | `text` crate + skrifa/harfrust | 100% |
-| Formats opened (`OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 34 extensions (31 VectorCraft + `.cdr`, `.cmx`, `.coralcraft`) | 31 extensions | 100% + CDR/CMX |
+| Formats opened (`OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 46 extensions (43 VectorCraft incl. PCX/Pixar/JPEG 2000 + `.cdr`, `.cmx`, `.coralcraft`) | 43 extensions | 100% + CDR/CMX |
 | Real-world `.cdr` sample fidelity (`refs/cdr-samples`) | 64/64 probe | 65/65 valid samples open with exact page/layer/object counts | — | — |
 
 What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX probe, parse and write** (`crates/cdr`, `crates/corel-import`), Corel `.cpl`/`.xml` palettes, and the CorelDRAW-specific MCP tools.
@@ -27,6 +32,7 @@ What CoralCraft has that VectorCraft lacks, and keeps after the fork: **CDR/CMX 
 | Phase | Goal | Exit criterion |
 |---|---|---|
 | **V0** | Fork import and green build | VectorCraft test suite passes in this repo; app runs as CoralCraft (rebranded) (**DONE**) |
+| **VS** | Full VectorCraft source sync | Base-aware merge of upstream `a466625..36ef34d` with every CoralCraft capability preserved and the hash-audit ledger green (**DONE 2026-11-08**: 130 conflicts resolved, 189 target-path differences all explained; plan `docs/superpowers/plans/2026-11-07-vectorcraft-full-sync.md`) |
 | **V1** | CDR/CMX on the VectorCraft document model | `.cdr`/`.cmx` open and save in the desktop app, CLI and MCP (`V1.1`–`V1.4` **DONE**: `corel-import`, Open/Place, Save As/Export CDR7/CDRX/CMX1, `cdr2raw`/`cmx2raw` oracle & real-sample counts) |
 | **V2** | Every VectorCraft file works | Compatibility matrix test covers every VectorCraft format; `.vectorcraft`/`.drawcraft`/`.vctemplate` round-trip losslessly with `"coralcraft"` extension block; legacy `.coralcraft` JSON/ZIP converter; `docs/file-format-parity.md` rewritten (`V2.1`–`V2.4` **DONE**) |
 | **V3** | CorelDRAW multi-page model | Pages, master layers (all/odd/even), desktop layer, page navigator (`V3.1`–`V3.3` **DONE**: per-page size/orientation, insert/delete/reorder reflow, Master All/Odd/Even & Desktop layers in CorelDRAW render order, bottom Page Navigator bar & Layer Role UI) |
@@ -331,6 +337,8 @@ Expected effect: after V2, CoralCraft matches what VectorCraft already does (Vec
     - `coralcraft-mcp`: Added `import_eps` and `import_pdf_base64` MCP tools (bringing `coralcraft-mcp` to **246 tools**).
 
 ## Changelog
+
+- 2026-11-08: **VectorCraft full source sync** (`36ef34dfdd8dfd1abc19fd209678860a00583558`, from base `a466625`): 130 conflicted paths resolved by ownership; upstream's fileio/render/ui-egui/mcp module splits absorbed with every CoralCraft capability rehomed (CDR/CMX I/O, multi-page + master layers, page navigator, palette bar, CorelDRAW workspace/shortcuts, CLI `probe`, PR #3 32-bit guards incl. the oversized-PNG IHDR fallbacks in `trace`/`doc`); divergence ledger `docs/upstream-divergences.tsv` explains all 189 differing target paths; Windows 7 support dropped by operator decision with the build evidence recorded in `docs/windows7.md`.
 
 - 2026-10-21: **Direction change.** Operator decided to re-base CoralCraft on a copy of VectorCraft (`a466625`), require reuse of VectorCraft subsystems, require compatibility with every VectorCraft file, and limit CoralCraft's own work to the CorelDRAW extension. Format self-round-trip milestones are frozen after M89. Old self-scores were withdrawn and replaced by a measured comparison.
 - 2026-10-21: M89 delivered (EPS `arc`/`arcn` circular arcs & `\ddd` octal escapes, PDF `TJ` kerning arrays, `<hex>` strings, multi-stream `/Contents [...]` & `/Parent` inherited `/MediaBox`, 3,000-iteration SplitMix64 mutation tests & `import_eps`/`import_pdf` fuzz targets, and `import_eps`/`import_pdf_base64` bringing `coralcraft-mcp` to 246 tools).

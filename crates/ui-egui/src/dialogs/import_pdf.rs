@@ -122,11 +122,13 @@ pub fn offer(app: &mut VectorcraftApp, name: &str, bytes: &[u8], path: Option<St
     // A file carrying its VectorCraft document (a saved .ai, or a PDF saved with Preserve Editing)
     // opens as that document, every artboard and layer: there are no pages to pick. Placing still
     // asks, since a place takes one page.
-    if place.is_none() && vectorcraft_pdf::editing_with(bytes, None).is_some() {
+    // The file is read once for both checks.
+    let opened = vectorcraft_pdf::open_pdf(bytes, None);
+    if place.is_none() && opened.as_ref().is_ok_and(|o| o.editing().is_some()) {
         return false;
     }
-    let (pages, locked) = match vectorcraft_pdf::info(bytes, None) {
-        Ok(i) if i.pages.len() > 1 => (i.pages.len(), false),
+    let (pages, locked) = match opened.map(|o| o.page_count()) {
+        Ok(count) if count > 1 => (count, false),
         Err(PdfError::NeedsPassword) => (0, true),
         _ => return false,
     };
@@ -202,7 +204,7 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
         if let Some(pw) = password(&d) {
             p["password"] = json!(pw);
         }
-        crate::place::run(app, &p).map(|_| ())
+        crate::place::run_for_user(app, &p).map(|_| ())
     } else {
         let mut p = json!({"cropTo": crop(&d).id(), "password": password(&d)});
         let range = d.str("range");
@@ -249,8 +251,8 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                     nav(ui, "chevrons-left", tl!("First Page"), 1, current > 1),
                     nav(ui, "chevron-left", tl!("Previous Page"), current.saturating_sub(1).max(1), current > 1),
                 ];
-                if let Some(v) = widgets::plain_field(ui, "pdf-page", current as f64, "", 0, 40.0) {
-                    current = (v.max(1.0) as usize).min(count.max(1));
+                if let Some(v) = widgets::range_field(ui, "pdf-page", current as f64, 1.0..=count.max(1) as f64, "", 0, 40.0) {
+                    current = v as usize;
                 }
                 ui.label(egui::RichText::new(crate::i18n::fmt(tl!("of {count}"), &[("count", &count.to_string())])).color(t.text_dim));
                 let go2 = [
@@ -282,7 +284,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
                     if widgets::radio(ui, tl!("Range:"), !all, true) {
                         d.fields.insert("allPages".into(), json!(false));
                     }
-                    if super::form::text_edit(ui, d, "range", 90.0).gained_focus() {
+                    if super::form::text_edit_named(ui, d, "range", tl!("Range:"), 90.0).gained_focus() {
                         d.fields.insert("allPages".into(), json!(false));
                     }
                 });
@@ -297,7 +299,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
 fn password_row(ui: &mut egui::Ui, d: &mut Dialog) {
     widgets::label_row(ui, tl!("Password"), LABEL_WIDTH, |ui| {
         let mut s = d.str("password");
-        let r = ui.add(egui::TextEdit::singleline(&mut s).password(true).desired_width(180.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut s).password(true).align(egui::Align2::LEFT_CENTER).desired_width(180.0));
         if r.changed() {
             d.fields.insert("password".into(), json!(s));
         }
@@ -311,7 +313,7 @@ fn password_row(ui: &mut egui::Ui, d: &mut Dialog) {
 fn preview(app: &mut VectorcraftApp, ctx: &egui::Context, d: &Dialog, page: usize) -> Option<egui::TextureHandle> {
     let file = app.ui.dialog_file.clone()?;
     let crop = crop(d);
-    let key = egui::Id::new(("pdf-preview", file.token, page, crop.id()));
+    let key = egui::Id::unique(("pdf-preview", file.token, page, crop.id()));
     let opts = fileio::LoadOptions { crop, password: password(d), ..Default::default() };
     // A page that can't be read shows an empty preview (and isn't read again).
     preview_texture(app, ctx, key, &format!("pdf-preview-{page}"), PREVIEW, || {

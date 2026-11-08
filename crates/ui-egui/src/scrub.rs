@@ -1,13 +1,17 @@
 //! Scrubbing numeric fields (#400, beyond Illustrator; Photoshop's scrubby labels): a horizontal
 //! drag on a numeric field's label (`W:`, `Opacity:`, the Character panel's size icon) steps the
 //! field's value by one unit every [`PX_PER_STEP`] points, ten with Shift and a tenth with
-//! Ctrl/Cmd, as the arrow keys step a focused field; a click on the label focuses the field. The
-//! text box itself never scrubs, and a field without a label doesn't.
+//! Ctrl/Cmd, as the arrow keys step a focused field; a click on the label focuses the field. A
+//! label that is a link (the Control bar's `Stroke:` and `Opacity:`, which open their panels;
+//! #4088) scrubs its field the same way, and a click on it still follows the link. The text box
+//! itself never scrubs, and a field without a label doesn't.
 //!
 //! The panels apply each value the drag passes as they apply a typed one, so the art follows the
 //! drag live; the app holds an undo group open meanwhile ([`begin_frame`], [`end_frame`]), so the
 //! drag is one undo step and Escape takes it back. Preferences › General › Scrub Numeric Fields by
 //! Dragging turns it off.
+
+use std::ops::RangeInclusive;
 
 use egui::{Context, CursorIcon, Id, Key, Rect, Response, Sense, Ui};
 
@@ -20,16 +24,17 @@ const LABEL_GAP: f32 = 64.0;
 
 /// Where the scrub in progress is kept (egui memory).
 fn state_id() -> Id {
-    Id::new("numeric-field-scrub")
+    Id::unique("numeric-field-scrub")
 }
 
 /// Where the last label drawn waits for its field.
 fn label_id() -> Id {
-    Id::new("numeric-field-label")
+    Id::unique("numeric-field-label")
 }
 
+/// Temp-memory key for the numeric-field scrub preference.
 fn enabled_id() -> Id {
-    Id::new("numeric-field-scrub-enabled")
+    Id::unique("numeric-field-scrub-enabled")
 }
 
 /// Turn scrubbing on or off (General › Scrub Numeric Fields by Dragging; on until set).
@@ -80,23 +85,28 @@ pub(crate) fn phase(ctx: &Context) -> Phase {
     }
 }
 
-/// Before the panels draw: while a field is scrubbed, the edits its values make are one undo step.
-/// (The drag's first frame applies nothing, so the group is open before its first value.)
+/// Before the panels draw: while a field is scrubbed, the edits its values make are one undo step,
+/// or part of the step of an undo group open in the active document
+/// ([`vectorcraft_engine::Session::begin_undo_scope`]). (The drag's first frame applies nothing, so
+/// the step begins before its first value.)
 pub(crate) fn begin_frame(app: &mut VectorcraftApp, ctx: &Context) {
     if !app.scrub_group && matches!(phase(ctx), Phase::Dragging | Phase::Released) {
-        app.session.begin_undo_group();
+        app.scrub_scope = app.session.begin_undo_scope();
         app.scrub_group = true;
     }
 }
 
-/// After the panels: a finished drag closes its undo group; Escape undoes it.
+/// After the panels: a finished drag ends its undo step in the document it began in, even when
+/// another document is active by then; Escape undoes the drag's edits.
 pub(crate) fn end_frame(app: &mut VectorcraftApp, ctx: &Context) {
     let phase = phase(ctx);
     if !app.scrub_group || phase == Phase::Dragging {
         return;
     }
     app.scrub_group = false;
-    app.session.end_undo_group(phase == Phase::Cancelled);
+    if let Some(scope) = app.scrub_scope.take() {
+        app.session.end_undo_scope(scope, phase == Phase::Cancelled);
+    }
     app.sync_views();
 }
 
@@ -105,45 +115,71 @@ pub(crate) fn end_frame(app: &mut VectorcraftApp, ctx: &Context) {
 struct Label {
     rect: Rect,
     pass: u64,
+    /// The label is a link, this widget: a click follows it instead of focusing the field.
+    link: Option<Id>,
 }
 
 /// Note the label (text or icon) drawn at `rect`: a numeric field drawn right after it on the
 /// same line takes it as its label, which scrubs the field.
 pub(crate) fn note_label(ui: &Ui, rect: Rect) {
+    note(ui, rect, None);
+}
+
+/// A link that labels the numeric field drawn after it (it opens a panel when clicked): a drag on
+/// it scrubs the field, and a click stays the link's. Its text can't be selected, which a drag
+/// across it would otherwise do.
+pub(crate) fn link_label(ui: &mut Ui, text: egui::RichText) -> Response {
+    let link = ui
+        .scope(|ui| {
+            ui.style_mut().interaction.selectable_labels = false;
+            ui.link(text)
+        })
+        .inner;
+    note(ui, link.rect, Some(link.id));
+    link
+}
+
+fn note(ui: &Ui, rect: Rect, link: Option<Id>) {
     let pass = ui.ctx().cumulative_pass_nr();
-    ui.data_mut(|d| d.insert_temp(label_id(), Label { rect, pass }));
+    ui.data_mut(|d| d.insert_temp(label_id(), Label { rect, pass, link }));
 }
 
 /// The label noted just before the field at `field`, on its line.
-fn take_label(ui: &Ui, field: Rect) -> Option<Rect> {
+fn take_label(ui: &Ui, field: Rect) -> Option<Label> {
     let l = ui.data_mut(|d| {
         let l = d.get_temp::<Label>(label_id());
         d.remove::<Label>(label_id());
         l
     })?;
     let gap = field.left() - l.rect.right();
-    (l.pass == ui.ctx().cumulative_pass_nr() && (-1.0..=LABEL_GAP).contains(&gap) && field.y_range().contains(l.rect.center().y)).then_some(l.rect)
+    (l.pass == ui.ctx().cumulative_pass_nr() && (-1.0..=LABEL_GAP).contains(&gap) && field.y_range().contains(l.rect.center().y)).then_some(l)
 }
 
 /// Scrub numeric field `field`, its box at `rect`, showing `text`: `value` in its units, rounded
-/// to `decimals` places. → The value a drag on the field's label steps it to, or the value it
-/// started at when Escape cancels the drag. A click on the label (or a press held without
-/// stepping) focuses the field with all of `text` selected. Nothing for a field without a label,
-/// disabled or showing no value (objects that differ).
-pub(crate) fn field(ui: &Ui, field: Id, rect: Rect, text: &str, value: Option<f64>, decimals: i32) -> Option<f64> {
+/// to `decimals` places and kept within `bounds` (#3370). → The value a drag on the field's label
+/// steps it to, or the value it started at when Escape cancels the drag. A click on the label (or a
+/// press held without stepping) focuses the field with all of `text` selected. Nothing for a field
+/// without a label, disabled or showing no value (objects that differ).
+pub(crate) fn field(ui: &Ui, field: Id, rect: Rect, text: &str, value: Option<f64>, decimals: i32, bounds: &RangeInclusive<f64>) -> Option<f64> {
     let label = take_label(ui, rect)?;
     let value = value.filter(|v| v.is_finite())?;
     if !enabled(ui.ctx()) || !ui.is_enabled() {
         return None;
     }
-    // On top of the label, which may sense clicks itself (selectable text).
-    let resp = ui.interact(label, field.with("scrub-label"), Sense::click_and_drag());
-    drag(ui, &resp, field, text, value, decimals)
+    // On top of the label, which may sense clicks itself (selectable text). A link senses drags
+    // too and keeps its clicks (and its pointing hand while hovered): a widget laid over it would
+    // take them.
+    let resp = match label.link {
+        Some(link) => ui.interact(label.rect, link, Sense::drag()),
+        None => ui.interact(label.rect, field.with("scrub-label"), Sense::click_and_drag()),
+    };
+    drag(ui, &resp, field, text, value, decimals, label.link.is_some()).map(|v| v.max(*bounds.start()).min(*bounds.end()))
 }
 
-/// What a drag on `resp`, the label of field `field`, does this frame.
-fn drag(ui: &Ui, resp: &Response, field: Id, text: &str, value: f64, decimals: i32) -> Option<f64> {
-    if resp.hovered() || resp.dragged() {
+/// What a drag on `resp`, the label of field `field`, does this frame (`link`: the label is a link,
+/// which a click follows, so a press held without stepping doesn't focus the field either).
+fn drag(ui: &Ui, resp: &Response, field: Id, text: &str, value: f64, decimals: i32, link: bool) -> Option<f64> {
+    if (resp.hovered() && !link) || resp.dragged() {
         ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
     }
     if resp.clicked() {
@@ -166,7 +202,7 @@ fn drag(ui: &Ui, resp: &Response, field: Id, text: &str, value: f64, decimals: i
         s.moved.then_some(s.start)
     } else if resp.drag_stopped() {
         // Held without stepping: a slow click.
-        if !s.moved {
+        if !s.moved && !link {
             crate::widgets::focus_field(ui, field, text);
         }
         None

@@ -10,7 +10,7 @@ use vectorcraft_pdf::{TileOrigin, TilingPage};
 
 use super::fileio::pdf::pdf_error;
 use super::print::{settings, to_json};
-use super::*;
+use super::{CommandSpec, Result, Session, bad, bool_or, cmd, has_doc, index, switch_or};
 
 const SET: &str = "print.tiling.set";
 
@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn show(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.doc_mut()?;
-    st.print_tiling = p.get("on").and_then(Value::as_bool).unwrap_or(!st.print_tiling);
+    st.print_tiling = switch_or(p, "on", !st.print_tiling, "view.printTiling")?;
     Ok(json!({ "on": st.print_tiling }))
 }
 
@@ -96,7 +96,7 @@ fn set_origin(s: &mut Session, p: &Value) -> Result<Value> {
         let regions = vectorcraft_pdf::print_regions(doc, &set).map_err(|e| pdf_error(SET, e))?;
         let picked = match p.get("artboard").filter(|v| !v.is_null()) {
             Some(v) => {
-                let i = v.as_u64().ok_or_else(|| bad(SET, "artboard must be a 0-based index"))? as usize;
+                let i = v.as_u64().map(index).ok_or_else(|| bad(SET, "artboard must be a 0-based index"))?;
                 regions.iter().find(|(a, _)| a.is_none() || *a == Some(i)).ok_or_else(|| bad(SET, format!("artboard {i} doesn't print")))?
             }
             None => region_holding(&regions, at).or(regions.first()).ok_or_else(|| bad(SET, "nothing prints"))?,

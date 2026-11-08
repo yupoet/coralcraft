@@ -1,0 +1,41 @@
+{
+  "id": "coralcraft",
+  "name": "CoralCraft",
+  "upgradeCode": "601C6437-08AE-4645-ADCC-27F036C2EA2F",
+  "sources": [
+    "coralcraft.wxs"
+  ],
+  "icon": "assets/app-icon/coralcraft.ico",
+  "localization": [
+    "coralcraft.en-us.wxl"
+  ],
+  "extensions": [
+    "UI",
+    "Util"
+  ],
+  "payloads": [
+    "coralcraft-cli.exe",
+    "coralcraft.exe"
+  ],
+  "registry": [
+    [
+      "-1",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\coralcraft.exe",
+      "",
+      "[#CoralcraftExe]"
+    ],
+    [
+      "-1",
+      "Software\\CoralCraft",
+      "InstallDir",
+      "[INSTALLFOLDER]"
+    ],
+    [
+      "-1",
+      "Software\\CoralCraft",
+      "DesktopShortcut",
+      "#1"
+    ]
+  ],
+  "mode": "dualScope"
+}

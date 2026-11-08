@@ -40,10 +40,21 @@ fn build_vectorcraft_interop_document() -> Document {
         rect: Rect::new(0.0, 0.0, 595.275_59, 841.889_76),
         show_center_mark: false,
         show_cross_hairs: false,
+        locked: false,
+        show_video_safe_areas: false,
+        video_ruler_pixel_aspect_ratio: 1.0,
+        color: None,
     }];
 
     // 1. Sharp rectangle with uniform RGB fill and stroke
-    let rect_live = LiveShape::Rectangle { w: 150.0, h: 100.0, radii: [0.0; 4], kinds: [CornerKind::Round; 4], xf: Affine::translate((50.0, 60.0)) };
+    let rect_live = LiveShape::Rectangle {
+        w: 150.0,
+        h: 100.0,
+        radii: [0.0; 4],
+        kinds: [CornerKind::Round; 4],
+        xf: Affine::translate((50.0, 60.0)),
+        radii_relative: false,
+    };
     let rect_path = rect_live.to_path();
     let mut rect_node = Node::new(
         NodeId(10),

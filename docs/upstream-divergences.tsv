@@ -1,11 +1,200 @@
 path	class	reason
+.github/workflows/ci.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/house-rules.yml	excluded	upstream governance check enforces VectorCraft's AGENTS.md; CoralCraft's AGENTS.md is authoritative (project policy)
+.github/workflows/nix.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/packaging-lint.yml	coralcraft-adaptation	the standalone windows-install-policy job is disabled in place; the windows-arm64 job builds the MSI as CoralCraft under the ArtCraft suite folder and runs the same policy check
+.github/workflows/print.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/release.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/windows-arm64.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/windows7.yml	excluded	Windows 7 build cannot resolve the target dependencies (vendor/windows-link patch no longer matches); files retained pending operator decision
+.gitignore	project-policy	fork's refs/, plan/ and corpus conventions
 AGENTS.md	project-policy	CoralCraft agent rules remain authoritative
+ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets
+CLAUDE.md	project-policy	CoralCraft agent rules remain authoritative
+Cargo.lock	coralcraft-adaptation	regenerated for the merged workspace
+Cargo.toml	coralcraft-adaptation	workspace identity plus the CoralCraft crates and exclusions
+LICENSE-APACHE	asset-ownership	the fork license files carry the CoralCraft copyright line
+LICENSE-MIT	asset-ownership	the fork license files carry the CoralCraft copyright line
+NOTICE	asset-ownership	Retain applicable upstream notices without adding brand grants
 README.md	project-policy	CoralCraft product and measured status remain authoritative
 ROADMAP.md	project-policy	CoralCraft roadmap and measured scores remain authoritative
-ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets
-NOTICE	asset-ownership	Retain applicable upstream notices without adding brand grants
-crates/cdr	coralcraft-owned	CDR and CMX parser and writer
-crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless CoralCraft metadata
-legacy	coralcraft-owned	Pre-fork compatibility code retained until V7
 apps/coralcraft	coralcraft-adaptation	Upstream desktop advances under the CoralCraft package identity
 apps/coralcraft-cli	coralcraft-adaptation	Upstream CLI advances under the CoralCraft package identity and probe command
+apps/vectorcraft-web/index.html	coralcraft-adaptation	web build carries CoralCraft title and icon
+apps/vectorcraft-web/src/api.rs	coralcraft-adaptation	web build carries CoralCraft title and icon
+apps/vectorcraft/build.rs	excluded	upstream desktop app path maps to apps/coralcraft
+assets/app-icon/LICENSE.txt	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/README.md	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/128x128/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/16x16/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/24x24/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/256x256/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/32x32/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/48x48/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/512x512/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/hicolor/scalable/apps/ai.storyteller.vectorcraft.svg	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-1024.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-macos-512.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-small.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.icns	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.ico	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+crates/cdr	coralcraft-owned	CDR and CMX parser and writer
+crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless CoralCraft metadata
+crates/doc/src/appearance/profile.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
+crates/doc/src/cmyk.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
+crates/doc/src/lib.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
+crates/doc/src/links.rs	coralcraft-adaptation	oversized-PNG IHDR fallback in checked_with_pixels (PR #3 class, 32-bit targets)
+crates/engine/Cargo.toml	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/colormgmt.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/create.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/commands.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/encode.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/formats.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/load.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/native.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/save.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/screens.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/tests.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fontfiles.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/help.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/layer.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/panelcmds.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/file_access.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/steps.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/tests/file.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/tests/save.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/tests/import_fuzz.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/mcp/Cargo.toml	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/src/headless.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/src/server.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/src/tests.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/src/tests/fileio.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/src/tools/definitions.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/mcp/tests/automation_roots.rs	coralcraft-adaptation	MCP reports the CoralCraft server identity; export description names cdr and cmx
+crates/metafile/src/import/emf.rs	coralcraft-adaptation	32-bit checked EMF bitmap offsets (PR #3)
+crates/pdf/src/linearize.rs	coralcraft-adaptation	32-bit checked predictor columns and linearization limits (PR #3)
+crates/pdf/src/streams.rs	coralcraft-adaptation	32-bit checked predictor columns and linearization limits (PR #3)
+crates/render/src/renderer.rs	coralcraft-adaptation	CorelDRAW master/Desktop render order and page-export exclusion
+crates/render/src/renderer/nodes.rs	coralcraft-adaptation	CorelDRAW master/Desktop render order and page-export exclusion
+crates/render/src/tests/layeropts.rs	coralcraft-adaptation	CorelDRAW master/Desktop render order and page-export exclusion
+crates/text/src/tests/typo.rs	coralcraft-adaptation	32-bit checked table-width limit (PR #3)
+crates/trace/src/raster.rs	coralcraft-adaptation	oversized-PNG IHDR fallback and bounded subpixel indices (PR #3)
+crates/trace/src/subpixel.rs	coralcraft-adaptation	oversized-PNG IHDR fallback and bounded subpixel indices (PR #3)
+crates/ui-egui/src/app.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/brand.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/chrome.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/clipboard_probe.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/community.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/about.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/layer_options.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/missing_fonts.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/recovery.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/save_for_web.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/script_check.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/shortcut_import.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/tests.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/dialogs/tests_save_for_web.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/bg.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/bs.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/ca.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/cs.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/da.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/de.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/el.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/es.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/fi.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/fr.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/hi.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/hu.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/id.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/it.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/ja.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/ka.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/ko.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/nl.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/pl.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/pt-br.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/ru.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/sv.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/tests.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/tr.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/uk.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/vi.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/zh-hans.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/i18n/zh-hant.tsv	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/io/save.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/lib.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/menus/run.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/menus/state.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/menus/tree.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/menus/ui_commands.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/native_menu.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panel_docking.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panels/layers.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panels/layers/rows.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panels/paragraph/tests.rs	coralcraft-adaptation	control_bar_node matches by label before value: accesskit node order differs on 32-bit targets and a TextRun shadows the control
+crates/ui-egui/src/prefs_dialog.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/prefs_dialog/tests.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/shortcut_editor.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/state.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/tests/labels.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/tests/nativemenu.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/tests/sysclip_probe.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/updates_ui.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/workspaces.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+docs/3d-lighting-performance.md	excluded	upstream-only doc dropped at the V0.1 import (docs/ stays CoralCraft-owned)
+docs/affinity-validation.md	excluded	upstream-only doc dropped at the V0.1 import (docs/ stays CoralCraft-owned)
+docs/brand/LICENSE-brand.txt	excluded	VectorCraft brand documentation
+docs/brand/artcraft-logo-white.png	excluded	VectorCraft brand documentation
+docs/brand/artcraft-logo-white.svg	excluded	VectorCraft brand documentation
+docs/brand/artcraft-logo.png	excluded	VectorCraft brand documentation
+docs/brand/artcraft-logo.svg	excluded	VectorCraft brand documentation
+docs/brand/artcraft-mark-black.png	excluded	VectorCraft brand documentation
+docs/brand/artcraft-mark-black.svg	excluded	VectorCraft brand documentation
+docs/brand/artcraft-mark.png	excluded	VectorCraft brand documentation
+docs/brand/artcraft-mark.svg	excluded	VectorCraft brand documentation
+docs/file-format-parity.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
+docs/gaps.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
+docs/images/art-envelope.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-mesh.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-neon-drive.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-pathfinder.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-repeat.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-ribbons.png	excluded	VectorCraft screenshots and product imagery
+docs/images/art-still-life.png	excluded	VectorCraft screenshots and product imagery
+docs/images/dusk-poster.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-1-neon.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-2-ribbons.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-3-sheet.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-4-bezier.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-5-perspective.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-6-revolve.png	excluded	VectorCraft screenshots and product imagery
+docs/images/shot-7-dimensions.png	excluded	VectorCraft screenshots and product imagery
+docs/mcp.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
+docs/target-app-parity.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
+legacy	coralcraft-owned	Pre-fork compatibility code retained until V7
+packaging/check-app-specific.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/env.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/freebsd/package.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/icons.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/linux/flatpak-bundle.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/linux/flatpak-oci.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/linux/nfpm.yaml	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/linux/package.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/Info.plist.in	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/dmg/DS_Store	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/dmg/README.md	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/dmg/background.svg	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/dmg/background.tiff	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/dmg/generate.py	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/import-cert.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/macos/package.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/web/README.md	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/windows/package.ps1	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/windows/portable.txt	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+packaging/windows/sign.ps1	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
+xtask/src/bundle.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
+xtask/src/layers.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
+xtask/src/main.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration

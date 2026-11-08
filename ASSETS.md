@@ -218,6 +218,13 @@ The rows below the policy were inherited from the VectorCraft fork base (`a46662
 | `assets/icons/dc-wrinkle.svg` | VectorCraft contributors | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-zoom-large.svg` | VectorCraft contributors | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
 | `assets/icons/dc-zoom-small.svg` | VectorCraft contributors | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-contour.svg` | VectorCraft contributors | Original work, drawn for VectorCraft (a solid rounded square inside four corner arcs, its offset outline); not derived from any other application's icon | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-objects-on-path.svg` | VectorCraft contributors | Original work, drawn for VectorCraft: three small squares along a curve | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-para-bullets.svg` | VectorCraft contributors | Original work, drawn for VectorCraft: three dots, each before a line | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-para-numbers.svg` | VectorCraft contributors | Original work, drawn for VectorCraft: the digits 1, 2 and 3, each before a line | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-type-vertical-area.svg` | VectorCraft contributors (designed by ham9zah) | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-type-vertical-path.svg` | VectorCraft contributors (designed by ham9zah) | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
+| `assets/icons/dc-type.svg` | VectorCraft contributors (designed by ham9zah) | Original work, drawn for VectorCraft | MIT OR Apache-2.0 |  |
 | `assets/icons/ellipsis.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0; header kept in file) | ISC (`assets/icons/LICENSE-lucide.txt`) |  |
 | `assets/icons/eraser.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0; header kept in file) | ISC (`assets/icons/LICENSE-lucide.txt`) |  |
 | `assets/icons/eye-off.svg` | Lucide Icons and Contributors | https://lucide.dev (lucide-static v1.49.0; header kept in file) | ISC (`assets/icons/LICENSE-lucide.txt`) |  |
