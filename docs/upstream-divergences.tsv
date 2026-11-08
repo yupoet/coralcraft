@@ -1,24 +1,22 @@
 path	class	reason
-AGENTS.md	project-policy	CoralCraft agent rules remain authoritative
-README.md	project-policy	CoralCraft product and measured status remain authoritative
-ROADMAP.md	project-policy	CoralCraft roadmap and measured scores remain authoritative
-ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets
-NOTICE	asset-ownership	Retain applicable upstream notices without adding brand grants
-crates/cdr	coralcraft-owned	CDR and CMX parser and writer
-crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless CoralCraft metadata
-legacy	coralcraft-owned	Pre-fork compatibility code retained until V7
-apps/coralcraft	coralcraft-adaptation	Upstream desktop advances under the CoralCraft package identity
-apps/coralcraft-cli	coralcraft-adaptation	Upstream CLI advances under the CoralCraft package identity and probe command
 .github/workflows/ci.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/nix.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/print.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/release.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/windows-arm64.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .gitignore	project-policy	fork's refs/, plan/ and corpus conventions
+AGENTS.md	project-policy	CoralCraft agent rules remain authoritative
+ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets
+CLAUDE.md	project-policy	CoralCraft agent rules remain authoritative
 Cargo.lock	coralcraft-adaptation	regenerated for the merged workspace
 Cargo.toml	coralcraft-adaptation	workspace identity plus the CoralCraft crates and exclusions
 LICENSE-APACHE	asset-ownership	the fork license files carry the CoralCraft copyright line
 LICENSE-MIT	asset-ownership	the fork license files carry the CoralCraft copyright line
+NOTICE	asset-ownership	Retain applicable upstream notices without adding brand grants
+README.md	project-policy	CoralCraft product and measured status remain authoritative
+ROADMAP.md	project-policy	CoralCraft roadmap and measured scores remain authoritative
+apps/coralcraft	coralcraft-adaptation	Upstream desktop advances under the CoralCraft package identity
+apps/coralcraft-cli	coralcraft-adaptation	Upstream CLI advances under the CoralCraft package identity and probe command
 apps/vectorcraft-web/index.html	coralcraft-adaptation	web build carries CoralCraft title and icon
 apps/vectorcraft-web/src/api.rs	coralcraft-adaptation	web build carries CoralCraft title and icon
 apps/vectorcraft/build.rs	excluded	upstream desktop app path maps to apps/coralcraft
@@ -33,13 +31,21 @@ assets/app-icon/hicolor/48x48/apps/ai.storyteller.vectorcraft.png	excluded	Vecto
 assets/app-icon/hicolor/512x512/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
 assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
 assets/app-icon/hicolor/scalable/apps/ai.storyteller.vectorcraft.svg	excluded	VectorCraft brand icon set excluded; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-1024.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-macos-512.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft-small.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.icns	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.ico	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+assets/app-icon/vectorcraft.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
+crates/cdr	coralcraft-owned	CDR and CMX parser and writer
+crates/corel-import	coralcraft-owned	VectorCraft document bridge and lossless CoralCraft metadata
 crates/doc/src/appearance/profile.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
 crates/doc/src/cmyk.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
 crates/doc/src/lib.rs	coralcraft-adaptation	CoralCraft layer-role module and 32-bit width-profile fix
 crates/engine/Cargo.toml	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/colormgmt.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/create.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
-crates/engine/src/cmd/edit.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
+crates/engine/src/cmd/fileio/commands.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/fileio/encode.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/fileio/formats.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
 crates/engine/src/cmd/fileio/load.rs	coralcraft-adaptation	CDR/CMX I/O, multi-page and master-layer commands, compound-root promotion
@@ -163,6 +169,7 @@ docs/images/shot-6-revolve.png	excluded	VectorCraft screenshots and product imag
 docs/images/shot-7-dimensions.png	excluded	VectorCraft screenshots and product imagery
 docs/mcp.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
 docs/target-app-parity.md	coralcraft-owned	CoralCraft measurement, parity, or platform document
+legacy	coralcraft-owned	Pre-fork compatibility code retained until V7
 packaging/check-app-specific.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
 packaging/env.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
 packaging/freebsd/package.sh	coralcraft-adaptation	CoralCraft package identity (names, ids, icons, URLs, install policy)
@@ -186,10 +193,3 @@ packaging/windows/sign.ps1	coralcraft-adaptation	CoralCraft package identity (na
 xtask/src/bundle.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
 xtask/src/layers.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
 xtask/src/main.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
-CLAUDE.md	project-policy	CoralCraft agent rules remain authoritative
-assets/app-icon/vectorcraft-1024.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
-assets/app-icon/vectorcraft-macos-512.png	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
-assets/app-icon/vectorcraft-small.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
-assets/app-icon/vectorcraft.icns	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
-assets/app-icon/vectorcraft.ico	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
-assets/app-icon/vectorcraft.svg	excluded	VectorCraft brand icon; CoralCraft ships its own originals (ASSETS.md)
