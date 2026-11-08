@@ -1,9 +1,11 @@
 path	class	reason
 .github/workflows/ci.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/house-rules.yml	excluded	upstream governance check enforces VectorCraft's AGENTS.md; CoralCraft's AGENTS.md is authoritative (project policy)
 .github/workflows/nix.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/print.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/release.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/windows-arm64.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
+.github/workflows/windows7.yml	excluded	Windows 7 build cannot resolve the target dependencies (vendor/windows-link patch no longer matches); files retained pending operator decision
 .gitignore	project-policy	fork's refs/, plan/ and corpus conventions
 AGENTS.md	project-policy	CoralCraft agent rules remain authoritative
 ASSETS.md	asset-ownership	Merged notices exclude VectorCraft brand assets

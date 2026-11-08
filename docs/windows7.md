@@ -1,5 +1,15 @@
 # Windows 7 compatibility build
 
+> **Status after the VectorCraft 36ef34d sync (2026-11-08):** upstream removed its Windows 7
+> support, and its dependency set no longer resolves through the vendored `windows-link` the
+> Windows 7 build patches — the CI job fails at `patch location vendor/windows-link does not
+> contain packages matching windows-link` (run 42435320094). The Windows 7 code
+> (`apps/coralcraft/src/printing/windows7.rs`, `packaging/windows/windows7.ps1`) is retained in
+> the tree pending an operator decision: either a Windows 7 compatible dependency arrangement is
+> rebuilt, or the support is dropped explicitly. Until one of those happens, no CoralCraft
+> release or document claims Windows 7 support, and the `windows7` workflow is not run.
+
+
 CoralCraft can build an **experimental, unsupported** portable package for Windows 7 SP1 x64. The package is not a supported release and does not promise that every feature works on Windows 7.
 
 The build requires an OpenGL 3.3-capable driver on the Windows 7 machine. It uses the patched `vendor/windows-link` crate and rebuilds the Rust standard library for the `x86_64-win7-windows-msvc` target. Other CoralCraft builds continue to use the normal crates.io dependency.

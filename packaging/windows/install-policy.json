@@ -1,38 +1,38 @@
 {
-  "id": "vectorcraft",
-  "name": "VectorCraft",
+  "id": "coralcraft",
+  "name": "CoralCraft",
   "upgradeCode": "601C6437-08AE-4645-ADCC-27F036C2EA2F",
   "sources": [
-    "vectorcraft.wxs"
+    "coralcraft.wxs"
   ],
-  "icon": "assets/app-icon/vectorcraft.ico",
+  "icon": "assets/app-icon/coralcraft.ico",
   "localization": [
-    "vectorcraft.en-us.wxl"
+    "coralcraft.en-us.wxl"
   ],
   "extensions": [
     "UI",
     "Util"
   ],
   "payloads": [
-    "vectorcraft-cli.exe",
-    "vectorcraft.exe"
+    "coralcraft-cli.exe",
+    "coralcraft.exe"
   ],
   "registry": [
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\vectorcraft.exe",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\coralcraft.exe",
       "",
-      "[#VectorcraftExe]"
+      "[#CoralcraftExe]"
     ],
     [
       "-1",
-      "Software\\VectorCraft",
+      "Software\\CoralCraft",
       "InstallDir",
       "[INSTALLFOLDER]"
     ],
     [
       "-1",
-      "Software\\VectorCraft",
+      "Software\\CoralCraft",
       "DesktopShortcut",
       "#1"
     ]
