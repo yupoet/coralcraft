@@ -995,8 +995,7 @@ fn paste_clip(s: &mut Session, p: &Value, mode: PasteMode, clip: &Clipboard, cho
     // nothing selected, the top / bottom of the current layer. Art other than paths goes beside
     // the compound path that holds the selected object, not into it.
     let anchor = if front || back {
-        // CoralCraft: a selected member anchors the paste beside its whole compound.
-        let order = selected_roots(s)?;
+        let order = st.selection.in_paint_order(&st.doc);
         let a = if front { order.last() } else { order.first() };
         let isolated_compound = st.isolation.is_some_and(|iso| st.doc.node(iso).is_some_and(|n| matches!(n.kind, NodeKind::Compound { .. })));
         let can_enter_compound = clip.nodes.iter().all(|n| matches!(n.kind, NodeKind::Path { .. }))

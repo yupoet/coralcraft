@@ -10,6 +10,12 @@
 - **Shallow `--depth=1` fetches break `merge-base`**: fetching the sync base and target with `--depth=1` leaves them as shallow boundaries; deepen from the local `refs/vectorcraft` clone with `--depth=10000` before the graft and merge.
 - **`git merge-tree --name-only` overcounts conflicts** (~386 vs the real merge's 130): it lists per-stage entries; the authoritative conflict inventory is `git diff --name-only --diff-filter=U` from the actual merge.
 
+## 0b. Platform: `constrain_angle_turns_the_base_orientation_of_polygons_and_stars` fails on x86_64 macOS only
+
+- **Symptom**: the engine test asserts a polygon drawn at Constrain Angle 360° equals the 0° one byte-for-byte; on this x86_64 macOS host the anchors differ by 1 ulp (`50.00000000000002` vs `50.0`).
+- **Ground truth**: the test fails identically on the pristine upstream target `36ef34df` checked out standalone on this machine — it is libm sensitivity inherited from upstream, not a sync regression. Upstream's own CI (and ours) run on ubuntu / windows / arm64-macOS where the values come out exact.
+- **Handling**: not "fixed" locally (that would diverge engine files upstream owns); the sync PR's platform checks are the authoritative green signal for it.
+
 ## 1. [Resolved] Short SHAs in `scripts/bootstrap-refs.sh` Rejected by GitHub `git fetch --depth 1`
 
 - **Symptom**: 7-character short SHAs in `scripts/bootstrap-refs.sh` caused `git fetch -q --depth 1 origin <short-sha>` to fail with `fatal: couldn't find remote ref`, triggering the fallback branch clone.
