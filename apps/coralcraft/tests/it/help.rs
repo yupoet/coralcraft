@@ -53,7 +53,7 @@ fn prints_usage(args: &[&str], env: &[(&str, &str)]) {
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
     assert!(out.stderr.is_empty(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.starts_with("Usage: vectorcraft "), "{args:?}: {stdout}");
+    assert!(stdout.starts_with("Usage: coralcraft "), "{args:?}: {stdout}");
     for flag in ["--control", "--automation-read-root", "--automation-write-root", "--in-window-menus", "--version", "--help"] {
         assert!(stdout.contains(flag), "{args:?}: usage doesn't mention {flag}: {stdout}");
     }
