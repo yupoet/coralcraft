@@ -72,7 +72,20 @@ fn save_as_svg_opens_svg_options_then_writes_svg() {
     // The save panel offers every save format, the document's own first.
     let pick = &picks.borrow()[0];
     let labels: Vec<&str> = pick.filters.iter().map(|f| f.0.as_str()).collect();
-    assert_eq!(labels, ["VectorCraft", "VectorCraft Template", "PDF", "SVG", "SVG Compressed", "PDF-compatible .ai", "EPS"]);
+    assert_eq!(
+        labels,
+        [
+            "VectorCraft",
+            "VectorCraft Template",
+            "PDF",
+            "SVG",
+            "SVG Compressed",
+            "PDF-compatible .ai",
+            "EPS",
+            "CorelDRAW",
+            "Corel Presentation Exchange"
+        ]
+    );
     assert_eq!(pick.name, "Untitled-1.vectorcraft");
     let d = dialog(&app);
     assert_eq!((d.kind.as_str(), d.str("path").as_str(), d.str("mode").as_str()), ("svgOptions", "art.svg", "save"));

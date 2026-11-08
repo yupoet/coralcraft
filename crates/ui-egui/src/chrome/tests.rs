@@ -1244,7 +1244,7 @@ fn without_the_preference_the_mark_stays() {
 
 #[test]
 fn window_title_with_no_document_is_the_app_name() {
-    assert_eq!(super::window_title(&title_test_app(true)), "VectorCraft");
+    assert_eq!(super::window_title(&title_test_app(true)), "CoralCraft");
 }
 
 #[test]
@@ -1288,11 +1288,11 @@ fn sync_window_title_sends_only_on_change() {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
     super::sync_window_title(&mut app, &ctx);
-    assert_eq!(app.last_window_title, "VectorCraft");
+    assert_eq!(app.last_window_title, "CoralCraft");
     let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
     out.textures_delta.clear();
     let cmds = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
-    assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "VectorCraft")), "{cmds:?}");
+    assert!(cmds.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t == "CoralCraft")), "{cmds:?}");
     // Same document state again: the cached title stops a repeat command.
     super::sync_window_title(&mut app, &ctx);
     let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});

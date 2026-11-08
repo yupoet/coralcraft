@@ -63,7 +63,7 @@ fn the_bar_starts_at_file() {
     for t in titles {
         assert!(shown.iter().any(|s| s == t), "{t} missing from {shown:?}");
     }
-    assert!(!shown.iter().any(|s| s == "VectorCraft"), "{shown:?}");
+    assert!(!shown.iter().any(|s| s == "CoralCraft"), "{shown:?}");
 }
 
 #[test]

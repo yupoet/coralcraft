@@ -220,7 +220,7 @@ fn temp_folder() -> Result<String, String> {
 /// The name of a folder that a preview made in the temporary folder, beside a `VectorCraft Save
 /// for Web` it couldn't use, before the process id and the count.
 #[cfg(not(target_arch = "wasm32"))]
-const BESIDE: &str = "VectorCraft Save for Web ";
+const BESIDE: &str = "CoralCraft Save for Web ";
 
 /// A new folder for a browser preview in the temporary folder `tmp`: inside `VectorCraft Save for
 /// Web` ([`preview_folder`]), or, when that folder can't be used, directly in `tmp`, named
