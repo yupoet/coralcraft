@@ -24,10 +24,10 @@ jobs:
     with:
       extra-checks-script: packaging/check-app-specific.sh
 
-    # CoralCraft: not adopted — the upstream checker validates the ArtCraft suite
-    # installer layout (folder roots, launcher policy) that CoralCraft does not
-    # install under; our MSI policy stays covered by the packaging-lint job above,
-    # packaging/check-app-specific.sh and the windows/release build jobs.
+    # CoralCraft: folded into the platform jobs — the windows-arm64 workflow builds
+    # the MSI and runs packaging/windows/check-install-policy.ps1 against
+    # packaging/windows/install-policy.json (name CoralCraft under the ArtCraft
+    # suite folder), so this standalone no-app-build copy is not run separately.
 #   windows-install-policy:
 #     timeout-minutes: 10
 #     name: Windows installation policy (no app build)

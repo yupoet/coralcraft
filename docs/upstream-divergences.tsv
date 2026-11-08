@@ -2,7 +2,7 @@ path	class	reason
 .github/workflows/ci.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/house-rules.yml	excluded	upstream governance check enforces VectorCraft's AGENTS.md; CoralCraft's AGENTS.md is authoritative (project policy)
 .github/workflows/nix.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
-.github/workflows/packaging-lint.yml	coralcraft-adaptation	the upstream windows-install-policy job validates the ArtCraft suite installer layout CoralCraft does not adopt; the job is disabled in place, the rest of packaging-lint runs
+.github/workflows/packaging-lint.yml	coralcraft-adaptation	the standalone windows-install-policy job is disabled in place; the windows-arm64 job builds the MSI as CoralCraft under the ArtCraft suite folder and runs the same policy check
 .github/workflows/print.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/release.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
 .github/workflows/windows-arm64.yml	coralcraft-adaptation	CoralCraft CI chain (cleanroom, serial i686, libcdr oracle, rebranded platform jobs)
