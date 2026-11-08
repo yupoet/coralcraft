@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  A fork of <a href="https://github.com/storytold/vectorcraft"><b>VectorCraft</b></a> (MIT OR Apache-2.0) extended toward <b>CorelDRAW</b> parity (often searched as <i>CoralDraw</i>), with clean-room <code>.cdr</code> and <code>.cmx</code> format support. It keeps every VectorCraft file format working and runs natively on macOS, Windows, Linux and FreeBSD, plus in the browser via WebAssembly.
+  A fork of <a href="https://github.com/storytold/vectorcraft"><b>VectorCraft</b></a> (MIT OR Apache-2.0) extended toward <b>CorelDRAW</b> parity (often searched as <i>CoralDraw</i>), with clean-room <code>.cdr</code> and <code>.cmx</code> format support. It keeps every VectorCraft file format working and runs natively on macOS, Windows (x64 and ARM64), Linux and FreeBSD, plus in the browser via WebAssembly.
 </p>
 
 <p align="center">
@@ -27,31 +27,32 @@
 
 ## Status
 
-**Pre-release (active Phase V development).** On 2026-10-21 CoralCraft re-based on a fork of [storytold/vectorcraft](https://github.com/storytold/vectorcraft) (`a466625`) and is extending it with CorelDRAW format interoperability, multi-page layout, workspace presets, and CorelDRAW-specific tools. Progress is tracked in [`ROADMAP.md`](ROADMAP.md), [`docs/gaps.md`](docs/gaps.md), and [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
+**Pre-release (active Phase V development).** On 2026-10-21 CoralCraft re-based on a fork of [storytold/vectorcraft](https://github.com/storytold/vectorcraft) (`a466625`), and on 2026-11-08 completed a **full source sync** of the entire upstream history up to `36ef34df` (8,676 commits) while preserving every CoralCraft extension — all 130 merge conflicts resolved by an audited ownership ledger ([`docs/upstream-vectorcraft.md`](docs/upstream-vectorcraft.md), [`docs/upstream-divergences.tsv`](docs/upstream-divergences.tsv)). Work continues with CorelDRAW format interoperability, multi-page layout, workspace presets, and CorelDRAW-specific tools; progress is tracked in [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md).
 
-**What works today (Phases V0–V4.1 complete):**
+**What works today (Phases V0–V4.2 and the full VectorCraft sync complete):**
 
-- **Native desktop & Web application (`coralcraft`, `vectorcraft-web`).** Full `eframe`/`egui` GPU/CPU desktop shell with 89 interactive canvas tools, ~40 dockable panels, 125 dialogs, multi-column/docking workspace management, and a built-in **`CorelDRAW` workspace preset** (`Window → Workspace → CorelDRAW`) featuring a single-column left Toolbox, top Property Bar, right vertical Color Palette bar (Left-click sets Fill, Right-click sets Outline), bottom Page Navigator bar, and right-side Object Properties / Objects / Transform / Align dockers.
+- **Native desktop & Web application (`coralcraft`, `vectorcraft-web`).** Full `eframe`/`egui` GPU/CPU desktop shell with the complete VectorCraft toolbox, ~40 dockable panels, 125 dialogs, multi-column/docking workspace management, and a built-in **`CorelDRAW` workspace preset** (`Window → Workspace → CorelDRAW`) featuring a single-column left Toolbox, top Property Bar, right vertical Color Palette bar (Left-click sets Fill, Right-click sets Outline), bottom Page Navigator bar, and right-side Object Properties / Objects / Transform / Align dockers.
 - **Clean-room `.cdr` and `.cmx` read/write (`coralcraft-cdr`, `corel-import`).**
   - Opens legacy `WL` (CDR 2), bare `RIFF`/`RIFX` (CDR 3–X3), modern `ZIP+RIFF` (`content/riffData.cdr` X4–X5 and `content/root.dat` X6+), and Corel Presentation Exchange `.cmx` files directly into the VectorCraft document model, preserving lossless CorelDRAW residuals under `document.unknown["coralcraft"]`.
   - Verified against **65/65 valid real-world `.cdr` samples** in `refs/cdr-samples/` with exact page, layer, and object counts.
   - Writes spec-conformant **CDR7** (`RIFF....CDR7`), **CDRX** (X4+ `ZIP+RIFF`), and **CMX1** (`RIFF....CMX1`) files from Save As, Export, CLI `convert`, and MCP `export`/`save_file`, verified against `libcdr`'s `cdr2raw` and `cmx2raw` differential oracles.
-- **100% VectorCraft file format compatibility (27 formats / 34 open extensions).** Opens and saves every format supported by VectorCraft (`.vectorcraft`, `.drawcraft`, `.vctemplate`, `.svg`, `.svgz`, `.pdf`, `.eps`, `.ps`, `.ai`, `.dxf`, `.dwg`, `.emf`, `.wmf`, `.fig`, `.sketch`, `.afdesign`, `.png`, `.jpg`, `.webp`, `.gif`, `.bmp`, `.tif`, `.tga`, `.ico`, `.psd`, `.ase`, `.aco`, `.csv`), plus `.cdr`, `.cmx`, and legacy pre-fork `.coralcraft` JSON/ZIP archives.See [`docs/file-format-parity.md`](docs/file-format-parity.md).
+- **100% VectorCraft file format compatibility (30 formats / 46 open extensions).** Opens and saves every format supported by VectorCraft at the synced upstream commit (`.vectorcraft`, `.drawcraft`, `.vctemplate`, `.svg`, `.svgz`, `.pdf`, `.eps`, `.ps`, `.ai`, `.ait`, `.dxf`, `.emf`, `.wmf`, `.af`/`.afdesign`/`.afpub`, `.psd`/`.psb`, `.png`, `.jpg`, `.webp`, `.gif`, `.tif`/`.tiff`, `.bmp`, `.tga`, and — added by the sync — `.pcx`, `.pxr` and JPEG 2000 `.jp2`/`.j2k`), plus `.cdr`, `.cmx`, and legacy pre-fork `.coralcraft` JSON/ZIP archives. See [`docs/file-format-parity.md`](docs/file-format-parity.md).
 - **CorelDRAW multi-page & master-layer model.**
   - Per-page dimensions, `Portrait`/`Landscape` orientation, and automatic horizontal spread reflow on insert, delete, resize, and drag-reorder.
   - **Master layers** (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`, configurable foreground/background) that repeat across matching pages, plus a shared non-printable **`Desktop` (pasteboard) layer**, rendered in CorelDRAW's 4-bucket layer order.
   - Bottom **Page Navigator bar** (`1 of N` counter, First/Previous/Insert Before/Page Tabs/Add After/Next/Last/Delete, double-click inline rename, drag-and-drop page reorder, right-click page context menu) and Layer Role badges (`M:All`, `M:Odd`, `M:Even`, `Desk`) in the Layers panel and Layer Options dialog.
+- **Public-documentation `CorelDRAW` shortcut preset (V4.2).** `F5`–`F12` tool dispatch (`F5` Freehand, `F6` Rectangle, `F7` Ellipse, `F10` Shape…), `Ctrl+G/U/L/K/Q/D` commands, and `Alt+F7`–`Alt+F10` / `F11` / `F12` docker toggles, conflict-free beside the built-in presets.
 
-**Remaining Phase V roadmap (`V4.2`–`V7.1`; see [`docs/gaps.md`](docs/gaps.md)):**
+**Remaining Phase V roadmap (`V4.3`–`V7.1`; see [`docs/gaps.md`](docs/gaps.md)):**
 
-- **V4.2–V4.4:** Public-documentation CorelDRAW shortcut preset (`F5`–`F12`, `Ctrl+G/U/L/K/Q`, `Alt+F7`–`F10`), CorelDRAW toolbox & context-sensitive Property Bar modes, and CorelDRAW docker refinements.
+- **V4.3–V4.4:** CorelDRAW toolbox & context-sensitive Property Bar modes (starting from the synced `vectorcraft-tools` catalog), and CorelDRAW docker refinements.
 - **V5.1–V5.4:** PowerClip container workflow (Place Inside, Edit Contents, Extract, Lock Contents), interactive effects with on-canvas handles, Corel `.cpl`/`.xml` palette import/export in the palette bar and Swatches panel, and Smart Fill / Connector / Dimension / PowerTRACE integration.
 - **V6.1–V6.2:** CoralCraft-specific MCP tools merged into the VectorCraft MCP server and regenerated [`docs/mcp.md`](docs/mcp.md).
 - **V7.1:** Retirement of the pre-fork `legacy/` workspace directory.
 
 ## Quick start
 
-Requires **Rust 1.85+** (Edition 2024).
+Requires **Rust 1.95+** (Edition 2024).
 
 ```sh
 git clone https://github.com/yupoet/coralcraft
@@ -92,8 +93,8 @@ It exposes structured tools (`open_file`, `save_file`, `export`, `render`, `insp
 GitHub Actions builds native packages via [`release.yml`](.github/workflows/release.yml) and verifies Linux `.deb` installation in [`ci.yml`](.github/workflows/ci.yml):
 
 1. macOS universal `.dmg` and `.app.zip` (`packaging/macos/package.sh`).
-2. Linux `.deb`, `.rpm`, AppImage, and Flatpak (`packaging/linux/`).
-3. Windows installer and portable `.zip` (`packaging/windows/`).
+2. Linux `.deb`, `.rpm`, AppImage, and Flatpak (`packaging/linux/`); the `.deb` is install-tested in CI.
+3. Windows installer and portable `.zip` for x64 (`packaging/windows/`); ARM64 packages are built, installed and launched on a native Windows ARM64 runner in CI.
 
 Until the next tagged release is published, build from source with `cargo build --release -p coralcraft`.
 
