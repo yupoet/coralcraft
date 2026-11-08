@@ -461,6 +461,17 @@ impl Document {
     }
 }
 
+/// Width and height from a PNG's fixed-position IHDR fields, without constructing a pixel decoder
+/// (CoralCraft: the 32-bit safe read `checked_with_pixels` falls back to).
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(8..16)? != b"\0\0\0\rIHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+    Some((width, height))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,15 +652,4 @@ mod tests {
         image(&mut d, "c", None);
         assert_eq!(d.linked_only_images().into_iter().collect::<Vec<_>>(), ["a"]);
     }
-}
-
-/// Width and height from a PNG's fixed-position IHDR fields, without constructing a pixel decoder
-/// (CoralCraft: the 32-bit safe read `checked_with_pixels` falls back to).
-fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.get(..8)? != b"\x89PNG\r\n\x1a\n" || bytes.get(8..16)? != b"\0\0\0\rIHDR" {
-        return None;
-    }
-    let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
-    let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
-    Some((width, height))
 }
