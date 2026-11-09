@@ -5,7 +5,7 @@
 Every entry of Illustrator's Effect menu, by its public feature name, against VectorCraft's effects catalogue
 (`effect_catalog()` in `crates/effects/src/lib.rs`) and the Effect menu built from it
 (`crates/ui-egui/src/menus.rs`). Counts are **measured** from the catalogue; "depth" notes are estimated.
-Part of [target-app-parity.md](target-app-parity.md); open work is in [gaps.md](gaps.md).
+Part of [target-app-parity.md](vectorcraft-target-app-parity.md); open work is in [gaps.md](gaps.md).
 
 ## Summary
 
@@ -52,7 +52,7 @@ its resolution, PDF export warns once per object with the requested and the lowe
 
 The pixel-filter pipeline (`vectorcraft_effects::pixel`) is in place: each new filter is one function, a
 catalogue row, a menu entry and translations. Measured throughput: 0.7–1.2 agent hours per filter
-(see [calibration](target-app-parity.md#calibration)). Every Photoshop-style filter is in the catalogue, and the Effect
+(see [calibration](vectorcraft-target-app-parity.md#calibration)). Every Photoshop-style filter is in the catalogue, and the Effect
 Gallery dialog shipped (#2883); its filter thumbnails and in-dialog preview area are the 1–2 h that remain.
 
 Film Grain (`artistic.filmGrain`, Effect › Artistic) adds stable monochrome noise to shadows and

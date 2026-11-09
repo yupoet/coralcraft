@@ -198,3 +198,4 @@ packaging/windows/sign.ps1	coralcraft-adaptation	CoralCraft package identity (na
 xtask/src/bundle.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
 xtask/src/layers.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
 xtask/src/main.rs	coralcraft-adaptation	cleanroom gate and coralcraft-cdr/corel-import registration
+docs/vectorcraft-target-app-parity.md	vectorcraft-owned	Upstream Illustrator parity assessment preserved separately from the CoralCraft matrix

@@ -220,3 +220,10 @@ the rename (binary names in packaging, workflows, the layer table, doc comments)
 | 2026-11-06 | `36ef34dfdd8dfd1abc19fd209678860a00583558` | Reference refresh only | Updated the local reference pin; no upstream source was merged in this change. |
 | 2026-11-07 | `36ef34dfdd8dfd1abc19fd209678860a00583558` | Full source sync from `a466625c8987550635cda951ebf36e08e1e80a56` | Integration in progress; completion requires the hash audit and all gates in the approved design. |
 | 2026-11-07 | `36ef34dfdd8dfd1abc19fd209678860a00583558` | Merge resolved, focused suites green, hash audit complete | 130 conflicts resolved by ownership on branch `sync/vectorcraft-36ef34d`; the divergence ledger (`docs/upstream-divergences.tsv`, 194 rows) explains every one of the 189 target-path differences. Full gate (Task 10) and platform PR checks pending; local libcdr oracle and operator CDR samples unavailable on this machine (self-skipping mode only). Windows 7 files retained pending the platform check; escalate with evidence if it fails. |
+
+### P0 documentation separation (2026-11-09)
+
+- Preserved the synced Illustrator assessment as `docs/vectorcraft-target-app-parity.md`.
+- VectorCraft-derived `effects`, `localization`, `hardware`, `type`, `ui`, and `roadmap` documents link to that file.
+- `docs/target-app-parity.md` is reserved for CoralCraft's CorelDRAW D1-D6 evidence matrix.
+- Reviewed formats, Image Trace, 3D, and plug-in documentation after the sync. Kept the measured format matrix, identified Image Trace as the P3 base, marked 3D as infrastructure rather than CorelDRAW Extrude evidence, and scoped the WASM plug-in API to D6 rather than VBA/COM.

@@ -5,7 +5,7 @@
 What hardware Illustrator uses, per platform, against VectorCraft. Illustrator's side is from its public
 documentation (GPU Performance, touch workspace, pen pressure pages); ours from the code
 (`crates/ui-egui/src/canvas.rs`, `touch.rs`, `graphics.rs`, `crates/render`). Part of
-[target-app-parity.md](target-app-parity.md).
+[target-app-parity.md](vectorcraft-target-app-parity.md).
 
 ## Summary
 

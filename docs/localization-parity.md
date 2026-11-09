@@ -4,7 +4,7 @@
 
 Per-language status of VectorCraft's interface. How the catalogs work and how to add a language:
 [`development.md` › Localisation](development.md#localisation). Part of
-[target-app-parity.md](target-app-parity.md).
+[target-app-parity.md](vectorcraft-target-app-parity.md).
 
 **How it is measured:** rows with a translation in each `crates/ui-egui/src/i18n/<code>.tsv`, counted on
 origin/main `01e165af`, except the rows that give a count date: those were counted on the `main` commit named in the row (the other dated rows on `main` at `cb0a7d9`, 2026-10-21; the Portuguese row on `main` at `d26dd933a`, 2026-10-31).

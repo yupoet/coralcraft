@@ -1,5 +1,8 @@
 # Plug-ins: the WebAssembly plug-in API (ABI v1)
 
+> CoralCraft: The WebAssembly plug-in sandbox is the D6 scripting/extension base. It is not a VBA or COM compatibility layer.
+
+
 VectorCraft does not host native plug-ins built for other illustration apps: that needs unsafe FFI into
 arbitrary machine code and cannot work in the browser build. Instead, plug-ins are **WebAssembly modules**
 run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web. The design follows PhotoCraft's

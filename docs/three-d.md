@@ -1,5 +1,8 @@
 # Extrude & Bevel, Inflate and Rotate
 
+> CoralCraft: These VectorCraft 3D effects are reusable infrastructure, not evidence of CorelDRAW Extrude parity. Corel-specific live-effect acceptance is handled in P3.
+
+
 The other three 3D types of **Effect › 3D and Materials** next to [Revolve](revolve.md). Like Revolve each is a
 live effect: the source path stays editable, the effect draws shaded vector faces, and SVG/PDF export, native
 saves and **Object › Expand Appearance** use the same evaluator.

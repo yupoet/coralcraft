@@ -1,5 +1,8 @@
 # Image Trace quality
 
+> CoralCraft: This VectorCraft-derived Image Trace documentation describes the implementation base for the P3 tracing workflow. It is not evidence of PowerTRACE parity; see `coreldraw-reference-adoption.md` and `target-app-parity.md`.
+
+
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-17 · **Change:** minor (Image Trace: Auto Color keeps rare but distinct colours; earlier: Gradients: grown over noise and soft rims)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-17 · **Change:** minor (Image Trace: large images trace with a warning; anchor limit raised to 8,000,000; earlier: Gradients: grown over noise and soft rims)
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-17 · **Change:** minor (Image Trace: Raster::new returns an error for a buffer of the wrong length; earlier: Gradients: grown over noise and soft rims)

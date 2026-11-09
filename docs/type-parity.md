@@ -3,7 +3,7 @@
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (Show Snap to Glyph Options scrolls to the options, with a Snap to Glyph checkbox, #5273; scores and estimates unchanged) · **Target:** Adobe Illustrator 2026 (30.x)
 
 Type is Illustrator's largest single area by use (weight 13 of 105 across "Type core" and "Type advanced" in
-[target-app-parity.md](target-app-parity.md)). This checklist lists the features one by one. Status is from the
+[target-app-parity.md](vectorcraft-target-app-parity.md)). This checklist lists the features one by one. Status is from the
 code and tests (`crates/text`, `crates/engine/src/cmd/type*.rs`, `textstyles.rs`, `crates/tools/src/text.rs`)
 against Illustrator's public documentation; **estimated** unless noted.
 

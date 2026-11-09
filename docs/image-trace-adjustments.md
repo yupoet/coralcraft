@@ -1,5 +1,8 @@
 # Adjusting an Image Trace
 
+> CoralCraft: This VectorCraft-derived Image Trace documentation describes the implementation base for the P3 tracing workflow. It is not evidence of PowerTRACE parity; see `coreldraw-reference-adoption.md` and `target-app-parity.md`.
+
+
 Select a placed raster image, then choose **Image Trace** or a preset from its arrow
 in Properties or the Control bar. The original image stays inside the tracing object so
 that subsequent adjustments always use the original pixels.
