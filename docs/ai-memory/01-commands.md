@@ -60,5 +60,5 @@ cargo run -p coralcraft-cli -- inspect-palette [--json] <palette.xml|palette.cpl
 cargo run -p coralcraft-cli -- mcp            # MCP server on stdio (same as `coralcraft --mcp`)
 
 # Regenerate the MCP tool list in docs/mcp.md (a sync test fails if it is stale)
-CORALCRAFT_BLESS=1 cargo test -p coralcraft-mcp --test docs_sync
+CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync
 ```
