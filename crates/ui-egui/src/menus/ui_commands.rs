@@ -425,6 +425,8 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
     ("view.grid", "Show Grid", "Cmd+'", "{}"),
     ("view.snapToGrid", "Snap to Grid", "Cmd+Shift+'", "{}"),
     ("view.snapToPoint", "Snap to Point", "Cmd+Alt+'", "{}"),
+    // CoralCraft: CorelDRAW's Snap to Guidelines toggle (P1 Task 5).
+    ("view.snapToGuides", "Snap to Guidelines", "", "{}"),
     ("view.presentation", "Presentation Mode", "Shift+F", "{}"),
     ("view.screenMode", "Screen Mode", "F", "{mode?: 0..2} (no param cycles)"),
     (

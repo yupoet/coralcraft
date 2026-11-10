@@ -467,6 +467,7 @@ pub(crate) mod testutil {
             outline: false,
             smart_guides: true,
             guides: true,
+            snap_to_guides: true,
             snap_to_grid: false,
             show_bbox: true,
             snap_to_pixel: false,

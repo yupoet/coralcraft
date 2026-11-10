@@ -249,6 +249,51 @@ mod tests {
         assert!(node_text(&nodes, "Weld").is_none(), "the upstream bar keeps its behaviour");
     }
 
+    /// The CorelDRAW snap toggles: `view.snapToGuides` flips the state the tools receive, the
+    /// CorelDRAW workspace's Snapping menu names the daily-use modes (Snap to Objects, Snap to
+    /// Guidelines, Dynamic Guides) where the upstream menu keeps its own, and both the view flag
+    /// and the Dynamic Guides preference persist.
+    #[test]
+    fn snapping_toggles_corel_names_and_persist() {
+        let mut app = app();
+        corel(&mut app);
+        // The toggle command flips the state and the tools' ViewInfo with it.
+        assert!(app.ui.view.snap_to_guides, "on by default");
+        assert!(app.view_info().snap_to_guides);
+        crate::menus::invoke(&mut app, "view.snapToGuides", json!({}));
+        assert!(!app.ui.view.snap_to_guides && !app.view_info().snap_to_guides, "toggled off");
+        crate::menus::invoke(&mut app, "view.snapToGuides", json!({}));
+        assert!(app.ui.view.snap_to_guides, "toggled back on");
+        // The CorelDRAW workspace's Snapping menu shows the CorelDRAW modes once opened.
+        let ctx = ctx();
+        let nodes = open_snapping_menu(&ctx, &mut app);
+        for label in ["Snap to Objects", "Snap to Grid", "Snap to Guidelines", "Dynamic Guides"] {
+            assert!(node_text(&nodes, label).is_some(), "{label} shows in the CorelDRAW workspace: {nodes:?}");
+        }
+        assert!(node_text(&nodes, "Smart Guides").is_none(), "the CorelDRAW names replace the upstream ones");
+        // The upstream menu keeps its own names outside the workspace (a click away closes the
+        // open menu first).
+        let away = egui::pos2(1400.0, 16.0);
+        let away_press =
+            |pressed| egui::Event::PointerButton { pos: away, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(away), away_press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![away_press(false)]);
+        crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
+        let nodes = open_snapping_menu(&ctx, &mut app);
+        assert!(node_text(&nodes, "Smart Guides").is_some() && node_text(&nodes, "Snap to Point").is_some(), "the upstream entries return");
+        assert!(node_text(&nodes, "Snap to Objects").is_none(), "no CorelDRAW entry outside the workspace");
+        // The view flag and the Dynamic Guides preference persist.
+        app.ui.view.snap_to_guides = false;
+        let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+        assert!(!back.view.snap_to_guides, "the flag round-trips");
+        let old: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap().replace("\"snap_to_guides\":false", ""))
+            .unwrap_or_else(|_| serde_json::from_str("{}").unwrap());
+        assert!(old.view.snap_to_guides, "a state saved before the flag defaults on");
+        app.run("prefs.set", json!({ "key": "constructionGuides", "value": false })).unwrap();
+        assert!(!app.session.prefs.construction_guides, "Dynamic Guides off through its preference");
+        assert_eq!(app.run("prefs.get", json!({ "key": "constructionGuides" })).unwrap(), json!(false), "the preference reads back");
+    }
+
     /// An English context for headless Control bar frames, with AccessKit on to find its controls
     /// (as the Paragraph panel's Control bar tests set up).
     fn ctx() -> egui::Context {
@@ -276,6 +321,19 @@ mod tests {
             nodes = out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default();
         }
         nodes
+    }
+
+    /// The Snapping menu opened (a click on its button), and the frames' accesskit nodes with its
+    /// entries in.
+    fn open_snapping_menu(ctx: &egui::Context, app: &mut VectorcraftApp) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
+        let nodes = control_bar_nodes(ctx, app, 1440.0, vec![]);
+        let button = node_text(&nodes, "Snapping").expect("the Snapping menu button");
+        let b = button.bounds().expect("the button's bounds");
+        let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        control_bar_nodes(ctx, app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(ctx, app, 1440.0, vec![press(false)]);
+        control_bar_nodes(ctx, app, 1440.0, vec![])
     }
 
     fn node_text(nodes: &[(egui::accesskit::NodeId, egui::accesskit::Node)], text: &str) -> Option<egui::accesskit::Node> {

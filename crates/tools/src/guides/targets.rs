@@ -522,7 +522,8 @@ impl Targets {
     /// These targets and the ruler guides, when they are shown (and so unlocked to the selection
     /// tools): they pull a point into line where they run.
     pub(super) fn with_rulers(mut self, cx: &ToolContext) -> Self {
-        if cx.guides {
+        // CoralCraft: Snap to Guidelines (P1 Task 5) can turn the ruler guides' pull off.
+        if cx.guides && cx.snap_to_guides {
             self.rulers = cx
                 .doc
                 .guides

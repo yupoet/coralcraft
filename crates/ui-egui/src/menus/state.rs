@@ -54,6 +54,8 @@ pub fn checked(app: &VectorcraftApp, id: &str, p: &Value) -> Option<bool> {
         "view.grid" => v.grid,
         "view.snapToGrid" => v.snap_to_grid,
         "view.snapToPoint" => v.snap_to_point,
+        // CoralCraft: CorelDRAW's Snap to Guidelines (P1 Task 5).
+        "view.snapToGuides" => v.snap_to_guides,
         "view.rulers" => v.rulers,
         // A View › Rotate View item is checked when the active view is turned to its angle; without
         // a document no item is checked.

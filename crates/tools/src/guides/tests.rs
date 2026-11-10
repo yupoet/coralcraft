@@ -891,3 +891,26 @@ fn a_shift_constrained_point_slides_onto_a_rotated_baseline() {
     let (q, _) = Targets::for_drawing(&d, &[], None, Some(GlyphSnap::default())).snap_from(crossing + Vec2::new(1.5, 0.3), Some(&from), 4.0);
     assert!(q.distance(crossing) < 1e-9, "{q:?} vs {crossing:?}");
 }
+
+/// CoralCraft: View → Snap to Guidelines (P1 Task 5) — a shown ruler guide pulls a nearby point
+/// into line where it runs, and turning the new toggle off leaves the point where it was, while
+/// the rest of the smart guides' targets keep pulling.
+#[test]
+fn snap_to_guidelines_toggle_gates_the_ruler_guides_pull() {
+    let (mut d, _) = doc_with_rect();
+    d.guides.push(vectorcraft_doc::Guide::new(true, 150.0));
+    let (s, p) = (Selection::default(), crate::PaintDefaults::default());
+    let c = cx(&d, &s, &p);
+    // On (the default): a point near the guide at x=150 lands on it, as a move drag's rulers do
+    // (select.rs builds them with `Targets::rulers`).
+    let (q, ov) = Targets::rulers(&c).snap_point(Point::new(153.0, 100.0), 4.0);
+    assert_eq!(q.x, 150.0, "the guide pulls the point into line");
+    assert!(!ov.is_empty(), "the guide says so: {ov:?}");
+    // Off: the same point keeps its x.
+    let c = ToolContext { snap_to_guides: false, ..cx(&d, &s, &p) };
+    let (q, _) = Targets::rulers(&c).snap_point(Point::new(153.0, 100.0), 4.0);
+    assert_eq!(q.x, 153.0, "Snap to Guidelines off leaves the point alone");
+    // The anchors' pull is unchanged either way.
+    let (q, _) = Targets::collect(&d, &[], None).styled(&c).snap_point(Point::new(102.0, 99.0), 4.0);
+    assert_eq!(q, Point::new(100.0, 100.0), "the smart guides' own targets still pull");
+}

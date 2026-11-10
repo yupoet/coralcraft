@@ -126,6 +126,9 @@ pub struct ToolContext<'a> {
     pub smart_guides: bool,
     /// View → Show Guides with Lock Guides off: the selection tools pick and drag ruler guides.
     pub guides: bool,
+    /// CoralCraft: View → Snap to Guidelines (P1 Task 5) — ruler guides pull a point into line
+    /// where they run. On by default, as the guides always did before the toggle existed.
+    pub snap_to_guides: bool,
     pub snap_to_grid: bool,
     /// Bounding box shown (View → Show/Hide Bounding Box).
     pub show_bbox: bool,

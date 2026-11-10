@@ -239,6 +239,9 @@ pub struct ViewFlags {
     pub grid: bool,
     pub guides: bool,
     pub smart_guides: bool,
+    /// CoralCraft: View → Snap to Guidelines (P1 Task 5) — ruler guides pull a point into line.
+    #[serde(default = "yes")]
+    pub snap_to_guides: bool,
     pub bounding_box: bool,
     pub pixel_preview: bool,
     pub snap_to_grid: bool,
@@ -277,6 +280,7 @@ impl Default for ViewFlags {
             grid: false,
             guides: true,
             smart_guides: true,
+            snap_to_guides: true,
             bounding_box: true,
             pixel_preview: false,
             snap_to_grid: false,

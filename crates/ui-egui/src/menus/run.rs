@@ -336,6 +336,8 @@ fn run_ui_part4(app: &mut VectorcraftApp, id: &str, _p: &Value) -> Option<Result
         "view.smartGuides" => flag(&mut app.ui.view.smart_guides),
         "view.grid" => flag(&mut app.ui.view.grid),
         "view.snapToGrid" => flag(&mut app.ui.view.snap_to_grid),
+        // CoralCraft: CorelDRAW's Snap to Guidelines (P1 Task 5).
+        "view.snapToGuides" => flag(&mut app.ui.view.snap_to_guides),
         _ => return None,
     };
     Some(r)

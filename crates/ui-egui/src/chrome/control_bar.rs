@@ -80,6 +80,28 @@ const ARTBOARD_SNAPPING_WIDTH: f32 = 900.0;
 
 /// The Control bar's snapping quick access; every change uses its existing command.
 fn snapping_menu(app: &mut VectorcraftApp, ui: &mut Ui) {
+    // CoralCraft: the CorelDRAW workspace's daily-use snap names (P1 Task 5): Snap to Objects is
+    // the smart guides' anchors/centres/edges, Snap to Guidelines the ruler guides' pull, and
+    // Dynamic Guides the construction guides (the Smart Guides preference of that name).
+    if crate::coreldraw_bar::active(app) {
+        ui.menu_button(tl!("Snapping"), |ui| {
+            for (label, cmd, on) in [
+                (tl!("Snap to Objects"), "view.smartGuides", app.ui.view.smart_guides),
+                (tl!("Snap to Grid"), "view.snapToGrid", app.ui.view.snap_to_grid),
+                (tl!("Snap to Guidelines"), "view.snapToGuides", app.ui.view.snap_to_guides),
+            ] {
+                if widgets::check(ui, label, on, true) {
+                    crate::menus::invoke(app, cmd, json!({}));
+                }
+            }
+            ui.separator();
+            let on = app.session.prefs.construction_guides;
+            if widgets::check(ui, tl!("Dynamic Guides"), on, true) {
+                crate::menus::invoke(app, "prefs.set", json!({ "key": "constructionGuides", "value": !on }));
+            }
+        });
+        return;
+    }
     ui.menu_button(tl!("Snapping"), |ui| {
         for (label, cmd, on) in [
             (tl!("Smart Guides"), "view.smartGuides", app.ui.view.smart_guides),

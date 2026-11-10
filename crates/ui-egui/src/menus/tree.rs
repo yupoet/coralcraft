@@ -595,6 +595,8 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 ),
                 c("Show Grid", "view.grid"),
                 c("Snap to Grid", "view.snapToGrid"),
+                // CoralCraft: CorelDRAW's Snap to Guidelines (P1 Task 5).
+                c("Snap to Guidelines", "view.snapToGuides"),
                 c("Snap to Pixel", "view.snapToPixel"),
                 c("Snap to Point", "view.snapToPoint"),
                 c("Snap to Glyph", "view.snapToGlyph"),
