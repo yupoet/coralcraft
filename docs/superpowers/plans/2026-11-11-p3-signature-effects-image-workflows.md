@@ -218,6 +218,8 @@ Run the focused tests plus `vectorcraft-effects` and Appearance suites. Commit w
 
 Place a handcrafted synthetic bitmap; exercise crop, resample, colour adjustment, and a common bitmap effect using existing commands. Assert source pixels, adjustment parameters, undo/redo, native reopen, and PowerClip composition. Do not turn editable vectors into bitmaps to satisfy the scenario.
 
+Progress: crop, undo/redo, brightness/contrast parameters, native reopen, and independent SVG evidence pass. No dedicated resample command or external-editor result has been verified, so this task remains open.
+
 - [ ] **Step 2: Verify external-editor handoff honestly**
 
 Exercise the existing external-editor command if present. Require an explicit unavailable/error result when no editor is configured; no test may claim a round trip it did not execute.

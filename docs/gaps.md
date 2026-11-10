@@ -56,7 +56,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P3.5 Envelope warp/mesh/content editing and Distort Twist parameter/dialog/native/SVG evidence (`5e7ddef04`); existing live suite 66/66. Push/pull and zipper-specific handles remain open.
 - [ ] P3.6 Extrude+Bevel and Drop Shadow ordered parameters/native/SVG+PDF/dialog evidence landed (`195b33c25`); Block Shadow, Lens, Perspective, Symmetry, and other D4 effects remain open.
 - [x] P3.7 Effect-stack reorder/duplicate/hide/remove/expand, invalid-input atomicity, native reopen, CorelDRAW Appearance and existing drag/eye evidence (`88570ccf8`).
-- [ ] P3.8 Bitmap crop/resample/adjustment/common effects and explicit external-editor behaviour remain open.
+- [ ] P3.8 Bitmap crop/undo/native reopen/brightness-contrast/independent SVG evidence landed; a dedicated resample command, other bitmap effects, PowerClip composition, and explicit external-editor behaviour remain open.
 - [ ] P3.9 PowerTRACE synthetic colour trace/live reopen/editable expansion/independent SVG/CorelDRAW panel landed (`cafb83293`; trace suite 252 passed, 3 existing ignored); centreline, colour reduction, smoothing, presets, and undo/redo workflow evidence remain open.
 - [ ] P3.10 Consolidated native/CDR/CMX persistence, warning, residual, and hostile-input audit. PowerClip + supported-effect CDR/CMX evidence and the live-Blend empty-path fix landed in this slice; mesh/transparency/bitmap/trace consolidation remains open.
 - [x] P3.11 No new command IDs were introduced; existing shared dispatch is reused and both live-registry/protocol `docs_sync` tests pass with generated docs clean.
