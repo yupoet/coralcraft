@@ -229,3 +229,78 @@ fn coreldraw_table_cells_are_editable_and_invalid_input_is_atomic() {
         assert_eq!(s.doc().unwrap().history.undo.len(), history, "invalid input added history: {params}");
     }
 }
+
+#[test]
+fn coreldraw_p2_semantics_survive_native_reopen_and_cdr_fallback() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    s.execute("artboard.new", &json!({"after": 0, "name": "Two"})).unwrap();
+    s.execute("layer.new", &json!({"name": "Master", "role": "masterAll"})).unwrap();
+    let field = s.execute("text.pageNumber.insert", &json!({"x": 20, "y": 280, "size": 12})).unwrap()["id"].as_u64().unwrap();
+    s.execute("layer.new", &json!({"name": "Body"})).unwrap();
+    let story = "Linked brochure body remains editable across native persistence. ".repeat(8);
+    let first =
+        s.execute("text.create", &json!({"x": 20, "y": 20, "text": story, "area": {"width": 150, "height": 60}})).unwrap()["id"].as_u64().unwrap();
+    let second =
+        s.execute("text.create", &json!({"x": 190, "y": 20, "text": "", "area": {"width": 150, "height": 100}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [first, second]})).unwrap();
+    s.execute("text.thread.create", &json!({})).unwrap();
+    s.execute("paraStyle.new", &json!({"name": "Body Center", "attrs": {"justify": "Center"}})).unwrap();
+    s.execute("paraStyle.apply", &json!({"name": "Body Center", "id": first})).unwrap();
+    let path = s.execute("path.create", &json!({"d": "M20 130 C100 80 200 80 280 130"})).unwrap()["id"].as_u64().unwrap();
+    let path_text = s.execute("text.createInPath", &json!({"path": path, "mode": "onPath", "text": "Path label"})).unwrap()["id"].as_u64().unwrap();
+    let table = s
+        .execute("layout.table", &json!({"x": 20, "y": 170, "width": 180, "height": 40, "rows": 1, "columns": 2, "text": [["Before", "Cell"]]}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let cell = match &s.doc().unwrap().doc.node(NodeId(table)).unwrap().kind {
+        NodeKind::Group { children, .. } => children
+            .iter()
+            .find_map(|node| match &node.kind {
+                NodeKind::Text(text) if text.plain_text() == "Before" => Some(node.id.0),
+                _ => None,
+            })
+            .unwrap(),
+        _ => panic!("table group"),
+    };
+
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    assert_eq!(s.execute("text.thread.info", &json!({})).unwrap(), json!([[first, second]]));
+    assert_eq!(text(&s, first).para.justify, vectorcraft_doc::Justify::Center);
+    assert!(matches!(text(&s, path_text).kind, TextKind::OnPath { .. }));
+    assert_eq!(text(&s, field).plain_text(), "#");
+    assert_eq!(text(&s, cell).plain_text(), "Before");
+
+    s.execute("text.editRange", &json!({"id": first, "start": 0, "end": 0, "insert": "Revised. "})).unwrap();
+    s.execute("text.reshapePath", &json!({"id": path_text, "anchors": [[0, 0]], "dx": 5, "dy": 0})).unwrap();
+    s.execute("text.setText", &json!({"id": cell, "text": "After"})).unwrap();
+    assert!(text(&s, first).plain_text().starts_with("Revised. "));
+    assert_eq!(text(&s, cell).plain_text(), "After");
+    assert_eq!(text(&s, field).plain_text(), "#");
+
+    let cdr = s.execute("document.serialize", &json!({"format": "cdr"})).unwrap();
+    assert!(
+        cdr["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|text| text.contains("page-number") && text.contains("native"))),
+        "the dynamic-field fallback is explicit: {cdr:?}"
+    );
+    s.execute("document.open", &json!({"name": "p2.cdr", "dataBase64": cdr["dataBase64"].as_str().unwrap()})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.artboards.len(), 2);
+    let mut texts = Vec::new();
+    for layer in &s.doc().unwrap().doc.layers {
+        layer.walk(&mut |node| {
+            if let NodeKind::Text(text) = &node.kind {
+                texts.push(text.plain_text());
+            }
+        });
+    }
+    for expected in ["1", "2", "After", "Path label"] {
+        assert!(texts.iter().any(|text| text == expected), "CDR retains editable text {expected:?}: {texts:?}");
+    }
+    assert!(texts.iter().any(|text| text.starts_with("Revised. ")), "the linked story's edited text remains: {texts:?}");
+}
