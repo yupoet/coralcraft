@@ -23,8 +23,8 @@
 ## File map
 
 - `docs/p2-inventory.md`: command/panel/format inventory and evidence anchors.
-- `crates/ui-egui/src/coreldraw_text_bar.rs`: CorelDRAW text Property Bar, separate from the general `coreldraw_bar.rs`.
-- `crates/ui-egui/src/chrome/control_bar.rs`, `crates/ui-egui/src/lib.rs`: text-bar registration only.
+- `crates/ui-egui/src/panels/character.rs`, `paragraph.rs`: the existing shared Property Bar controls; reuse them rather than creating a second text bar.
+- `crates/ui-egui/src/panels/tests_coreldraw_text.rs`: CorelDRAW workspace evidence for the shared text controls.
 - `crates/engine/tests/it/coreldraw_text.rs`: artistic/paragraph text, typography, and thread behaviour.
 - `crates/engine/tests/it/coreldraw_layout.rs`: path text, wrap, dynamic page numbers, master content, and editable tables.
 - `crates/engine/tests/it/coreldraw_cdr_text.rs`: legacy text decoding, warning, residual, and writer evidence.
@@ -75,48 +75,37 @@ git add docs/p2-inventory.md
 git commit -m "docs: inventory the P2 text and layout capabilities"
 ```
 
-### Task 2: Add the CorelDRAW font and size Property Bar
+### Task 2: Verify the CorelDRAW font and size Property Bar
 
 **Files:**
-- Create: `crates/ui-egui/src/coreldraw_text_bar.rs`
-- Modify: `crates/ui-egui/src/chrome/control_bar.rs`
-- Modify: `crates/ui-egui/src/lib.rs`
+- Create: `crates/ui-egui/src/panels/tests_coreldraw_text.rs`
+- Modify: `crates/ui-egui/src/panels.rs`
 
-- [ ] **Step 1: Write the failing UI test**
+- [ ] **Step 1: Verify the existing controls before changing production code**
 
-Create `coreldraw_text_bar.rs` with a `#[cfg(test)]` test named `text_bar_edits_the_selected_font_and_size` that creates a `VectorcraftApp`, selects the CorelDRAW workspace, creates text through `text.create`, selects it, draws the new bar, and then runs the same `text.setStyle` calls used by the widgets:
+The shared Control bar already calls `panels::character::control_bar`, which reuses `font_pickers` and `size_field` while text is selected or edited. Do not create `coreldraw_text_bar.rs` or duplicate font lookup, shaping, or command construction.
 
-```rust
-app.run("text.setStyle", json!({"id": id, "size": 36.0, "fontStyle": "Bold"})).unwrap();
-let node = app.run("document.node", json!({"id": id, "summary": true})).unwrap();
-assert_eq!(node["fontSize"].as_f64(), Some(36.0));
-```
+Create `tests_coreldraw_text.rs` with `text_bar_edits_the_selected_font_and_size`: select the CorelDRAW workspace, create and select text, draw the real Control bar, choose a font-size preset through pointer input, and verify the selected model. Exercise the font style through the widget's actual `text.setStyle {style}` command, then verify undo/redo and native reopen. Also verify that the text controls disappear with no text selected.
 
-Run `cargo test -p vectorcraft-ui-egui coreldraw_text_bar -- --nocapture` before the bar exists and confirm the test fails because the module/controls are absent.
+This is an evidence slice for existing behavior, so a passing test does not justify production code. If it exposes a real CorelDRAW-specific gap, add a focused failing regression test before fixing that gap.
 
-- [ ] **Step 2: Implement the thin bar over existing Character controls**
-
-Implement `pub fn show(app: &mut VectorcraftApp, ui: &mut Ui) -> bool` so it returns false outside the CorelDRAW workspace and when the mapped Text tool/selected text is absent. When active, call the existing `panels::character::{font_pickers,size_field}` with unique ids `corel-cb-font`, `corel-cb-font-style`, and `corel-cb-font-size`. Do not duplicate font lookup, shaping, or command construction.
-
-Register `coreldraw_text_bar` in `lib.rs` and call `show` from the Control bar after the P1 tool-specific rows. Keep all existing upstream bars unchanged outside the CorelDRAW workspace.
-
-- [ ] **Step 3: Run and commit**
+- [ ] **Step 2: Run and commit**
 
 ```bash
-cargo test -p vectorcraft-ui-egui coreldraw_text_bar -- --nocapture
+cargo test -p vectorcraft-ui-egui coreldraw_text -- --nocapture
 cargo test -p vectorcraft-ui-egui outline_pen
 ```
 
-Expected: both pass. Commit only the three UI files with `feat: add the CorelDRAW text property bar`.
+Expected: both pass. Commit only the test module, its registration, and this plan correction with `test: verify the CorelDRAW text property bar`.
 
-### Task 3: Add paragraph alignment and list controls
+### Task 3: Verify paragraph alignment and list controls
 
 **Files:**
-- Modify: `crates/ui-egui/src/coreldraw_text_bar.rs`
+- Modify: `crates/ui-egui/src/panels/tests_coreldraw_text.rs`
 - Create: `crates/engine/tests/it/coreldraw_text.rs`
 - Modify: `crates/engine/tests/it/main.rs`
 
-- [ ] **Step 1: Write failing paragraph behaviour tests**
+- [ ] **Step 1: Add paragraph behaviour evidence**
 
 In `coreldraw_text.rs`, create an area text object and verify left/centre/right/justify plus bullet and numbered-list edits through the existing commands:
 
@@ -126,26 +115,26 @@ s.execute("text.setFormat", &json!({"ids": [id], "list": "bullet", "bullet": "sq
 s.execute("text.setFormat", &json!({"ids": [id], "list": "number", "number": "upperRoman"})).unwrap();
 ```
 
-Assert the model changes, undo/redo restores each state, and native reopen preserves it. Run `cargo test -p vectorcraft-engine --test it coreldraw_text -- --nocapture`; confirm failure before any missing wiring is added.
+Assert the model changes, undo/redo restores each state, and native reopen preserves it. Run `cargo test -p vectorcraft-engine --test it coreldraw_text -- --nocapture`. Existing behaviour that passes needs only evidence; a missing behaviour requires a failing regression test before implementation.
 
-- [ ] **Step 2: Wire the CorelDRAW controls to existing Paragraph behaviour**
+- [ ] **Step 2: Verify the shared CorelDRAW controls**
 
-Use `panels::paragraph::align` and `run_on_paragraphs` for alignment/list actions. Add left, centre, right, justify, bullet, and numbered-list controls to `coreldraw_text_bar.rs`, with unique AccessKit labels. Do not implement a second paragraph formatter.
+The shared Control bar already exposes left/centre/right alignment and a Paragraph popover; the Paragraph panel supplies justification, bullets, and numbering through `align` and `run_on_paragraphs`. Cover the CorelDRAW workspace's real controls with pointer/accessibility evidence. Do not add a second paragraph row or formatter; change production code only for a measured CorelDRAW-specific gap.
 
 - [ ] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p vectorcraft-engine --test it coreldraw_text -- --nocapture
-cargo test -p vectorcraft-ui-egui coreldraw_text_bar -- --nocapture
+cargo test -p vectorcraft-ui-egui coreldraw_text -- --nocapture
 ```
 
-Expected: pass. Commit with `feat: expose CorelDRAW paragraph controls`.
+Expected: pass. Commit with `test: verify CorelDRAW paragraph controls` when evidence-only, or `feat: expose CorelDRAW paragraph controls` if a measured gap requires wiring.
 
 ### Task 4: Prove linked-frame editing and UI threading
 
 **Files:**
 - Modify: `crates/engine/tests/it/coreldraw_text.rs`
-- Modify: `crates/ui-egui/src/coreldraw_text_bar.rs`
+- Modify: `crates/ui-egui/src/panels/tests_coreldraw_text.rs`
 
 - [ ] **Step 1: Write the failing linked-frame test**
 
@@ -207,7 +196,7 @@ Expected: pass, including independent `usvg` and Hayro checks. Commit with `feat
 
 **Files:**
 - Modify: `crates/engine/tests/it/coreldraw_text.rs`
-- Modify: `crates/ui-egui/src/coreldraw_text_bar.rs`
+- Modify: `crates/ui-egui/src/panels/tests_coreldraw_text.rs`
 
 - [ ] **Step 1: Add failing evidence for the selected typography path**
 
