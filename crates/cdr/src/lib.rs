@@ -17,6 +17,7 @@ pub mod error;
 pub mod inflate;
 pub mod parse;
 pub mod riff;
+pub mod text;
 pub mod zip;
 
 use serde::{Deserialize, Serialize};

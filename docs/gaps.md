@@ -35,6 +35,9 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.12 MCP/CLI surface and regenerated docs (this commit): `p1_commands_run_through_run_command` proves the new commands through `run_command`; `docs/mcp.md` regeneration clean (registry unchanged).
 - [x] P1.13 P1 acceptance scenario and gate (this commit): `crates/engine/tests/it/coreldraw_p1_acceptance.rs` (build → revise → native reopen → SVG text + independent usvg + re-import → PDF structure + Hayro-backed import, recorded in `docs/p1-inventory.md` §4); `cargo xtask ci` gate run with the result recorded in `docs/ai-memory/03-current.md`. **P1 complete; next: P2 (text and multipage layout).**
 
+**P2 follow-ups found by implementation:**
+- [ ] P2.CDR-TEXT Link the public-spec `stlt` Font Encoding / `font` Encoding ID records to their text runs, then call the bounded decoder in `crates/cdr/src/text.rs`. The decoder, strict `txtd` errors/warnings, and residual writer mapping are implemented and tested, but this font-record association is not; do not guess a code page from the bytes. S2 remains open.
+
 Completed migration steps (V0–V4.2):
 
 - [x] V0.1 Move pre-fork crates to `legacy/` (keep `crates/cdr`); copy VectorCraft `a466625` crates, apps, xtask pieces, vendor, non-brand assets, packaging, and CI; create `docs/upstream-vectorcraft.md`.

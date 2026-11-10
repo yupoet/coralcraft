@@ -1887,7 +1887,11 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     } else if let Some((payload, tag)) = loda_payload {
         decode_loda_geometry(payload, tag, ctx.endian, ctx.version, page_size, bbox_rect, warnings)
     } else if let Some(txtd) = txtd_payload {
-        decode_txtd_chunk(txtd, bbox_rect)
+        let (kind, raw) = decode_txtd_chunk(txtd, bbox_rect, warnings);
+        if let Some(raw) = raw {
+            residual.chunks.push(raw);
+        }
+        kind
     } else if let Some(b) = bbox_rect {
         ObjectKind::Rect(RectSpec::sharp(b))
     } else {
@@ -3073,19 +3077,38 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
     Some(ObjectKind::ParagraphText(Box::new(spec)))
 }
 
-fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
+fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>, warnings: &mut Vec<String>) -> (ObjectKind, Option<RawChunk>) {
     // Byte 0 is text encoding tag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Text)
-    let text = if payload.first() == Some(&0x02) && payload.len() >= 3 {
-        let u16s: Vec<u16> =
-            payload.get(1..).unwrap_or_default().as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&ch| ch != 0).collect();
-        String::from_utf16_lossy(&u16s)
-    } else if payload.first().is_some_and(|&b| b <= 0x01) && payload.len() >= 2 {
-        String::from_utf8_lossy(payload.get(1..).unwrap_or_default()).trim_end_matches('\0').to_owned()
-    } else {
-        String::from_utf8_lossy(payload).trim_end_matches('\0').to_owned()
+    let before = warnings.len();
+    let decoded = match payload.first() {
+        Some(0) => crate::text::decode_ascii(payload.get(1..).unwrap_or_default()),
+        Some(1) => crate::text::decode_utf8(payload.get(1..).unwrap_or_default()),
+        Some(2) => crate::text::decode_utf16le(payload.get(1..).unwrap_or_default()),
+        Some(tag) => {
+            warnings.push(format!("W-TXTD-ENCODING: unknown txtd encoding tag 0x{tag:02x}; raw text retained"));
+            Ok(String::new())
+        }
+        None => {
+            warnings.push("W-TXTD-ENCODING: txtd has no encoding tag; raw text retained".into());
+            Ok(String::new())
+        }
     };
+    let text = match decoded {
+        Ok(text) => text,
+        Err(error) => {
+            warnings.push(format!("W-TXTD-DECODE: {error}; raw text retained"));
+            String::new()
+        }
+    };
+    let residual = (warnings.len() > before).then(|| RawChunk {
+        tag: ChunkTag(*b"txtd"),
+        flags: 0,
+        slot: 0,
+        payload: RawPayload(payload.to_vec()),
+        src_offset: 0,
+    });
     let rect = bbox_rect.unwrap_or_else(|| Rect::new(36.0, 36.0, 236.0, 136.0).unwrap_or_default());
-    if let Ok(pt) = Point::new(rect.x0.get(), rect.y0.get())
+    let kind = if let Ok(pt) = Point::new(rect.x0.get(), rect.y0.get())
         && let Ok(spec) = ParagraphTextSpec::new(
             pt,
             rect.width().max(20.0),
@@ -3097,12 +3120,12 @@ fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>) -> ObjectKind {
             TextAlignment::Left,
             1,
             0.0,
-        )
-    {
+        ) {
         ObjectKind::ParagraphText(Box::new(spec))
     } else {
         ObjectKind::Rect(RectSpec::sharp(rect))
-    }
+    };
+    (kind, residual)
 }
 
 fn decode_loda_bitmap(slice: &[u8], endian: Endian, _version: u16, _page_size: Size, bbox_rect: Option<Rect>) -> Option<ObjectKind> {
@@ -5461,5 +5484,25 @@ mod budget_tests {
         dib.extend_from_slice(&24u16.to_le_bytes());
         dib.resize(40, 0);
         assert!(decode_bmp_or_cdib_chunk(&dib, Endian::Little).is_none());
+    }
+
+    #[test]
+    fn txtd_malformed_or_unknown_encodings_warn_and_keep_the_raw_chunk() {
+        for payload in [&[0x7f, b'A'][..], &[1, b'c', 0xff][..], &[2, 0x41][..]] {
+            let mut warnings = Vec::new();
+            let (kind, residual) = decode_txtd_chunk(payload, None, &mut warnings);
+            assert_eq!(warnings.len(), 1, "payload {payload:?} must warn");
+            assert!(
+                residual.is_some_and(|chunk| chunk.tag == ChunkTag(*b"txtd") && chunk.payload.0 == payload),
+                "payload {payload:?} must be preserved"
+            );
+            let ObjectKind::ParagraphText(text) = kind else { panic!("expected paragraph fallback") };
+            assert_eq!(text.text, "Text", "unknown text must not be silently decoded as UTF-8");
+        }
+        let mut warnings = Vec::new();
+        let (kind, residual) = decode_txtd_chunk(b"\0A\0", None, &mut warnings);
+        assert!(warnings.is_empty() && residual.is_none());
+        let ObjectKind::ParagraphText(text) = kind else { panic!("expected text") };
+        assert_eq!(text.text, "A");
     }
 }

@@ -11,6 +11,7 @@ repository.workspace = true
 coralcraft-color = { workspace = true }
 coralcraft-doc = { workspace = true }
 coralcraft-geom = { workspace = true }
+encoding_rs.workspace = true
 serde = { workspace = true }
 thiserror = { workspace = true }
 

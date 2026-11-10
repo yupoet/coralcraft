@@ -937,6 +937,7 @@ dependencies = [
  "coralcraft-color",
  "coralcraft-doc",
  "coralcraft-geom",
+ "encoding_rs",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

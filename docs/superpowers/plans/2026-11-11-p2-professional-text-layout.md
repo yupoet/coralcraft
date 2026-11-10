@@ -291,7 +291,7 @@ Create handcrafted byte fixtures for Windows-1252 and Windows-1250, including a 
 
 - [ ] **Step 2: Implement the bounded decoder**
 
-Add `encoding_rs = "0.8"` to workspace dependencies and `encoding_rs.workspace = true` to `coralcraft-cdr`. Implement a decoder that takes bytes plus an explicitly identified `encoding_rs::Encoding`; do not guess a code page from text. Integrate it only where the CDR parser has an evidenced encoding field. Unknown encodings produce a warning and residual, not silent UTF-8 replacement.
+Add `encoding_rs = "0.8"` to workspace dependencies and `encoding_rs.workspace = true` to `coralcraft-cdr`. Implement bounded decoders that take bytes plus an explicitly identified `encoding_rs::Encoding`; do not guess a code page from text. Strict `txtd` ASCII/UTF-8/UTF-16LE errors and unknown encoding tags produce a warning and residual, not silent replacement. The public-spec `stlt` Font Encoding / `font` Encoding ID records are not yet associated with text runs; record that linkage as an open follow-up rather than claiming full old-version text coverage.
 
 - [ ] **Step 3: Verify mapping and writer evidence**
 
