@@ -726,6 +726,42 @@ mod tests {
     }
 
     #[test]
+    /// CoralCraft P1 Task 11 (known-issue 0e): a multi-page document round-trips through CDR7
+    /// with every page (its name and size) preserved.
+    #[test]
+    fn write_cdr7_roundtrips_multiple_pages() {
+        use coralcraft_color::Color;
+        use coralcraft_doc::{Document, FillStyle, Page, PageId, Residual};
+        use coralcraft_geom::F64;
+        let mut doc = Document::new_a4_portrait();
+        for (i, name) in ["Two", "Three"].iter().enumerate() {
+            let size = doc.pages[0].size;
+            doc.pages.push(Page {
+                id: PageId(u64::try_from(i + 2).unwrap()),
+                name: (*name).to_string(),
+                size,
+                bleed: F64::ZERO,
+                background: Some(FillStyle::uniform(Color::WHITE)),
+                layers: Vec::new(),
+                residual: Residual::default(),
+                extra: Default::default(),
+            });
+        }
+        doc.pages[0].name = "One".into();
+        let bytes = write_cdr7(&doc).unwrap();
+        let parsed = parse_document(&bytes).unwrap().document;
+        let names: Vec<&str> = parsed.pages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["One", "Two", "Three"], "every page round-trips");
+        for (a, b) in doc.pages.iter().zip(parsed.pages.iter()) {
+            assert!(
+                (a.size.width.get() - b.size.width.get()).abs() < 0.01,
+                "page sizes round-trip: {} vs {}",
+                a.size.width.get(),
+                b.size.width.get()
+            );
+        }
+    }
+
     fn write_cdr7_roundtrip_paragraph_text() {
         use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment};
         use coralcraft_geom::Point;

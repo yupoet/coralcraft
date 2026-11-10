@@ -18,6 +18,8 @@ mod copy_direct_selection;
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).
 mod coreldraw_pages;
+// CoralCraft: the P1 persistence audit (P1 Task 11).
+mod coreldraw_p1_persistence;
 // CoralCraft: the CorelDRAW fill/outline appearance (P1 Task 7).
 mod coreldraw_appearance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).

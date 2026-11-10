@@ -77,12 +77,11 @@ fn pages_and_master_layers_survive_the_daily_round_trips() {
         layers(&mut s)
     );
 
-    // CDR7 round trip: the master layer survives `corel-import`'s mapping. The first page is
-    // lost today — known-issue 0e (docs/ai-memory/04-known-issues.md), owned by P1 Task 11; this
-    // asserts the measured current behaviour so the fix flips the test.
+    // CDR7 round trip: every page and the master layer survive `corel-import`'s mapping (the
+    // reader's master-page heuristic no longer eats a named first page; P1 Task 11).
     let mut s = pages_doc();
     let cdr = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
     s.execute("document.open", &json!({ "name": "pages.cdr", "dataBase64": cdr })).unwrap();
-    assert_eq!(names(&mut s).len(), 2, "known-issue 0e: CDR7 keeps pages 2..N: {:?}", names(&mut s));
+    assert_eq!(names(&mut s).len(), 3, "three pages reopened from CDR7: {:?}", names(&mut s));
     assert!(layers(&mut s).iter().any(|(_, role)| role.starts_with("master_all")), "the master layer reopened from CDR7: {:?}", layers(&mut s));
 }

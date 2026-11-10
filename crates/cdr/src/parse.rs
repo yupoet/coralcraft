@@ -580,7 +580,9 @@ fn process_chunk_tree(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &mut Doc
         }
 
         // If raw_pages has > 1 entries and idx == 0 has 0 objects while later pages exist, treat idx == 0 as Master Page
-        if idx == 0 && raw_pages.len() > 1 && page.layers.iter().all(|l| l.objects.is_empty()) {
+        // — but only when it carries no page name of its own: a numbered page (as CorelDRAW's page
+        // tabs and our writer's `pmta` name them) is never the master page container.
+        if idx == 0 && raw_pages.len() > 1 && page.layers.iter().all(|l| l.objects.is_empty()) && page.name.is_empty() {
             continue;
         }
         let final_num = (doc.pages.len().saturating_add(1)) as u64;
