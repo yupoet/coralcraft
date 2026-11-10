@@ -20,6 +20,8 @@ mod coreldraw_node_workflow;
 mod coreldraw_appearance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).
 mod coreldraw_shaping;
+// CoralCraft: the CorelDRAW styles and symbols (P1 Task 9).
+mod coreldraw_styles_symbols;
 // CoralCraft: the CorelDRAW transform and align workflows (P1 Task 6).
 mod coreldraw_transform;
 mod dimensions;

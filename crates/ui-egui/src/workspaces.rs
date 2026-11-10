@@ -82,7 +82,8 @@ pub const TOUCH: &str = "Touch";
 pub const CORELDRAW: &str = "CorelDRAW";
 
 /// CoralCraft: pre-configured right docker stack for the CorelDRAW workspace (`Object Properties`,
-/// `Objects`, `Transform`, `Align & Distribute`, `Color`, `Text`).
+/// `Objects`, `Transform`, `Align & Distribute`, `Color`, `Text`, plus P1 Task 9's `Object Styles`
+/// and `Symbol Manager`).
 pub fn coreldraw_docking_layout() -> craft_ui::docking::Layout<String> {
     // CoralCraft: CorelDRAW's docker arrangement — the canvas at the left, its dockers docked at
     // the right edge: object docker groups over the color and character docker groups.
@@ -92,6 +93,8 @@ pub fn coreldraw_docking_layout() -> craft_ui::docking::Layout<String> {
                 craft_ui::docking::Group::new(vec!["properties".into(), "layers".into()], 0),
                 craft_ui::docking::Group::new(vec!["transform".into(), "align".into()], 0),
                 craft_ui::docking::Group::new(vec!["color".into(), "character".into()], 0),
+                // CoralCraft: Object Styles and Symbol Manager (P1 Task 9).
+                craft_ui::docking::Group::new(vec!["graphicStyles".into(), "symbols".into()], 0),
             ],
             width: 260.0,
             iconic: false,
