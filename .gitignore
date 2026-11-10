@@ -6,6 +6,9 @@
 # Local session notes (same convention as vectorcraft)
 /plan/
 
+# Isolated development worktrees
+/.worktrees/
+
 # Test corpora fetched by `cargo xtask corpus` (never committed; same convention as vectorcraft)
 /corpus/
 # A craft-fonts checkout for CRAFT_FONTS_DIR (release builds check it out here)
