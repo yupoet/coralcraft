@@ -18,6 +18,8 @@ mod copy_direct_selection;
 mod coreldraw_cdr_text;
 // CoralCraft: advanced fills and transparency (P3 Task 3).
 mod coreldraw_fills_transparency;
+// CoralCraft: bitmap and PowerTRACE workflows (P3 Tasks 8-9).
+mod coreldraw_image_workflows;
 // CoralCraft: the CorelDRAW selection and node workflow (P1 Task 3).
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).

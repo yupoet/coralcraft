@@ -238,12 +238,14 @@ Use a handcrafted bitmap and run:
 
 ```rust
 let traced = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": {"mode": "color"}})).unwrap()["id"].as_u64().unwrap();
-s.execute("imageTrace.setView", &json!({"id": traced, "view": "traced"})).unwrap();
+s.execute("imageTrace.setView", &json!({"id": traced, "view": "outlines"})).unwrap();
 let expanded = s.execute("imageTrace.makeAndExpand", &json!({"id": traced})).unwrap();
-assert!(expanded["ids"].as_array().is_some_and(|ids| !ids.is_empty()));
+assert!(expanded["paths"].as_u64().is_some_and(|paths| paths > 0));
 ```
 
 Verify outline and centreline modes supported by `vectorcraft-trace`, colour reduction, smoothing, presets, undo/redo, editable expanded paths, and native reopen. Parse the expanded SVG independently with `usvg`.
+
+Progress: synthetic colour tracing, Outlines view, native live-trace reopen, editable expanded paths, and independent SVG evidence pass. Centreline, colour-reduction, smoothing, presets, and undo/redo coverage remain open, so this task is not checked.
 
 - [ ] **Step 2: Verify the Image Trace docker and CorelDRAW naming**
 

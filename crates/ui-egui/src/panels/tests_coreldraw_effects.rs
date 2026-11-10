@@ -144,3 +144,31 @@ fn coreldraw_appearance_docker_shows_and_edits_the_ordered_effect_stack() {
     assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["distort.twist", "distort.twist", "stylize.dropShadow"]);
     assert!(!effects[0].visible);
 }
+
+#[test]
+fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_fn(16, 16, |x, y| {
+        if (3..13).contains(&x) && (3..13).contains(&y) { image::Rgba([20, 40, 80, 255]) } else { image::Rgba([255; 4]) }
+    })
+    .write_to(&mut png, image::ImageFormat::Png)
+    .unwrap();
+    let placed = run(
+        &mut app,
+        "file.place",
+        json!({"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+    );
+    let bitmap = placed["ids"][0].as_u64().unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::image_trace::show);
+    for label in ["Preset", "Mode", "View"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+    let trace = NodeId(run(&mut app, "imageTrace.make", json!({"id": bitmap, "params": {"ignoreWhite": true}}))["id"].as_u64().unwrap());
+    assert!(app.session.active().unwrap().doc.node(trace).unwrap().extras().trace.is_some());
+    let expanded = run(&mut app, "imageTrace.makeAndExpand", json!({"id": trace.0}));
+    assert!(expanded["paths"].as_u64().unwrap() > 0, "{expanded}");
+}
