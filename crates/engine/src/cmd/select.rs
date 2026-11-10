@@ -444,7 +444,7 @@ fn marquee(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let inside = bool_or(p, "inside", false);
     let st = s.doc()?;
-    let mut ids = vectorcraft_doc::hit::marquee(&st.doc, r, None, true);
+    let mut ids = vectorcraft_doc::hit::marquee(&st.doc, r, st.isolation, true);
     if inside {
         let symbols = st.doc.symbol_boxes();
         let within = |b: vectorcraft_geom::Rect| r.min_x() <= b.min_x() && b.max_x() <= r.max_x() && r.min_y() <= b.min_y() && b.max_y() <= r.max_y();

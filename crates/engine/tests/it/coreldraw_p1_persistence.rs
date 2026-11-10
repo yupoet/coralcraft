@@ -86,7 +86,7 @@ fn every_p1_semantic_survives_one_native_round_trip() {
     assert_eq!(p1blue["strokeWidth"].as_f64(), Some(3.0), "the style's outlined weight reopened: {p1blue:?}");
     assert!(!p1blue["linked"].as_array().unwrap_or(&vec![]).is_empty(), "an object stayed linked");
     // styled1 keeps its look as a plain object; styled2 is the symbol's source art, so its look
-    // shows in the export (an independent read of the reopened document).
+    // shows in the exported SVG of the reopened document.
     let id = by_bounds(20.0, 200.0).unwrap_or_else(|| panic!("styled1 reopened: {nodes:?}"))["id"].as_u64().unwrap();
     let node = s.execute("document.node", &json!({ "id": id, "summary": true })).unwrap();
     assert_eq!(node["fill"].as_str(), Some("#3050a0"), "the styled fill reopened");

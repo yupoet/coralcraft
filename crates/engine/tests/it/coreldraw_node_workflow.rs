@@ -2,7 +2,7 @@
 //! the D1 row's rise to level 4. The Shape tool's daily workflow runs headless as commands (node
 //! select/move/add/delete/convert, marquee selection, selection modifiers) with undo and redo, the
 //! edited nodes stay editable after a native `.vectorcraft` save and reopen, and the exported SVG
-//! shows the edited geometry — parsed here from the SVG text itself, not read back through our own
+//! is checked both as text and by the independent `usvg` parser rather than only through our own
 //! document model.
 
 use serde_json::{Value, json};
@@ -27,11 +27,13 @@ fn anchors(s: &mut Session, id: u64) -> u64 {
 
 /// The SVG serialization of the document (an independent text the checks below parse).
 fn svg(s: &mut Session) -> String {
-    s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string()
+    let text = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&text, &usvg::Options::default()).expect("independent usvg parse");
+    assert!(!tree.root().children().is_empty(), "usvg found the exported artwork");
+    text
 }
 
-/// The geometry the SVG gives its shapes — `<path d="…">` and `<polygon points="…">` alike, with
-/// commas as spaces so both read the same — an independent parse of the exported text.
+/// Text-level geometry assertions backed by the independent `usvg` parse in [`svg`].
 fn svg_geometry(svg: &str) -> String {
     let mut out = String::new();
     for l in svg.lines() {
@@ -147,4 +149,17 @@ fn edited_nodes_survive_a_native_save_and_reopen() {
     s.execute("path.moveAnchors", &json!({ "dx": 0, "dy": 40 })).unwrap();
     let d = svg_geometry(&svg(&mut s));
     assert!(d.contains("30 50") && d.contains("120 60"), "the reopened path edits: {d}");
+}
+
+/// Marquee selection in isolation mode never reaches objects outside the isolated object.
+#[test]
+fn marquee_selection_respects_the_isolation_scope() {
+    let mut s = session();
+    let inside = s.execute("shape.rectangle", &json!({ "x": 0, "y": 0, "width": 40, "height": 40 })).unwrap()["id"].as_u64().unwrap();
+    let outside = s.execute("shape.rectangle", &json!({ "x": 100, "y": 0, "width": 40, "height": 40 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("object.isolate", &json!({ "id": inside })).unwrap();
+
+    let result = s.execute("select.marquee", &json!({ "x": 0, "y": 0, "width": 200, "height": 100 })).unwrap();
+    let ids: Vec<u64> = result["ids"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    assert_eq!(ids, vec![inside], "isolation excluded the outside object {outside}");
 }

@@ -21,7 +21,10 @@ fn overlap() -> (Session, u64, u64) {
 
 /// The SVG serialization of the document.
 fn svg(s: &mut Session) -> String {
-    s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string()
+    let text = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&text, &usvg::Options::default()).expect("independent usvg parse");
+    assert!(!tree.root().children().is_empty(), "usvg found the exported artwork");
+    text
 }
 
 /// The count of `<rect`, `<path` and `<polygon` shapes the SVG has.
@@ -71,7 +74,7 @@ fn weld_unites_the_selection_and_undoes() {
     assert_eq!(bounds(&mut s, ids[0]), (10.0, 10.0, 90.0, 90.0), "the union's bounds");
     let text = svg(&mut s);
     assert_eq!(svg_shapes(&text), 1, "the independent SVG shows one shape: {text}");
-    assert!(svg_point_counts(&text) == [8] || svg_shapes(&text) == 1, "the welded L-silhouette");
+    assert!(svg_point_counts(&text).contains(&8), "the welded L-silhouette has eight corners: {text}");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(svg_shapes(&svg(&mut s)), 2, "undo restored two shapes");
     let sel = s.active().unwrap().selection.objects.clone();

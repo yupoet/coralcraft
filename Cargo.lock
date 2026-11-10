@@ -6318,6 +6318,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "usvg 0.48.1",
  "vectorcraft-affinity",
  "vectorcraft-brush",
  "vectorcraft-cad",

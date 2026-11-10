@@ -2,8 +2,8 @@
 //! revised entirely through the command surface an MCP `run_command` call drives: shapes, a
 //! node-edited path, text, a welded pair, a style, a symbol, transforms and fills, on two pages
 //! with a master layer. Then: a native `.vectorcraft` save and reopen keeps everything editable,
-//! the exported SVG re-imports with matching geometry (an independent import), and the PDF has the
-//! structure a PDF reader checks (header, page objects, xref).
+//! the exported SVG is parsed by independent `usvg` and re-imported for editability, while the PDF
+//! is checked structurally and opened through the Hayro-backed reader.
 
 use serde_json::json;
 use vectorcraft_engine::Session;
@@ -57,9 +57,10 @@ fn p1_acceptance_builds_revises_and_round_trips_a_logo() {
     let node = s.execute("document.node", &json!({ "id": id, "summary": true })).unwrap();
     assert_eq!(node["strokeWidth"].as_f64(), Some(4.0), "the reopened document edits");
 
-    // SVG: an independent import — reopen the exported text and check the geometry came back.
+    // SVG: independent usvg parsing, then reopen the exported text and check editability.
     let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
     assert!(svg.contains("<svg"), "the SVG carries the art: {svg}");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the acceptance document");
     s.execute("document.open", &json!({ "name": "logo.svg", "dataBase64": b64(svg.as_bytes()) })).unwrap();
     let info = s.execute("document.info", &json!({})).unwrap();
     // The re-imported document holds the logo's art: its artboard is the export's extent, and the
@@ -79,6 +80,8 @@ fn p1_acceptance_builds_revises_and_round_trips_a_logo() {
     assert!(pdf.starts_with(b"%PDF-"), "a PDF header");
     assert!(pdf.windows(11).any(|w| w == b"/Type /Page") || pdf.windows(10).any(|w| w == b"/Type/Page"), "page objects");
     assert!(pdf.windows(9).any(|w| w == b"startxref"), "an xref table");
+    let reopened = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF import");
+    assert_eq!(reopened.artboards.len(), 1, "the PDF reader reconstructed the exported page");
 }
 
 /// Base64 (the command surface takes data as base64).

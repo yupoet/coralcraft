@@ -33,7 +33,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.10 Pages and master layers daily use (this commit): reorder/roles/native-reopen evidence in `crates/engine/tests/it/coreldraw_pages.rs`; measured CDR7 first-page loss recorded as known-issue 0e (owned by P1.11).
 - [x] P1.11 Native persistence and CDR mapping (this commit): consolidated P1 persistence audit `crates/engine/tests/it/coreldraw_p1_persistence.rs`; CDR7 multi-page first-page loss FIXED (reader master-page heuristic now skips only unnamed first pages — known-issue 0e resolved; regression `write_cdr7_roundtrips_multiple_pages`); hostile-input suites green.
 - [x] P1.12 MCP/CLI surface and regenerated docs (this commit): `p1_commands_run_through_run_command` proves the new commands through `run_command`; `docs/mcp.md` regeneration clean (registry unchanged).
-- [x] P1.13 P1 acceptance scenario and gate (this commit): `crates/engine/tests/it/coreldraw_p1_acceptance.rs` (build → revise → native reopen → SVG re-import + PDF structure, recorded in `docs/p1-inventory.md` §4); `cargo xtask ci` gate run with the result recorded in `docs/ai-memory/03-current.md`. **P1 complete; next: P2 (text and multipage layout).**
+- [x] P1.13 P1 acceptance scenario and gate (this commit): `crates/engine/tests/it/coreldraw_p1_acceptance.rs` (build → revise → native reopen → SVG text + independent usvg + re-import → PDF structure + Hayro-backed import, recorded in `docs/p1-inventory.md` §4); `cargo xtask ci` gate run with the result recorded in `docs/ai-memory/03-current.md`. **P1 complete; next: P2 (text and multipage layout).**
 
 Completed migration steps (V0–V4.2):
 
@@ -64,13 +64,13 @@ The sync itself (plan [`superpowers/plans/2026-11-07-vectorcraft-full-sync.md`](
 - [ ] S3 Remove the `nonminimal_bool` / `drop_non_drop` workspace-lint allowances once a later upstream sync clears the clippy drift (root `Cargo.toml`, marked `# CoralCraft:`). Continuous hygiene — kept open.
 - [x] S4 Regenerate `docs/mcp.md` against the synced MCP registry. **Resolved 2026-11-10 (P0.2, commit `1db3a65e0`)**: `crates/mcp/tests/docs_sync.rs` now checks the live registry and protocol surface; regenerate with `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`.
 - [x] S5 Fold upstream's technical-doc changes (formats, tracing, three-d, plugins) into CoralCraft's own docs where they matter. **Resolved 2026-11-10 (P0.3, commit `1949c7a20`)**: upstream's Illustrator assessment preserved as `docs/vectorcraft-target-app-parity.md`, upstream links retargeted, and CoralCraft notes added to the formats/tracing/3D/plug-in docs.
-- [ ] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels.
+- [x] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels. Completed by P1.8; behaviour evidence is in `crates/ui-egui/src/panels/tests_coreldraw_dockers.rs`.
 - [ ] V5.1 PowerClip.
 - [ ] V5.2 Interactive effects with on-canvas handles (Blend, Contour, Distort, Envelope, Extrude, Drop Shadow, Transparency).
 - [ ] V5.3 Corel `.cpl`/`.xml` palettes in the palette bar and swatches.
 - [ ] V5.4 Smart Fill, Connector, Dimension, PowerTRACE.
 - [ ] V6.1 VectorCraft MCP server plus CoralCraft-only tools; retire duplicates.
-- [ ] V6.2 Regenerate `docs/mcp.md`; keep `coralcraft-cli mcp` / `coralcraft --mcp`.
+- [x] V6.2 Regenerate `docs/mcp.md`; keep `coralcraft-cli mcp` / `coralcraft --mcp`. Completed by P0.2/S4; `crates/mcp/tests/docs_sync.rs` keeps the generated list current.
 - [ ] V7.1 Delete `legacy/` crates as their unique content is ported. Continuous hygiene — kept open.
 
 > [!NOTE]

@@ -112,15 +112,19 @@ fn choice(ui: &mut egui::Ui, d: &mut Dialog, key: &str, label: &str, options: &[
 
 fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
     let style = STYLES.iter().find(|(v, _)| *v == d.str("style")).and_then(|(_, dash)| *dash);
+    let color = d.fields.get("color").and_then(Value::as_str);
+    if let Some(c) = color
+        && !(c.starts_with('#') && c.len() == 7 && c.chars().skip(1).all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err("colour must be #rrggbb".into());
+    }
     let mut p = json!({
         "weight": d.f64("weight", 2.0).max(0.0),
         "miterLimit": d.f64("miterLimit", 10.0).max(1.0),
         "join": d.str("join"),
         "cap": d.str("cap"),
+        "dash": style.map_or(Value::Null, |dash| json!(dash)),
     });
-    if let Some(dash) = style {
-        p["dash"] = json!(dash);
-    }
     for (key, dst) in [("startArrow", "startArrow"), ("endArrow", "endArrow")] {
         let v = d.str(key);
         if v.is_empty() {
@@ -129,11 +133,11 @@ fn confirm(app: &mut VectorcraftApp, d: &Dialog) -> Result<Value, String> {
             p[dst] = json!(v);
         }
     }
-    // The stroke first, then the colour (each is its own undo step, as the panels' are), then the
-    // dialog closes whatever they did.
+    // The stroke first, then the colour (each is its own undo step, as the panels' are); the dialog
+    // closes on success, and a command error stays visible to the caller.
     let r = app.run("stroke.set", p).map_err(|e| e.to_string())?;
-    if let Some(c) = d.fields.get("color").and_then(Value::as_str).filter(|c| c.starts_with('#') && c.len() == 7) {
-        app.run("paint.setStroke", json!({ "color": c })).ok();
+    if let Some(c) = color {
+        app.run("paint.setStroke", json!({ "color": c }))?;
     }
     app.ui.dialog = None;
     Ok(r)
@@ -189,5 +193,36 @@ mod tests {
         open(&mut app).unwrap();
         let d = app.ui.dialog.take().unwrap();
         confirm(&mut app, &d).unwrap();
+    }
+
+    /// Choosing Solid clears an existing dash pattern instead of leaving it on the object.
+    #[test]
+    fn solid_clears_an_existing_dash_pattern() {
+        let (mut app, id) = app_with_stroked_path();
+        app.run("stroke.set", json!({ "dash": [4.0, 2.0] })).unwrap();
+        open(&mut app).unwrap();
+        let mut d = app.ui.dialog.take().unwrap();
+        d.fields.insert("style".into(), json!("solid"));
+        confirm(&mut app, &d).unwrap();
+
+        let node = app.run("document.node", json!({ "id": id, "summary": true })).unwrap();
+        assert!(node["strokeOptions"]["dash"].is_null(), "Solid removed the dash: {node}");
+    }
+
+    /// An invalid colour is refused before any outline edit, and the dialog stays open.
+    #[test]
+    fn an_invalid_colour_is_refused_without_an_outline_edit() {
+        let (mut app, id) = app_with_stroked_path();
+        open(&mut app).unwrap();
+        let mut d = app.ui.dialog.take().unwrap();
+        d.fields.insert("weight".into(), json!(9.0));
+        d.fields.insert("color".into(), json!("#zzzzzz"));
+        app.ui.dialog = Some(d.clone());
+
+        let error = confirm(&mut app, &d).expect_err("invalid colour must fail");
+        assert!(error.contains("colour"), "{error}");
+        assert!(app.ui.dialog.is_some(), "the dialog stays open");
+        let node = app.run("document.node", json!({ "id": id, "summary": true })).unwrap();
+        assert_eq!(node["strokeWidth"].as_f64(), Some(3.0), "the failed colour did not change the weight");
     }
 }

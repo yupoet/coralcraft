@@ -22,6 +22,13 @@
 - **Ground truth**: the failure reproduces on the pre-sync baseline `8208a6c1e`, so it predates this sync (the fixture moved at V0.1).
 - **Handling**: out of the sync's scope (legacy code is frozen until V7); recorded here so the milestone gate accounts for it as pre-existing.
 
+## 0f. [Resolved 2026-11-11, P1 review] Marquee isolation and Outline Pen solid/error handling
+
+- `select.marquee` passed `None` instead of the active isolation scope to `hit::marquee`, allowing object selection outside the isolated object. Regression: `coreldraw_node_workflow::marquee_selection_respects_the_isolation_scope` failed with both objects selected before the fix and passes with `st.isolation` forwarded.
+- Outline Pen Solid omitted `dash`, leaving an existing dash pattern unchanged; `confirm` now writes `dash: null`. Invalid colours are validated before the stroke edit, and colour-command errors propagate instead of closing as success. Regressions: `solid_clears_an_existing_dash_pattern` and `an_invalid_colour_is_refused_without_an_outline_edit` in `crates/ui-egui/src/dialogs/outline_pen.rs`.
+- The P1 SVG evidence now includes independent `usvg` parsing, and the acceptance PDF is opened through the Hayro-backed reader. Text-only export assertions and self-reimport are not described as independent evidence by themselves.
+- The review's full CI run stopped at known-issue 0b and skipped later gates, so each skipped gate was run separately. A P0 divergence-ledger target-product name failed `cargo xtask brands`; its description was made neutral and the rerun passed. `no-bundled-fonts` is registered only as a CI step, not a direct xtask command; its tests, Clippy, and feature-tree checks were run explicitly from `xtask/src/main.rs`.
+
 ## 0e. [Resolved 2026-11-10, P1 Task 11] CDR7 multi-page round trip drops the first page
 
 `write_cdr7` (`crates/cdr/src/parse.rs`, `write_riff_document`) round-trips a 3-artboard document

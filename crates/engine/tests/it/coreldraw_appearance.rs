@@ -30,12 +30,14 @@ fn fills_and_outlines_survive_reopen_and_show_in_the_svg() {
     assert!(svg.contains("fill=\"#e8b04b\""), "the fill: {svg}");
     assert!(svg.contains("stroke-dasharray"), "the dash: {svg}");
     assert!(svg.contains("stroke-linejoin=\"round\""), "the join: {svg}");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the appearance");
     // With an arrowhead, the exporter draws the dashed stroke and the head as geometry (each dash
     // a closed subpath, the head a triangle).
     s.execute("stroke.set", &json!({ "startArrow": "Triangle" })).unwrap();
     let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
     assert!(svg.matches(" Z").count() > 10, "the dashes draw as geometry: {svg}");
     assert!(svg.contains("L28 28 Z"), "the arrowhead's triangle: {svg}");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the arrowed appearance");
     // Native reopen keeps them editable: the same commands act on the reopened path.
     let data = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
     s.execute("document.open", &json!({ "dataBase64": data })).unwrap();

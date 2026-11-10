@@ -155,9 +155,10 @@ command surface an MCP `run_command` call runs (recorded 2026-11-10):
 2. **Revise & save/reopen** — `document.serialize {format: "vectorcraft"}` → `document.open`:
    pages, the style, and the symbol reopen; a node edit and an outline edit act on the reopened
    document (`strokeWidth` 4.0 verified).
-3. **Independent exports** — SVG re-imported through `document.open` (≥ 4 objects re-selected and
-   editable: `stroke.set` verified on the re-imported geometry); PDF checked at the byte level
-   (`%PDF-` header, `/Type /Page` objects, `startxref`).
+3. **Independent exports** — SVG parsed by independent `usvg` and re-imported through
+   `document.open` (≥ 4 objects re-selected and editable: `stroke.set` verified on the re-imported
+   geometry); PDF checked at the byte level (`%PDF-` header, `/Type /Page` objects, `startxref`) and
+   opened through the independent Hayro-backed `vectorcraft_pdf::import` reader.
 
 ## 5. Maintenance
 

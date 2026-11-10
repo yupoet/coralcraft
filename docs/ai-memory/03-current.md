@@ -1,8 +1,10 @@
 # 03 — Current Milestone Status, Active Tasks & Next Steps
 
-> Last updated: 2026-11-10
+> Last updated: 2026-11-11
 
 ## 1. Current Stage Status
+
+- **P1 REVIEW FIXES (2026-11-11):** review of the completed P1 branch found and fixed three real issues: `select.marquee` now passes the active isolation scope to `hit::marquee`; Outline Pen Solid writes `dash: null`; invalid colours are refused before any edit and colour-command errors propagate. The SVG evidence now includes independent `usvg` parsing, and the P1 acceptance PDF is opened through the Hayro-backed reader. The new regression tests failed before the fixes; all 16 CorelDRAW engine integration tests and all 3 Outline Pen tests pass after them. Review gate (2026-11-11): `cargo xtask ci` passed fmt and Clippy, then workspace tests finished 4,375 passed / 1 failed — only the documented x86_64 known-issue 0b. Doctests, wasm, cleanroom, assets, layers, pdf-deps, cursors, i18n, and the source-equivalent no-bundled-fonts checks were run separately and passed. Brands initially caught the P0 divergence ledger's target-product wording; that wording was corrected and the gate rerun green. This is not recorded as a clean full-CI pass.
 
 - **P1 PROFESSIONAL CORE VECTOR WORKFLOW COMPLETE (2026-11-10, commits 14b60f776..3ea88dfc2).** All thirteen P1 tasks delivered
   on the synced VectorCraft base ([plan](../superpowers/plans/2026-11-09-p1-core-vector-workflow.md), inventory
@@ -16,7 +18,7 @@
   symbols (new row → 4, Object Styles & Symbol Manager dockers); **T10** page/master-layer daily use; **T11** the consolidated
   persistence audit + the CDR7 first-page round-trip FIX (known-issue 0e resolved: the reader's master-page heuristic now
   skips only unnamed first pages); **T12** MCP surface (run_command) + docs_sync clean; **T13** the acceptance scenario
-  (build → revise → `.vectorcraft` reopen editable → SVG re-import → PDF structure).
+  (build → revise → `.vectorcraft` reopen editable → SVG text + independent usvg + re-import → PDF structure + Hayro-backed import).
   **P1 gate (2026-11-10):** `cargo xtask ci` — fmt ok, clippy ok (`-D warnings`), workspace tests 4,375 passed / 1 failed; the
   single failure is the documented platform-flake
   `tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars` (known-issue 0b, reproduced in

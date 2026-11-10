@@ -23,16 +23,16 @@ fn row(s: &mut Session) -> Vec<u64> {
 
 /// The left edges of the SVG's `<rect>` shapes, in order.
 fn svg_x_positions(s: &mut Session) -> Vec<f64> {
-    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
-    let mut xs = vec![];
-    for l in svg.lines() {
-        let l = l.trim_start();
-        if let Some(rest) = l.strip_prefix("<rect") {
-            let at = rest.find("x=\"").expect("a rect's x");
-            let end = rest[at + 3..].find('"').expect("the closing quote") + at + 3;
-            xs.push(rest[at + 3..end].parse::<f64>().unwrap());
+    let text = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&text, &usvg::Options::default()).expect("independent usvg parse");
+    fn visit(node: &usvg::Node, xs: &mut Vec<f64>) {
+        match node {
+            usvg::Node::Group(group) => group.children().iter().for_each(|child| visit(child, xs)),
+            _ => xs.push(f64::from(node.abs_bounding_box().left())),
         }
     }
+    let mut xs = vec![];
+    tree.root().children().iter().for_each(|node| visit(node, &mut xs));
     xs
 }
 

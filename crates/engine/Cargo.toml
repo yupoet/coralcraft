@@ -61,6 +61,8 @@ rustix = { workspace = true, features = ["std", "process"] }
 vectorcraft-affinity = { workspace = true, features = ["synth"] }
 crc32fast = { workspace = true }
 vectorcraft-testkit = { workspace = true }
+# CoralCraft: independent SVG parser evidence for the P1 interoperability tests.
+usvg = { workspace = true }
 proptest = { workspace = true }
 # A variable font built in code (no font file is committed).
 vectorcraft-text = { workspace = true, features = ["test-fonts"] }

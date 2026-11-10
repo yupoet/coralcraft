@@ -1,7 +1,7 @@
 //! CoralCraft: the CorelDRAW object styles and symbol basics on the shared commands (P1 Task 9) —
 //! style apply and redefine propagate to the linked objects, a symbol's instances update when its
 //! source art is edited, both survive a native `.vectorcraft` save and reopen, and the exported
-//! SVG of a styled/symbol document shows the applied look (an independent read of the text).
+//! SVG is checked as text and parsed by the independent `usvg` parser.
 
 use serde_json::json;
 use vectorcraft_engine::Session;
@@ -37,7 +37,8 @@ fn styles_apply_and_redefine_propagate() {
     let style = list["styles"].as_array().unwrap().iter().find(|st| st["name"].as_str() == Some("Logo Blue")).expect("the style listed");
     assert_eq!(style["linked"].as_array().map(|l| l.len()), Some(2), "both objects linked: {style:?}");
     let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
-    assert!(svg.contains("#a03050"), "the independent SVG shows the styled look: {svg}");
+    assert!(svg.contains("#a03050"), "the exported SVG shows the styled look: {svg}");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the styled document");
 }
 
 /// Symbol basics: create from a selection, place instances, edit the source — every instance
@@ -63,6 +64,7 @@ fn symbols_place_and_update_on_source_edits() {
     let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
     assert!(svg.contains("#a02050"), "the source edit shows in the export: {svg}");
     assert!(!svg.contains("#20a050"), "the old look is gone everywhere");
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the symbol document");
     // Native reopen keeps the symbol and its instances (the instance count is the same symbol).
     let data = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
     s.execute("document.open", &json!({ "dataBase64": data })).unwrap();
