@@ -98,6 +98,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             page_number_insert
         ),
+        cmd!(
+            "layout.table",
+            "Table",
+            ["Layout", "Table"],
+            None,
+            "{x, y, width, height, rows, columns, text?: [[cell…]…]} create one group of editable cell paths and live text, at most 1000 cells → {id, rows, columns}",
+            has_doc,
+            table
+        ),
     ]
 }
 
@@ -709,6 +718,85 @@ fn path_create(s: &mut Session, p: &Value) -> Result<Value> {
         ap.set_stroke(vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK));
     }
     add_look(s, "Pen", path_kind(path, None), look, None)
+}
+
+fn table_text(p: &Value, rows: usize, columns: usize) -> Result<Vec<Vec<String>>> {
+    const C: &str = "layout.table";
+    let mut cells = vec![vec![String::new(); columns]; rows];
+    let Some(value) = p.get("text") else { return Ok(cells) };
+    let given = value.as_array().ok_or_else(|| bad(C, "text must be an array of row arrays"))?;
+    if given.len() > rows {
+        return Err(bad(C, "text has more rows than the table"));
+    }
+    for (row, values) in given.iter().enumerate() {
+        let values = values.as_array().ok_or_else(|| bad(C, "each text row must be an array"))?;
+        if values.len() > columns {
+            return Err(bad(C, "text has more columns than the table"));
+        }
+        for (column, value) in values.iter().enumerate() {
+            cells[row][column] = value.as_str().ok_or_else(|| bad(C, "each cell's text must be a string"))?.to_owned();
+        }
+    }
+    Ok(cells)
+}
+
+fn table(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "layout.table";
+    const MAX_CELLS: usize = 1000;
+    check_numbers(p, &["x", "y", "width", "height", "size"], C)?;
+    let (x, y, width, height) = (f64_req(p, "x", C)?, f64_req(p, "y", C)?, f64_req(p, "width", C)?, f64_req(p, "height", C)?);
+    let bounds = [x, y, width, height, x + width, y + height];
+    if width <= 0.0 || height <= 0.0 || bounds.iter().any(|value| !value.is_finite() || value.abs() > vectorcraft_doc::MAX_COORD) {
+        return Err(bad(C, "table bounds must be finite and have positive width and height"));
+    }
+    let count = |key: &str| {
+        let value = p
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| bad(C, format!("`{key}` must be a positive whole number")))?;
+        (value > 0).then_some(value).ok_or_else(|| bad(C, format!("`{key}` must be positive")))
+    };
+    let (rows, columns) = (count("rows")?, count("columns")?);
+    let cell_count = rows.checked_mul(columns).ok_or_else(|| bad(C, "too many table cells"))?;
+    if cell_count > MAX_CELLS {
+        return Err(bad(C, format!("a table may have at most {MAX_CELLS} cells")));
+    }
+    let text = table_text(p, rows, columns)?;
+    let style = new_type_style(s, p);
+    let parent = s.doc()?.target_parent()?;
+    let id = s.edit("Table", |d, sel| {
+        let (cell_width, cell_height) = (width / columns as f64, height / rows as f64);
+        let mut children = Vec::with_capacity(cell_count * 2);
+        for (row, row_text) in text.iter().enumerate() {
+            for (column, value) in row_text.iter().enumerate() {
+                let left = x + column as f64 * cell_width;
+                let top = y + row as f64 * cell_height;
+                let name = Some(format!("Cell {}:{}", row + 1, column + 1));
+                let mut border = Node::path(
+                    d.alloc_id(),
+                    shapes::rectangle(Rect::new(left, top, left + cell_width, top + cell_height)),
+                    Appearance::basic(vectorcraft_color::Paint::None, vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), 1.0),
+                );
+                border.name = name.clone();
+                children.push(std::sync::Arc::new(border));
+                let baseline = top + (cell_height + style.size) * 0.5;
+                let mut text = TextObject::point(Point::new(left + 4.0, baseline), value, style.clone());
+                text.para = new_type_para();
+                super::typecmd::refresh_bounds(&mut text);
+                let mut cell = Node::new(d.alloc_id(), NodeKind::Text(Box::new(text)));
+                cell.name = name;
+                children.push(std::sync::Arc::new(cell));
+            }
+        }
+        let id = d.alloc_id();
+        let mut group = Node::group(id, children);
+        group.name = Some("Table".into());
+        d.insert(parent, usize::MAX, group)?;
+        sel.set([id]);
+        Ok(id)
+    })?;
+    Ok(json!({"id": id.0, "rows": rows, "columns": columns}))
 }
 
 fn page_number_insert(s: &mut Session, p: &Value) -> Result<Value> {

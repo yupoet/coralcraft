@@ -168,3 +168,64 @@ fn coreldraw_page_number_cdr_fallback_warns_and_writes_page_text() {
     );
     assert!(!texts.iter().any(|text| text == "#"), "the dynamic placeholder is not written as visible content");
 }
+
+#[test]
+fn coreldraw_table_cells_are_editable_and_invalid_input_is_atomic() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    let table = s.execute("layout.table", &json!({"x": 20, "y": 30, "width": 300, "height": 120, "rows": 2, "columns": 3, "text": [["Name", "Qty", "Price"], ["Apple", "2", "3.50"]]})).unwrap();
+    let group = table["id"].as_u64().unwrap();
+    let children = |s: &Session| match &s.doc().unwrap().doc.node(NodeId(group)).unwrap().kind {
+        NodeKind::Group { children, .. } => children.clone(),
+        _ => panic!("table is not a group"),
+    };
+    assert_eq!(children(&s).len(), 12, "two by three cells, each an editable path and live text");
+    let apple = children(&s)
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Text(text) if text.plain_text() == "Apple" => Some(node.id.0),
+            _ => None,
+        })
+        .expect("the cell text is live");
+    s.execute("text.setText", &json!({"id": apple, "text": "Pear"})).unwrap();
+    assert_eq!(text(&s, apple).plain_text(), "Pear");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(text(&s, apple).plain_text(), "Apple");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(text(&s, apple).plain_text(), "Pear");
+
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    assert_eq!(children(&s).len(), 12);
+    assert_eq!(text(&s, apple).plain_text(), "Pear", "the edited cell remains live after native reopen");
+    let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the table");
+    let pdf = vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({"format": "pdf"})).unwrap()["dataBase64"].as_str().unwrap())
+        .unwrap();
+    let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed table PDF read");
+    let mut texts = Vec::new();
+    for layer in &imported.layers {
+        layer.walk(&mut |node| {
+            if let NodeKind::Text(text) = &node.kind {
+                texts.push(text.plain_text());
+            }
+        });
+    }
+    assert!(texts.iter().any(|text| text == "Pear"), "the edited cell exports as text: {texts:?}");
+
+    let before = s.doc().unwrap().doc.clone();
+    let history = s.doc().unwrap().history.undo.len();
+    for params in [
+        json!({"x": 0, "y": 0, "width": 100, "height": 100, "rows": 0, "columns": 2}),
+        json!({"x": 0, "y": 0, "width": 100, "height": 100, "rows": 2, "columns": -1}),
+        json!({"x": 0, "y": 0, "width": 100, "height": 100, "rows": 2.5, "columns": 2}),
+        json!({"x": 0, "y": 0, "width": 0, "height": 100, "rows": 2, "columns": 2}),
+        json!({"x": 0, "y": 0, "width": 100, "height": f64::INFINITY, "rows": 2, "columns": 2}),
+        json!({"x": 0, "y": 0, "width": 100, "height": 100, "rows": 1001, "columns": 2}),
+        json!({"x": 0, "y": 0, "width": 100, "height": 100, "rows": 1, "columns": 1, "text": [["ok"], ["too many"]]}),
+    ] {
+        assert!(s.execute("layout.table", &params).is_err(), "invalid table input: {params}");
+        assert_eq!(s.doc().unwrap().doc, before, "invalid input changed the document: {params}");
+        assert_eq!(s.doc().unwrap().history.undo.len(), history, "invalid input added history: {params}");
+    }
+}
