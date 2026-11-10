@@ -69,3 +69,53 @@ fn coreldraw_font_size_preset_uses_the_shared_combo_geometry() {
     click(&ctx, &mut app, text_rect(&texts, "36 pt").center(), &mut combo);
     assert_eq!(style(&app, id).size, 36.0);
 }
+
+fn control_nodes(ctx: &egui::Context, app: &mut VectorcraftApp) -> Vec<egui::accesskit::Node> {
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::chrome::control_bar(app, ui));
+    out.textures_delta.clear();
+    out.platform_output.accesskit_update.expect("an accessibility tree").nodes.into_iter().map(|(_, node)| node).collect()
+}
+
+fn click_control(ctx: &egui::Context, app: &mut VectorcraftApp, name: &str) {
+    let nodes = control_nodes(ctx, app);
+    let node = nodes
+        .iter()
+        .filter(|node| node.label() == Some(name))
+        .max_by(|a, b| a.bounds().map(|r| r.x1 - r.x0).unwrap_or(0.0).total_cmp(&b.bounds().map(|r| r.x1 - r.x0).unwrap_or(0.0)))
+        .unwrap_or_else(|| panic!("no control named {name}: {nodes:?}"));
+    let bounds = node.bounds().expect("control bounds");
+    let at = egui::pos2(((bounds.x0 + bounds.x1) * 0.5) as f32, ((bounds.y0 + bounds.y1) * 0.5) as f32);
+    click(ctx, app, at, crate::chrome::control_bar);
+}
+
+#[test]
+fn coreldraw_paragraph_popover_edits_alignment_and_lists() {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    ctx.enable_accesskit();
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let id =
+        run(&mut app, "text.create", json!({"x": 10, "y": 40, "text": "One\nTwo", "area": {"width": 200, "height": 120}}))["id"].as_u64().unwrap();
+    run(&mut app, "select.set", json!({"ids": [id]}));
+    let paragraph = |app: &VectorcraftApp| match &app.session.active().unwrap().doc.node(vectorcraft_doc::NodeId(id)).unwrap().kind {
+        NodeKind::Text(text) => text.para.clone(),
+        _ => panic!("not text"),
+    };
+
+    click_control(&ctx, &mut app, "Paragraph:");
+    assert!(
+        control_nodes(&ctx, &mut app).iter().any(|node| node.label() == Some("Justify all lines")),
+        "the CorelDRAW Property Bar opens the shared Paragraph controls"
+    );
+    click_control(&ctx, &mut app, "Justify all lines");
+    assert_eq!(paragraph(&app).justify, vectorcraft_doc::Justify::JustifyAll);
+    click_control(&ctx, &mut app, "Bullets");
+    assert_eq!(paragraph(&app).list, Some(vectorcraft_doc::text::ParaList::bulleted(vectorcraft_doc::text::Bullet::Dot)));
+    click_control(&ctx, &mut app, "Numbered List");
+    assert_eq!(paragraph(&app).list, Some(vectorcraft_doc::text::ParaList::numbered(vectorcraft_doc::text::NumberStyle::Arabic)));
+    run(&mut app, "edit.undo", json!({}));
+    assert_eq!(paragraph(&app).list, Some(vectorcraft_doc::text::ParaList::bulleted(vectorcraft_doc::text::Bullet::Dot)));
+    run(&mut app, "edit.redo", json!({}));
+    assert_eq!(paragraph(&app).list, Some(vectorcraft_doc::text::ParaList::numbered(vectorcraft_doc::text::NumberStyle::Arabic)));
+}
