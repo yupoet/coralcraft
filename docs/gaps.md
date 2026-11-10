@@ -2,10 +2,24 @@
 
 > For agent task selection: pick the first unchecked item from top to bottom. Update this file and [`ROADMAP.md`](../ROADMAP.md) as each item completes.
 > Ordering principle (2026-10-21): re-base on VectorCraft first, then CorelDRAW extensions. Reuse VectorCraft; never reimplement a subsystem it already has.
+> Since 2026-11-09 the product roadmap is the umbrella specification ([`superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md)); P0 precedes further large V4.3 work.
 
 ## Phase V: VectorCraft fork (top priority, operator decision 2026-10-21)
 
 The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-fork.md`](superpowers/plans/2026-10-21-vectorcraft-fork.md).
+
+**P0 queue (evidence baseline and TraceDraw adoption audit — execute before further large V4.3 work; plan: [`superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md`](superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md)):**
+
+- [ ] P0.1 Record current CDR oracle/sample evidence; S2 remains open while any prerequisite is absent. (Ledger exists — [`cdr-verification.md`](cdr-verification.md), commit `c3f638c7c` — but every check is UNVERIFIED because `cdr2raw`/`cmx2raw` and `refs/cdr-samples` are absent from the development machine, so the entry stays open.)
+- [x] P0.2 Restore generated MCP docs on `vectorcraft-mcp` (S4). (Commit `1db3a65e0`: `crates/mcp/tests/docs_sync.rs` + regenerated [`mcp.md`](mcp.md).)
+- [x] P0.3 Separate VectorCraft and CorelDRAW parity records and fold relevant upstream doc updates (S5). (Commit `1949c7a20`: [`vectorcraft-target-app-parity.md`](vectorcraft-target-app-parity.md) + folded notes.)
+- [x] P0.4 Pin TraceDraw and refresh libcdr. (Commit `7b7940e9e`: TraceDraw `aac8563a5b4eb8399d86d285f8aa69a6ffc0deee`, libcdr `f4cd1f9fa64a312190357bfa33ca80c51512bb2b`.)
+- [x] P0.5 Run pinned TraceDraw tests and record the source audit. (Commit `5f1560285`: [`ai-memory/05-ref-docs/07-tracedraw.md`](ai-memory/05-ref-docs/07-tracedraw.md).)
+- [x] P0.6 Record module adoption decisions and the D1-D6 evidence matrix. (Commit `aa191e6f4`: [`coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md) + rewritten [`target-app-parity.md`](target-app-parity.md).)
+- [x] P0.7 Synchronize roadmap, README, memory, and the P1 handoff. (This commit: `ROADMAP.md`, `gaps.md`, migration plan, `README.md`, AI memory.)
+- [ ] V4.3 Resume CorelDRAW tool mapping and the context-sensitive Property Bar after P0 adoption decisions. From the synced `crates/tools/src/catalog.rs`, `crates/ui-egui/src/toolbar.rs`, and `crates/ui-egui/src/chrome/control_bar.rs`, one small tool group at a time through `tool.select`, `tool.setOption`, and shared engine commands; public CorelDRAW behavior source is the user guide registered in `refs/REFS.md` (`https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf`). Adoption boundaries: [`coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md).
+
+Completed migration steps (V0–V4.2):
 
 - [x] V0.1 Move pre-fork crates to `legacy/` (keep `crates/cdr`); copy VectorCraft `a466625` crates, apps, xtask pieces, vendor, non-brand assets, packaging, and CI; create `docs/upstream-vectorcraft.md`.
 - [x] V0.2 Workspace builds; VectorCraft test suite passes; `cargo xtask ci` adapted (cleanroom still blocks Corel strings and `.cdr`/`.cmx` binaries).
@@ -24,17 +38,16 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] V3.3 Page navigator.
 - [x] V4.1 CorelDRAW workspace preset on VectorCraft docking.
 - [x] V4.2 CorelDRAW shortcut set (public documentation only).
-- [ ] V4.3 CorelDRAW tool mapping and context-sensitive property bar. **Start here after the 2026-11-08 sync**: from the synced `crates/tools/src/catalog.rs`, `crates/ui-egui/src/toolbar.rs`, and `crates/ui-egui/src/chrome/control_bar.rs`, one small tool group at a time through `tool.select`, `tool.setOption`, and shared engine commands; public CorelDRAW behavior source is the user guide registered in `refs/REFS.md` (`https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf`).
 
 ## Follow-ups opened by the VectorCraft full sync (2026-11-08)
 
 The sync itself (plan [`superpowers/plans/2026-11-07-vectorcraft-full-sync.md`](superpowers/plans/2026-11-07-vectorcraft-full-sync.md)) is complete: 130 conflicts resolved, the ledger explains all 189 differing target paths, and the platform gates ran on PR #5. It opened these items:
 
 - [x] S1 Windows 7: **dropped (operator decision 2026-11-08)** — the unbuildable `windows7.ps1` and `printing/windows7.rs` are removed, the `win7` target-vendor guards match the target again, and `docs/windows7.md` records the decision and evidence. Minimum platform set: macOS, Linux, Windows, FreeBSD, Windows ARM64, wasm32.
-- [ ] S2 Run the libcdr differential oracle and the real-sample checks where `libcdr-tools` and `refs/cdr-samples` exist (they are absent on the 2026-11-08 development machine; the tests ran in self-skipping mode).
-- [ ] S3 Remove the `nonminimal_bool` / `drop_non_drop` workspace-lint allowances once a later upstream sync clears the clippy drift (root `Cargo.toml`, marked `# CoralCraft:`).
-- [ ] S4 Regenerate `docs/mcp.md` against the synced MCP registry (the legacy `docs_sync` fixture failure is pre-existing; the fresh list comes from the merged `vectorcraft-mcp`).
-- [ ] S5 Fold upstream's technical-doc changes (formats, tracing, three-d, plugins) into CoralCraft's own docs where they matter; the upstream files were taken verbatim at the sync (see `docs/upstream-divergences.tsv`).
+- [ ] S2 Run the libcdr differential oracle and the real-sample checks where `libcdr-tools` and `refs/cdr-samples` exist (they are absent on the 2026-11-08 development machine; the tests ran in self-skipping mode). Current state and the exact unverified checks are recorded in [`cdr-verification.md`](cdr-verification.md); S2 blocks real CDR certification (P0.1) until the prerequisites exist.
+- [ ] S3 Remove the `nonminimal_bool` / `drop_non_drop` workspace-lint allowances once a later upstream sync clears the clippy drift (root `Cargo.toml`, marked `# CoralCraft:`). Continuous hygiene — kept open.
+- [x] S4 Regenerate `docs/mcp.md` against the synced MCP registry. **Resolved 2026-11-10 (P0.2, commit `1db3a65e0`)**: `crates/mcp/tests/docs_sync.rs` now checks the live registry and protocol surface; regenerate with `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`.
+- [x] S5 Fold upstream's technical-doc changes (formats, tracing, three-d, plugins) into CoralCraft's own docs where they matter. **Resolved 2026-11-10 (P0.3, commit `1949c7a20`)**: upstream's Illustrator assessment preserved as `docs/vectorcraft-target-app-parity.md`, upstream links retargeted, and CoralCraft notes added to the formats/tracing/3D/plug-in docs.
 - [ ] V4.4 Core dockers (Object Properties, Objects, Transform, Align & Distribute, Color, Text) from VectorCraft panels.
 - [ ] V5.1 PowerClip.
 - [ ] V5.2 Interactive effects with on-canvas handles (Blend, Contour, Distort, Envelope, Extrude, Drop Shadow, Transparency).
@@ -42,7 +55,12 @@ The sync itself (plan [`superpowers/plans/2026-11-07-vectorcraft-full-sync.md`](
 - [ ] V5.4 Smart Fill, Connector, Dimension, PowerTRACE.
 - [ ] V6.1 VectorCraft MCP server plus CoralCraft-only tools; retire duplicates.
 - [ ] V6.2 Regenerate `docs/mcp.md`; keep `coralcraft-cli mcp` / `coralcraft --mcp`.
-- [ ] V7.1 Delete `legacy/` crates as their unique content is ported.
+- [ ] V7.1 Delete `legacy/` crates as their unique content is ported. Continuous hygiene — kept open.
+
+> [!NOTE]
+> V6 is **not** a late MCP-only phase: per the umbrella roadmap, MCP/CLI support (and CDR/CMX
+> interoperability and legacy retirement) advance with every feature phase (P0–P5). V6.1/V6.2 above
+> remain as concrete cleanup items to pick up inside those phases, not after them.
 
 > [!NOTE]
 > Frozen after M89: new milestones that only make CoralCraft's own SVG/DXF/EPS/PDF export re-import into itself. The M-series log below is history.

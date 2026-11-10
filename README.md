@@ -34,8 +34,8 @@
 - **Native desktop & Web application (`coralcraft`, `vectorcraft-web`).** Full `eframe`/`egui` GPU/CPU desktop shell with the complete VectorCraft toolbox, ~40 dockable panels, 125 dialogs, multi-column/docking workspace management, and a built-in **`CorelDRAW` workspace preset** (`Window → Workspace → CorelDRAW`) featuring a single-column left Toolbox, top Property Bar, right vertical Color Palette bar (Left-click sets Fill, Right-click sets Outline), bottom Page Navigator bar, and right-side Object Properties / Objects / Transform / Align dockers.
 - **Clean-room `.cdr` and `.cmx` read/write (`coralcraft-cdr`, `corel-import`).**
   - Opens legacy `WL` (CDR 2), bare `RIFF`/`RIFX` (CDR 3–X3), modern `ZIP+RIFF` (`content/riffData.cdr` X4–X5 and `content/root.dat` X6+), and Corel Presentation Exchange `.cmx` files directly into the VectorCraft document model, preserving lossless CorelDRAW residuals under `document.unknown["coralcraft"]`.
-  - Verified against **65/65 valid real-world `.cdr` samples** in `refs/cdr-samples/` with exact page, layer, and object counts.
-  - Writes spec-conformant **CDR7** (`RIFF....CDR7`), **CDRX** (X4+ `ZIP+RIFF`), and **CMX1** (`RIFF....CMX1`) files from Save As, Export, CLI `convert`, and MCP `export`/`save_file`, verified against `libcdr`'s `cdr2raw` and `cmx2raw` differential oracles.
+  - Verified against **65/65 valid real-world `.cdr` samples** in `refs/cdr-samples/` with exact page, layer, and object counts — a historical V1.4 result (pre-2026-11-08-sync tree). The current-tree verification state is tracked separately in [`docs/cdr-verification.md`](docs/cdr-verification.md), where it is currently **unverified** because the oracle tools and sample corpus are absent from the development machine.
+  - Writes spec-conformant **CDR7** (`RIFF....CDR7`), **CDRX** (X4+ `ZIP+RIFF`), and **CMX1** (`RIFF....CMX1`) files from Save As, Export, CLI `convert`, and MCP `export`/`save_file`, verified against `libcdr`'s `cdr2raw` and `cmx2raw` differential oracles (historical verification; current state in [`docs/cdr-verification.md`](docs/cdr-verification.md)).
 - **100% VectorCraft file format compatibility (30 formats / 46 open extensions).** Opens and saves every format supported by VectorCraft at the synced upstream commit (`.vectorcraft`, `.drawcraft`, `.vctemplate`, `.svg`, `.svgz`, `.pdf`, `.eps`, `.ps`, `.ai`, `.ait`, `.dxf`, `.emf`, `.wmf`, `.af`/`.afdesign`/`.afpub`, `.psd`/`.psb`, `.png`, `.jpg`, `.webp`, `.gif`, `.tif`/`.tiff`, `.bmp`, `.tga`, and — added by the sync — `.pcx`, `.pxr` and JPEG 2000 `.jp2`/`.j2k`), plus `.cdr`, `.cmx`, and legacy pre-fork `.coralcraft` JSON/ZIP archives. See [`docs/file-format-parity.md`](docs/file-format-parity.md).
 - **CorelDRAW multi-page & master-layer model.**
   - Per-page dimensions, `Portrait`/`Landscape` orientation, and automatic horizontal spread reflow on insert, delete, resize, and drag-reorder.
@@ -43,12 +43,16 @@
   - Bottom **Page Navigator bar** (`1 of N` counter, First/Previous/Insert Before/Page Tabs/Add After/Next/Last/Delete, double-click inline rename, drag-and-drop page reorder, right-click page context menu) and Layer Role badges (`M:All`, `M:Odd`, `M:Even`, `Desk`) in the Layers panel and Layer Options dialog.
 - **Public-documentation `CorelDRAW` shortcut preset (V4.2).** `F5`–`F12` tool dispatch (`F5` Freehand, `F6` Rectangle, `F7` Ellipse, `F10` Shape…), `Ctrl+G/U/L/K/Q/D` commands, and `Alt+F7`–`Alt+F10` / `F11` / `F12` docker toggles, conflict-free beside the built-in presets.
 
-**Remaining Phase V roadmap (`V4.3`–`V7.1`; see [`docs/gaps.md`](docs/gaps.md)):**
+**Active product roadmap (P0–P5; see [`ROADMAP.md`](ROADMAP.md)):**
 
-- **V4.3–V4.4:** CorelDRAW toolbox & context-sensitive Property Bar modes (starting from the synced `vectorcraft-tools` catalog), and CorelDRAW docker refinements.
-- **V5.1–V5.4:** PowerClip container workflow (Place Inside, Edit Contents, Extract, Lock Contents), interactive effects with on-canvas handles, Corel `.cpl`/`.xml` palette import/export in the palette bar and Swatches panel, and Smart Fill / Connector / Dimension / PowerTRACE integration.
-- **V6.1–V6.2:** CoralCraft-specific MCP tools merged into the VectorCraft MCP server and regenerated [`docs/mcp.md`](docs/mcp.md).
-- **V7.1:** Retirement of the pre-fork `legacy/` workspace directory.
+- **P0:** Evidence baseline, current CDR verification status, and TraceDraw adoption audit.
+- **P1:** Professional core vector workflow, expanding V4.3/V4.4 after adoption decisions.
+- **P2:** Professional text and multipage layout.
+- **P3:** PowerClip, live effects, tracing, and image workflows.
+- **P4:** Colour management, prepress, and production output.
+- **P5:** Automation, performance, and product hardening.
+
+CDR/CMX interoperability, MCP/CLI, upstream syncs, and legacy retirement advance throughout these phases. The migration's V7 is not the end of the CorelDRAW product roadmap.
 
 ## Quick start
 

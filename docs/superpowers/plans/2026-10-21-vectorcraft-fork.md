@@ -2,6 +2,8 @@
 
 > Status: **active** (operator decision 2026-10-21). Supersedes the M-series milestone loop.
 > Upstream base: `refs/vectorcraft` @ `a466625` (2026-10-18, `MIT OR Apache-2.0`).
+> Product roadmap beyond the migration: `docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`.
+> Execute P0 before further large V4.3 work: `docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md`.
 
 ## 1. Operator decisions (2026-10-21)
 

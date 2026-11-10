@@ -22,6 +22,13 @@
 - **Ground truth**: the failure reproduces on the pre-sync baseline `8208a6c1e`, so it predates this sync (the fixture moved at V0.1).
 - **Handling**: out of the sync's scope (legacy code is frozen until V7); recorded here so the milestone gate accounts for it as pre-existing.
 
+## 0d. P0 evidence baseline: two parity documents, the MCP docs generator, and CDR verification state (2026-11-10)
+
+- **Two parity documents, two different targets**: [`docs/vectorcraft-target-app-parity.md`](../vectorcraft-target-app-parity.md) is upstream VectorCraft's **Adobe Illustrator** parity evidence (preserved verbatim after the sync); [`docs/target-app-parity.md`](../target-app-parity.md) is CoralCraft's **CorelDRAW** D1-D6 evidence matrix (levels 0-5, no aggregate percentage). Never cite one as the other; VectorCraft-derived docs link to the former, CoralCraft docs to the latter.
+- **The MCP docs generator is `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`** (crate is `vectorcraft-mcp` since the 2026-11-08 sync; the old `coralcraft-mcp` command no longer exists). `crates/mcp/tests/docs_sync.rs` fails when `docs/mcp.md`'s generated tool list or documented protocol surface is stale.
+- **Current CDR oracle/sample state is UNVERIFIED**: on the 2026-11-10 development machine `cdr2raw` and `cmx2raw` are not installed and `refs/cdr-samples` is absent, so all six checks in [`docs/cdr-verification.md`](../cdr-verification.md) are UNVERIFIED (self-skipping tests are not passes). This keeps S2 and P0.1 open and pins the CDR/CMX row of the parity matrix at level 2; the 65/65 sample result is historical (V1.4) only.
+- **TraceDraw's baked-versus-live effects documentation conflict is resolved from source**: TraceDraw's `architecture.md` says effects bake; `features.md` says live. Source and tests show the **live** model is implemented (`live.rs` effect stack evaluated at render/export, 42 tests, CDR `kept_effects`/`kept_blends` round trips); the architecture doc is stale. Conclusion and adoption consequence (map onto VectorCraft effect stacks, do not port `live.rs`) are recorded in [`docs/ai-memory/05-ref-docs/07-tracedraw.md`](05-ref-docs/07-tracedraw.md) and [`docs/coreldraw-reference-adoption.md`](../coreldraw-reference-adoption.md).
+
 ## 1. [Resolved] Short SHAs in `scripts/bootstrap-refs.sh` Rejected by GitHub `git fetch --depth 1`
 
 - **Symptom**: 7-character short SHAs in `scripts/bootstrap-refs.sh` caused `git fetch -q --depth 1 origin <short-sha>` to fail with `fatal: couldn't find remote ref`, triggering the fallback branch clone.
@@ -82,7 +89,7 @@
   
   `cargo xtask ci` was green throughout, because none of these were tested.
 - **Rules**:
-  1. Any tool or command name written in docs must come from the code. `docs/mcp.md` is generated and checked by `cargo test -p coralcraft-mcp --test docs_sync`.
+  1. Any tool or command name written in docs must come from the code. `docs/mcp.md` is generated and checked by `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`.
   2. A package counts as verified only after it has been installed and launched on its target OS: container install tests for Linux, a native runner for macOS, Windows and FreeBSD. Never hand-roll binary package formats (dmg, pkg, rpm, flatpak, AppImage). Use the platform tools on native CI runners, as `refs/vectorcraft/packaging` does.
   3. Linux release binaries must target an old glibc baseline (`cargo zigbuild --target x86_64-unknown-linux-gnu.2.17`) or musl.
   4. Never delete untracked files you did not create without asking. The `.github/` release workflow was deleted once by mistake.

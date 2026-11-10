@@ -1,10 +1,34 @@
 # 03 — Current Milestone Status, Active Tasks & Next Steps
 
-> Last updated: 2026-11-07
+> Last updated: 2026-11-10
 
 ## 1. Current Stage Status
 
-- **VECTORCRAFT FULL SYNC IN PROGRESS (2026-11-07): base-aware three-way merge of upstream `36ef34dfdd8dfd1abc19fd209678860a00583558` onto `8208a6c1e` (branch `sync/vectorcraft-36ef34d`).**
+- **P0 EVIDENCE BASELINE AND TRACEDRAW ADOPTION AUDIT (active direction, 2026-11-10).** The operator approved the umbrella product roadmap
+  [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](../superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md)
+  and P0 precedes further large V4.3 work; the implementation plan is
+  [`docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md`](../superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md).
+  **Reference pins:** TraceDraw `aac8563a5b4eb8399d86d285f8aa69a6ffc0deee` (v0.43.0, MIT OR Apache-2.0) and libcdr
+  `f4cd1f9fa64a312190357bfa33ca80c51512bb2b`, both restorable via `scripts/bootstrap-refs.sh`.
+  **Task 2-7 results:** (2) [`docs/cdr-verification.md`](../cdr-verification.md) records every current-tree CDR oracle/sample check as
+  UNVERIFIED (`cdr2raw`/`cmx2raw` not installed, `refs/cdr-samples` absent) — S2 stays open (commit `c3f638c7c`); (3) `docs/mcp.md` regenerated
+  with a live-registry sync test `crates/mcp/tests/docs_sync.rs`, 33 tools, protocol surface current (commit `1db3a65e0`); (4) upstream's
+  Illustrator assessment preserved as [`docs/vectorcraft-target-app-parity.md`](../vectorcraft-target-app-parity.md) (commit `1949c7a20`);
+  (5) pins committed (commit `7b7940e9e`); (6) TraceDraw audit
+  [`docs/ai-memory/05-ref-docs/07-tracedraw.md`](05-ref-docs/07-tracedraw.md): `tracedraw-cdr-format` 21 passed, `tracedraw-cdr` 299+19+1+2
+  passed, `tracedraw-core --lib` 483 passed/1 ignored, `tracedraw --lib` FAILED (2402 passed/51 failed/43 ignored, app-crate UI-language and
+  font-file issues) so `apps/tracedraw` stays a behaviour reference (commit `5f1560285`); (7) adoption decisions recorded in
+  [`docs/coreldraw-reference-adoption.md`](../coreldraw-reference-adoption.md) and the D1-D6 level-0-5 evidence matrix replaced the legacy
+  percentage matrix in [`docs/target-app-parity.md`](../target-app-parity.md) (commit `aa191e6f4`); (8) roadmap/gaps/README/memory
+  synchronized (this commit).
+  **Measured statistics (2026-11-10):** `cargo xtask stats` → 2,021 files, 876,333 lines, 14,592 `#[test]` functions, 66 `proptest!`
+  across the workspace; desktop layer (`vectorcraft-ui-egui` 212,144 + `coralcraft` 13,519 + `vectorcraft-tools` 57,205 +
+  `vectorcraft-engine` 244,878) = 527,746 lines.
+  **Next:** the only unchecked P0 queue item is P0.1/S2 (blocked on oracle/sample prerequisites; it stays open while
+  `docs/cdr-verification.md` contains UNVERIFIED). Everything else in P0 is documentation/audit-complete, so the next concrete work is the
+  P1 handoff: Task 9 of the P0 plan runs the P0 gate and writes the P1 implementation plan
+  (`docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md`) from the completed adoption record; V4.3 execution follows it.
+- **VECTORCRAFT FULL SYNC COMPLETE (2026-11-08; recorded 2026-11-07): base-aware three-way merge of upstream `36ef34dfdd8dfd1abc19fd209678860a00583558` onto `8208a6c1e` (branch `sync/vectorcraft-36ef34d`).**
   All 130 conflicted paths resolved by ownership (`docs/upstream-divergences.tsv`: 194 rows; the Task 9 hash audit reports every one of the 189 differing target paths explained). Upstream structural rewrites absorbed (fileio → `formats.rs`/`commands.rs`/`access.rs`, render → `renderer/`, ui-egui `lib.rs`/`menus.rs`/`io.rs`/`chrome.rs`/`layers.rs`/`mcp tools.rs` split into submodules, apps moved to `tests/it/`); every CoralCraft capability rehomed onto the new APIs (CDR/CMX registrations, multi-page/master-layer commands, page navigator + palette bar wiring in `app.rs::ui_frame`, CorelDRAW workspace docking layout via `panel_docking::with_canvas`, shortcut preset on `craft_keymap::Overrides`, layer-role badges/menu in `panels/layers/rows.rs`, `probe` subcommand, PR #3 32-bit guards incl. the oversized-PNG IHDR fallback in `crates/trace/src/raster.rs`). Focused suites run green on the merged tree: corel-import 10, engine coreldraw 1 + artboard 198 + import_fuzz 190, render layer 25, ui-egui page_navigator 1 + palette_bar 1 + coreldraw_workspace 1 + shortcut 144 + dialog_sliders 1, coralcraft-cli 62, vectorcraft-mcp 171, trace/pdf hostile-input 3, packaging identity check ok, `cargo xtask layers/assets/cleanroom` ok. **Local oracle limitation:** `cdr2raw`/`cmx2raw` and `refs/cdr-samples` are absent on this machine, so the libcdr differential and real-sample checks ran in their self-skipping mode only; record stands until run where the prerequisites exist. **Windows 7:** dropped by operator decision (2026-11-08) after the sync made the build unbuildable; the files are removed and `docs/windows7.md` records the decision. **Next: V4.3** (CorelDRAW tool mapping and the context-sensitive property bar) from the synced `crates/tools/src/catalog.rs`, `crates/ui-egui/src/toolbar.rs`, and `crates/ui-egui/src/chrome/control_bar.rs` — one small tool group at a time through `tool.select`, `tool.setOption`, and shared engine commands; the public CorelDRAW behavior source is the user guide registered in `refs/REFS.md`. The sync PR (#5) carried the full platform gates; its follow-up items are S1–S5 in `docs/gaps.md`.
 - **V4.2 DONE (2026-10-22): CorelDRAW shortcut set from public documentation (`crates/ui-egui/src/shortcut_editor.rs`, `crates/ui-egui/src/shortcuts.rs`).**
   Added `"CorelDRAW"` to `PRESETS` (`crates/ui-egui/src/shortcut_editor.rs`) with conflict-free public-documentation CorelDRAW tool (`F10` Shape, `F5` Freehand, `F6` Rectangle, `F7` Ellipse, `F8` Text, `Y` Polygon, `A` Spiral, `G` Interactive Fill, `M` Mesh Fill, `X` Eraser, `H` Pan, `Z` Zoom), command (`Cmd+G/U/L/K/Q/D`, `F4`, `Shift+F2`, `F3`, `F9`), and docker (`Alt+F7`..`Alt+F10`, `F11`, `F12`) bindings, and enabled function-key (`F1`..`F12`) tool dispatching in `crates/ui-egui/src/shortcuts.rs`. **Next task: V4.3** (CorelDRAW tool mapping and context-sensitive property bar).
