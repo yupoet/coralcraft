@@ -1,0 +1,41 @@
+# P3 Signature Effects and Image Workflows Inventory
+
+> Baseline: `13232f0a917086f104edc4396da856c43bb5ae6a` (P2 complete). This inventory distinguishes an existing implementation from CorelDRAW workflow evidence; neither a registered command nor a self-round trip proves level 4.
+
+Measured with the same-revision CLI/xtask binaries: the JSON command catalog was captured successfully; `cargo xtask stats` reports 2,039 files, 879,598 lines, 14,647 test attributes, and 66 proptest blocks.
+
+## 1. Existing reusable base
+
+| Slice | Existing implementation | Existing evidence | P3 acceptance still required |
+|---|---|---|---|
+| PowerClip | `object.clippingMask.make/release/editContents/editMask` in `crates/engine/src/cmd/object/commands.rs`; clip-group document/render support | Engine clip-group, selection, bounds, flattening tests | CorelDRAW menu/control workflow, nested/native editing, independent SVG `clipPath` and Hayro-backed PDF evidence |
+| Blend | `object.blend.make/options/info/release/expand`, spine and order commands in `cmd/live/`; `panels/blend.rs`, `dialogs/blend_options.rs`, canvas blend controls | Engine live Blend and bounds tests | CorelDRAW controls, parameter/source edit after native reopen, independent export |
+| Contour | Existing contour effect and `canvas/contour_bar.rs` | Existing effect/tool tests | Live parameter editing, native persistence, independent export |
+| Envelope | `object.envelope.makeWithWarp/makeWithMesh/makeWithTopObject`, reset/options/release/expand/editContents/setMeshPoint | Document live expansion and engine tests | CorelDRAW interaction and native/interchange evidence |
+| Distort | Existing effect catalog, `effect.apply/setParams`, effect dialog and canvas controls | Effect engine/dialog tests | Push/pull, zipper/twister workflow evidence; no new effect model |
+| Extrude/shadows/other signature effects | Ordered appearance effects in `cmd/effectcmd.rs`, `panels/properties.rs`, Appearance and effect dialogs | Existing effects tests | Per-effect D4 inventory; source/parameters after reopen; explicit raster/vector fallback |
+| Effect stack | `effect.apply/list/remove/setParams/expandAppearance/duplicate/move`; visibility is handled by `setParams` | Effect command and Appearance tests | Ordered edit/hide/remove/clone/expand in CorelDRAW workspace, native persistence |
+| Advanced fills | Existing paint model, patterns/gradients/textures, `object.mesh.*` | Paint, mesh, render, and export tests | CorelDRAW controls, native editable semantics, independent SVG/PDF evidence |
+| Transparency | Existing transparency commands, merge modes, opacity masks, Transparency panel | Transparency/flattener tests | Uniform/graded/mask workflows and explicit export fallback |
+| Bitmap workflows | Existing image placement, crop/resample/adjustment and bitmap-effect commands | Image/effect tests | Synthetic-image end-to-end workflow, native reopen, explicit external-editor result |
+| PowerTRACE | `imageTrace.make/makeAndExpand/setView/presets.*` in `cmd/buildcmds/trace.rs`; `panels/image_trace.rs`; `vectorcraft-trace` | Trace engine, UI run, and tracer tests | Outline/centreline/colour/smoothing/preset evidence; editable expanded paths and independent SVG |
+| CDR/CMX | `corel-import` and `coralcraft-cdr` mapping, residuals and warning paths | P1/P2 appearance/text/page tests | Per-feature supported mapping or explicit warning/residual; S2 remains open |
+| Automation | All features already use shared engine command dispatch; MCP `run_command`; generated `docs/mcp.md` | P1/P2 `run_command` and docs-sync tests | Every new P3 command exercised through real dispatch; generated docs clean |
+
+## 2. Evidence and architecture boundaries
+
+- Native `.vectorcraft`/`.drawcraft`/`.vctemplate` reopen must preserve editable source objects and parameters.
+- `usvg` and Hayro-backed `vectorcraft-pdf` are the independent SVG/PDF readers. Text search in our own export is supplementary, not independent parsing.
+- SVG/PDF expansion may show generated geometry while the native document keeps live effects. Expansion is not evidence that CDR retains live effects.
+- CDR/CMX must warn when it flattens or drops live semantics. No oracle or real-sample result may be claimed while S2 prerequisites are absent.
+- Reuse VectorCraft only. TraceDraw remains a selectively audited reference/donor, not a second application base.
+
+## 3. Acceptance scenarios
+
+1. **Poster:** nested PowerClip, advanced fill/transparency, Blend, Envelope, shadow, and live text; native reopen and revision; independent SVG/PDF reads; explicit CDR/CMX fallback ledger.
+2. **Traced image:** handcrafted synthetic bitmap, tracing preset/mode/colour/smoothing, editable expanded paths, bitmap adjustment, native reopen and independent SVG read.
+3. **Automation:** all new commands run through shared `run_command`; invalid input returns errors without mutation; generated MCP documentation matches the live registry.
+
+## 4. Gate baseline
+
+P2's final `cargo xtask ci` result was fmt and Clippy passed, workspace tests 4,375 passed and 1 failed. The only failure was known-issue 0b (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`), an existing x86_64 macOS 1-ulp issue. All gates skipped by that stop were run separately and passed. P3 must record its own results and must not describe that baseline as a clean full-CI pass.
