@@ -32,7 +32,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.9 Object/colour styles and symbols basics (this commit): style apply/redefine propagation + symbol place/edit-source instance updates + native reopen evidence in `crates/engine/tests/it/coreldraw_styles_symbols.rs`; Object Styles & Symbol Manager dockers added to the CorelDRAW workspace. Colour-style tint/override models open (P2+).
 - [x] P1.10 Pages and master layers daily use (this commit): reorder/roles/native-reopen evidence in `crates/engine/tests/it/coreldraw_pages.rs`; measured CDR7 first-page loss recorded as known-issue 0e (owned by P1.11).
 - [x] P1.11 Native persistence and CDR mapping (this commit): consolidated P1 persistence audit `crates/engine/tests/it/coreldraw_p1_persistence.rs`; CDR7 multi-page first-page loss FIXED (reader master-page heuristic now skips only unnamed first pages — known-issue 0e resolved; regression `write_cdr7_roundtrips_multiple_pages`); hostile-input suites green.
-- [ ] P1.12 MCP/CLI surface and regenerated documentation.
+- [x] P1.12 MCP/CLI surface and regenerated docs (this commit): `p1_commands_run_through_run_command` proves the new commands through `run_command`; `docs/mcp.md` regeneration clean (registry unchanged).
 - [ ] P1.13 P1 acceptance scenario and gate.
 
 Completed migration steps (V0–V4.2):

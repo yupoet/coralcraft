@@ -1793,3 +1793,25 @@ fn add_text_reports_overflow_and_takes_a_fit() {
     let point = made(&call(&mut s, 3, "add_text", json!({"text": "NEON DRIVE", "x": 0, "y": 300, "size": 60})));
     assert!(point.get("overflow").is_none(), "{point}");
 }
+
+// CoralCraft: the P1 commands through the MCP surface (P1 Task 12) — the new engine commands are
+// scriptable through `run_command`, the generic tool every engine command runs through.
+#[test]
+fn p1_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let step = |s: &mut Server, id: u64, command: &str, params: Value| {
+        let v = rpc(s, id, "tools/call", json!({"name": "run_command", "arguments": {"command": command, "params": params}}));
+        assert!(v.get("error").is_none(), "{v}");
+        v["result"].clone()
+    };
+    step(&mut s, 1, "file.new", json!({"width": 300, "height": 300}));
+    step(&mut s, 2, "shape.rectangle", json!({"x": 10, "y": 10, "width": 60, "height": 60}));
+    step(&mut s, 3, "shape.rectangle", json!({"x": 40, "y": 40, "width": 60, "height": 60}));
+    // select.marquee selects what the rect reaches.
+    let r = step(&mut s, 4, "select.marquee", json!({"x": 0, "y": 0, "width": 100, "height": 100}));
+    assert_eq!(r["isError"], false, "{r}");
+    // object.pathfinder.boundary wraps the union.
+    let r = step(&mut s, 5, "object.pathfinder.boundary", json!({}));
+    assert_eq!(r["isError"], false, "{r}");
+    assert!(r.to_string().contains("ids"), "{r}");
+}
