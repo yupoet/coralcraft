@@ -23,7 +23,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 
 - [x] P1.1 Baseline inventory and evidence anchors. (Commit `14b60f776`: [`p1-inventory.md`](p1-inventory.md).)
 - [x] P1.2 CorelDRAW tool mapping and Property Bar modes (V4.3 core; this commit, see V4.3 above).
-- [ ] P1.3 Selection and node-editing workflows (D1, level 3→4).
+- [x] P1.3 Selection and node-editing workflows (D1, level 3→4; this commit): `select.marquee` command + the headless workflow, undo/redo, native reopen and independent SVG evidence in `crates/engine/tests/it/coreldraw_node_workflow.rs`.
 - [ ] P1.4 Shaping (weld/trim/intersect/simplify) as commands + Property Bar.
 - [ ] P1.5 Snapping and dynamic guides.
 - [ ] P1.6 Transforms, Align & Distribute docker behaviours.

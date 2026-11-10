@@ -12,8 +12,10 @@ mod affinity_local;
 mod artboard_click;
 mod beyond_canvas;
 mod clear_commands;
+// CoralCraft: the CorelDRAW selection and node workflow (P1 Task 3).
 mod compound_attributes;
 mod copy_direct_selection;
+mod coreldraw_node_workflow;
 mod dimensions;
 mod eyedropper_sources;
 mod find_replace_paras;

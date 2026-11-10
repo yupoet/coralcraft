@@ -9,7 +9,8 @@ use vectorcraft_tools::builder::is_live_paint;
 
 use super::wand::{fill_of, stroke_of};
 use super::{
-    CommandSpec, Result, Session, bad, bool_or, checked_id, checked_ids_param, cmd, color_value, has_doc, has_selection, index, ok, str_param,
+    CommandSpec, Result, Session, bad, bool_or, checked_id, checked_ids_param, cmd, color_value, f64_req, has_doc, has_selection, index, ok,
+    str_param,
 };
 use crate::DocState;
 
@@ -64,6 +65,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id} or {ids: [id…]}: each selected one leaves the selection, the others join it; all ids must be non-negative integers naming existing objects → {count, ids} (resulting selection)",
             has_doc,
             toggle
+        ),
+        // CoralCraft: the CorelDRAW marquee selection as a command (P1 Task 3) — the objects the
+        // Selection tool's marquee drag reaches.
+        cmd!(
+            "select.marquee",
+            "Select by Marquee",
+            [],
+            None,
+            "{x, y, width, height, mode?: \"set\"|\"add\"|\"toggle\" (set by default), inside?: bool (false by default: the objects the rect reaches, as a marquee drag; true: only the objects entirely inside it, as the Selection tool's E)} → {count, ids} (resulting selection)",
+            has_doc,
+            marquee
         ),
         cmd!(
             "select.key",
@@ -408,6 +420,48 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         for id in ids {
             sel.toggle(id);
         }
+    })?;
+    selection_result(s)
+}
+
+// CoralCraft: the marquee selection (P1 Task 3): what the rect reaches comes from
+// `vectorcraft_doc::hit::marquee` (the Selection tool's own marquee), and `inside` keeps only the
+// objects whose geometric bounds lie entirely within the rect, as the tool's E key does.
+fn marquee(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "select.marquee";
+    super::check_numbers(p, &["x", "y", "width", "height"], C)?;
+    let (x, y) = (f64_req(p, "x", C)?, f64_req(p, "y", C)?);
+    let (w, h) = (f64_req(p, "width", C)?, f64_req(p, "height", C)?);
+    if !(w.is_finite() && h.is_finite()) {
+        return Err(bad(C, "invalid size"));
+    }
+    let r = vectorcraft_geom::Rect::new(x, y, x + w, y + h).abs();
+    let mode = match str_param(p, "mode") {
+        None | Some("set") => "set",
+        Some("add") => "add",
+        Some("toggle") => "toggle",
+        Some(m) => return Err(bad(C, format!("unknown mode {m:?}"))),
+    };
+    let inside = bool_or(p, "inside", false);
+    let st = s.doc()?;
+    let mut ids = vectorcraft_doc::hit::marquee(&st.doc, r, None, true);
+    if inside {
+        let symbols = st.doc.symbol_boxes();
+        let within = |b: vectorcraft_geom::Rect| r.min_x() <= b.min_x() && b.max_x() <= r.max_x() && r.min_y() <= b.min_y() && b.max_y() <= r.max_y();
+        ids.retain(|id| st.doc.node(*id).and_then(|n| n.geometric_bounds_with(&symbols)).is_some_and(within));
+    }
+    s.select(|_, sel| match mode {
+        "add" => {
+            for id in ids {
+                sel.add(id);
+            }
+        }
+        "toggle" => {
+            for id in ids {
+                sel.toggle(id);
+            }
+        }
+        _ => sel.set(ids.iter().copied()),
     })?;
     selection_result(s)
 }
