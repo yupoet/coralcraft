@@ -26,7 +26,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.3 Selection and node-editing workflows (D1, level 3→4; this commit): `select.marquee` command + the headless workflow, undo/redo, native reopen and independent SVG evidence in `crates/engine/tests/it/coreldraw_node_workflow.rs`.
 - [x] P1.4 Shaping as commands + Property Bar (this commit): Weld/Trim/Intersect/Simplify/minus operations map onto `object.pathfinder.*`, Boundary added as `object.pathfinder.boundary`; evidence in `crates/engine/tests/it/coreldraw_shaping.rs` + the Property Bar buttons in `crates/ui-egui/src/coreldraw_bar.rs`.
 - [x] P1.5 Snapping and dynamic guides (this commit): new `view.snapToGuides` toggle through `UiState`/`ViewInfo`/`ToolContext` (default on, so upstream behaviour is unchanged), the CorelDRAW Snapping menu names (Snap to Objects/Grid/Guidelines + Dynamic Guides as the construction-guides preference), deterministic snap test + toggle/menu/persistence tests. Dynamic-guide angle editing deferred to P2+.
-- [ ] P1.6 Transforms, Align & Distribute docker behaviours.
+- [x] P1.6 Transforms, Align & Distribute docker behaviours (this commit): CorelDRAW Property Bar Mirror buttons + Rotation field over `object.reflect`/`object.rotate`; distribute modes verified with independent SVG parses + native reopen in `crates/engine/tests/it/coreldraw_transform.rs`; the docker fields are the synced Transform/Align panels.
 - [ ] P1.7 Fills, outlines, and the Outline Pen dialog.
 - [ ] P1.8 Core dockers (Object Properties, Objects, Transform, Align).
 - [ ] P1.9 Object/colour styles and symbols (basics).

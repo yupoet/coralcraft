@@ -134,7 +134,7 @@
 | T3 Selection & node editing | `select.*`, `path.*`, `crates/pathops/src/edit.rs`, anchor tools + kittest suites | **exists** (P1 Task 3: added `select.marquee` — the one measured headless gap — and the D1 level-4 evidence: `crates/engine/tests/it/coreldraw_node_workflow.rs`) |
 | T4 Shaping | `object.pathfinder.*`, compound shapes, Shape Builder | **exists** (P1 Task 4: Weld/Trim/Intersect/Simplify/minus map onto the shared commands; Boundary added; Property Bar buttons in `coreldraw_bar.rs`) |
 | T5 Snapping & dynamic guides | guides/snap engine + prefs + `guide.*` commands + `snapping_menu` | **exists** (P1 Task 5: `view.snapToGuides` toggle added; CorelDRAW Snapping menu names; dynamic guides = construction-guides pref; angle editing open) |
-| T6 Transforms, Align & Distribute | `object.*` transforms, `panels/transform.rs`, `panels/align.rs`, `object.align/distribute/distributeSpacing` | **exists** → Corel option mapping only |
+| T6 Transforms, Align & Distribute | `object.*` transforms, `panels/transform.rs`, `panels/align.rs`, `object.align/distribute/distributeSpacing` | **exists** (P1 Task 6: Property Bar mirror/rotation controls; distribute modes independently verified; docker fields = synced panels) |
 | T7 Fills/outlines/Outline Pen | `paint.*`, `stroke.*`, `appearance.*`, palette bar, stroke panel | **partial** (Outline Pen dialog + Corel defaults flow absent) |
 | T8 Core dockers | `panels/properties.rs`, `panels/layers.rs`, `panels/transform.rs`, `panels/align.rs` on the CorelDRAW workspace preset | **partial** (fields vs Corel spec to be closed) |
 | T9 Styles & symbols | `graphicStyle.*`, `symbol.*`, `swatch.*` + panels | **exists** → Corel wiring only |

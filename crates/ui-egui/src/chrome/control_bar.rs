@@ -337,8 +337,10 @@ pub fn control_bar(app: &mut VectorcraftApp, ui: &mut Ui) {
                     anchor_buttons(app, ui, anchors);
                 }
                 isolation_button(app, ui);
-                // CoralCraft: the CorelDRAW workspace's shaping buttons (two or more selected).
+                // CoralCraft: the CorelDRAW workspace's shaping buttons (two or more selected)
+                // and transform controls (one or more selected).
                 crate::coreldraw_bar::shaping_buttons(app, ui);
+                crate::coreldraw_bar::transform_buttons(app, ui);
                 ui.add_space(6.0);
                 // An image or an Image Trace object shows its own controls in place of Fill and Stroke.
                 let image = crate::place::control_bar_details(app, ui) || crate::panels::image_trace::control_bar(app, ui);

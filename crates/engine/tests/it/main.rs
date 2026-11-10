@@ -18,6 +18,8 @@ mod copy_direct_selection;
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).
 mod coreldraw_shaping;
+// CoralCraft: the CorelDRAW transform and align workflows (P1 Task 6).
+mod coreldraw_transform;
 mod dimensions;
 mod eyedropper_sources;
 mod find_replace_paras;

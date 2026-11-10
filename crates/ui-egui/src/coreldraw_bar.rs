@@ -85,6 +85,35 @@ pub fn tool_tip(app: &VectorcraftApp, vc: &str) -> Option<String> {
     })
 }
 
+/// The CorelDRAW transform controls of the Property Bar (P1 Task 6), shown with one or more
+/// objects selected in the CorelDRAW workspace alone: Mirror Horizontal and Mirror Vertical over
+/// `object.reflect` and the Rotation field over `object.rotate` (the angle of the selection's
+/// bounding box, `absolute`), as the public user guide's property bar carries them. The numeric
+/// transforms, Apply to Duplicate (`copy`) and the rest stay in the Transform docker.
+pub fn transform_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
+    if !active(app) || app.session.active().is_none_or(|st| st.selection.objects.is_empty()) {
+        return;
+    }
+    let mut run = None;
+    for (icon, tip, axis) in [("flip-horizontal-2", "Mirror Horizontal", "vertical"), ("flip-vertical-2", "Mirror Vertical", "horizontal")] {
+        if widgets::icon_button(ui, icon, tl!(tip), false, 24.0).clicked() {
+            run = Some(json!({ "axis": axis }));
+        }
+    }
+    // The selection's current angle, shown as the amount another turn adds to.
+    let angle = app.selection_box().map_or(0.0, |b| b.angle);
+    widgets::field_label(ui, label(&Tokens::get(ui.ctx()), "Rotation:"));
+    if let Some(v) = widgets::plain_field(ui, "cb-corel-rotation", angle, "°", 1, 56.0) {
+        run = Some(json!({ "angle": v, "absolute": true }));
+    }
+    if let Some(p) = run {
+        let cmd = if p.get("axis").is_some() { "object.reflect" } else { "object.rotate" };
+        app.run(cmd, p).ok();
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
 /// The CorelDRAW shaping buttons of the Property Bar (P1 Task 4), in the public user guide's
 /// order, shown with two or more objects selected in the CorelDRAW workspace alone. Each runs the
 /// shared Pathfinder command it maps onto; Simplify and Trim share `object.pathfinder.trim`
@@ -292,6 +321,40 @@ mod tests {
         app.run("prefs.set", json!({ "key": "constructionGuides", "value": false })).unwrap();
         assert!(!app.session.prefs.construction_guides, "Dynamic Guides off through its preference");
         assert_eq!(app.run("prefs.get", json!({ "key": "constructionGuides" })).unwrap(), json!(false), "the preference reads back");
+    }
+
+    /// The transform controls show with one object selected in the CorelDRAW workspace alone, and
+    /// a click on Mirror Horizontal runs `object.reflect` (the geometry flips); the Rotation field
+    /// shows the selection's angle.
+    #[test]
+    fn transform_buttons_show_and_mirror_runs() {
+        let mut app = app();
+        corel(&mut app);
+        let ctx = ctx();
+        // Nothing selected: no transform controls.
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Mirror Horizontal").is_none() && node_text(&nodes, "Rotation:").is_none(), "nothing selected");
+        let id = app.run("shape.rectangle", json!({ "x": 100, "y": 100, "width": 40, "height": 20 })).unwrap()["id"].clone();
+        app.run("select.set", json!({ "ids": [id] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Mirror Horizontal").is_some(), "the mirror buttons show");
+        assert!(node_text(&nodes, "Rotation:").is_some(), "the rotation field shows");
+        // A click flips the selection about its own axis (the box keeps its place, mirrored).
+        let b = node_text(&nodes, "Mirror Horizontal").unwrap().bounds().expect("the button");
+        let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let undo = app.session.active().unwrap().history.undo.len();
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![press(false)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let node = app.run("document.node", json!({ "id": id, "summary": true })).unwrap();
+        let bb = &node["bounds"];
+        assert_eq!((bb["x"].as_f64(), bb["width"].as_f64()), (Some(100.0), Some(40.0)), "a square-to-the-page box mirrors in place: {bb:?}");
+        assert_eq!(app.session.active().unwrap().history.undo.len(), undo + 1, "one undo step");
+        // Outside the CorelDRAW workspace the controls never show.
+        crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Mirror Horizontal").is_none(), "the upstream bar keeps its behaviour");
     }
 
     /// An English context for headless Control bar frames, with AccessKit on to find its controls
