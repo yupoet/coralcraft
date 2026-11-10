@@ -176,7 +176,7 @@ Build a document containing an open path, path text, a wrap object, and an area 
 ```rust
 let path = s.execute("path.create", &json!({"d": "M20 100 C100 20 200 20 280 100"})).unwrap()["id"].clone();
 let text = s.execute("text.createInPath", &json!({"path": path, "mode": "onPath", "text": "Editable path text"})).unwrap()["id"].clone();
-s.execute("text.reshapePath", &json!({"id": text, "path": "M20 120 C100 40 200 40 280 120"})).unwrap();
+s.execute("text.reshapePath", &json!({"id": text, "anchors": [[0, 0]], "dx": 0, "dy": 20})).unwrap();
 ```
 
 Assert the path/text remain editable after native reopen, the wrap engine responds to object changes, and area fit/overflow state changes through `text.areaOptions`. Parse exported SVG with independent `usvg` and open exported PDF through `vectorcraft_pdf::import`.

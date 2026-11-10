@@ -30,6 +30,8 @@ mod coreldraw_shaping;
 mod coreldraw_styles_symbols;
 // CoralCraft: professional text workflows (P2 Task 3).
 mod coreldraw_text;
+// CoralCraft: path text, wrapping, and layout workflows (P2 Task 5).
+mod coreldraw_layout;
 // CoralCraft: the CorelDRAW transform and align workflows (P1 Task 6).
 mod coreldraw_transform;
 mod dimensions;
