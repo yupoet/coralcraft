@@ -119,3 +119,21 @@ fn coreldraw_paragraph_popover_edits_alignment_and_lists() {
     run(&mut app, "edit.redo", json!({}));
     assert_eq!(paragraph(&app).list, Some(vectorcraft_doc::text::ParaList::numbered(vectorcraft_doc::text::NumberStyle::Arabic)));
 }
+
+#[test]
+fn coreldraw_thread_menu_uses_the_shared_linking_commands() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let story = "Linked brochure text flows through both frames. ".repeat(12);
+    let first = run(&mut app, "text.create", json!({"x": 10, "y": 10, "text": story, "area": {"width": 150, "height": 60}}))["id"].as_u64().unwrap();
+    let second = run(&mut app, "text.create", json!({"x": 200, "y": 10, "text": "", "area": {"width": 150, "height": 120}}))["id"].as_u64().unwrap();
+    run(&mut app, "select.set", json!({"ids": [first, second]}));
+    assert!(crate::menus::enabled(&app, "text.thread.create"));
+    crate::menus::invoke(&mut app, "text.thread.create", json!({}));
+    assert_eq!(run(&mut app, "text.thread.info", json!({})), json!([[first, second]]));
+    run(&mut app, "select.set", json!({"ids": [second]}));
+    crate::menus::invoke(&mut app, "text.thread.remove", json!({}));
+    assert_eq!(run(&mut app, "text.thread.info", json!({})), json!([]));
+    run(&mut app, "edit.undo", json!({}));
+    assert_eq!(run(&mut app, "text.thread.info", json!({})), json!([[first, second]]));
+}

@@ -147,20 +147,21 @@ assert_eq!(threads.as_array().map(Vec::len), Some(1));
 s.execute("text.editRange", &json!({"id": first, "start": 0, "end": 0, "insert": "Revised introduction. "})).unwrap();
 ```
 
-Verify thread order, text reflow, undo/redo, `text.thread.break` behaviour, and native reopen. If the daily-use command path already passes, the initial failure must come from the missing CorelDRAW UI linkage, not from adding a duplicate engine feature.
+Verify thread order, text reflow, undo/redo, `text.thread.break` behaviour, and native reopen. Existing behaviour that passes needs evidence, not a duplicate engine feature.
 
-- [ ] **Step 2: Add only the measured UI gap**
+- [ ] **Step 2: Verify the existing CorelDRAW UI path**
 
-Expose thread creation/add/break through the CorelDRAW text context controls using the existing command ids. Use the existing Selection-tool ports for on-canvas threading; do not add another port renderer. If inventory confirms the port interaction already works, cover it with an egui pointer test and leave production code unchanged.
+Drive the shared Type › Threaded Text commands in the CorelDRAW workspace and run the existing Selection-tool port pointer tests, including double-click to break a link. Add no second context menu or port renderer. Change production code only if these tests expose a CorelDRAW-specific gap.
 
 - [ ] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p vectorcraft-engine --test it coreldraw_text -- --nocapture
-cargo test -p vectorcraft-ui-egui coreldraw_text_bar -- --nocapture
+cargo test -p vectorcraft-ui-egui coreldraw_text -- --nocapture
+cargo test -p vectorcraft-ui-egui a_double_click_on_a_threaded_out_port_breaks_the_thread
 ```
 
-Commit with `feat: complete CorelDRAW linked-text workflows` only when both engine and UI evidence are present.
+Commit with `test: verify CorelDRAW linked-text workflows` when evidence-only, or the appropriate `feat:` if a measured gap requires wiring.
 
 ### Task 5: Prove path text, wrapping, and frame fitting
 

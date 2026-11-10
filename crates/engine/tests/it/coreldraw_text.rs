@@ -62,3 +62,43 @@ fn coreldraw_paragraph_controls_edit_history_and_reopen() {
     s.execute("text.setStyle", &json!({"id": id, "justify": "center"})).unwrap();
     assert!(text(&s, id).paragraph_styles().iter().all(|para| para.justify == Justify::Center), "the reopened text remains editable");
 }
+
+#[test]
+fn coreldraw_linked_frames_reflow_break_and_reopen() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 600, "height": 300})).unwrap();
+    let story = "The brochure introduction flows from one frame into the next without losing editable text. ".repeat(8);
+    let first =
+        s.execute("text.create", &json!({"x": 10, "y": 10, "text": story, "area": {"width": 150, "height": 60}})).unwrap()["id"].as_u64().unwrap();
+    let second =
+        s.execute("text.create", &json!({"x": 200, "y": 10, "text": "", "area": {"width": 150, "height": 120}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [first, second]})).unwrap();
+    s.execute("text.thread.create", &json!({})).unwrap();
+    assert_eq!(s.execute("text.thread.info", &json!({})).unwrap(), json!([[first, second]]));
+    let shown = |s: &Session| [first, second].map(|id| text(s, id).plain_text());
+    assert!(shown(&s).iter().all(|part| !part.is_empty()), "both frames show part of the story");
+    assert_eq!(shown(&s).concat(), story);
+
+    s.execute("text.editRange", &json!({"id": first, "start": 0, "end": 0, "insert": "Revised introduction. "})).unwrap();
+    assert_eq!(shown(&s).concat(), format!("Revised introduction. {story}"), "editing the first frame reflows the story");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(shown(&s).concat(), story);
+    s.execute("edit.redo", &json!({})).unwrap();
+    let revised = format!("Revised introduction. {story}");
+    assert_eq!(shown(&s).concat(), revised);
+
+    s.execute("text.thread.break", &json!({"id": first, "port": "out"})).unwrap();
+    assert!(s.execute("text.thread.info", &json!({})).unwrap().as_array().unwrap().is_empty());
+    assert_eq!(text(&s, first).plain_text(), revised);
+    assert_eq!(text(&s, second).plain_text(), "");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.execute("text.thread.info", &json!({})).unwrap(), json!([[first, second]]));
+    assert_eq!(shown(&s).concat(), revised);
+
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    assert_eq!(s.execute("text.thread.info", &json!({})).unwrap(), json!([[first, second]]));
+    assert_eq!(shown(&s).concat(), revised);
+    s.execute("text.editRange", &json!({"id": first, "start": 0, "end": 0, "insert": "After reopen. "})).unwrap();
+    assert_eq!(shown(&s).concat(), format!("After reopen. {revised}"), "the reopened thread remains editable");
+}
