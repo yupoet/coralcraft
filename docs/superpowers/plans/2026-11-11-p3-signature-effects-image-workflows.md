@@ -116,7 +116,7 @@ Run the new engine/UI filters plus existing mesh and transparency suites. Commit
 - Modify: `crates/engine/tests/it/main.rs`
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 
-- [ ] **Step 1: Write the live Blend test**
+- [x] **Step 1: Write the live Blend test**
 
 ```rust
 let blend = s.execute("object.blend.make", &json!({"ids": [a, b], "steps": 4})).unwrap()["id"].as_u64().unwrap();
@@ -128,11 +128,11 @@ assert_eq!(info["steps"].as_u64(), Some(7));
 
 Edit spine anchors, reverse direction/order, undo/redo, release, and reopen natively. Independent SVG output must contain expanded visible geometry while the native source stays a live Blend.
 
-- [ ] **Step 2: Write the Contour and on-canvas evidence**
+- [x] **Step 2: Write the Contour and on-canvas evidence**
 
 Exercise the existing contour effect and `canvas/contour_bar.rs` controls with real pointer input; verify parameter edits and source geometry remain editable. Add no second contour renderer or effect model.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run the live-effect engine filter, CorelDRAW UI filter, and existing blend/contour suites. Commit with `feat: complete CorelDRAW blend and contour editing` or `test:` when evidence-only.
 

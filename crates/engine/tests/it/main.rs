@@ -40,6 +40,8 @@ mod coreldraw_styles_symbols;
 mod coreldraw_text;
 // CoralCraft: path text, wrapping, and layout workflows (P2 Task 5).
 mod coreldraw_layout;
+// CoralCraft: Blend, Contour, and other live effects (P3 Task 4).
+mod coreldraw_live_effects;
 // CoralCraft: the CorelDRAW transform and align workflows (P1 Task 6).
 mod coreldraw_transform;
 mod dimensions;

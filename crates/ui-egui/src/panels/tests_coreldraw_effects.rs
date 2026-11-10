@@ -57,3 +57,27 @@ fn coreldraw_transparency_panel_and_mesh_command_keep_live_models() {
     run(&mut app, "object.mesh.create", json!({"id": shape.0, "rows": 1, "cols": 1}));
     assert!(matches!(app.session.active().unwrap().doc.node(shape).unwrap().kind, NodeKind::Mesh(_)));
 }
+
+#[test]
+fn coreldraw_blend_panel_reflects_and_edits_the_live_blend() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let a = app.session.active().unwrap().selection.objects[0];
+    let b = NodeId(run(&mut app, "shape.rectangle", json!({"x": 140, "y": 30, "width": 30, "height": 30}))["id"].as_u64().unwrap());
+    run(&mut app, "select.set", json!({"ids": [a.0, b.0]}));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::blend::show);
+    for label in ["Make", "Spacing:", "Orientation:"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+
+    let blend = NodeId(run(&mut app, "object.blend.make", json!({"steps": 4}))["id"].as_u64().unwrap());
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::blend::show);
+    for label in ["Direction:", "Reverse Spine", "Expand", "Release"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+    run(&mut app, "object.blend.options", json!({"id": blend.0, "steps": 7}));
+    assert_eq!(app.session.execute("object.blend.info", &json!({})).unwrap()["steps"], json!(7));
+    assert!(matches!(app.session.active().unwrap().doc.node(blend).unwrap().kind, NodeKind::Blend { .. }));
+}
