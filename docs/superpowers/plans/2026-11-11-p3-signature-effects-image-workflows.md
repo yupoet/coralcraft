@@ -142,21 +142,22 @@ Run the live-effect engine filter, CorelDRAW UI filter, and existing blend/conto
 - Modify: `crates/engine/tests/it/coreldraw_live_effects.rs`
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 
-- [ ] **Step 1: Add failing Envelope evidence**
+- [x] **Step 1: Add failing Envelope evidence**
 
-Create an envelope with a warp, change its options and mesh points, edit its contents, undo/redo, expand a copy, and reopen natively:
+Create a warp envelope, change its options, edit its contents, reopen natively, then reset to a mesh and edit a mesh point before a second reopen and explicit expansion:
 
 ```rust
 s.execute("select.set", &json!({"ids": [shape]})).unwrap();
 let envelope = s.execute("object.envelope.makeWithWarp", &json!({"style": "arc", "bend": 25.0})).unwrap()["id"].as_u64().unwrap();
-s.execute("object.envelope.setMeshPoint", &json!({"id": envelope, "index": 0, "x": 5.0, "y": 5.0})).unwrap();
+s.execute("object.envelope.resetWithMesh", &json!({"id": envelope, "rows": 2, "cols": 2})).unwrap();
+s.execute("object.envelope.setMeshPoint", &json!({"id": envelope, "index": 4, "x": 85.0, "y": 45.0})).unwrap();
 ```
 
-- [ ] **Step 2: Add Distort and UI evidence**
+- [x] **Step 2: Add Distort and UI evidence**
 
-Apply the existing push/pull, zipper, or twister effect through `effect.apply`, edit with `effect.setParams`, and drive its real CorelDRAW workspace controls. Require native parameter persistence and independent exported geometry.
+Apply the existing twister effect through `effect.apply`, edit with `effect.setParams`, and open its real dialog in the CorelDRAW workspace. Require native parameter persistence and independent exported geometry.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run the new filters and existing envelope/effect suites. Commit only the tested slice.
 

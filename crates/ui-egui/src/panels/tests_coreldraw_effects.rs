@@ -81,3 +81,29 @@ fn coreldraw_blend_panel_reflects_and_edits_the_live_blend() {
     assert_eq!(app.session.execute("object.blend.info", &json!({})).unwrap()["steps"], json!(7));
     assert!(matches!(app.session.active().unwrap().doc.node(blend).unwrap().kind, NodeKind::Blend { .. }));
 }
+
+#[test]
+fn coreldraw_envelope_menu_and_distort_dialog_use_shared_models() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    let tree = crate::menus::menu_tree();
+    let object = tree.iter().find(|(title, _)| *title == "Object").map(|(_, items)| items).unwrap();
+    let envelope = object
+        .iter()
+        .find_map(|item| match item {
+            crate::menus::Item::Sub("Envelope Distort", items) => Some(items),
+            _ => None,
+        })
+        .expect("Object menu has Envelope Distort");
+    assert!(envelope.iter().any(|item| matches!(item, crate::menus::Item::Cmd(_, "object.envelope.makeWithWarp", _))));
+    assert!(envelope.iter().any(|item| matches!(item, crate::menus::Item::Cmd(_, "object.envelope.editContents", _))));
+
+    let envelope = NodeId(run(&mut app, "object.envelope.makeWithWarp", json!({"id": shape.0, "style": "arc", "bend": 25}))["id"].as_u64().unwrap());
+    assert!(matches!(app.session.active().unwrap().doc.node(envelope).unwrap().kind, NodeKind::Envelope { .. }));
+    run(&mut app, "effect.apply", json!({"id": shape.0, "effect": "distort.twist", "params": {"angle": 35}}));
+    assert_eq!(app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects[0].params["angle"].as_f64(), Some(35.0));
+    crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": "distort.twist"}));
+    let dialog = app.ui.dialog.as_ref().expect("the Distort dialog opens");
+    assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("distort.twist"));
+}

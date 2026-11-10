@@ -87,3 +87,50 @@ fn contour_updates_one_live_offset_effect_and_expands_only_when_asked() {
     assert!(s.doc().unwrap().doc.node(NodeId(expanded_id)).unwrap().appearance.effects.is_empty());
     assert!(matches!(s.doc().unwrap().doc.node(NodeId(source)).unwrap().kind, NodeKind::Path { .. }));
 }
+
+#[test]
+fn envelope_mesh_contents_and_warp_parameters_remain_live_after_reopen() {
+    let mut s = session();
+    let source = rectangle(&mut s, 40.0, "#204080");
+    s.execute("select.set", &json!({"ids": [source]})).unwrap();
+    let envelope = s.execute("object.envelope.makeWithWarp", &json!({"style": "arc", "bend": 25})).unwrap()["id"].as_u64().unwrap();
+    s.execute("object.envelope.options", &json!({"id": envelope, "fidelity": 90, "bend": -30})).unwrap();
+    let editing = s.execute("object.envelope.editContents", &json!({"id": envelope})).unwrap();
+    assert_eq!(editing["editing"], json!(true));
+    assert_eq!(s.doc().unwrap().selection.objects, vec![NodeId(source)]);
+    s.execute("paint.setFill", &json!({"id": source, "color": "#ff0000"})).unwrap();
+    s.execute("object.envelope.editContents", &json!({"editing": false})).unwrap();
+
+    native_reopen(&mut s);
+    let NodeKind::Envelope { fidelity, kind, .. } = &s.doc().unwrap().doc.node(NodeId(envelope)).unwrap().kind else { panic!("live envelope") };
+    assert_eq!(*fidelity, 90.0);
+    let vectorcraft_doc::live::EnvelopeKind::Warp { bend, .. } = kind.as_ref() else { panic!("warp envelope") };
+    assert_eq!(*bend, -30.0);
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(source)).unwrap().appearance.fill_paint().color().unwrap().to_hex(), "#ff0000");
+
+    s.execute("select.set", &json!({"ids": [envelope]})).unwrap();
+    s.execute("object.envelope.resetWithMesh", &json!({"id": envelope, "rows": 2, "cols": 2})).unwrap();
+    s.execute("object.envelope.setMeshPoint", &json!({"id": envelope, "index": 4, "x": 85, "y": 45})).unwrap();
+    native_reopen(&mut s);
+    let NodeKind::Envelope { kind, .. } = &s.doc().unwrap().doc.node(NodeId(envelope)).unwrap().kind else { panic!("live mesh envelope") };
+    assert!(matches!(kind.as_ref(), vectorcraft_doc::live::EnvelopeKind::Mesh { .. }));
+    independent_svg_read(&mut s);
+    s.execute("select.set", &json!({"ids": [envelope]})).unwrap();
+    s.execute("object.envelope.expand", &json!({})).unwrap();
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(envelope)).unwrap().kind, NodeKind::Group { .. }));
+}
+
+#[test]
+fn distort_twist_parameters_survive_native_reopen_and_export() {
+    let mut s = session();
+    let source = rectangle(&mut s, 40.0, "#204080");
+    let applied = s.execute("effect.apply", &json!({"id": source, "effect": "distort.twist", "params": {"angle": 10}})).unwrap();
+    assert_eq!(applied["index"], json!(0));
+    s.execute("effect.setParams", &json!({"id": source, "index": 0, "params": {"angle": 35}})).unwrap();
+    native_reopen(&mut s);
+    let node = s.doc().unwrap().doc.node(NodeId(source)).unwrap();
+    assert_eq!(node.appearance.effects[0].id, "distort.twist");
+    assert_eq!(node.appearance.effects[0].params["angle"].as_f64(), Some(35.0));
+    assert!(matches!(node.kind, NodeKind::Path { .. }));
+    independent_svg_read(&mut s);
+}
