@@ -937,6 +937,8 @@ fn run_ui_part13(app: &mut VectorcraftApp, id: &str, p: &Value) -> Option<Result
             None => Err("no such perspective grid preset".into()),
         },
         "ui.blendOptions" => crate::dialogs::blend_options::open(app),
+        // CoralCraft: the CorelDRAW Outline Pen dialog (P1 Task 7; the CorelDRAW preset's F12).
+        "ui.outlinePen" => crate::dialogs::outline_pen::open(app),
         "ui.livePaintGapOptions" => crate::dialogs::live_paint_gaps::open(app),
         "ui.perspectivePlane" => crate::dialogs::perspective_plane::open(app, p),
 

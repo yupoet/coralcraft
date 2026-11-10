@@ -222,6 +222,8 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                         Sep,
                         c("Outline Stroke", "object.path.outlineStroke"),
                         c("Offset Path…", "object.path.offsetPath"),
+                        // CoralCraft: the CorelDRAW Outline Pen dialog (P1 Task 7).
+                        c("Outline Pen…", "ui.outlinePen"),
                         c("Reverse Path Direction", "path.reverse"),
                         Sep,
                         c("Simplify…", "object.path.simplify"),

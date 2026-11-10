@@ -1530,6 +1530,13 @@ pub const UI_COMMANDS: &[(&str, &str, &str, &str)] = &[
         "",
         "{} open Blend Options (Object › Blend › Blend Options…, the Blend tool's double-click, Alt-click and toolbar button; dialog `blendOptions`: spacing smooth|steps|distance, steps, distance (pt), orientation page|path, preview) on the selected blend's options, previewed live: OK runs object.blend.options as one undo step; with no blend selected it sets what new blends start with",
     ),
+    // CoralCraft: the CorelDRAW Outline Pen dialog (P1 Task 7).
+    (
+        "ui.outlinePen",
+        "Outline Pen…",
+        "",
+        "{} open the Outline Pen dialog (dialog `outlinePen`: weight (pt), miterLimit, join miter|round|bevel, cap butt|round|square, startArrow and endArrow (Arrow, Triangle, Concave, DoubleArrow, Circle, Square, Diamond, Bar or none), style solid|dotted|dashed, color #rrggbb) on the selection's outline, or what the next object drawn starts with; OK runs stroke.set and, when the colour changed, paint.setStroke",
+    ),
     (
         "ui.livePaintGapOptions",
         "Gap Options…",

@@ -74,6 +74,8 @@ pub mod objects_on_path_options;
 pub mod office_export;
 pub mod package;
 pub(crate) mod path_ops;
+// CoralCraft: the CorelDRAW Outline Pen dialog (P1 Task 7).
+pub(crate) mod outline_pen;
 pub mod pathfinder_options;
 pub mod pdf_presets;
 pub mod perspective_grid;
@@ -292,6 +294,8 @@ registry! {
     Shape: ["rectangle", "roundedRectangle", "ellipse", "polygon", "star", "lineSegment", "arc", "spiral", "rectangularGrid", "polarGrid"] => shapes::SPEC,
     Transform: ["move", "rotate", "scale", "reflect", "shear"] => transform::SPEC,
     PathOp: ["average", "averageJoin", "offsetPath", "simplify", "splitIntoGrid"] => path_ops::SPEC,
+    // CoralCraft: the CorelDRAW Outline Pen dialog (P1 Task 7).
+    OutlinePen: [outline_pen::KIND] => outline_pen::SPEC,
     DocumentSetup: ["documentSetup"] => document_setup::SPEC,
     ArtboardOptions: [artboard_options::KIND] => artboard_options::SPEC,
     ExportForScreens: ["exportForScreens"] => export_for_screens::SPEC,

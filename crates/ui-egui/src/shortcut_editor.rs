@@ -728,7 +728,8 @@ fn coreldraw_preset() -> Overrides {
         ("panel:scale", "Alt+F9"),
         ("panel:info", "Alt+F10"),
         ("panel:gradient", "F11"),
-        ("panel:stroke", "F12"),
+        // The guide's F12 is the Outline Pen dialog itself (P1 Task 7), not the Stroke panel.
+        ("ui.outlinePen", "F12"),
     ];
     for &(key, chord) in bindings {
         let _ = assign(&mut set, key, Some(chord), true);
@@ -1589,7 +1590,10 @@ mod tests {
         assert_eq!(panel_shortcut("transform"), Some("Alt+F7"));
         assert_eq!(panel_shortcut("align"), Some("Alt+F8"));
         assert_eq!(panel_shortcut("gradient"), Some("F11"));
-        assert_eq!(panel_shortcut("stroke"), Some("F12"));
+        // F12 is the Outline Pen dialog, as the public documentation binds it (P1 Task 7); the
+        // Stroke panel keeps the upstream default, which is not F12.
+        assert_eq!(command_shortcut("ui.outlinePen"), Some("F12"));
+        assert_ne!(panel_shortcut("stroke"), Some("F12"));
     }
 
     #[test]
