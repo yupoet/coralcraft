@@ -725,7 +725,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// CoralCraft P1 Task 11 (known-issue 0e): a multi-page document round-trips through CDR7
     /// with every page (its name and size) preserved.
     #[test]
@@ -762,6 +761,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn write_cdr7_roundtrip_paragraph_text() {
         use coralcraft_doc::{Document, ObjectId, ObjectKind, ObjectNode, ParagraphTextSpec, TextAlignment};
         use coralcraft_geom::Point;

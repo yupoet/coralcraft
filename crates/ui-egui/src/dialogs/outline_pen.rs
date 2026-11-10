@@ -48,34 +48,33 @@ pub fn open(app: &mut VectorcraftApp) -> Result<Value, String> {
         "style": "solid",
         "color": "#000000",
     });
-    if let Some(id) = app.session.active().and_then(|st| st.selection.objects.first().map(|id| id.0)) {
-        if let Ok(node) = app.run("document.node", json!({ "id": id, "summary": true })) {
-            if let Some(o) = node.get("strokeOptions").and_then(Value::as_object) {
-                for (k, dst) in [("miterLimit", "miterLimit"), ("join", "join"), ("cap", "cap")] {
-                    if let Some(v) = o.get(k) {
-                        fields[dst] = v.clone();
-                    }
-                }
-                if let Some(arrow) = o.get("startArrow").and_then(Value::as_str) {
-                    fields["startArrow"] = json!(arrow);
-                }
-                if let Some(arrow) = o.get("endArrow").and_then(Value::as_str) {
-                    fields["endArrow"] = json!(arrow);
-                }
-                if let Some(dash) = o.get("dash").and_then(Value::as_array) {
-                    fields["style"] = json!(match dash.iter().filter_map(Value::as_f64).collect::<Vec<_>>()[..] {
-                        [0.0, ..] => "dotted",
-                        _ => "dashed",
-                    });
-                }
+    if let Some(id) = app.session.active().and_then(|st| st.selection.objects.first().map(|id| id.0))
+        && let Ok(node) = app.run("document.node", json!({ "id": id, "summary": true }))
+        && let Some(o) = node.get("strokeOptions").and_then(Value::as_object)
+    {
+        for (k, dst) in [("miterLimit", "miterLimit"), ("join", "join"), ("cap", "cap")] {
+            if let Some(v) = o.get(k) {
+                fields[dst] = v.clone();
             }
-            // The summary reports the weight beside the stroke options.
-            if let Some(w) = node.get("strokeWidth").and_then(Value::as_f64) {
-                fields["weight"] = json!(w);
-            }
-            if let Some(c) = node.get("stroke").and_then(Value::as_str).filter(|s| s.starts_with('#')) {
-                fields["color"] = json!(c);
-            }
+        }
+        if let Some(arrow) = o.get("startArrow").and_then(Value::as_str) {
+            fields["startArrow"] = json!(arrow);
+        }
+        if let Some(arrow) = o.get("endArrow").and_then(Value::as_str) {
+            fields["endArrow"] = json!(arrow);
+        }
+        if let Some(dash) = o.get("dash").and_then(Value::as_array) {
+            fields["style"] = json!(match dash.iter().filter_map(Value::as_f64).collect::<Vec<_>>()[..] {
+                [0.0, ..] => "dotted",
+                _ => "dashed",
+            });
+        }
+        // The summary reports the weight beside the stroke options.
+        if let Some(w) = node.get("strokeWidth").and_then(Value::as_f64) {
+            fields["weight"] = json!(w);
+        }
+        if let Some(c) = node.get("stroke").and_then(Value::as_str).filter(|s| s.starts_with('#')) {
+            fields["color"] = json!(c);
         }
     }
     app.ui.dialog = Some(Dialog::new(KIND, fields));

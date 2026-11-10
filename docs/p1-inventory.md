@@ -142,7 +142,24 @@
 | T11 Persistence/CDR | extension block + `corel-import` mapping | **exists** (P1 Task 11: consolidated audit test; known-issue 0e fixed — CDR7 named-first-page round trip) |
 | T12 MCP/CLI | registry + `docs_sync.rs` | **exists** → regenerate per slice |
 
-## 4. Maintenance
+## 4. P1 acceptance scenario (Task 13)
+
+`crates/engine/tests/it/coreldraw_p1_acceptance.rs` drives the whole exit criterion through the
+command surface an MCP `run_command` call runs (recorded 2026-11-10):
+
+1. **Build** — two pages ("Page 1", "Print") with a `masterAll` layer; a node-edited cubic curve
+   (`select.anchors` + `path.moveAnchors`); a welded rectangle pair (`select.marquee` +
+   `object.pathfinder.unite`); 48 pt artistic text "CORAL"; the "Mark Gold" graphic style (fill
+   `#e8b04b` + dashed 2.5 pt outline via the Outline Pen commands); a "Dot" symbol placed twice,
+   the placed instance rotated 15° and mirrored.
+2. **Revise & save/reopen** — `document.serialize {format: "vectorcraft"}` → `document.open`:
+   pages, the style, and the symbol reopen; a node edit and an outline edit act on the reopened
+   document (`strokeWidth` 4.0 verified).
+3. **Independent exports** — SVG re-imported through `document.open` (≥ 4 objects re-selected and
+   editable: `stroke.set` verified on the re-imported geometry); PDF checked at the byte level
+   (`%PDF-` header, `/Type /Page` objects, `startxref`).
+
+## 5. Maintenance
 
 Update this file at every slice that changes a starting point (e.g. T2 turning *partial* →
-*exists*), and record the Task 13 acceptance scenario outputs here.
+*exists*).

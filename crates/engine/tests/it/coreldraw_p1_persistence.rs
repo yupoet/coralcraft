@@ -51,7 +51,7 @@ fn every_p1_semantic_survives_one_native_round_trip() {
     let paths = s.execute("document.inspect", &json!({})).unwrap();
     // Flatten every reported node of every kind.
     let mut nodes: Vec<serde_json::Value> = vec![];
-    let mut walk = |v: &serde_json::Value, out: &mut Vec<serde_json::Value>| {
+    let walk = |v: &serde_json::Value, out: &mut Vec<serde_json::Value>| {
         if let Some(arr) = v["nodes"].as_array() {
             for n in arr {
                 out.push(n.clone());

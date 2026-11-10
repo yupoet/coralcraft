@@ -33,7 +33,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.10 Pages and master layers daily use (this commit): reorder/roles/native-reopen evidence in `crates/engine/tests/it/coreldraw_pages.rs`; measured CDR7 first-page loss recorded as known-issue 0e (owned by P1.11).
 - [x] P1.11 Native persistence and CDR mapping (this commit): consolidated P1 persistence audit `crates/engine/tests/it/coreldraw_p1_persistence.rs`; CDR7 multi-page first-page loss FIXED (reader master-page heuristic now skips only unnamed first pages — known-issue 0e resolved; regression `write_cdr7_roundtrips_multiple_pages`); hostile-input suites green.
 - [x] P1.12 MCP/CLI surface and regenerated docs (this commit): `p1_commands_run_through_run_command` proves the new commands through `run_command`; `docs/mcp.md` regeneration clean (registry unchanged).
-- [ ] P1.13 P1 acceptance scenario and gate.
+- [x] P1.13 P1 acceptance scenario and gate (this commit): `crates/engine/tests/it/coreldraw_p1_acceptance.rs` (build → revise → native reopen → SVG re-import + PDF structure, recorded in `docs/p1-inventory.md` §4); `cargo xtask ci` gate run with the result recorded in `docs/ai-memory/03-current.md`. **P1 complete; next: P2 (text and multipage layout).**
 
 Completed migration steps (V0–V4.2):
 

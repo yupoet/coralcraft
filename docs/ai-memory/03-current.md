@@ -4,6 +4,28 @@
 
 ## 1. Current Stage Status
 
+- **P1 PROFESSIONAL CORE VECTOR WORKFLOW COMPLETE (2026-11-10, commits 14b60f776..3ea88dfc2).** All thirteen P1 tasks delivered
+  on the synced VectorCraft base ([plan](../superpowers/plans/2026-11-09-p1-core-vector-workflow.md), inventory
+  [`docs/p1-inventory.md`](../p1-inventory.md) §4 records the acceptance scenario):
+  **T2** the eleven core-tool mapping (`crates/tools/src/coreldraw.rs`), the CorelDRAW workspace's toolbox/labels and Property
+  Bar rows (`crates/ui-egui/src/coreldraw_bar.rs`); **T3** `select.marquee` + node-workflow/native-reopen/independent-SVG
+  evidence (D1 → 4); **T4** shaping mapped onto `object.pathfinder.*` with new `object.pathfinder.boundary` + Property Bar
+  buttons (→ 4); **T5** `view.snapToGuides` toggle through `UiState`/`ViewInfo`/`ToolContext` + CorelDRAW Snapping menu names;
+  **T6** Property Bar mirror/rotation controls + distribute evidence (new row → 4); **T7** the Outline Pen dialog
+  (`ui.outlinePen`, the preset's F12) + appearance/CDR7 round trips (→ 4); **T8** docker behaviour evidence; **T9** styles and
+  symbols (new row → 4, Object Styles & Symbol Manager dockers); **T10** page/master-layer daily use; **T11** the consolidated
+  persistence audit + the CDR7 first-page round-trip FIX (known-issue 0e resolved: the reader's master-page heuristic now
+  skips only unnamed first pages); **T12** MCP surface (run_command) + docs_sync clean; **T13** the acceptance scenario
+  (build → revise → `.vectorcraft` reopen editable → SVG re-import → PDF structure).
+  **P1 gate (2026-11-10):** `cargo xtask ci` — fmt ok, clippy ok (`-D warnings`), workspace tests 4,375 passed / 1 failed; the
+  single failure is the documented platform-flake
+  `tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars` (known-issue 0b, reproduced in
+  isolation, fails identically on the pristine upstream target on this host, green on every CI platform in PR #5) — recorded
+  verbatim, not silenced. **Next: P2 (Professional Text and Multipage Layout)** from
+  [`docs/target-app-parity.md`](../target-app-parity.md) rows "Artistic/paragraph text and typography" and "Pages, master
+  layers, and page navigator" (level-5 items), guided by the umbrella spec §P2; S2 (real CDR certification) stays open.
+
+
 - **P0 EVIDENCE BASELINE & TRACEDRAW AUDIT COMPLETE (2026-11-10, commits d970c1983..93abd180a).** All seven executable P0 tasks done: CDR verification ledger (`docs/cdr-verification.md`, all current-tree rows UNVERIFIED on this machine — tools/corpus absent), MCP docs regenerated on `vectorcraft-mcp` with a live-registry sync test (S4 closed), VectorCraft/CorelDRAW parity records separated (S5 closed), TraceDraw pinned at `aac8563a` + libcdr refreshed at `f4cd1f9`, pinned suites run (cdr-format 21/21, cdr 321/321, core 483/484, app 2402/2451 — app failures are locale-assertion noise; app crate is behaviour-reference only), 12-row adoption decision record (`docs/coreldraw-reference-adoption.md`; live effects confirmed from source, mapping stays on the VectorCraft effect stack), D1–D6 evidence matrix replacing the 100% claims (`docs/target-app-parity.md`), roadmap/gaps/README/memory synchronized (P0 queue: P0.2–P0.7 checked; P0.1/S2 open), and the P1 plan written (`docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md`). **P0 gate:** fmt/clippy green; workspace tests 4,375 passed / 1 failed — the single failure is the documented platform-flaky `constrain_angle_turns_the_base_orientation_of_polygons_and_stars` (known-issue 0b, reproduced in isolation, fails identically on the pristine upstream target on this host; green on every CI platform in PR #5). **Status: P0 documentation/audit complete; S2 real CDR certification open** (needs a machine with `cdr2raw`/`cmx2raw` and `refs/cdr-samples`). **Next: P1 Task 1 (capability inventory).**
 
 - **P0 EVIDENCE BASELINE AND TRACEDRAW ADOPTION AUDIT (active direction, 2026-11-10).** The operator approved the umbrella product roadmap

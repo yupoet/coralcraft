@@ -24,7 +24,7 @@ fn pages_doc() -> Session {
 fn layers(s: &mut Session) -> Vec<(String, String)> {
     let doc = s.execute("document.json", &json!({})).unwrap();
     let mut out = vec![];
-    let mut walk = |nodes: &Vec<serde_json::Value>, out: &mut Vec<(String, String)>| {
+    let walk = |nodes: &Vec<serde_json::Value>, out: &mut Vec<(String, String)>| {
         for n in nodes {
             if n["kind"]["type"].as_str() == Some("layer") {
                 let id = n["id"].as_u64().unwrap_or_default();
