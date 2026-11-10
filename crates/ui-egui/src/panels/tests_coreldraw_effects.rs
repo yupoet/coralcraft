@@ -123,3 +123,24 @@ fn coreldraw_extrude_and_drop_shadow_dialogs_open_on_the_shared_effect_stack() {
     let effects = &app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects;
     assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["threeD.extrude", "stylize.dropShadow"]);
 }
+
+#[test]
+fn coreldraw_appearance_docker_shows_and_edits_the_ordered_effect_stack() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    run(&mut app, "effect.apply", json!({"id": shape.0, "effect": "stylize.dropShadow"}));
+    run(&mut app, "effect.apply", json!({"id": shape.0, "effect": "distort.twist"}));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::appearance::show);
+    for label in ["Drop Shadow", "Twist"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+    run(&mut app, "effect.move", json!({"id": shape.0, "from": 1, "to": 0}));
+    run(&mut app, "effect.duplicate", json!({"id": shape.0, "index": 0}));
+    run(&mut app, "effect.setParams", json!({"id": shape.0, "index": 0, "visible": false}));
+    let effects = &app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects;
+    assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["distort.twist", "distort.twist", "stylize.dropShadow"]);
+    assert!(!effects[0].visible);
+}

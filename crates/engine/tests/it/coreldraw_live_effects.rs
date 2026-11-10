@@ -158,3 +158,40 @@ fn extrude_bevel_and_drop_shadow_keep_ordered_editable_parameters() {
         .unwrap();
     assert_eq!(vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed effect PDF read").artboards.len(), 1);
 }
+
+#[test]
+fn effect_stack_reorders_duplicates_hides_removes_and_expands_atomically() {
+    let mut s = session();
+    let source = rectangle(&mut s, 40.0, "#204080");
+    s.execute("effect.apply", &json!({"id": source, "effect": "stylize.dropShadow", "params": {"x": 8}})).unwrap();
+    s.execute("effect.apply", &json!({"id": source, "effect": "distort.twist", "params": {"angle": 20}})).unwrap();
+    s.execute("effect.move", &json!({"id": source, "from": 1, "to": 0})).unwrap();
+    s.execute("effect.duplicate", &json!({"id": source, "index": 0})).unwrap();
+    s.execute("effect.setParams", &json!({"id": source, "index": 0, "visible": false})).unwrap();
+    let ids = |s: &Session| {
+        s.doc().unwrap().doc.node(NodeId(source)).unwrap().appearance.effects.iter().map(|effect| effect.id.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&s), ["distort.twist", "distort.twist", "stylize.dropShadow"]);
+    assert!(!s.doc().unwrap().doc.node(NodeId(source)).unwrap().appearance.effects[0].visible);
+
+    let before = s.doc().unwrap().history.undo.len();
+    assert!(s.execute("effect.move", &json!({"id": source, "from": 99, "to": 0})).is_err());
+    assert_eq!(s.doc().unwrap().history.undo.len(), before);
+    native_reopen(&mut s);
+    assert_eq!(ids(&s), ["distort.twist", "distort.twist", "stylize.dropShadow"]);
+    assert!(!s.doc().unwrap().doc.node(NodeId(source)).unwrap().appearance.effects[0].visible);
+
+    s.execute("effect.remove", &json!({"id": source, "index": 1})).unwrap();
+    assert_eq!(ids(&s), ["distort.twist", "stylize.dropShadow"]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(ids(&s), ["distort.twist", "distort.twist", "stylize.dropShadow"]);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(ids(&s), ["distort.twist", "stylize.dropShadow"]);
+    independent_svg_read(&mut s);
+
+    s.execute("select.set", &json!({"ids": [source]})).unwrap();
+    let expanded = s.execute("effect.expandAppearance", &json!({})).unwrap();
+    for id in expanded["ids"].as_array().unwrap().iter().filter_map(|id| id.as_u64()) {
+        assert!(s.doc().unwrap().doc.node(NodeId(id)).unwrap().appearance.effects.is_empty());
+    }
+}

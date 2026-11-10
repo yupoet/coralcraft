@@ -195,15 +195,15 @@ Run focused engine/UI tests and existing effect catalog suites. Commit each meas
 - Modify: `crates/engine/tests/it/coreldraw_live_effects.rs`
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 
-- [ ] **Step 1: Write the failing stack test**
+- [x] **Step 1: Write the failing stack test**
 
 Apply two compatible effects, then run `effect.move`, `effect.duplicate`, `effect.setParams {"visible": false}`, `effect.remove`, and `effect.expandAppearance`. Assert exact order, parameters, visibility, undo/redo, and native reopen. Verify cloning through the existing clone/copy-properties workflow rather than adding a parallel stack.
 
-- [ ] **Step 2: Verify the Appearance docker**
+- [x] **Step 2: Verify the Appearance docker**
 
 Drive reorder, hide, edit, duplicate, remove, and expand through the actual CorelDRAW workspace Appearance controls. Failed commands must leave document and history unchanged.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run the focused tests plus `vectorcraft-effects` and Appearance suites. Commit with `feat: complete CorelDRAW live-effect stack editing` or `test:` if evidence-only.
 
