@@ -111,6 +111,17 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             |s, p| run_pf(s, p, PathfinderOp::MinusBack)
         ),
+        // CoralCraft: CorelDRAW's Boundary (P1 Task 4, public user guide "Shaping"): one closed
+        // path around the silhouette of the selected objects; the objects stay.
+        cmd!(
+            "object.pathfinder.boundary",
+            "Boundary",
+            ["Window", "Pathfinder"],
+            None,
+            "{ids?: [id…] (selected first; default: the selection), precision?: pt 0.001..10, removeRedundantPoints?: bool (default: the Pathfinder Options, see object.pathfinder.options; the values used join the journal entry)} create one closed unfilled path — the outline of the selected objects' union — directly above the topmost of them and select it; the objects stay → {ids}",
+            has_selection,
+            boundary
+        ),
         cmd!(
             "object.pathfinder.trap",
             "Trap…",
@@ -674,6 +685,51 @@ fn run_pf(s: &mut Session, p: &Value, op: PathfinderOp) -> Result<Value> {
         let nid = d.wrap(&roots, |_| new_node)?;
         sel.set([nid]);
         Ok(vec![nid])
+    })?;
+    Ok(ids_json(&ids))
+}
+
+// CoralCraft: CorelDRAW's Boundary (P1 Task 4): the union of the selection's leaf shapes as one
+// closed path with no paint of its own, inserted directly above the topmost selected object (which
+// stays, with the rest of the selection) and selected.
+fn boundary(s: &mut Session, p: &Value) -> Result<Value> {
+    let roots = selected_roots(s)?;
+    if roots.is_empty() {
+        return Err(EngineError::Other("nothing selected".into()));
+    }
+    let options = pf_options(s, p, "object.pathfinder.boundary")?;
+    let ids = s.edit("Boundary", |d, sel| {
+        let mut parts: Vec<(PathData, FillRule)> = vec![];
+        for id in &roots {
+            let n = d.node(*id).ok_or(EngineError::NoNode(*id))?;
+            let mut leaves = vec![];
+            pf_leaves(d, n, &mut leaves);
+            for l in &leaves {
+                if let Some((path, rule)) = node_path(l) {
+                    parts.push((path, rule));
+                }
+            }
+        }
+        if parts.is_empty() {
+            return Err(EngineError::Other("Boundary: select paths, compound paths, groups or text".into()));
+        }
+        if parts.iter().any(|(p, _)| p.subpaths.iter().any(|sp| sp.anchors.iter().any(|a| !(a.p.x.is_finite() && a.p.y.is_finite())))) {
+            return Err(EngineError::Other("paths contain invalid coordinates".into()));
+        }
+        let refs: Vec<(&PathData, FillRule)> = parts.iter().map(|(p, r)| (p, *r)).collect();
+        let outline = po::try_unite_all_with(&refs, options.precision).map_err(|e| EngineError::Other(e.to_string()))?;
+        if outline.is_empty() {
+            return Err(EngineError::Other("Boundary produced an empty result".into()));
+        }
+        let outline = if options.remove_redundant_points { po::remove_redundant_points(&outline, options.precision) } else { outline };
+        // No paint of its own, as the public user guide's Boundary does.
+        let n = shape_node(d, outline, None);
+        let id = n.id;
+        let top = roots.last().ok_or(EngineError::Other("nothing selected".into()))?;
+        let (par, idx, _) = d.position(*top).ok_or(EngineError::NoNode(*top))?;
+        d.insert(par, idx + 1, n)?;
+        sel.set([id]);
+        Ok(vec![id])
     })?;
     Ok(ids_json(&ids))
 }

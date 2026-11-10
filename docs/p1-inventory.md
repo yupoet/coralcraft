@@ -132,7 +132,7 @@
 |---|---|---|
 | T2 Tool mapping + Property Bar modes | tool catalog, `toolbar.rs`, `control_bar.rs`, `tool.select`/`tool.setOption` | **exists** (P1 Task 2: `crates/tools/src/coreldraw.rs` mapping, CorelDRAW workspace toolbox slots/tips, Property Bar rows in `crates/ui-egui/src/coreldraw_bar.rs`; shape rows reuse the add-on controls) |
 | T3 Selection & node editing | `select.*`, `path.*`, `crates/pathops/src/edit.rs`, anchor tools + kittest suites | **exists** (P1 Task 3: added `select.marquee` — the one measured headless gap — and the D1 level-4 evidence: `crates/engine/tests/it/coreldraw_node_workflow.rs`) |
-| T4 Shaping | `object.pathfinder.*`, compound shapes, Shape Builder | **partial** (Corel naming/workflow surface absent) |
+| T4 Shaping | `object.pathfinder.*`, compound shapes, Shape Builder | **exists** (P1 Task 4: Weld/Trim/Intersect/Simplify/minus map onto the shared commands; Boundary added; Property Bar buttons in `coreldraw_bar.rs`) |
 | T5 Snapping & dynamic guides | guides/snap engine + prefs + `guide.*` commands + `snapping_menu` | **partial** (Corel snap modes/dynamic guides naming + toggles absent) |
 | T6 Transforms, Align & Distribute | `object.*` transforms, `panels/transform.rs`, `panels/align.rs`, `object.align/distribute/distributeSpacing` | **exists** → Corel option mapping only |
 | T7 Fills/outlines/Outline Pen | `paint.*`, `stroke.*`, `appearance.*`, palette bar, stroke panel | **partial** (Outline Pen dialog + Corel defaults flow absent) |

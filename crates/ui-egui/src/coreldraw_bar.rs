@@ -85,6 +85,33 @@ pub fn tool_tip(app: &VectorcraftApp, vc: &str) -> Option<String> {
     })
 }
 
+/// The CorelDRAW shaping buttons of the Property Bar (P1 Task 4), in the public user guide's
+/// order, shown with two or more objects selected in the CorelDRAW workspace alone. Each runs the
+/// shared Pathfinder command it maps onto; Simplify and Trim share `object.pathfinder.trim`
+/// (each shape cut by everything above it), whose geometry is Simplify's, and identical to Trim
+/// for the two-object case.
+pub fn shaping_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
+    let n = app.session.active().map_or(0, |st| st.selection.objects.len());
+    if !active(app) || n < 2 {
+        return;
+    }
+    for (label, cmd) in [
+        ("Weld", "object.pathfinder.unite"),
+        ("Trim", "object.pathfinder.trim"),
+        ("Intersect", "object.pathfinder.intersect"),
+        ("Simplify", "object.pathfinder.trim"),
+        ("Front Minus Back", "object.pathfinder.minusBack"),
+        ("Back Minus Front", "object.pathfinder.minusFront"),
+        ("Boundary", "object.pathfinder.boundary"),
+    ] {
+        if widgets::flat_button(ui, tl!(label), 64.0).clicked() {
+            app.run(cmd, json!({})).ok();
+        }
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,17 +162,18 @@ mod tests {
         corel(&mut app);
         // Spiral: the CorelDRAW row shows, the add-on's Segments doesn't.
         app.run("tool.select", json!({ "tool": "spiral" })).unwrap();
-        let nodes = control_bar_nodes(&mut app, 1440.0);
+        let ctx = ctx();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
         assert!(node_text(&nodes, "Revolutions:").is_some(), "the Spiral row shows");
         assert!(node_text(&nodes, "Decay:").is_some());
         assert!(node_text(&nodes, "Segments").is_none(), "the add-on's spiral controls are replaced");
         // Freehand: the smoothing row shows.
         app.run("tool.select", json!({ "tool": "pencil" })).unwrap();
-        let nodes = control_bar_nodes(&mut app, 1440.0);
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
         assert!(node_text(&nodes, "Freehand Smoothing:").is_some(), "the Freehand row shows");
         // Rectangle: the add-on shape controls the workspaces share keep showing.
         app.run("tool.select", json!({ "tool": "rectangle" })).unwrap();
-        let nodes = control_bar_nodes(&mut app, 1440.0);
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
         assert!(node_text(&nodes, "Radius:").is_some(), "the Rectangle's shape controls show");
         // A selected rectangle and polygon edit through the live-shape commands: one undo step
         // each, the live shape's parameter changes (the fields' commands).
@@ -165,7 +193,7 @@ mod tests {
         // Outside the CorelDRAW workspace the upstream bar is unchanged.
         crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
         app.run("tool.select", json!({ "tool": "spiral" })).unwrap();
-        let nodes = control_bar_nodes(&mut app, 1440.0);
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
         assert!(node_text(&nodes, "Revolutions:").is_none(), "no CorelDRAW row outside the workspace");
         assert!(node_text(&nodes, "Segments").is_some(), "the add-on controls return");
     }
@@ -182,6 +210,45 @@ mod tests {
         assert!(tool_tip(&app, "selection").is_none());
     }
 
+    /// The shaping buttons show with two or more objects selected in the CorelDRAW workspace alone,
+    /// and a click runs its command (Weld unites into one selected object).
+    #[test]
+    fn shaping_buttons_show_and_weld_runs() {
+        let mut app = app();
+        corel(&mut app);
+        let a = app.run("shape.rectangle", json!({ "x": 10, "y": 10, "width": 60, "height": 60 })).unwrap()["id"].clone();
+        let b = app.run("shape.rectangle", json!({ "x": 40, "y": 40, "width": 60, "height": 60 })).unwrap()["id"].clone();
+        let ctx = ctx();
+        // One object: no shaping buttons.
+        app.run("select.set", json!({ "ids": [a] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Weld").is_none(), "one object is nothing to shape");
+        // Two: the seven buttons show.
+        app.run("select.set", json!({ "ids": [a, b] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        for label in ["Weld", "Trim", "Intersect", "Simplify", "Front Minus Back", "Back Minus Front", "Boundary"] {
+            assert!(node_text(&nodes, label).is_some(), "{label} shows");
+        }
+        // A click on Weld unites the selection into one object.
+        let center = |n: &egui::accesskit::Node| {
+            let b = n.bounds().unwrap_or_else(|| panic!("{n:?}"));
+            egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+        };
+        let at = center(&node_text(&nodes, "Weld").expect("the Weld button"));
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![press(false)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let selected = app.session.active().unwrap().selection.objects.clone();
+        assert_eq!(selected.len(), 1, "Weld united the two rectangles");
+        // Outside the CorelDRAW workspace the buttons never show.
+        crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
+        app.run("edit.undo", json!({})).unwrap();
+        app.run("select.set", json!({ "ids": [a, b] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Weld").is_none(), "the upstream bar keeps its behaviour");
+    }
+
     /// An English context for headless Control bar frames, with AccessKit on to find its controls
     /// (as the Paragraph panel's Control bar tests set up).
     fn ctx() -> egui::Context {
@@ -192,13 +259,19 @@ mod tests {
         ctx
     }
 
-    /// Two headless frames of the whole Control bar, `width` wide (the first lays it out).
-    fn control_bar_nodes(app: &mut VectorcraftApp, width: f32) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
-        let ctx = ctx();
+    /// Two headless frames of the whole Control bar, `width` wide (the first lays it out), with
+    /// optional events, on the shared `ctx`.
+    fn control_bar_nodes(
+        ctx: &egui::Context,
+        app: &mut VectorcraftApp,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::accesskit::NodeId, egui::accesskit::Node)> {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 300.0));
         let mut nodes = Vec::new();
-        for _ in 0..2 {
-            let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| crate::chrome::control_bar(app, ui));
+        for events in [events, vec![]] {
+            let mut out =
+                ctx.run_ui(egui::RawInput { events, screen_rect: Some(screen), ..Default::default() }, |ui| crate::chrome::control_bar(app, ui));
             out.textures_delta.clear();
             nodes = out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default();
         }

@@ -88,6 +88,7 @@ pub(crate) const SELECTS_GIVEN_IDS: &[&str] = &[
     "object.hide",
     "object.lock",
     "object.move",
+    "object.pathfinder.boundary",
     "object.pathfinder.crop",
     "object.pathfinder.divide",
     "object.pathfinder.exclude",
