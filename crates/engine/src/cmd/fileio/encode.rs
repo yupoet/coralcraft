@@ -452,6 +452,19 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
+    // CoralCraft: CDR/CMX carry the evaluated page text, while native documents keep the field.
+    if matches!(f.id, "cdr" | "cmx") {
+        let has_page_numbers = doc.layers.iter().any(|layer| {
+            let mut found = false;
+            layer.walk(&mut |node| found |= node.extras().page_number);
+            found
+        });
+        if has_page_numbers {
+            enc.warnings.push(
+                "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
+            );
+        }
+    }
     // Baking, flattening and drawing stop early when cancelled and leave a truncated result.
     vectorcraft_doc::cancel::check()?;
     // An image the renderer couldn't decode draws nothing: say so rather than write a picture

@@ -219,32 +219,25 @@ Commit with `test: verify CorelDRAW typography workflows` or the appropriate `fe
 ### Task 7: Add dynamic page-number fields
 
 **Files:**
-- Modify: `crates/doc/src/text/runs.rs`
-- Modify: `crates/engine/src/cmd/textedit.rs`
-- Modify: `crates/engine/tests/it/coreldraw_layout.rs`
-- Modify: `crates/corel-import/src/lib.rs`
+- Modify: `crates/doc/src/node/{extras,wire}.rs`, `node.rs`, and `coralcraft.rs`
+- Modify: `crates/engine/src/cmd/{create,newart}.rs` and `cmd/fileio/{export,encode}.rs`
+- Modify: `crates/render/src/{lib,renderer}.rs` and `renderer/{nodes,text}.rs`
+- Modify: `crates/svg/src/export/nodes.rs` and `crates/pdf/src/export/{entry,exporter,text,writer}.rs`
+- Modify: `crates/corel-import/src/lib.rs` and `crates/engine/tests/it/coreldraw_layout.rs`
 
 - [ ] **Step 1: Write the failing dynamic-field test**
 
-The test creates three pages, inserts a page-number field into master-page text, reorders pages, and requires the evaluated text to follow each current page. Native reopen must keep the field dynamic rather than flattening it. The test fails on the current tree because no such field exists.
+Create three pages, insert a dedicated page-number text object into a master layer, reorder pages, and require evaluated text to follow each current page. Native reopen must keep the field dynamic. The initial test fails because `text.pageNumber.insert` does not exist.
 
-- [ ] **Step 2: Add the smallest document representation**
+- [ ] **Step 2: Use the smallest document representation**
 
-Add an optional field to `TextRun` with serde defaults so old files are unchanged:
+Store an object-level `page_number` flag in the existing sparse `NodeExtras`, with a serde default in `NodeWire`; do not add a field to every `TextRun` literal. `Node::page_number_text` creates a temporary evaluated text copy while the stored placeholder remains `#`. `text.pageNumber.insert {x, y, …}` creates this object in one history step. This slice covers dedicated page-number objects, not arbitrary inline fields mixed into a longer run.
 
-```rust
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum TextField {
-    #[serde(rename = "pageNumber")]
-    PageNumber,
-}
-```
-
-Add `pub field: Option<TextField>` to `TextRun`, defaulting and skipping serialization when absent. `TextRun::new` and `TextRun::inline` initialize it to `None`. Add `text.pageNumber.insert` to insert the field at a caret/selection. Resolve the field from the current artboard at layout/render time; never store a page's current number as the field's permanent text.
+Evaluate at the canvas, SVG, and PDF boundaries. `Document::corel_layers_for_page` supplies the ordered, translated master/normal/desktop layer stack for single-page export. Ordinary text and all non-field rendering paths remain unchanged.
 
 - [ ] **Step 3: Map the CDR fallback explicitly**
 
-When CDR cannot carry the dynamic field, export the evaluated number with a warning and preserve the native field in the CoralCraft native extension. Do not claim native CDR dynamic-field support without a cited format layout and test.
+CDR/CMX export splits page-number objects into applicable pages as ordinary editable text, leaving other master content on the master layer. The command warns that the dynamic field and master semantics are retained only in the native document. Do not claim native CDR dynamic-field support without a cited format layout and test.
 
 - [ ] **Step 4: Verify and commit**
 
@@ -252,9 +245,10 @@ When CDR cannot carry the dynamic field, export the evaluated number with a warn
 cargo test -p vectorcraft-doc text
 cargo test -p vectorcraft-engine --test it coreldraw_layout -- --nocapture
 cargo test -p corel-import
+cargo test -p vectorcraft-render layeropts
 ```
 
-Expected: page creation, reorder, native reopen, export fallback, and warnings pass. Commit with `feat: add dynamic page-number fields`.
+Expected: creation, reorder, native reopen, canvas/SVG/PDF evaluation, CDR fallback, and warnings pass. Commit with `feat: add dynamic page-number fields`.
 
 ### Task 8: Add an editable table layout command
 

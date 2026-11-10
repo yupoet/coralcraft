@@ -49,6 +49,8 @@ pub(crate) use writer::{Sheet, Writer};
 
 pub(crate) struct Exporter<'a> {
     doc: &'a Document,
+    /// CoralCraft: the 1-based artboard currently being written.
+    page_number: Option<usize>,
     /// The art boxes of `doc`'s symbols, which the walk measures symbol instances by when it
     /// leaves out objects outside the page ([`SymbolBoxes::quick`]). The box of an instance whose
     /// art holds brushed strokes grows by as far as their brush art can paint

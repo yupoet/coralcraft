@@ -51,6 +51,8 @@ pub use vello_cpu;
 /// Reusable renderer (keeps the render context, geometry and glyph caches between frames; decoded
 /// images are shared by all renderers, see [`set_image_cache_budget`]).
 pub struct Renderer {
+    /// CoralCraft: the 1-based page whose master content is being drawn.
+    page_number: Option<usize>,
     /// Glyph geometry per text object, keyed by `Arc` identity like `geom` (see [`Self::text_geom_of`]).
     texts: FrameCache<usize, (Arc<Node>, Arc<TextGeom>)>,
     /// The latest cached glyph geometry for each text object id. A move changes the node's Arc

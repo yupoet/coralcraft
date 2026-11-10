@@ -64,3 +64,107 @@ fn coreldraw_path_text_wrap_and_fit_remain_editable() {
     let reopened = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF read");
     assert_eq!(reopened.artboards.len(), 1);
 }
+
+fn exported_page_text(s: &mut Session, page: usize) -> String {
+    let svg = s.execute("document.serialize", &json!({"format": "svg", "artboard": page})).unwrap()["text"].as_str().unwrap().to_string();
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the page");
+    let xml = usvg::roxmltree::Document::parse(&svg).expect("XML text evidence");
+    xml.descendants()
+        .filter(|node| node.is_element() && matches!(node.tag_name().name(), "text" | "tspan"))
+        .filter_map(|node| node.text())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+#[test]
+fn coreldraw_dynamic_page_numbers_follow_pages_and_native_reopen() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 100})).unwrap();
+    s.execute("artboard.new", &json!({"after": 0, "name": "Two"})).unwrap();
+    s.execute("artboard.new", &json!({"after": 1, "name": "Three"})).unwrap();
+    s.execute("layer.new", &json!({"name": "Page Numbers", "role": "masterAll"})).unwrap();
+    let field = s.execute("text.pageNumber.insert", &json!({"x": 20, "y": 80, "size": 12})).unwrap()["id"].as_u64().unwrap();
+    assert_eq!(exported_page_text(&mut s, 0), "1");
+    assert_eq!(exported_page_text(&mut s, 1), "2");
+    assert_eq!(exported_page_text(&mut s, 2), "3");
+    assert_eq!(text(&s, field).plain_text(), "#", "the stored field is not flattened to the current number");
+    let (before_first, before_second) = {
+        let doc = &s.doc().unwrap().doc;
+        let mut renderer = vectorcraft_render::Renderer::new();
+        let first = renderer.render_region(doc, doc.artboards[0].rect, 1.0, true).pixels;
+        let second = renderer.render_region(doc, doc.artboards[1].rect, 1.0, true).pixels;
+        (first, second)
+    };
+    assert!(before_first != before_second, "the initial master pages evaluate different numbers");
+
+    s.execute("artboard.reorder", &json!({"index": 0, "to": 2, "reflowPages": true})).unwrap();
+    assert_eq!(exported_page_text(&mut s, 2), "3", "reordered pages still evaluate by their current position");
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    assert_eq!(text(&s, field).plain_text(), "#");
+    assert_eq!(exported_page_text(&mut s, 1), "2", "the native field remains dynamic after reopen");
+
+    let (first, second) = {
+        let doc = &s.doc().unwrap().doc;
+        let mut renderer = vectorcraft_render::Renderer::new();
+        let first = renderer.render_region(doc, doc.artboards[0].rect, 1.0, true).pixels;
+        let second = renderer.render_region(doc, doc.artboards[1].rect, 1.0, true).pixels;
+        (first, second)
+    };
+    assert!(
+        first != second,
+        "the canvas renderer evaluates each page's number; pages: {:?}; ink: {} / {}",
+        s.doc().unwrap().doc.artboards.iter().map(|page| page.rect).collect::<Vec<_>>(),
+        first.iter().filter(|&&channel| channel != 255).count(),
+        second.iter().filter(|&&channel| channel != 255).count()
+    );
+
+    for page in 0..3 {
+        let bytes =
+            vectorcraft_pdf::export(&s.doc().unwrap().doc, &vectorcraft_pdf::PdfOptions { artboards: Some(vec![page]), ..Default::default() })
+                .unwrap();
+        let imported = vectorcraft_pdf::import(&bytes).expect("independent Hayro-backed page-number PDF read");
+        let mut texts = Vec::new();
+        for layer in &imported.layers {
+            layer.walk(&mut |node| {
+                if let NodeKind::Text(text) = &node.kind {
+                    texts.push(text.plain_text());
+                }
+            });
+        }
+        assert!(texts.iter().any(|text| text == &(page + 1).to_string()), "page {} exports its evaluated number: {texts:?}", page + 1);
+    }
+}
+
+#[test]
+fn coreldraw_page_number_cdr_fallback_warns_and_writes_page_text() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 100})).unwrap();
+    s.execute("artboard.new", &json!({"after": 0, "name": "Two"})).unwrap();
+    s.execute("layer.new", &json!({"name": "Page Numbers", "role": "masterAll"})).unwrap();
+    s.execute("text.pageNumber.insert", &json!({"x": 20, "y": 80, "size": 12})).unwrap();
+    let exported = s.execute("document.serialize", &json!({"format": "cdr"})).unwrap();
+    assert!(
+        exported["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|text| text.contains("page-number") && text.contains("native"))),
+        "the CDR fallback is explicit: {exported:?}"
+    );
+    s.execute("document.open", &json!({"name": "pages.cdr", "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+    let mut texts = Vec::new();
+    for layer in &s.doc().unwrap().doc.layers {
+        layer.walk(&mut |node| {
+            if let NodeKind::Text(text) = &node.kind {
+                texts.push(text.plain_text());
+            }
+        });
+    }
+    assert!(
+        texts.iter().any(|text| text == "1") && texts.iter().any(|text| text == "2"),
+        "each CDR page carries its evaluated editable text: {texts:?}"
+    );
+    assert!(!texts.iter().any(|text| text == "#"), "the dynamic placeholder is not written as visible content");
+}

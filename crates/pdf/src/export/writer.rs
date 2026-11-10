@@ -160,7 +160,8 @@ impl Writer {
         if fits {
             let shown = (sheet.view * sheet.place).inverse().transform_rect_bbox(paper);
             ex.paper = if [shown.x0, shown.y0, shown.x1, shown.y1].iter().all(|v| v.is_finite()) { shown.union(r) } else { r };
-            ex.children(&mut s, &doc.layers, r);
+            let layers = doc.corel_layers_for_page(ex.page_number.unwrap_or(1).saturating_sub(1));
+            ex.children(&mut s, layers.as_deref().unwrap_or(&doc.layers), r);
         }
         if page_group || cmyk_page_group {
             s.pop();

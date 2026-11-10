@@ -604,7 +604,11 @@ impl Writer<'_> {
                 let d: Vec<String> = paths.iter().map(|p| self.path_d(p, self.xf)).collect();
                 self.shape(n, &d.join(" "), None, &paths, *rule, export_shape_bounds(n));
             }
-            NodeKind::Text(t) => self.text_node(n, t),
+            NodeKind::Text(t) => {
+                let page = self.opts.artboard.map_or_else(|| self.doc.page_number_for_text(t), |page| page + 1);
+                let evaluated = n.page_number_text(page);
+                self.text_node(n, evaluated.as_ref().unwrap_or(t));
+            }
             NodeKind::Image(im) => {
                 if let Some(Paint::Solid { color, .. }) = n.extras().colorize.as_deref()
                     && let Some(blob) = self.doc.image_blob(im)

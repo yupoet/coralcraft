@@ -33,6 +33,7 @@ impl Serialize for Node {
             e.mask.is_none(),
             e.trace.is_none(),
             e.wrap.is_none(),
+            is_default(&e.page_number),
             e.graph.is_none(),
             e.series_index.is_none(),
             is_default(&e.type_outlines),
@@ -74,6 +75,7 @@ impl Serialize for Node {
         field!("mask", &e.mask);
         field!("trace", &e.trace);
         field!("wrap", &e.wrap);
+        field!("page_number", &e.page_number);
         field!("graph", &e.graph);
         field!("series_index", &e.series_index);
         field!("type_outlines", &e.type_outlines);
@@ -194,6 +196,8 @@ pub(super) struct NodeWire {
     #[serde(default)]
     wrap: Option<crate::text::TextWrap>,
     #[serde(default)]
+    page_number: bool,
+    #[serde(default)]
     graph: Option<Box<crate::graph::GraphSpec>>,
     #[serde(default)]
     series_index: Option<u32>,
@@ -240,6 +244,7 @@ impl From<NodeWire> for Node {
             mask: w.mask,
             trace: w.trace,
             wrap: w.wrap,
+            page_number: w.page_number,
             graph: w.graph,
             series_index: w.series_index,
             type_outlines: w.type_outlines,

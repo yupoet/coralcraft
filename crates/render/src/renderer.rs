@@ -32,6 +32,7 @@ pub(crate) use paint::{CROP_STROKES, crop_line};
 impl Renderer {
     pub fn new() -> Self {
         Self {
+            page_number: None,
             texts: FrameCache::new(lru::TEXT_BUDGET, 1024),
             text_ids: PtrMap::default(),
             text_fonts: 0,

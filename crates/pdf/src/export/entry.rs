@@ -119,6 +119,7 @@ fn export_with_report_inner(doc: &Document, opts: &PdfOptions, left_out: &mut Ha
             negative: false,
             links,
         };
+        ex.page_number = Some(i + 1);
         w.page(&mut ex, &sheet).map_err(|_| PdfError::BadArtboard(i))?;
     }
     vectorcraft_doc::cancel::check().map_err(|_| PdfError::Cancelled)?;

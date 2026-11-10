@@ -120,6 +120,14 @@ pub(super) fn art_over(doc: &Document, rect: vectorcraft_geom::Rect) -> Document
     fn kept(n: &Arc<Node>, doc: &Document, symbols: &SymbolBoxes, rect: vectorcraft_geom::Rect) -> Option<Arc<Node>> {
         if matches!(n.kind, NodeKind::Layer { clip: false, .. }) {
             let mut layer = Node::clone(n);
+            let info = doc.corel_layer_info(layer.id);
+            if info.role.is_master() {
+                if doc.artboards.iter().position(|page| page.rect == rect).is_some_and(|page| !info.role.applies_to_page(page)) {
+                    return None;
+                }
+                let first = doc.artboards.first().map(|page| page.rect).unwrap_or(rect);
+                layer.transform(vectorcraft_geom::Affine::translate((rect.x0 - first.x0, rect.y0 - first.y0)), false);
+            }
             let children = layer.children_mut()?;
             *children = children.iter().filter_map(|c| kept(c, doc, symbols, rect)).collect();
             return Some(Arc::new(layer));

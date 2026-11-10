@@ -73,5 +73,26 @@ pub struct Node {
     pub extras: Extras,
 }
 
+impl Node {
+    /// CoralCraft: the evaluated text of a dynamic page-number object, leaving ordinary text absent.
+    #[must_use]
+    pub fn page_number_text(&self, page: usize) -> Option<TextObject> {
+        if !self.extras().page_number {
+            return None;
+        }
+        let NodeKind::Text(text) = &self.kind else { return None };
+        let mut evaluated = (**text).clone();
+        let style = evaluated.first_style();
+        evaluated.runs = vec![crate::TextRun::new(page.max(1).to_string(), style)];
+        evaluated.paras.clear();
+        evaluated.ruby.clear();
+        evaluated.first_para_continues = false;
+        evaluated.list_count = 0;
+        evaluated.cached_bounds = None;
+        evaluated.cached_baselines.clear();
+        Some(evaluated)
+    }
+}
+
 #[cfg(test)]
 mod tests;

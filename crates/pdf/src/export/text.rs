@@ -12,7 +12,9 @@ impl Exporter<'_> {
     /// write no glyph.
     pub(super) fn text(&mut self, s: &mut Surface, n: &Node, t: &TextObject, page: Rect) {
         let doc = self.doc;
-        let resolved = doc.inline_resolved(t);
+        let page_number = self.page_number.unwrap_or_else(|| doc.page_number_for_text(t));
+        let evaluated = n.page_number_text(page_number);
+        let resolved = doc.inline_resolved(evaluated.as_ref().unwrap_or(t));
         let t = &*resolved;
         let layout = vectorcraft_text::layout(vectorcraft_text::FontDb::global(), t);
         let tb = t.xf.transform_rect_bbox(layout.bounds);

@@ -322,7 +322,9 @@ impl Renderer {
             && a.blend == vectorcraft_color::BlendMode::Normal
             && !fx::has_fx(a)
         {
-            let t = &*f.doc.inline_resolved(t);
+            let page = self.page_number.unwrap_or_else(|| f.doc.page_number_for_text(t));
+            let evaluated = a.page_number_text(page);
+            let t = &*f.doc.inline_resolved(evaluated.as_ref().unwrap_or(t));
             let (g, kept) = match f.text_snap(t) {
                 Some(xf) => (Arc::new(text_geom_snapped(t, Some(xf))), false),
                 None => self.text_geom_of(a, t),
@@ -705,7 +707,9 @@ impl Renderer {
                     visible: Rect::new(fr.visible.x0 - dx, fr.visible.y0 - dy, fr.visible.x1 - dx, fr.visible.y1 - dy),
                     ..*fr
                 };
+                let previous = self.page_number.replace(page_idx + 1);
                 self.draw_children(ctx, &page_fr, single, knockout);
+                self.page_number = previous;
             }
         }
     }

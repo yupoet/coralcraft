@@ -917,6 +917,43 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
     Ok((doc, warnings))
 }
 
+/// Whether this node or a descendant is a dynamic page-number field.
+fn holds_page_number(node: &Node) -> bool {
+    node.extras().page_number || node.children().into_iter().flatten().any(|child| holds_page_number(child))
+}
+
+/// Keep only dynamic page-number objects in a copied layer/group.
+fn retain_page_numbers(node: &mut Node) {
+    if let Some(children) = node.children_mut() {
+        for child in children.iter_mut() {
+            retain_page_numbers(Arc::make_mut(child));
+        }
+        children.retain(|child| holds_page_number(child));
+    }
+}
+
+/// Remove dynamic page-number objects from the master copy used for CDR's ordinary master art.
+fn remove_page_numbers(node: &mut Node) {
+    if let Some(children) = node.children_mut() {
+        for child in children.iter_mut() {
+            remove_page_numbers(Arc::make_mut(child));
+        }
+        children.retain(|child| !holds_page_number(child));
+    }
+}
+
+/// Evaluate dynamic page-number objects in a per-page CDR copy without changing the source document.
+fn flatten_page_numbers(node: &mut Node, page: usize) {
+    if let Some(evaluated) = node.page_number_text(page)
+        && let NodeKind::Text(text) = &mut node.kind
+    {
+        **text = evaluated;
+    }
+    for child in node.children_mut().into_iter().flatten() {
+        flatten_page_numbers(Arc::make_mut(child), page);
+    }
+}
+
 /// Maps a [`vectorcraft_doc::Document`] back to a [`coralcraft_doc::Document`], restoring any lossless
 /// CorelDRAW metadata and residuals stored in `Document::unknown["coralcraft"]`.
 pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError> {
@@ -1050,12 +1087,14 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         }
                     }
                     None => {
-                        let master_off = if matches!(lmeta.role, LayerRole::MasterAllPages | LayerRole::MasterOddPages | LayerRole::MasterEvenPages) {
-                            artboard_offsets.first().copied().unwrap_or(Vec2::ZERO)
-                        } else {
-                            Vec2::ZERO
-                        };
-                        let clayer = convert_vc_layer_to_cdr(lnode, Some(lmeta), master_off, doc, Some(meta));
+                        let is_master = matches!(lmeta.role, LayerRole::MasterAllPages | LayerRole::MasterOddPages | LayerRole::MasterEvenPages);
+                        let flatten = is_master && holds_page_number(lnode);
+                        let master_off = if is_master { artboard_offsets.first().copied().unwrap_or(Vec2::ZERO) } else { Vec2::ZERO };
+                        let mut source = lnode.clone();
+                        if flatten {
+                            remove_page_numbers(Arc::make_mut(&mut source));
+                        }
+                        let clayer = convert_vc_layer_to_cdr(&source, Some(lmeta), master_off, doc, Some(meta));
                         if let Some(existing) = cdr_doc.master_layers.iter_mut().find(|ml| ml.id == clayer.id) {
                             *existing = clayer;
                         } else if matches!(clayer.role, LayerRole::Desktop | LayerRole::Guides | LayerRole::Grid)
@@ -1064,6 +1103,30 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                             *existing = clayer;
                         } else {
                             cdr_doc.master_layers.push(clayer);
+                        }
+                        if flatten {
+                            // CDR fallback: each page gets ordinary editable text; only the native
+                            // document retains the dynamic field and its master-layer semantics.
+                            for (page_index, page) in cdr_doc.pages.iter_mut().enumerate() {
+                                let applies = match lmeta.role {
+                                    LayerRole::MasterOddPages => !page_index.is_multiple_of(2),
+                                    LayerRole::MasterEvenPages => page_index.is_multiple_of(2),
+                                    _ => true,
+                                };
+                                if !applies {
+                                    continue;
+                                }
+                                let mut page_art = (**lnode).clone();
+                                retain_page_numbers(&mut page_art);
+                                flatten_page_numbers(&mut page_art, page_index + 1);
+                                let offset = artboard_offsets.get(page_index).copied().unwrap_or(Vec2::ZERO);
+                                let origin = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
+                                page_art.id = NodeId(lnode.id.0.saturating_mul(1000).saturating_add(page_index as u64).max(1));
+                                page_art.transform(vectorcraft_geom::Affine::translate((offset.x - origin.x, offset.y - origin.y)), false);
+                                let mut clayer = convert_vc_layer_to_cdr(&page_art, None, offset, doc, None);
+                                clayer.role = LayerRole::Normal;
+                                page.layers.push(clayer);
+                            }
                         }
                     }
                 }

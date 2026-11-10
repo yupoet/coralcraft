@@ -7,7 +7,9 @@ use crate::paint;
 
 impl Renderer {
     pub(super) fn draw_text(&mut self, ctx: &mut RenderContext, f: &Frame, n: &Node, t: &TextObject) {
-        let t = &*f.doc.inline_resolved(t);
+        let page = self.page_number.unwrap_or_else(|| f.doc.page_number_for_text(t));
+        let evaluated = n.page_number_text(page);
+        let t = &*f.doc.inline_resolved(evaluated.as_ref().unwrap_or(t));
         // Type drawn as `fx_owner` (the node `draw_arc` is drawing, or type art that `fx_arts`
         // keeps, see `draw_fx_art`) takes its glyph geometry from `texts`, as on the fast path,
         // except in frames that snap type to pixels.

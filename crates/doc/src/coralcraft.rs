@@ -5,10 +5,14 @@
 //! `Document::unknown["coralcraft"]["layer_meta"]`, sharing the exact JSON schema produced by
 //! `corel-import` (`CoralCraftLayerMeta`).
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{Document, NodeId};
+use vectorcraft_geom::{Affine, Point};
+
+use crate::{Document, Node, NodeId, TextObject};
 
 /// Key in [`Document::unknown`] storing lossless CorelDRAW metadata and layer roles.
 pub const CORALCRAFT_UNKNOWN_KEY: &str = "coralcraft";
@@ -269,6 +273,49 @@ impl Document {
             lm_obj.remove(&id.0.to_string());
         }
         let _ = Map::len(lm_obj);
+    }
+
+    /// The 1-based page containing a text object's origin, or page 1 when it is outside every page.
+    #[must_use]
+    pub fn page_number_for_text(&self, text: &TextObject) -> usize {
+        let origin = text.xf * Point::ZERO;
+        self.artboards.iter().position(|page| page.rect.contains(origin)).unwrap_or(0).saturating_add(1)
+    }
+
+    /// The layer stack for one 0-based CorelDRAW page, with applicable master art moved to that page.
+    #[must_use]
+    pub fn corel_layers_for_page(&self, page_index: usize) -> Option<Vec<Arc<Node>>> {
+        if !self.has_corel_layer_roles() {
+            return None;
+        }
+        let current = self.artboards.get(page_index)?.rect;
+        let origin = self.artboards.first().map(|page| page.rect).unwrap_or(current);
+        let (mut background, mut normal, mut foreground, mut desktop) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for layer in &self.layers {
+            let info = self.corel_layer_info(layer.id);
+            let target = if info.role.is_master() {
+                if !info.role.applies_to_page(page_index) {
+                    continue;
+                }
+                if info.master_in_front { &mut foreground } else { &mut background }
+            } else if info.role.is_desktop_or_overlay() {
+                &mut desktop
+            } else {
+                &mut normal
+            };
+            if info.role.is_master() {
+                let mut copy = (**layer).clone();
+                copy.transform(Affine::translate((current.x0 - origin.x0, current.y0 - origin.y0)), false);
+                target.push(Arc::new(copy));
+            } else {
+                target.push(layer.clone());
+            }
+        }
+        let mut out = background;
+        out.extend(normal);
+        out.extend(foreground);
+        out.extend(desktop);
+        Some(out)
     }
 }
 

@@ -23,6 +23,7 @@ impl<'a> Exporter<'a> {
     pub(crate) fn new(doc: &'a Document, set: &'a crate::PdfSettings) -> Self {
         Self {
             doc,
+            page_number: None,
             symbols: doc.symbol_boxes().quick().with_brush_art(),
             warnings: vec![],
             images: HashMap::new(),

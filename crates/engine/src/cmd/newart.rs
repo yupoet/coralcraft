@@ -83,18 +83,21 @@ pub(crate) struct NewArt {
     style: Option<String>,
     /// From the template: placed gradients are relative to the unit box.
     unit_box: bool,
+    /// CoralCraft: mark new text as a dynamic page-number field.
+    pub(crate) page_number: bool,
 }
 
 impl NewArt {
     /// A plain look: `appearance`, full opacity, no link.
     pub(crate) fn plain(appearance: Appearance) -> Self {
-        Self { appearance, opacity: 1.0, blend: BlendMode::Normal, style: None, unit_box: false }
+        Self { appearance, opacity: 1.0, blend: BlendMode::Normal, style: None, unit_box: false, page_number: false }
     }
 
     /// Give new object `n` (in `d`) this look: its placed gradients land relative to its bounds, and
     /// it links to the style (type keeps its own transparency).
     pub(crate) fn apply(&self, d: &mut vectorcraft_doc::Document, n: &mut Node) {
         n.appearance = self.appearance.clone().into();
+        n.extras_mut().page_number = self.page_number;
         if self.unit_box
             && n.appearance.has_placed_gradient()
             && let Some(b) = n.geometric_bounds()
@@ -133,7 +136,7 @@ impl Session {
             st.width = width;
         }
         let (opacity, blend, style) = self.new_art_transparency();
-        NewArt { appearance, opacity, blend, style: style.map(str::to_string), unit_box: true }
+        NewArt { appearance, opacity, blend, style: style.map(str::to_string), unit_box: true, page_number: false }
     }
 
     /// The appearance of the next object drawn (the Appearance panel shows it with nothing

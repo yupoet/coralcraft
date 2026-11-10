@@ -89,6 +89,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             text_create
         ),
+        cmd!(
+            "text.pageNumber.insert",
+            "Insert Page Number",
+            ["Layout"],
+            None,
+            "{x, y, size?: pt, font?: family, style?, color?, justify?} create a dynamic page-number text object; its stored placeholder stays editable and each page renders its current 1-based number → {id, bounds}",
+            has_doc,
+            page_number_insert
+        ),
     ]
 }
 
@@ -702,6 +711,14 @@ fn path_create(s: &mut Session, p: &Value) -> Result<Value> {
     add_look(s, "Pen", path_kind(path, None), look, None)
 }
 
+fn page_number_insert(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut params = p.clone();
+    let values = params.as_object_mut().ok_or_else(|| bad("text.pageNumber.insert", "parameters must be an object"))?;
+    values.insert("text".into(), json!("#"));
+    values.insert("pageNumber".into(), json!(true));
+    text_create(s, &params)
+}
+
 fn text_create(s: &mut Session, p: &Value) -> Result<Value> {
     let x = f64_req(p, "x", "text.create")?;
     let y = f64_req(p, "y", "text.create")?;
@@ -739,7 +756,9 @@ fn text_create(s: &mut Session, p: &Value) -> Result<Value> {
         // Lays the text out (and sizes an Auto Size frame).
         super::typecmd::refresh_bounds(&mut t);
     }
-    let made = insert_look_turned(s, "Type", NodeKind::Text(Box::new(t)), NewArt::plain(Appearance::default()), None, true, bbox_turn(rotation))?;
+    let mut look = NewArt::plain(Appearance::default());
+    look.page_number = bool_or(p, "pageNumber", false);
+    let made = insert_look_turned(s, "Type", NodeKind::Text(Box::new(t)), look, None, true, bbox_turn(rotation))?;
     let id = made.get("id").and_then(Value::as_u64).map(NodeId);
     let made = super::typecmd::with_bounds(s, id, made);
     let mut made = super::typecmd::with_overflow(s, id.as_slice(), made);
