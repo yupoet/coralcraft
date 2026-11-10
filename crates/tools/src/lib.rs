@@ -11,6 +11,8 @@ pub mod addons;
 pub mod bbox;
 pub mod builder;
 pub mod catalog;
+// CoralCraft: the CorelDRAW core-tool mapping (P1 Task 2 / V4.3).
+pub mod coreldraw;
 pub mod corners;
 pub mod cropimage;
 pub mod cut;

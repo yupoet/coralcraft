@@ -130,7 +130,7 @@
 
 | P1 slice | VectorCraft base | Start |
 |---|---|---|
-| T2 Tool mapping + Property Bar modes | tool catalog, `toolbar.rs`, `control_bar.rs`, `tool.select`/`tool.setOption` | **partial** (generic bar exists; per-tool Corel modes absent) |
+| T2 Tool mapping + Property Bar modes | tool catalog, `toolbar.rs`, `control_bar.rs`, `tool.select`/`tool.setOption` | **exists** (P1 Task 2: `crates/tools/src/coreldraw.rs` mapping, CorelDRAW workspace toolbox slots/tips, Property Bar rows in `crates/ui-egui/src/coreldraw_bar.rs`; shape rows reuse the add-on controls) |
 | T3 Selection & node editing | `select.*`, `path.*`, `crates/pathops/src/edit.rs`, anchor tools + kittest suites | **exists** → close Corel-specific gaps only |
 | T4 Shaping | `object.pathfinder.*`, compound shapes, Shape Builder | **partial** (Corel naming/workflow surface absent) |
 | T5 Snapping & dynamic guides | guides/snap engine + prefs + `guide.*` commands + `snapping_menu` | **partial** (Corel snap modes/dynamic guides naming + toggles absent) |

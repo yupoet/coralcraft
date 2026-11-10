@@ -31,6 +31,8 @@ pub mod chrome;
 mod clipboard_probe;
 pub mod community;
 pub mod control;
+// CoralCraft: the CorelDRAW Property Bar modes for the mapped core tools (P1 Task 2 / V4.3).
+pub mod coreldraw_bar;
 pub mod credits;
 pub mod cursors;
 mod custom_toolbars;

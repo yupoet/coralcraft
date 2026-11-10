@@ -17,7 +17,23 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P0.5 Run pinned TraceDraw tests and record the source audit. (Commit `5f1560285`: [`ai-memory/05-ref-docs/07-tracedraw.md`](ai-memory/05-ref-docs/07-tracedraw.md).)
 - [x] P0.6 Record module adoption decisions and the D1-D6 evidence matrix. (Commit `aa191e6f4`: [`coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md) + rewritten [`target-app-parity.md`](target-app-parity.md).)
 - [x] P0.7 Synchronize roadmap, README, memory, and the P1 handoff. (This commit: `ROADMAP.md`, `gaps.md`, migration plan, `README.md`, AI memory.)
-- [ ] V4.3 Resume CorelDRAW tool mapping and the context-sensitive Property Bar after P0 adoption decisions. From the synced `crates/tools/src/catalog.rs`, `crates/ui-egui/src/toolbar.rs`, and `crates/ui-egui/src/chrome/control_bar.rs`, one small tool group at a time through `tool.select`, `tool.setOption`, and shared engine commands; public CorelDRAW behavior source is the user guide registered in `refs/REFS.md` (`https://learn.corel.com/wp-content/uploads/2022/08/CorelDRAW-UserGuide-Mar22.pdf`). Adoption boundaries: [`coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md).
+- [x] V4.3 CorelDRAW tool mapping and the context-sensitive Property Bar (P1 Task 2; this commit): the core-tool mapping in `crates/tools/src/coreldraw.rs` (Pick/Shape/Freehand/Bézier/Rectangle/Ellipse/Polygon/Spiral/Text/Zoom/Pan onto VectorCraft tools with the V4.2 public shortcuts), the CorelDRAW workspace's toolbox slots and labels in `crates/ui-egui/src/toolbar.rs`, and the Property Bar rows in `crates/ui-egui/src/coreldraw_bar.rs` (Spiral/Freehand over `tool.setOption`; the shape tools keep the synced add-on controls; live-shape edits through `object.setLiveShape`). Public behavior source: the user guide registered in `refs/REFS.md`.
+
+**P1 queue (professional core vector workflow — plan: [`superpowers/plans/2026-11-09-p1-core-vector-workflow.md`](superpowers/plans/2026-11-09-p1-core-vector-workflow.md); inventory: [`p1-inventory.md`](p1-inventory.md)):**
+
+- [x] P1.1 Baseline inventory and evidence anchors. (Commit `14b60f776`: [`p1-inventory.md`](p1-inventory.md).)
+- [x] P1.2 CorelDRAW tool mapping and Property Bar modes (V4.3 core; this commit, see V4.3 above).
+- [ ] P1.3 Selection and node-editing workflows (D1, level 3→4).
+- [ ] P1.4 Shaping (weld/trim/intersect/simplify) as commands + Property Bar.
+- [ ] P1.5 Snapping and dynamic guides.
+- [ ] P1.6 Transforms, Align & Distribute docker behaviours.
+- [ ] P1.7 Fills, outlines, and the Outline Pen dialog.
+- [ ] P1.8 Core dockers (Object Properties, Objects, Transform, Align).
+- [ ] P1.9 Object/colour styles and symbols (basics).
+- [ ] P1.10 Pages and master layers — daily-use completion.
+- [ ] P1.11 Native persistence and CDR mapping for all P1 semantics.
+- [ ] P1.12 MCP/CLI surface and regenerated documentation.
+- [ ] P1.13 P1 acceptance scenario and gate.
 
 Completed migration steps (V0–V4.2):
 

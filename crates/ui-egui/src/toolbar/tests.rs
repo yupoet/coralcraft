@@ -1054,3 +1054,37 @@ fn tab_skips_the_grip_and_the_tear_off_bars() {
         assert!(!stops.contains(&id), "Tab stops on {name}: {stops:?}");
     }
 }
+
+/// CoralCraft: the CorelDRAW workspace's toolbox shows the mapped core tools in the public guide's
+/// order (Pick, Shape, Freehand with Bézier, Rectangle, Ellipse, Polygon with Spiral, Text, Zoom,
+/// Pan); the upstream layout keeps the default workspace, and switching back returns it.
+#[test]
+fn coreldraw_workspace_shows_the_core_tool_toolbox() {
+    let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
+    let basic = slots(&app);
+    assert_eq!(basic.first().unwrap().1, ["selection"], "the default layout");
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let ids: Vec<Vec<&str>> = slots(&app).into_iter().map(|(_, s)| s).collect();
+    assert_eq!(
+        ids,
+        vec![
+            vec!["selection"],
+            vec!["directSelection"],
+            vec!["pencil", "pen"],
+            vec!["rectangle"],
+            vec!["ellipse"],
+            vec!["polygon", "spiral"],
+            vec!["type"],
+            vec!["zoom"],
+            vec!["hand"],
+        ]
+    );
+    // The toolbox renders one button per core-tool slot.
+    let ctx = egui::Context::default();
+    let tools = frame(&mut app, &ctx, 0.0, vec![]);
+    assert_eq!(tools.len(), COREL_SLOTS.len(), "one button per core-tool slot: {tools:?}");
+    // The upstream layout returns when the workspace changes back.
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
+    assert_eq!(slots(&app), basic);
+}

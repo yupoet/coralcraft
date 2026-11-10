@@ -73,6 +73,21 @@ pub(crate) fn tip(t: &ToolInfo) -> String {
     }
 }
 
+/// CoralCraft: the CorelDRAW workspace's toolbox — the mapped core tools in the public guide's
+/// order (`vectorcraft_tools::coreldraw`), each slot the flyout CorelDRAW groups them in (Bézier
+/// behind Freehand, Spiral behind Polygon).
+const COREL_SLOTS: &[&[&str]] = &[
+    &["selection"],
+    &["directSelection"],
+    &["pencil", "pen"],
+    &["rectangle"],
+    &["ellipse"],
+    &["polygon", "spiral"],
+    &["type"],
+    &["zoom"],
+    &["hand"],
+];
+
 /// Slots of the current layout, as Edit Toolbar left it: (category label for the first slot of a
 /// category, tool ids).
 pub(crate) fn slots(app: &VectorcraftApp) -> Vec<(Option<&'static str>, Vec<&'static str>)> {
@@ -80,6 +95,9 @@ pub(crate) fn slots(app: &VectorcraftApp) -> Vec<(Option<&'static str>, Vec<&'st
         edited
     } else if app.ui.toolbar_advanced {
         TOOL_GROUPS.iter().map(|g| (None, g.iter().map(|t| t.id).collect())).collect()
+    } else if crate::coreldraw_bar::active(app) {
+        // CoralCraft: the CorelDRAW workspace's core-tool toolbox (a user's edits above still win).
+        COREL_SLOTS.iter().map(|s| (None, s.to_vec())).collect()
     } else {
         BASIC.iter().flat_map(|(cat, ss)| ss.iter().enumerate().map(move |(i, s)| (if i == 0 { Some(*cat) } else { None }, s.to_vec()))).collect()
     }
@@ -278,8 +296,10 @@ fn body(app: &mut VectorcraftApp, ui: &mut Ui, cols: usize, floating: Option<egu
                     } else if resp.clicked() {
                         app.select_tool(shown.id);
                     }
-                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_active, tip(shown)));
-                    resp.on_hover_text(tip(shown));
+                    // CoralCraft: the mapped core tools show the CorelDRAW workspace's label.
+                    let hover = crate::coreldraw_bar::tool_tip(app, shown.id).unwrap_or_else(|| tip(shown));
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), is_active, hover.clone()));
+                    resp.on_hover_text(hover);
                 }
             });
             i += row.len();
@@ -426,6 +446,11 @@ pub fn open_options(app: &mut VectorcraftApp, tool: &str) -> Result<serde_json::
 /// Warp's mesh and pins (set through `tool.setOption`). The Artboard tool's options are drawn by
 /// [`crate::panels::artboards::control_bar`].
 pub fn control_bar_options(app: &mut VectorcraftApp, ui: &mut Ui) {
+    // CoralCraft: the CorelDRAW workspace's Property Bar modes come first; the Spiral row replaces
+    // the add-on shape controls, so the bar never shows two spiral parameterizations at once.
+    if crate::coreldraw_bar::tool_options(app, ui) {
+        return;
+    }
     if crate::addons::shapes::control_bar(app, ui) {
         return;
     }
