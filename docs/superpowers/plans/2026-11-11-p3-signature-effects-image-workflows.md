@@ -99,6 +99,8 @@ s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 1, "x": 90.0, "
 
 Assert undo/redo, native editability, and independent SVG/PDF structure. Do not accept a preview-only fill as editable semantics.
 
+Progress: fountain, vector-pattern, and mesh tests pass with native edit/reopen and independent SVG/PDF reads. Two-colour/bitmap patterns and textures remain uncovered, so this step stays open.
+
 - [ ] **Step 2: Verify transparency and merge behaviour**
 
 Exercise uniform/graded transparency, merge modes, and opacity masks through existing transparency commands and panels. Require source editability and explicit export fallback where an output format cannot retain the live model.

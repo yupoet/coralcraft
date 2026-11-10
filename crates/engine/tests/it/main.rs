@@ -16,6 +16,8 @@ mod compound_attributes;
 mod copy_direct_selection;
 // CoralCraft: legacy CDR text decoding and residuals (P2 Task 9).
 mod coreldraw_cdr_text;
+// CoralCraft: advanced fills and transparency (P3 Task 3).
+mod coreldraw_fills_transparency;
 // CoralCraft: the CorelDRAW selection and node workflow (P1 Task 3).
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).

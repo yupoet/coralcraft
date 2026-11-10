@@ -39,3 +39,21 @@ fn coreldraw_object_menu_runs_the_shared_powerclip_lifecycle() {
     assert!(app.session.active().unwrap().doc.node(contents).is_some());
     assert!(app.session.active().unwrap().doc.node(frame).is_some());
 }
+
+#[test]
+fn coreldraw_transparency_panel_and_mesh_command_keep_live_models() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::transparency::show);
+    assert!(texts.iter().any(|(text, _)| text.contains("Opacity")), "Transparency panel rows: {texts:?}");
+
+    run(&mut app, "transparency.set", json!({"id": shape.0, "opacity": 55, "blend": "multiply"}));
+    let node = app.session.active().unwrap().doc.node(shape).unwrap();
+    assert_eq!(node.opacity, 0.55);
+    assert_eq!(node.blend, vectorcraft_color::BlendMode::Multiply);
+    run(&mut app, "object.mesh.create", json!({"id": shape.0, "rows": 1, "cols": 1}));
+    assert!(matches!(app.session.active().unwrap().doc.node(shape).unwrap().kind, NodeKind::Mesh(_)));
+}
