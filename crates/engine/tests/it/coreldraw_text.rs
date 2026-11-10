@@ -102,3 +102,78 @@ fn coreldraw_linked_frames_reflow_break_and_reopen() {
     s.execute("text.editRange", &json!({"id": first, "start": 0, "end": 0, "insert": "After reopen. "})).unwrap();
     assert_eq!(shown(&s).concat(), format!("After reopen. {revised}"), "the reopened thread remains editable");
 }
+
+#[test]
+fn coreldraw_character_styles_keep_local_overrides_and_reopen() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 400, "height": 200})).unwrap();
+    let id = s.execute("text.create", &json!({"x": 10, "y": 30, "text": "Hello world"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("charStyle.new", &json!({"name": "Brochure Emphasis", "attrs": {"size": 24.0, "underline": true, "features": ["dlig"]}})).unwrap();
+    s.execute("charStyle.apply", &json!({"name": "Brochure Emphasis", "id": id, "start": 6, "end": 11})).unwrap();
+    s.execute("text.setRangeStyle", &json!({"id": id, "start": 6, "end": 11, "size": 30.0, "featureChanges": ["tnum"]})).unwrap();
+    s.execute("charStyle.setAttrs", &json!({"name": "Brochure Emphasis", "attrs": {"size": 18.0, "underline": false, "tracking": 50.0}})).unwrap();
+    let styled = text(&s, id).runs.into_iter().find(|run| run.text == "world").expect("the styled range");
+    assert_eq!((styled.style.size, styled.style.underline, styled.style.tracking), (30.0, false, 50.0), "redefinition keeps the local size override");
+    assert_eq!(styled.style.style_name.as_deref(), Some("Brochure Emphasis"));
+    assert!(styled.style.features.iter().any(|feature| feature == "tnum"));
+    s.execute("edit.undo", &json!({})).unwrap();
+    let before = text(&s, id).runs.into_iter().find(|run| run.text == "world").unwrap();
+    assert!(
+        before.style.underline && before.style.features.iter().any(|feature| feature == "tnum"),
+        "undo restores the previous style and feature state"
+    );
+    s.execute("edit.redo", &json!({})).unwrap();
+
+    s.execute("paraStyle.new", &json!({"name": "Brochure Lead", "attrs": {"justify": "Center", "space_after": 8.0}})).unwrap();
+    s.execute("paraStyle.apply", &json!({"name": "Brochure Lead", "id": id})).unwrap();
+    s.execute("paraStyle.setAttrs", &json!({"name": "Brochure Lead", "attrs": {"justify": "Right", "space_after": 12.0}})).unwrap();
+    assert_eq!((text(&s, id).para.justify, text(&s, id).para.space_after), (Justify::Right, 12.0));
+
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    let reopened_text = text(&s, id);
+    assert_eq!((reopened_text.para.justify, reopened_text.para.space_after), (Justify::Right, 12.0));
+    let reopened = reopened_text.runs.into_iter().find(|run| run.text == "world").expect("the reopened styled range");
+    assert_eq!((reopened.style.size, reopened.style.underline, reopened.style.tracking), (30.0, false, 50.0));
+    assert!(reopened.style.features.iter().any(|feature| feature == "tnum"));
+}
+
+#[test]
+fn coreldraw_glyphs_variable_axes_and_missing_fonts_reopen() {
+    use vectorcraft_text::test_fonts::{TWO_AXIS_FAMILY, alternates_family, alternates_font, two_axis_font, unencoded_glyphs};
+    let db = vectorcraft_text::FontDb::global();
+    db.add_font(alternates_font(true).expect("the synthetic alternates font builds"));
+    db.add_font(two_axis_font().expect("the synthetic variable font builds"));
+    let [alternate, ..] = unencoded_glyphs().expect("the synthetic unencoded glyph");
+
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    let glyphs =
+        s.execute("text.create", &json!({"x": 10, "y": 40, "text": "xaay", "font": alternates_family(true)})).unwrap()["id"].as_u64().unwrap();
+    let listed = s.execute("text.glyphAlternates", &json!({"id": glyphs, "start": 2})).unwrap();
+    assert!(listed["alternates"].as_array().unwrap().iter().any(|item| item["gid"] == json!(alternate)));
+    s.execute("text.setGlyphAlternate", &json!({"id": glyphs, "start": 2, "gid": alternate})).unwrap();
+    assert_eq!(s.execute("text.glyphAlternates", &json!({"id": glyphs, "start": 2})).unwrap()["chosen"], json!(alternate));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_ne!(s.execute("text.glyphAlternates", &json!({"id": glyphs, "start": 2})).unwrap()["chosen"], json!(alternate));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.execute("text.glyphAlternates", &json!({"id": glyphs, "start": 2})).unwrap()["chosen"], json!(alternate));
+
+    let variable = s.execute("text.create", &json!({"x": 10, "y": 100, "text": "lIn", "font": TWO_AXIS_FAMILY})).unwrap()["id"].as_u64().unwrap();
+    s.execute("text.setRangeStyle", &json!({"id": variable, "start": 0, "end": 3, "fontAxes": {"wght": 650}})).unwrap();
+    assert_eq!(text(&s, variable).runs[0].style.font_axes.get("wght"), Some(&650.0));
+    let missing = s.execute("text.create", &json!({"x": 10, "y": 160, "text": "Missing", "font": "CoralCraft P2 Missing 6F28C9"})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let report = s.execute("text.missingFonts", &json!({})).unwrap();
+    assert!(
+        report["fonts"].as_array().unwrap().iter().any(|font| font["family"] == "CoralCraft P2 Missing 6F28C9" && font["status"] == "missing"),
+        "{report}"
+    );
+
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    assert_eq!(s.execute("text.glyphAlternates", &json!({"id": glyphs, "start": 2})).unwrap()["chosen"], json!(alternate));
+    assert_eq!(text(&s, variable).runs[0].style.font_axes.get("wght"), Some(&650.0));
+    assert_eq!(text(&s, missing).runs[0].style.font_family, "CoralCraft P2 Missing 6F28C9");
+}

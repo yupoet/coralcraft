@@ -137,3 +137,14 @@ fn coreldraw_thread_menu_uses_the_shared_linking_commands() {
     run(&mut app, "edit.undo", json!({}));
     assert_eq!(run(&mut app, "text.thread.info", json!({})), json!([[first, second]]));
 }
+
+#[test]
+fn coreldraw_workspace_opens_the_shared_typography_panels() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    for panel in ["character", "paragraph", "openType", "glyphs", "charStyles", "paraStyles"] {
+        app.run("window.panel", json!({"panel": panel})).unwrap();
+        let docked = app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_string()));
+        assert!(docked || app.ui.open_panel.as_deref() == Some(panel), "CorelDRAW shows the shared {panel} panel");
+    }
+}

@@ -203,15 +203,15 @@ Expected: pass, including independent `usvg` and Hayro checks. Commit with `feat
 
 Exercise character and paragraph styles, OpenType features, glyph alternates, variable-font axes where available, and missing-font reporting through the existing commands. Assert style propagation, local overrides, undo/redo, and native reopen. Keep tests independent of host-installed fonts by using the existing test-font fixtures; never add a font file to the repository.
 
-- [ ] **Step 2: Expose the relevant existing panels/commands in the CorelDRAW workspace**
+- [ ] **Step 2: Verify the relevant existing panels in the CorelDRAW workspace**
 
-Link the Property Bar to Character, Paragraph, OpenType, Glyphs, and Text Styles panels through existing `window.panel` commands. Add no new font engine or glyph model. If all behaviour already passes, keep this as a test and documentation slice.
+Open Character, Paragraph, OpenType, Glyphs, Character Styles, and Paragraph Styles through the existing `window.panel` commands, accepting both docked and floating presentation. Add no new font engine, glyph model, or panel system. If all behaviour already passes, keep this as a test and documentation slice.
 
 - [ ] **Step 3: Verify and commit**
 
 ```bash
 cargo test -p vectorcraft-engine --test it coreldraw_text -- --nocapture
-cargo test -p vectorcraft-ui-egui coreldraw_text_bar -- --nocapture
+cargo test -p vectorcraft-ui-egui coreldraw_text -- --nocapture
 ```
 
 Commit with `test: verify CorelDRAW typography workflows` or the appropriate `feat:` if wiring changed.
