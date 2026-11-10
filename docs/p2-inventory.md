@@ -18,6 +18,16 @@
 | MCP and CLI | Generic `run_command` in `vectorcraft-mcp`; generated docs through `crates/mcp/tests/docs_sync.rs` | **Exists.** New commands are exercised through `run_command`; docs are regenerated rather than hand-counted. |
 | Brochure acceptance | P1 `coreldraw_p1_acceptance.rs`, independent `usvg`, and `vectorcraft_pdf::import` | **New scenario.** Three pages with styled/linked/path text, dynamic page numbers on master content, an editable table, and a synthetic bitmap; revise, reorder, reopen, export, and independently read the PDF. |
 
+## Delivered evidence (2026-11-11)
+
+- Tasks 2–6 are evidence-only reuse slices: the shared Character/Paragraph controls, linked-text menu and canvas ports, path text/wrap/fit, and typography panels all pass CorelDRAW workspace tests. No duplicate text bar, formatter, thread model, or font engine was added.
+- Task 7 (`3496cd828`) adds an object-level dynamic page-number field in `NodeExtras`; canvas, SVG, and PDF evaluate per page. CDR/CMX writes editable per-page text with an explicit warning. It does not claim arbitrary inline fields or native CDR dynamic fields.
+- Task 8 (`79346f767`) adds bounded, atomic `layout.table` with editable paths/live text. Interactive table-tool editing remains open.
+- Task 9 (`bef6489ac`) adds bounded legacy decoding and strict `txtd` warnings/residuals. The `stlt`/font-record-to-text encoding association remains open in `docs/gaps.md`; S2 is unchanged.
+- Tasks 10–12 add consolidated persistence, real MCP `run_command`, and `coreldraw_p2_acceptance.rs`: a three-page brochure built, reopened, revised, reordered, exported, and read through independent `usvg` and Hayro-backed PDF paths.
+- Gate: `cargo xtask ci` passed fmt and Clippy, then workspace tests finished 4,375 passed / 1 failed — only documented x86_64 known-issue 0b. The earlier concurrent performance timeout did not recur. Doctests, cleanroom, the source-equivalent no-bundled-fonts checks, pdf-deps, assets, brands, cursors, i18n, layers, and wasm were each run separately and passed.
+- Final measured `cargo xtask stats`: 2,039 files, 879,598 Rust lines, 14,647 source test attributes, and 66 proptest blocks. The focused CorelDRAW engine suite has 28 passing tests; the full CorelDRAW UI filter has 17 passing tests.
+
 ## Evidence rules used by every P2 task
 
 1. Production changes start with a test observed failing on the pre-change tree.

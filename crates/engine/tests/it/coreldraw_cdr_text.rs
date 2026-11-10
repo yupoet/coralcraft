@@ -38,7 +38,7 @@ fn unknown_text_encoding_residual_survives_native_and_cdr_mapping() {
             found
         })
         .expect("the imported text remains a live text object");
-    let NodeKind::Text(text) = &text.kind else { unreachable!() };
+    let NodeKind::Text(text) = &text.kind else { panic!("expected live text") };
     assert_eq!(text.as_ref(), &TextObject::point(text.xf * vectorcraft_geom::Point::ZERO, "Text", text.first_style()));
 
     let exported = corel_import::export_document(&reopened).unwrap();

@@ -1118,7 +1118,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                                 }
                                 let mut page_art = (**lnode).clone();
                                 retain_page_numbers(&mut page_art);
-                                flatten_page_numbers(&mut page_art, page_index + 1);
+                                flatten_page_numbers(&mut page_art, page_index.saturating_add(1));
                                 let offset = artboard_offsets.get(page_index).copied().unwrap_or(Vec2::ZERO);
                                 let origin = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
                                 page_art.id = NodeId(lnode.id.0.saturating_mul(1000).saturating_add(page_index as u64).max(1));
@@ -2130,6 +2130,13 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
             }
         }
         NodeKind::Text(tobj) => {
+            let page = doc
+                .artboards
+                .iter()
+                .position(|page| page.rect.x0 == offset.x && page.rect.y0 == offset.y)
+                .map_or_else(|| doc.page_number_for_text(tobj), |index| index.saturating_add(1));
+            let evaluated = node.page_number_text(page);
+            let tobj = evaluated.as_ref().unwrap_or(tobj);
             let text = tobj.plain_text();
             let st = tobj.first_style();
             let local_xf = affine_mul(Affine::translate(neg_offset), tobj.xf);

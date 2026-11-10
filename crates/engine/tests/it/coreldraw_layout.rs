@@ -304,3 +304,32 @@ fn coreldraw_p2_semantics_survive_native_reopen_and_cdr_fallback() {
     }
     assert!(texts.iter().any(|text| text.starts_with("Revised. ")), "the linked story's edited text remains: {texts:?}");
 }
+
+#[test]
+fn coreldraw_page_number_on_a_normal_page_uses_its_cdr_page_text() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 100})).unwrap();
+    s.execute("artboard.new", &json!({"after": 0, "name": "Two"})).unwrap();
+    s.execute("layer.new", &json!({"name": "Second page", "pageIndex": 1})).unwrap();
+    s.execute("text.pageNumber.insert", &json!({"x": 240, "y": 80})).unwrap();
+    let exported = s.execute("document.serialize", &json!({"format": "cdr"})).unwrap();
+    assert!(exported["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("page-number"))));
+    s.execute("document.open", &json!({"name": "normal.cdr", "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+    let texts = s
+        .doc()
+        .unwrap()
+        .doc
+        .layers
+        .iter()
+        .flat_map(|layer| {
+            let mut texts = Vec::new();
+            layer.walk(&mut |node| {
+                if let NodeKind::Text(text) = &node.kind {
+                    texts.push(text.plain_text());
+                }
+            });
+            texts
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["2"], "the normal-page CDR object carries its evaluated number, not the placeholder");
+}

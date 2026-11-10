@@ -35,8 +35,18 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.12 MCP/CLI surface and regenerated docs (this commit): `p1_commands_run_through_run_command` proves the new commands through `run_command`; `docs/mcp.md` regeneration clean (registry unchanged).
 - [x] P1.13 P1 acceptance scenario and gate (this commit): `crates/engine/tests/it/coreldraw_p1_acceptance.rs` (build → revise → native reopen → SVG text + independent usvg + re-import → PDF structure + Hayro-backed import, recorded in `docs/p1-inventory.md` §4); `cargo xtask ci` gate run with the result recorded in `docs/ai-memory/03-current.md`. **P1 complete; next: P2 (text and multipage layout).**
 
+**P2 professional text and multipage layout (2026-11-11):**
+- [x] P2.1–P2.6 CorelDRAW text Property Bar, paragraph/list controls, linked frames, path text/wrap/fit, and typography panels/styles/glyphs/variable axes/missing fonts. Evidence: `tests_coreldraw_text.rs`, `coreldraw_text.rs`, and `coreldraw_layout.rs`; existing VectorCraft implementations were reused.
+- [x] P2.7 Dynamic page-number objects on master layers, current-page canvas/SVG/PDF evaluation, native persistence, and warned CDR/CMX per-page text fallback (`3496cd828`). Arbitrary inline fields in longer text runs are not claimed.
+- [x] P2.8 `layout.table`: one group of editable cell paths/live text, bounded atomic input, undo/redo, native reopen, and independent SVG/PDF evidence (`79346f767`). A dedicated interactive table editor remains future work.
+- [x] P2.9 Bounded Windows-1252/Windows-1250 and strict built-in text decoding, `txtd` warnings/residuals, and writer evidence (`bef6489ac`).
+- [x] P2.10–P2.11 Consolidated native/CDR persistence and real MCP `run_command` coverage; generated docs clean.
+- [x] P2.12 Three-page brochure acceptance with styled/linked/path text, wrapping, dynamic page numbers, editable table, embedded synthetic bitmap, native revision/reorder, independent `usvg`, and a three-page Hayro-backed PDF read. **Next: P3 (Signature Effects and Image Workflows).**
+
 **P2 follow-ups found by implementation:**
 - [ ] P2.CDR-TEXT Link the public-spec `stlt` Font Encoding / `font` Encoding ID records to their text runs, then call the bounded decoder in `crates/cdr/src/text.rs`. The decoder, strict `txtd` errors/warnings, and residual writer mapping are implemented and tested, but this font-record association is not; do not guess a code page from the bytes. S2 remains open.
+- [ ] P2.TABLE-UI Add interactive table selection, row/column insertion/deletion, resizing, and cell navigation around the `layout.table` objects; P2 delivered the editable object model and command, not a complete table tool.
+- [ ] P2.INLINE-FIELDS Extend the dedicated page-number object model only if a failing inline-text workflow requires fields mixed into longer runs; do not infer that support from the current object-level field.
 
 Completed migration steps (V0–V4.2):
 

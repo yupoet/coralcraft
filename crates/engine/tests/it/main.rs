@@ -26,6 +26,8 @@ mod coreldraw_p1_persistence;
 mod coreldraw_appearance;
 // CoralCraft: the P1 acceptance scenario (P1 Task 13).
 mod coreldraw_p1_acceptance;
+// CoralCraft: the P2 brochure acceptance scenario (P2 Task 12).
+mod coreldraw_p2_acceptance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).
 mod coreldraw_shaping;
 // CoralCraft: the CorelDRAW styles and symbols (P1 Task 9).

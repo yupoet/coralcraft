@@ -1,32 +1,32 @@
 # CoralCraft Roadmap
 
-> Stage: **pre-alpha, P0 evidence baseline active** · Updated: 2026-11-10
-> Direction (operator decision 2026-10-21): CoralCraft is a **fork of [`storytold/vectorcraft`](https://github.com/storytold/vectorcraft)** extended toward CorelDRAW. Reuse VectorCraft; build only the CorelDRAW extension; open and save every VectorCraft file. See [`AGENTS.md`](AGENTS.md), the umbrella product roadmap [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md), the active P0 plan [`docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md`](docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md), and the migration plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
+> Stage: **pre-alpha, P2 complete; P3 is next** · Updated: 2026-11-11
+> Direction (operator decision 2026-10-21): CoralCraft is a **fork of [`storytold/vectorcraft`](https://github.com/storytold/vectorcraft)** extended toward CorelDRAW. Reuse VectorCraft; build only the CorelDRAW extension; open and save every VectorCraft file. See [`AGENTS.md`](AGENTS.md), the umbrella product roadmap [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md), the completed P2 plan [`docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md`](docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md), and the migration plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
 
 > [!IMPORTANT]
 > The per-dimension self-scores used until M89 (for example "Tools, panels & interactive UI 80%") were not measured and are withdrawn. The table below is measured against `refs/vectorcraft` @ `a466625`.
 
-## Measured parity vs VectorCraft (CoralCraft column refreshed with `cargo xtask stats` on 2026-11-10)
+## Measured parity vs VectorCraft (CoralCraft column refreshed with `cargo xtask stats` on 2026-11-11)
 
 The 2026-11-07/08 sync merged the whole upstream history between `a466625` and `36ef34df`
 (8,676 commits) into this repository on top of every CoralCraft extension; see
 [`docs/upstream-vectorcraft.md`](docs/upstream-vectorcraft.md) and the divergence ledger
 [`docs/upstream-divergences.tsv`](docs/upstream-divergences.tsv).
 
-Current-tree totals from `cargo xtask stats` (run 2026-11-10): 2,021 files, 876,333 lines,
-14,592 `#[test]` functions, and 66 `proptest!` macros across the workspace. The desktop-layer
-total below sums `vectorcraft-ui-egui` (212,144) + `coralcraft` (13,519) + `vectorcraft-tools`
-(57,205) + `vectorcraft-engine` (244,878) = 527,746 lines. Ratios above 100% vs the `a466625`
+Current-tree totals from `cargo xtask stats` (run 2026-11-11): 2,039 files, 879,598 lines,
+14,647 `#[test]` functions, and 66 `proptest!` macros across the workspace. The desktop-layer
+total below sums `vectorcraft-ui-egui` (213,138) + `coralcraft` (13,519) + `vectorcraft-tools`
+(57,314) + `vectorcraft-engine` (246,664) = 530,693 lines. Ratios above 100% vs the `a466625`
 column mostly reflect upstream's own growth between `a466625` and `36ef34df`.
 
-| Metric | Pre-fork (2026-10-21) | CoralCraft (current tree, 2026-11-10) | VectorCraft (`a466625`) | Ratio (current tree) |
+| Metric | Pre-fork (2026-10-21) | CoralCraft (current tree, 2026-11-11) | VectorCraft (`a466625`) | Ratio (current tree) |
 |---|---:|---:|---:|---:|
-| Rust lines (all crates + apps) | 53.2k | ~876k | ~697k | ~126% (+ `cdr`, `corel-import`) |
-| Desktop layer (ui-egui + app + tools + engine) | 11.0k | 527.7k | 318k | ~166% |
+| Rust lines (all crates + apps) | 53.2k | ~880k | ~697k | ~126% (+ `cdr`, `corel-import`) |
+| Desktop layer (ui-egui + app + tools + engine) | 11.0k | 530.7k | 318k | ~167% |
 | Panels / dockers | 2 | ~40 | ~40 | ~100% |
 | Dialogs | ~0 | 125 source files | 125 source files | ~100% |
 | Working canvas tools | 6 | 89 | 89 | ~100% |
-| `#[test]` functions | 165 | 14,592 (+66 `proptest!`) | 14,503 (@ `36ef34df`) | ~101% |
+| `#[test]` functions | 165 | 14,647 (+66 `proptest!`) | 14,503 (@ `36ef34df`) | ~101% |
 | Text engine (fonts, shaping) | none (placeholder glyph outlines) | `text` crate + skrifa/harfrust | `text` crate + skrifa/harfrust | 100% |
 | Formats opened (`OPEN_EXTS`) | svg, pdf, eps, dxf (own-export oriented) | 46 extensions (43 VectorCraft incl. PCX/Pixar/JPEG 2000 + `.cdr`, `.cmx`, `.coralcraft`) | 43 extensions | 100% + CDR/CMX |
 | Real-world `.cdr` sample fidelity (`refs/cdr-samples`) | 64/64 probe | historical 65/65 (V1.4, pre-sync tree); current tree **UNVERIFIED** — see [`docs/cdr-verification.md`](docs/cdr-verification.md) | — | — |
@@ -40,8 +40,8 @@ Source: [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-d
 | Phase | Name | Exit criterion |
 |---|---|---|
 | **P0** | Evidence Baseline and TraceDraw Adoption Audit | The current evidence baseline is honest, the external-reference ledger is reproducible, and every P1 candidate has an explicit reuse/adoption decision. Plan: [`docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md`](docs/superpowers/plans/2026-11-09-p0-evidence-and-tracedraw-audit.md). Documentation/audit delivered 2026-11-10; S2 real CDR certification remains open while [`docs/cdr-verification.md`](docs/cdr-verification.md) records UNVERIFIED prerequisites. |
-| **P1** | Professional Core Vector Workflow | A user can create and revise a multi-object logo or icon document from scratch; all supported objects remain editable after save/reopen; command, UI, and independent export checks pass. Delivered 2026-11-10 (Tasks 1–13, plan: [`docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md`](docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md); evidence in [`docs/target-app-parity.md`](docs/target-app-parity.md) and [`docs/p1-inventory.md`](docs/p1-inventory.md)). **Next: P2.** |
-| **P2** | Professional Text and Multipage Layout | Create a multipage brochure with styled artistic and paragraph text, linked frames, master-page content, page numbering, and mixed vector/bitmap content. Editing and pagination remain stable, and independent PDF checks confirm the output. |
+| **P1** | Professional Core Vector Workflow | A user can create and revise a multi-object logo or icon document from scratch; all supported objects remain editable after save/reopen; command, UI, and independent export checks pass. Delivered 2026-11-10 (Tasks 1–13, plan: [`docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md`](docs/superpowers/plans/2026-11-09-p1-core-vector-workflow.md); evidence in [`docs/target-app-parity.md`](docs/target-app-parity.md) and [`docs/p1-inventory.md`](docs/p1-inventory.md)). |
+| **P2** | Professional Text and Multipage Layout | Delivered 2026-11-11 (Tasks 1–12, plan: [`docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md`](docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md)). The three-page brochure covers styled/linked/path text, master-page numbers, an editable table, and an embedded bitmap, with native revision/reorder and independent SVG/PDF checks. **Next: P3.** |
 | **P3** | Signature Effects and Image Workflows | Create a poster and a traced-image composition using PowerClip and multiple live effects; save and reopen the document; effect parameters and source content remain editable; export fallbacks are explicit and tested. |
 | **P4** | Colour, Prepress, and Production Output | Produce independently validated PDF/X and print output with correct page boxes, fonts, spot plates, overprint behaviour, output intents, marks, imposition, and data-driven content. |
 | **P5** | Automation, Performance, and Product Hardening | Representative real projects pass sustained editing, automation, save/reopen, crash-recovery, export, and platform-install scenarios within measured performance budgets. Release evidence names the actual platforms and scenarios run. |

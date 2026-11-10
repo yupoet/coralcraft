@@ -1,5 +1,12 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0g. P2 text/layout boundaries (2026-11-11)
+
+- Dynamic page numbers are dedicated text objects marked by `NodeExtras::page_number`; their stored text is `#`, with evaluation only at canvas/SVG/PDF output. Arbitrary inline fields in longer text runs are not implemented.
+- CDR/CMX exports split dynamic page numbers into ordinary editable per-page text and emit a warning; the dynamic field and master semantics remain native-only. The public-spec `stlt` Font Encoding / `font` Encoding ID records are not yet linked to text runs; `crates/cdr/src/text.rs` supplies bounded decoders but no byte-based guessing is allowed.
+- `layout.table` creates ordinary groups of editable cell paths and live text with at most 1000 cells. It is not a dedicated interactive table tool.
+- S2 stays open: self-skipping oracle/sample tests are not real CDR certification.
+
 ## 0. VectorCraft Sync (2026-11-07): API drift map for the 36ef34d merge
 
 - **`egui` fork (rev 6d518fc) renamed accessibility types**: `egui::WidgetType::SelectableLabel`/`Button`/`Label` → `egui::Role::*`, and `ui.close_menu()` → `ui.close()`. CoralCraft UI modules (e.g. `page_navigator.rs`) must use the `Role` API.
