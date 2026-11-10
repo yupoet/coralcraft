@@ -48,6 +48,20 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [ ] P2.TABLE-UI Add interactive table selection, row/column insertion/deletion, resizing, and cell navigation around the `layout.table` objects; P2 delivered the editable object model and command, not a complete table tool.
 - [ ] P2.INLINE-FIELDS Extend the dedicated page-number object model only if a failing inline-text workflow requires fields mixed into longer runs; do not infer that support from the current object-level field.
 
+**P3 signature effects and image workflows (plan: [`superpowers/plans/2026-11-11-p3-signature-effects-image-workflows.md`](superpowers/plans/2026-11-11-p3-signature-effects-image-workflows.md); inventory: [`p3-inventory.md`](p3-inventory.md)):**
+- [x] P3.1 Command/UI/persistence inventory and evidence anchors (`61966c3f5`).
+- [x] P3.2 Core PowerClip lifecycle: make/edit/nesting/release, undo/redo, native reopen, CorelDRAW Object-menu dispatch, independent SVG/PDF (`1db9426f7`). Dedicated PowerClip naming and lock-contents-to-frame UI remain open.
+- [ ] P3.3 Advanced fills/transparency: fountain, vector pattern, mesh, object opacity/Multiply and panel evidence landed (`64b585f3f`); two-colour/bitmap patterns, textures, graded transparency, and opacity masks remain open.
+- [x] P3.4 Blend and Contour live/source editing, native persistence, independent SVG, CorelDRAW panel and existing on-canvas pointer evidence (`3a449dc94`).
+- [x] P3.5 Envelope warp/mesh/content editing and Distort Twist parameter/dialog/native/SVG evidence (`5e7ddef04`); existing live suite 66/66. Push/pull and zipper-specific handles remain open.
+- [ ] P3.6 Extrude+Bevel and Drop Shadow ordered parameters/native/SVG+PDF/dialog evidence landed (`195b33c25`); Block Shadow, Lens, Perspective, Symmetry, and other D4 effects remain open.
+- [x] P3.7 Effect-stack reorder/duplicate/hide/remove/expand, invalid-input atomicity, native reopen, CorelDRAW Appearance and existing drag/eye evidence (`88570ccf8`).
+- [ ] P3.8 Bitmap crop/resample/adjustment/common effects and explicit external-editor behaviour remain open.
+- [ ] P3.9 PowerTRACE synthetic colour trace/live reopen/editable expansion/independent SVG/CorelDRAW panel landed (`cafb83293`; trace suite 252 passed, 3 existing ignored); centreline, colour reduction, smoothing, presets, and undo/redo workflow evidence remain open.
+- [ ] P3.10 Consolidated native/CDR/CMX persistence, warning, residual, and hostile-input audit.
+- [ ] P3.11 Real MCP `run_command` coverage for any new P3 surface and generated docs (no new commands have been added so far).
+- [ ] P3.12 Poster + traced-image acceptance and full P3 gate. P3 remains in progress until the umbrella exit criterion passes.
+
 Completed migration steps (V0–V4.2):
 
 - [x] V0.1 Move pre-fork crates to `legacy/` (keep `crates/cdr`); copy VectorCraft `a466625` crates, apps, xtask pieces, vendor, non-brand assets, packaging, and CI; create `docs/upstream-vectorcraft.md`.
