@@ -107,3 +107,19 @@ fn coreldraw_envelope_menu_and_distort_dialog_use_shared_models() {
     let dialog = app.ui.dialog.as_ref().expect("the Distort dialog opens");
     assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("distort.twist"));
 }
+
+#[test]
+fn coreldraw_extrude_and_drop_shadow_dialogs_open_on_the_shared_effect_stack() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    for effect in ["threeD.extrude", "stylize.dropShadow"] {
+        run(&mut app, "effect.apply", json!({"id": shape.0, "effect": effect}));
+        crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": effect}));
+        let dialog = app.ui.dialog.as_ref().expect("the effect dialog opens");
+        assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some(effect));
+        app.ui.dialog = None;
+    }
+    let effects = &app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects;
+    assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["threeD.extrude", "stylize.dropShadow"]);
+}

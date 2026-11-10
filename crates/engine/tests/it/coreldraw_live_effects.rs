@@ -134,3 +134,27 @@ fn distort_twist_parameters_survive_native_reopen_and_export() {
     assert!(matches!(node.kind, NodeKind::Path { .. }));
     independent_svg_read(&mut s);
 }
+
+#[test]
+fn extrude_bevel_and_drop_shadow_keep_ordered_editable_parameters() {
+    let mut s = session();
+    let source = rectangle(&mut s, 40.0, "#204080");
+    s.execute("effect.apply", &json!({"id": source, "effect": "threeD.extrude", "params": {"depth": 40, "bevel": "classic", "bevelWidth": 3}}))
+        .unwrap();
+    s.execute("effect.apply", &json!({"id": source, "effect": "stylize.dropShadow", "params": {"x": 8, "y": 6, "blur": 2, "opacity": 60}})).unwrap();
+    s.execute("effect.setParams", &json!({"id": source, "index": 0, "params": {"depth": 55}})).unwrap();
+    s.execute("effect.setParams", &json!({"id": source, "index": 1, "params": {"x": 10}})).unwrap();
+
+    native_reopen(&mut s);
+    let effects = &s.doc().unwrap().doc.node(NodeId(source)).unwrap().appearance.effects;
+    assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["threeD.extrude", "stylize.dropShadow"]);
+    assert_eq!(effects[0].params["depth"].as_f64(), Some(55.0));
+    assert_eq!(effects[0].params["bevel"], json!("classic"));
+    assert_eq!(effects[1].params["x"].as_f64(), Some(10.0));
+    assert_eq!(effects[1].params["opacity"].as_f64(), Some(60.0));
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(source)).unwrap().kind, NodeKind::Path { .. }));
+    independent_svg_read(&mut s);
+    let pdf = vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({"format": "pdf"})).unwrap()["dataBase64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed effect PDF read").artboards.len(), 1);
+}

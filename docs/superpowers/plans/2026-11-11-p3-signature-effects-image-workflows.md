@@ -179,6 +179,8 @@ s.execute("effect.setParams", &json!({"id": shape, "index": index, "params": rev
 
 Require source/parameters to survive native reopen; record unsupported target behaviours explicitly rather than inventing an effect.
 
+Progress: Extrude + Bevel and Drop Shadow pass native/edit/independent SVG+PDF and dialog evidence. Block Shadow, Lens, Perspective, and Symmetry remain open, so this task is not checked.
+
 - [ ] **Step 2: Verify real controls and independent export**
 
 Drive the existing dialogs, property bars, or canvas handles in the CorelDRAW workspace. Parse SVG with `usvg` and PDF with Hayro; distinguish retained vector semantics from raster fallback.
