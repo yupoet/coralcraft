@@ -1,36 +1,67 @@
-# Parity with CorelDRAW (Target Workflow Matrix)
+# CorelDRAW Parity — CoralCraft Evidence Matrix (D1–D6)
 
-> [!NOTE]
-> **Updated 2026-10-21 (`R0.1`–`R8.1` completed):** All workflow domains below are backed by behavioural tests, including the native `eframe`/`egui` 0.36 desktop workspace shell (`CoralCraftApp` + `egui_kittest::Harness`), planar subdivision polygon boolean clipper (`boolean.rs` with area-identity & grid-oracle tests), Kaitai/Photopea-aligned CDR7/CMX1 writers verified against `libcdr` (`cdr2raw` / `cmx2raw`), and 244 typed MCP tools (`coralcraft-mcp`). Re-estimated per-dimension scores are in [`ROADMAP.md`](../ROADMAP.md) and the completed work queue is in [`gaps.md`](gaps.md).
+> **Target:** the complete CorelDRAW main application, tracked by capability domain D1–D6 with
+> evidence levels 0–5. This file replaced the pre-P0 matrix of manually estimated percentages; those
+> claims were withdrawn by the umbrella specification. There is deliberately **no aggregate
+> percentage** in this document.
+> Umbrella roadmap:
+> [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md)
+> (direction approved by the operator 2026-11-09).
+>
+> A separate document exists with a similar name:
+> [`docs/vectorcraft-target-app-parity.md`](vectorcraft-target-app-parity.md) is upstream VectorCraft's
+> own **Adobe Illustrator** parity assessment, preserved verbatim after the 2026-11-08 sync. It
+> measures a different target against different evidence and is never evidence of CorelDRAW parity.
 
+## Evidence levels
 
-CoralCraft is a clean-room, open-source vector illustration and multi-page layout application targeting CorelDRAW workflow parity (and beyond). All feature descriptions and keyboard/tool conventions below are derived strictly from public documentation (CorelDRAW public user guides, published technical books, and open specifications).
+Each capability row has a current level and links to its evidence:
 
-## Summary Matrix
+| Level | Name | Minimum meaning |
+|---|---:|---|
+| 0 | Absent | No supported implementation. |
+| 1 | Model | Document semantics and native serialization exist. |
+| 2 | Command | Shared engine command, undo/redo, and headless behaviour tests pass. |
+| 3 | Interactive | Real tool/Property Bar/Docker interaction and UI tests pass. |
+| 4 | Interoperable | Native reopen preserves editability; applicable independent import/export checks pass. |
+| 5 | Production | The feature passes its real workflow, target-platform, and performance acceptance scenario. |
 
-| Workflow Domain | Current Status (M0–M14) | Target Milestone | Notes |
-| --- | --- | --- | --- |
-| **Document Model & Multi-Page** | **100%** (delivered) | M2 (Delivered) | Multi-page spreads, Master Pages (`MasterAllPages`, `MasterOddPages`, `MasterEvenPages`), Desktop pasteboard (`ObjectId` + `ObjectKind::Unsupported` lossless passthrough) |
-| **Objects & Geometry** | **100%** (delivered) | M2–M13 (Delivered) | Parametric Rectangle (`Round`/`Scalloped`/`Chamfered`), Ellipse (`Full`/`Pie`/`Arc`), Polygon/Star, Cubic/Quadratic Bézier Curve, Fillet/Scallop/Chamfer curves, Artistic Text, Paragraph Text multi-column frames, Linear Dimension lines, Embedded Bitmaps, 2D Boolean ops (`Weld`/`Trim`/`Intersect`/`FrontMinusBack`/`BackMinusFront`), Groups |
-| **Fills, Outlines & Palette** | **100%** (delivered) | M2–M8 (Delivered) | Uniform, Fountain (`Linear`/`Radial`/`Conical`/`Square`, Direct + Rainbow CW/CCW), Uniform/Fountain Transparency (`TransparencyStyle`), Outline (`behind_fill`, `scale_with_object`, Hairline), Spot/Registration/Lab colors, binary `.cpl` / `.xml` palette import & export |
-| **CorelDRAW Signature Effects** | **100%** (delivered) | M3–M13 (Delivered) | Recursive PowerClip (`MAX_CLIP_DEPTH = 8`), Contour, Drop Shadow, Extrude, Blend + custom `ArcLengthTable` Spine, 4-corner Envelope (`enve` CDR round-trip), 2-point Perspective homography, Artistic Media Brush, Fit Text to Path |
-| **Interactive Tools & Classic Workspace** | **100%** (delivered) | M4–M12 (Delivered) | Classic CorelDRAW workspace (`MenuBar`, `StandardToolbar`, context-sensitive `PropertyBar`, left `Toolbox` with 10 vector glyphs, right `ColorPaletteBar` (`[X]` No-Color, Left-Click Fill / Right-Click Outline), bottom `PageNavigatorBar`, `StatusBar`, `Objects`/`Properties` Dockers, `1440×900` full-workspace rasterizer, Interactive Fill handles, dashed `#0055E5` guidelines, 7-mode Alignment + 8-mode Distribution, Step & Repeat) |
-| **Prepress, Print & Interchange** | **100%** (delivered) | M3–M14 (Delivered) | ISO 32000-1 PDF 1.4 (`/MediaBox`, `/TrimBox`, `/BleedBox`, CMYK `k`/`K`), `PrepressOptions` (crop & Registration `1 1 1 1 K` marks), `EPSF-3.0` (`export_eps`), AutoCAD DXF (`export_dxf` / `import_dxf`), SVG 1.1 (`export_svg` / `import_svg`), CDR7/CMX1/CDRX writers |
-| **Automation & Agentic MCP** | **90%** (delivered) | M5–M64 / R4.1–R4.2 (Delivered) | `coralcraft-mcp` JSON-RPC 2.0 server (**244** typed authoring, effect, layout, and interchange tools with generated `inputSchema.properties`) + `coralcraft --mcp` & `coralcraft-cli mcp` |
+A menu entry, command registration, file extension, or self-round trip alone is never completion.
+Feature counts are derived from the matrix, not manually estimated percentages.
 
-## 1. Document & Multi-Page Architecture
+## Current-tree capability matrix
 
-Unlike single-canvas or artboard-only vector editors, CorelDRAW documents combine a multi-page publication model with a shared pasteboard:
+Levels are conservative floors: a level is raised only by a current-tree test cited in the row, never
+by a historical result. A domain is never marked complete because one layer exists — for example, a
+level 4 row still owes its level 5 production scenario.
 
-- **Pages & Facing Spreads**: Per-page dimensions, orientation, and bleed next to a document-wide default page size.
-- **Document-Level Layer Stack**: Layers (Normal, Master, Guides, Desktop, Grid) are defined at the document level, while object instances bind to `(Page | Master | Desktop, LayerId)`.
-- **Desktop Layer**: Objects placed on the `Desktop` pasteboard remain visible across page switches on screen while staying non-printing by default during export.
-- **Units & Coordinate Precision**: Internal CDR coordinates use `1 / 254,000 inch` (`0.1 μm` = `1 / 10,000 mm`) signed integers; `coralcraft-geom` provides exact `CdrUnit(i64)` <-> `Pt(F64)` conversion (`31_750 / 9` rational).
+| Capability | Level | Current-tree evidence | Historical evidence |
+|---|---:|---|---|
+| CorelDRAW tool mapping and Property Bar | 2 | Shared VectorCraft commands exist; V4.3 mapping is open. Workspace shell proven by [`coreldraw_workspace_preset_configures_bars_and_dockers_and_round_trips_v4_1`](../crates/ui-egui/src/workspaces.rs) and the shortcut preset by [`coreldraw_shortcut_preset_is_conflict_free_and_maps_public_shortcuts_v4_2`](../crates/ui-egui/src/shortcut_editor.rs); the tool-by-tool Property Bar modes from [`crates/tools/src/catalog.rs`](../crates/tools/src/catalog.rs) are the open V4.3 item ([`docs/gaps.md`](gaps.md)). | — |
+| Selection and node interaction | 3 | Synced VectorCraft interactive tools and tests: tool catalog and interaction code in [`crates/tools/src/`](../crates/tools/src/) with selection behaviour covered by [`crates/engine/tests/it/selection_commands.rs`](../crates/engine/tests/it/selection_commands.rs) and node editing by [`crates/pathops/src/edit.rs`](../crates/pathops/src/edit.rs). Corel-specific Pick/Shape handle semantics are tracked under V4.3/P1. | — |
+| Shaping and path operations | 3 | VectorCraft command/UI coverage in [`crates/pathops/src/boolean.rs`](../crates/pathops/src/boolean.rs) and [`crates/pathops/src/pathfinder.rs`](../crates/pathops/src/pathfinder.rs); Corel-specific mapping (Weld/Trim/Intersect/Simplify/Boundary naming and workflow) remains open ([`docs/gaps.md`](gaps.md), P1). | — |
+| Pages, master layers, and page navigator | 4 | V2.2 native persistence plus V3 command/UI tests: [`vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_losslessly_v2_2`](../crates/engine/src/cmd/fileio/tests.rs) (native reopen preserves the model), [`coreldraw_master_and_desktop_layer_commands_and_roundtrip_v3_2`](../crates/engine/src/cmd/layer.rs), and [`page_navigator_renders_tabs_and_executes_add_delete_rename_reorder_and_switch_v3_3`](../crates/ui-egui/src/page_navigator.rs). Level 5 production scenarios (long-document recovery, facing pages) are open. | — |
+| Fills, outlines, palettes, and transparency | 3 | VectorCraft UI/render plus CoralCraft palette bar: [`palette_bar_renders_swatches_and_applies_fill_on_left_click_and_stroke_on_right_click_v4_1`](../crates/ui-egui/src/palette_bar.rs); fountain/pattern/transparency paint semantics live in the synced VectorCraft appearance stack ([`crates/doc/src/`](../crates/doc/src/), [`crates/render/src/`](../crates/render/src/)). Domain-specific interoperability is incomplete: Corel `.cpl`/`.xml` palettes in the bar and mesh/pattern-fountain CDR fidelity are open ([`docs/gaps.md`](gaps.md), V5.3/P1–P3). | — |
+| Artistic/paragraph text and typography | 3 | Synced VectorCraft text engine and UI: shaping/hyphenation/justification in [`crates/text/src/`](../crates/text/src/) with engine coverage in [`crates/engine/src/cmd/fileio/tests_text.rs`](../crates/engine/src/cmd/fileio/tests_text.rs). Corel CDR semantic coverage is incomplete (old code pages, tabs/bullets/drop caps from `stlt`); decoding gaps and the VectorCraft-first decision are recorded in [`docs/coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md). | — |
+| PowerClip container workflow | 2 | Import/render/native residual support exists: PowerClip structures map through [`crates/corel-import/src/lib.rs`](../crates/corel-import/src/lib.rs) with residuals preserved in the CoralCraft extension block. Full edit/extract/lock workflow is open ([`docs/gaps.md`](gaps.md), V5.1/P3); the TraceDraw behaviour reference decision is in [`docs/coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md). | — |
+| CorelDRAW live-effect workflow | 2 | VectorCraft effects exist ([`crates/effects/src/`](../crates/effects/src/) with the engine effect stack); CorelDRAW effect mapping and on-canvas handles are open ([`docs/gaps.md`](gaps.md), V5.2/P3). The TraceDraw audit confirmed a real, test-backed live-effect model to adapt **per effect onto VectorCraft infrastructure** — see the [live-effect finding](coreldraw-reference-adoption.md#adoption-table). | — |
+| Bitmap tracing | 3 | Synced VectorCraft tracing and UI tests: [`crates/trace/src/`](../crates/trace/src/) with quality presets covered under [`crates/trace/tests/`](../crates/trace/tests/). PowerTRACE-specific presets/behaviour are a P3 reference item ([`docs/coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md)). | — |
+| Colour management and prepress | 3 | Synced VectorCraft ICC/PDF/print infrastructure: PDF/X output covered by [`crates/engine/src/cmd/fileio/tests_pdfx.rs`](../crates/engine/src/cmd/fileio/tests_pdfx.rs) and colour settings by [`crates/engine/tests/color_settings.rs`](../crates/engine/tests/color_settings.rs). Corel workflow acceptance (spot plates through separations, overprint preview, imposition, data merge) is open (P4). | — |
+| CDR/CMX read/write | 2 | Engine read/write commands and regression tests exist: [`cdr_and_cmx_engine_pipeline_passes_libcdr_oracle_and_real_samples`](../crates/engine/src/cmd/fileio/tests.rs) and [`crates/corel-import/tests/oracle_and_samples.rs`](../crates/corel-import/tests/oracle_and_samples.rs). Current independent oracle state is recorded separately in [`docs/cdr-verification.md`](cdr-verification.md) — **all six checks are UNVERIFIED on the current tree**, so level 2 stands; interactive and independent evidence must raise this conservatively. | V1.4 (2026-10-22, pre-sync tree) ran the libcdr `cdr2raw`/`cmx2raw` differential oracle and opened 65/65 valid real-world `.cdr` samples with exact counts — see V1.4 in [`docs/gaps.md`](gaps.md). Historical only; it does not upgrade the current-tree level. |
+| VectorCraft native/file compatibility | 4 | V2.1–V2.2 compatibility and lossless extension tests: [`vectorcraft_format_compatibility_matrix_covers_every_format_v2_1`](../crates/engine/src/cmd/fileio/tests.rs), [`vectorcraft_drawcraft_and_vctemplate_preserve_coralcraft_extension_block_losslessly_v2_2`](../crates/engine/src/cmd/fileio/tests.rs), and [`legacy_coralcraft_json_and_zip_containers_open_and_place_losslessly_v2_3`](../crates/engine/src/cmd/fileio/tests.rs). Format matrix details in [`docs/file-format-parity.md`](file-format-parity.md). | — |
+| MCP and CLI | 2 | Synced headless command/protocol tests; regenerated docs prove registry coverage: [`crates/mcp/tests/docs_sync.rs`](../crates/mcp/tests/docs_sync.rs) and [`crates/mcp/tests/protocol_props.rs`](../crates/mcp/tests/protocol_props.rs) behind the generated tool reference in [`docs/mcp.md`](mcp.md). CorelDRAW-specific command coverage grows with each phase (continuous workstream, not a late phase). | — |
+| Sandboxed scripting/plugins | 2 | Synced VectorCraft infrastructure: the WebAssembly plug-in sandbox in [`crates/plugins/src/`](../crates/plugins/src/) (D6 base; not a VBA/COM layer — see the note in [`docs/plugins.md`](plugins.md)). CorelDRAW object-model coverage is open (P5). | — |
 
-## 2. Classic CorelDRAW Workspace & Interactive Tool Architecture
+## How to read and maintain this matrix
 
-- **Top Chrome**: Fixed 11-category Menu Bar (`File`, `Edit`, `View`, `Layout`, `Object`, `Effects`, `Bitmaps`, `Text`, `Tools`, `Window`, `Help`), Standard Toolbar, and context-sensitive Property Bar driven by `coralcraft_tools::build_property_bar_schema`.
-- **Left Vertical Toolbox**: Single-column tool bar with CorelDRAW shortcuts (`F10` Shape, `Z` Zoom, `F5` Freehand/Bezier, `F6` Rectangle, `F7` Ellipse, `Y` Polygon/Star, `F8` Artistic Text, `G` Interactive Fill, `Escape` Pick).
-- **Right Vertical Color Palette Bar**: Top `[X]` No-Color cell followed by scrollable swatches; Left-Click sets Fill, Right-Click sets Outline (updating selection or next-object creation defaults).
-- **Bottom Page Navigator & Status Bar**: `+`, `Page 1..N` (Rename, Duplicate, Delete), `Master Page`, and `Desktop` tabs above the Status Bar (`x, y`, selection summary, Fill chip, Outline chip).
-- **Right Collapsible Dockers**: Tabbed `Objects` (Object Manager tree) and `Properties` inspector.
+- **Current-tree evidence** means a test or command that runs against the current repository tree.
+  **Historical evidence** means an older milestone result; it is kept for context and never raises a
+  level. The only historical result currently cited is the V1.4 CDR oracle/sample run above.
+- A capability reaches level 4 for CDR/CMX only when [`docs/cdr-verification.md`](cdr-verification.md)
+  records real (non-self-skipping) oracle and sample passes on the current tree; until then the CDR/CMX
+  row stays at level 2 regardless of writer/reader test counts.
+- TraceDraw-derived behaviour follows the adoption boundaries in
+  [`docs/coreldraw-reference-adoption.md`](coreldraw-reference-adoption.md); that document, not this
+  matrix, decides what may be ported.
+- Work order comes from [`docs/gaps.md`](gaps.md); phase exit criteria come from the umbrella
+  specification.
