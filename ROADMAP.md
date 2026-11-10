@@ -13,10 +13,10 @@ The 2026-11-07/08 sync merged the whole upstream history between `a466625` and `
 [`docs/upstream-vectorcraft.md`](docs/upstream-vectorcraft.md) and the divergence ledger
 [`docs/upstream-divergences.tsv`](docs/upstream-divergences.tsv).
 
-Current-tree totals from `cargo xtask stats` (run 2026-11-11): 2,046 files, 880,442 lines,
-14,671 `#[test]` functions, and 66 `proptest!` macros across the workspace. The desktop-layer
+Current-tree totals from `cargo xtask stats` (run 2026-11-11): 2,046 files, 880,464 lines,
+14,672 `#[test]` functions, and 66 `proptest!` macros across the workspace. The desktop-layer
 total below sums `vectorcraft-ui-egui` (213,315) + `coralcraft` (13,519) + `vectorcraft-tools`
-(57,314) + `vectorcraft-engine` (247,323) = 531,471 lines. Ratios above 100% vs the `a466625`
+(57,314) + `vectorcraft-engine` (247,345) = 531,493 lines. Ratios above 100% vs the `a466625`
 column mostly reflect upstream's own growth between `a466625` and `36ef34df`.
 
 | Metric | Pre-fork (2026-10-21) | CoralCraft (current tree, 2026-11-11) | VectorCraft (`a466625`) | Ratio (current tree) |

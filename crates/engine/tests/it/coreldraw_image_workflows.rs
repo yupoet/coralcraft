@@ -78,3 +78,25 @@ fn bitmap_crop_and_colour_adjustment_survive_undo_and_native_reopen() {
     let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
     usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the adjusted bitmap");
 }
+
+#[test]
+fn invalid_bitmap_crop_is_refused_without_document_or_history_changes() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([30, 120, 180, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bitmap = s
+        .execute(
+            "file.place",
+            &json!({"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [40, 40]}),
+        )
+        .unwrap()["ids"][0]
+        .as_u64()
+        .unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    let history = s.doc().unwrap().history.undo.len();
+    assert!(s.execute("object.cropImage", &json!({"id": bitmap, "rect": [500, 500, 10, 10]})).is_err());
+    assert!(s.execute("object.cropImage", &json!({"id": bitmap, "rect": "12"})).is_err());
+    assert_eq!(s.doc().unwrap().doc, before);
+    assert_eq!(s.doc().unwrap().history.undo.len(), history);
+}
