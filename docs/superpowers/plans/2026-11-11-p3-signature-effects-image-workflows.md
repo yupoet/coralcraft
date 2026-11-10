@@ -266,6 +266,8 @@ Run `coreldraw_image_workflows`, the CorelDRAW UI filter, and `vectorcraft-trace
 
 Build a document with nested PowerClip, live effects, mesh/transparency, bitmap, and trace output. Reopen native and edit every source. Export CDR7/CMX1 and require supported structures to reopen; unsupported live semantics must return a named warning and retain a native residual where the format permits. Never claim CDR dynamic effects from a flattened self-round trip.
 
+Progress: CDR/CMX PowerClip + Extrude/Drop Shadow evidence passes. A failing Blend test exposed silent empty-path export; live nodes now use `vectorcraft_doc::live::expand_deep` and return a named warning. The combined mesh/transparency/bitmap/trace audit and hostile-input gate remain open, so this task is not checked.
+
 - [ ] **Step 2: Implement only cited format mappings**
 
 Use the public CDR specification and audited adoption record. Unknown chunks remain bounded residuals; malformed input returns structured errors without panic. S2 stays open without libcdr tools and real samples.

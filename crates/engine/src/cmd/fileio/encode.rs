@@ -452,7 +452,7 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
-    // CoralCraft: CDR/CMX carry the evaluated page text, while native documents keep the field.
+    // CoralCraft: CDR/CMX carry evaluated page text and live geometry, while native documents keep their sources.
     if matches!(f.id, "cdr" | "cmx") {
         let has_page_numbers = doc.layers.iter().any(|layer| {
             let mut found = false;
@@ -463,6 +463,20 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
             enc.warnings.push(
                 "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
             );
+        }
+        let mut live_kinds = std::collections::BTreeSet::new();
+        for layer in &doc.layers {
+            layer.walk(&mut |node| {
+                if vectorcraft_doc::live::is_live(node) {
+                    live_kinds.insert(node.kind_label());
+                }
+            });
+        }
+        if !live_kinds.is_empty() {
+            let kinds = live_kinds.into_iter().collect::<Vec<_>>().join(", ");
+            enc.warnings.push(format!(
+                "live {kinds} objects are expanded to plain vector groups in CDR/CMX; the native document keeps the editable live sources"
+            ));
         }
     }
     // Baking, flattening and drawing stop early when cancelled and leave a truncated result.

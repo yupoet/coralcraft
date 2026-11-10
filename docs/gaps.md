@@ -58,7 +58,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P3.7 Effect-stack reorder/duplicate/hide/remove/expand, invalid-input atomicity, native reopen, CorelDRAW Appearance and existing drag/eye evidence (`88570ccf8`).
 - [ ] P3.8 Bitmap crop/resample/adjustment/common effects and explicit external-editor behaviour remain open.
 - [ ] P3.9 PowerTRACE synthetic colour trace/live reopen/editable expansion/independent SVG/CorelDRAW panel landed (`cafb83293`; trace suite 252 passed, 3 existing ignored); centreline, colour reduction, smoothing, presets, and undo/redo workflow evidence remain open.
-- [ ] P3.10 Consolidated native/CDR/CMX persistence, warning, residual, and hostile-input audit.
+- [ ] P3.10 Consolidated native/CDR/CMX persistence, warning, residual, and hostile-input audit. PowerClip + supported-effect CDR/CMX evidence and the live-Blend empty-path fix landed in this slice; mesh/transparency/bitmap/trace consolidation remains open.
 - [ ] P3.11 Real MCP `run_command` coverage for any new P3 surface and generated docs (no new commands have been added so far).
 - [ ] P3.12 Poster + traced-image acceptance and full P3 gate. P3 remains in progress until the umbrella exit criterion passes.
 

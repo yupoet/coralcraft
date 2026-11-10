@@ -1,5 +1,10 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0h. [Resolved 2026-11-11, P3 Task 10] CDR live objects silently exported as empty paths
+
+- `corel-import::convert_vc_node_to_cdr` previously sent Blend/Envelope/Mesh and other live kinds to its fallback with `node.path_data().cloned().unwrap_or_default()`, which could write an empty path without a warning.
+- Regression `coreldraw_p3_persistence::cdr_live_blend_export_warns_and_keeps_visible_vector_geometry` failed with `warnings == []` before the fix. Live nodes now use the existing `vectorcraft_doc::live::expand_deep`, and `encode_all_of` reports which live kinds become plain vector groups in CDR/CMX. Native sources remain editable; the self-round trip is supplementary, not independent CDR certification. S2 remains open.
+
 ## 0g. P2 text/layout boundaries (2026-11-11)
 
 - Dynamic page numbers are dedicated text objects marked by `NodeExtras::page_number`; their stored text is `#`, with evaluation only at canvas/SVG/PDF output. Arbitrary inline fields in longer text runs are not implemented.

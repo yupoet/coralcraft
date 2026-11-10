@@ -2009,6 +2009,14 @@ fn convert_vc_layer_to_cdr(
 }
 
 fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Option<&CoralCraftDocData>) -> ObjectNode {
+    // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
+    let expanded;
+    let node = if vectorcraft_doc::live::is_live(node) {
+        expanded = vectorcraft_doc::live::expand_deep(node, None);
+        &expanded
+    } else {
+        node
+    };
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
         // Check if the node's basic properties and page-local bounds were untouched in VectorCraft; if so,
         // restore the exact original ObjectNode (updating any recursive children if it is a Group or PowerClip).
