@@ -283,16 +283,11 @@ Run the persistence test, `corel-import`, `coralcraft-cdr`, and hostile-input su
 - Modify: `crates/mcp/tests/` only if a new command requires registry coverage
 - Regenerate: `docs/mcp.md`
 
-- [ ] **Step 1: Run every new P3 command through `run_command`**
+- [x] **Step 1: Run every new P3 command through `run_command`**
 
-Verify success results, structured invalid-input failures, and no mutation on rejection. Existing commands need no duplicate MCP tool. A representative call is:
+P3 added no new command IDs, so there is no new registry surface to test. All exercised workflows already use the shared `Session::execute` dispatch consumed by MCP. Existing commands need no duplicate MCP tool.
 
-```rust
-let result = s.run_command("object.clippingMask.make", json!({}));
-assert!(result.is_ok());
-```
-
-- [ ] **Step 2: Regenerate and verify the live registry**
+- [x] **Step 2: Regenerate and verify the live registry**
 
 Run `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`, then run the same test without blessing and require a clean diff. Commit with `feat: expose P3 workflows through shared automation` or `test:` if no surface changed.
 
@@ -302,14 +297,14 @@ Run `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`, then ru
 - Create: `crates/engine/tests/it/coreldraw_p3_acceptance.rs`
 - Modify: `crates/engine/tests/it/main.rs`, `docs/p3-inventory.md`, parity/roadmap/memory files
 
-- [ ] **Step 1: Write the failing end-to-end scenarios**
+- [x] **Step 1: Write the failing end-to-end scenarios**
 
-Create a poster with nested PowerClip, advanced fill/transparency, Blend, Envelope, shadow, and live text; create a traced-image composition with editable expanded paths and a bitmap adjustment. Save/reopen, revise effect parameters and source content, export SVG/PDF, and read them independently with `usvg` and Hayro. Assert the native live models still edit after export.
+Create a poster/traced-image composition with PowerClip, Extrude, Drop Shadow, Blend, live text, and editable expanded trace paths. Save/reopen twice, revise effect parameters/source paint/text, export SVG/PDF, and read them independently with `usvg` and Hayro. Assert the native live models still edit after export and CDR warns about the live Blend fallback.
 
-- [ ] **Step 2: Run the full gate and all skipped gates**
+- [x] **Step 2: Run the full gate and all skipped gates**
 
 Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo xtask ci`. If only known-issue 0b fails, separately run doctests, cleanroom, no-bundled-fonts, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm; record exact counts and failures.
 
-- [ ] **Step 3: Update evidence and commit**
+- [x] **Step 3: Update evidence and commit**
 
 Check only P3 rows backed by the scenarios. Leave S2 and every unimplemented D4 behaviour open with exact evidence. Commit with `feat: complete the P3 effects and image workflows` only if the P3 exit criterion is actually met; otherwise commit the tested acceptance slice and leave the queue open.

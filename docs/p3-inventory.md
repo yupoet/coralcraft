@@ -20,7 +20,7 @@ Measured with the same-revision CLI/xtask binaries: the JSON command catalog was
 | Bitmap workflows | Existing image placement, crop/resample/adjustment and bitmap-effect commands | Image/effect tests | Synthetic-image end-to-end workflow, native reopen, explicit external-editor result |
 | PowerTRACE | `imageTrace.make/makeAndExpand/setView/presets.*` in `cmd/buildcmds/trace.rs`; `panels/image_trace.rs`; `vectorcraft-trace` | **P3 progress:** synthetic colour trace, Outlines view, native live reopen, editable expanded paths, independent SVG, and CorelDRAW Image Trace panel workflow pass | Centreline, colour reduction, smoothing, presets, and undo/redo remain open |
 | CDR/CMX | `corel-import` and `coralcraft-cdr` mapping, residuals and warning paths | **P3 progress:** PowerClip + Extrude/Drop Shadow CDR/CMX reopen; live Blend now exports expanded vector groups with an explicit warning instead of an empty path | Combined mesh/transparency/bitmap/trace audit, hostile-input gate, residual matrix, and S2 real oracle/samples remain open |
-| Automation | All features already use shared engine command dispatch; MCP `run_command`; generated `docs/mcp.md` | P1/P2 `run_command` and docs-sync tests | Every new P3 command exercised through real dispatch; generated docs clean |
+| Automation | All features already use shared engine command dispatch; MCP `run_command`; generated `docs/mcp.md` | **P3 Task 11:** no new command IDs were added; both live-registry/protocol `docs_sync` tests pass with a clean generated document | Future commands must enter the same shared dispatch and add invalid-input evidence |
 
 ## 2. Evidence and architecture boundaries
 
@@ -35,7 +35,10 @@ Measured with the same-revision CLI/xtask binaries: the JSON command catalog was
 1. **Poster:** nested PowerClip, advanced fill/transparency, Blend, Envelope, shadow, and live text; native reopen and revision; independent SVG/PDF reads; explicit CDR/CMX fallback ledger.
 2. **Traced image:** handcrafted synthetic bitmap, tracing preset/mode/colour/smoothing, editable expanded paths, bitmap adjustment, native reopen and independent SVG read.
 3. **Automation:** all new commands run through shared `run_command`; invalid input returns errors without mutation; generated MCP documentation matches the live registry.
+4. **Measured P3 acceptance:** `coreldraw_p3_acceptance` passes with PowerClip + Extrude + Drop Shadow + Blend + live text + traced paths, two native reopens, source/parameter/text revision, independent `usvg` and Hayro-backed PDF reads, and an explicit CDR live-Blend warning. This does not close the remaining P3 capability rows.
 
 ## 4. Gate baseline
 
 P2's final `cargo xtask ci` result was fmt and Clippy passed, workspace tests 4,375 passed and 1 failed. The only failure was known-issue 0b (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`), an existing x86_64 macOS 1-ulp issue. All gates skipped by that stop were run separately and passed. P3 must record its own results and must not describe that baseline as a clean full-CI pass.
+
+P3 gate: the first CI run stopped on formatting in the new acceptance test; after formatting and re-running that test, the full gate passed fmt and Clippy, then workspace tests finished **4,375 passed / 1 failed / 2 ignored**, solely known-issue 0b. The large-edit 50,000-object test passed without the earlier concurrent-build timeout. Doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm were then run separately and all exited successfully. Both no-default-feature dependency trees contain no `bundled-fonts` feature. Wasm emitted four existing UI warnings, not errors. This is not a clean full-CI claim because known-issue 0b remains red.
