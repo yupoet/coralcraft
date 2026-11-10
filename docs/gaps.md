@@ -30,7 +30,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.7 Fills, outlines, and the Outline Pen dialog (this commit): `crates/ui-egui/src/dialogs/outline_pen.rs` (F12 in the CorelDRAW preset, `ui.outlinePen`, Object › Outline Pen…) over `stroke.set`/`paint.setStroke`; appearance persistence + independent SVG + CDR7 round trip in `crates/engine/tests/it/coreldraw_appearance.rs`.
 - [x] P1.8 Core dockers (this commit): the CorelDRAW workspace's Object Properties/Objects/Transform/Align dockers are the synced panels; behaviour evidence (fields reflect the selection, edits run the shared commands, Apply to Duplicate = the commands' `copy` param) in `crates/ui-egui/src/panels/tests_coreldraw_dockers.rs`.
 - [x] P1.9 Object/colour styles and symbols basics (this commit): style apply/redefine propagation + symbol place/edit-source instance updates + native reopen evidence in `crates/engine/tests/it/coreldraw_styles_symbols.rs`; Object Styles & Symbol Manager dockers added to the CorelDRAW workspace. Colour-style tint/override models open (P2+).
-- [ ] P1.10 Pages and master layers — daily-use completion.
+- [x] P1.10 Pages and master layers daily use (this commit): reorder/roles/native-reopen evidence in `crates/engine/tests/it/coreldraw_pages.rs`; measured CDR7 first-page loss recorded as known-issue 0e (owned by P1.11).
 - [ ] P1.11 Native persistence and CDR mapping for all P1 semantics.
 - [ ] P1.12 MCP/CLI surface and regenerated documentation.
 - [ ] P1.13 P1 acceptance scenario and gate.

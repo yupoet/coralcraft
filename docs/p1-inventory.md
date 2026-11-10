@@ -138,7 +138,7 @@
 | T7 Fills/outlines/Outline Pen | `paint.*`, `stroke.*`, `appearance.*`, palette bar, stroke panel | **exists** (P1 Task 7: `dialogs/outline_pen.rs` over the shared stroke commands; F12 rebound in the CorelDRAW preset; appearance round trips proven) |
 | T8 Core dockers | `panels/properties.rs`, `panels/layers.rs`, `panels/transform.rs`, `panels/align.rs` on the CorelDRAW workspace preset | **exists** (P1 Task 8: behaviour evidence suite `panels/tests_coreldraw_dockers.rs`; Apply to Duplicate = `copy` param; no missing fields found at daily-use level) |
 | T9 Styles & symbols | `graphicStyle.*`, `symbol.*`, `swatch.*` + panels | **exists** (P1 Task 9: propagation/update/persistence evidence; Object Styles & Symbol Manager dockers in the CorelDRAW workspace) |
-| T10 Pages & master layers | V3.1–V3.3 (level 4) | **exists** → daily-use gaps only |
+| T10 Pages & master layers | V3.1–V3.3 (level 4) | **exists** (P1 Task 10: reorder/role/native evidence; CDR7 first-page loss = known-issue 0e, owned by T11) |
 | T11 Persistence/CDR | extension block + `corel-import` mapping | **exists** → grow with new semantics |
 | T12 MCP/CLI | registry + `docs_sync.rs` | **exists** → regenerate per slice |
 

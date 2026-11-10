@@ -16,6 +16,8 @@ mod compound_attributes;
 mod copy_direct_selection;
 // CoralCraft: the CorelDRAW selection and node workflow (P1 Task 3).
 mod coreldraw_node_workflow;
+// CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).
+mod coreldraw_pages;
 // CoralCraft: the CorelDRAW fill/outline appearance (P1 Task 7).
 mod coreldraw_appearance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).

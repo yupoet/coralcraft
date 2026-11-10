@@ -22,6 +22,15 @@
 - **Ground truth**: the failure reproduces on the pre-sync baseline `8208a6c1e`, so it predates this sync (the fixture moved at V0.1).
 - **Handling**: out of the sync's scope (legacy code is frozen until V7); recorded here so the milestone gate accounts for it as pre-existing.
 
+## 0e. CDR7 multi-page round trip drops the first page (measured 2026-11-10, P1 Task 10)
+
+`write_cdr7` (`crates/cdr/src/parse.rs`, `write_riff_document`) round-trips a 3-artboard document
+back as 2 pages: the first (default-named) artboard is lost, pages 2..N and the master layer's
+role survive, and page sizes come back in mm-as-points units (200 pt reads 70.5556). Reproducer:
+`coreldraw_pages::pages_and_master_layers_survive_the_daily_round_trips` in
+`crates/engine/tests/it/coreldraw_pages.rs`. Owned by P1 Task 11 (native persistence and CDR
+mapping audit); the native `.vectorcraft` round trip of the same document keeps all pages.
+
 ## 0d. P0 evidence baseline: two parity documents, the MCP docs generator, and CDR verification state (2026-11-10)
 
 - **Two parity documents, two different targets**: [`docs/vectorcraft-target-app-parity.md`](../vectorcraft-target-app-parity.md) is upstream VectorCraft's **Adobe Illustrator** parity evidence (preserved verbatim after the sync); [`docs/target-app-parity.md`](../target-app-parity.md) is CoralCraft's **CorelDRAW** D1-D6 evidence matrix (levels 0-5, no aggregate percentage). Never cite one as the other; VectorCraft-derived docs link to the former, CoralCraft docs to the latter.
