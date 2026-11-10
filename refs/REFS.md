@@ -7,6 +7,7 @@
 | Directory | License | How We Use It | Clean-Room & License Boundary |
 | --- | --- | --- | --- |
 | `vectorcraft/` | MIT OR Apache-2.0 | **Fork base (operator decision 2026-10-21)**: CoralCraft is a copy of VectorCraft (`a466625`) extended toward CorelDRAW. Reuse every existing subsystem (geometry, pathops, color/CMS, render, text, effects, trace, SVG/PDF/EPS/AI/DXF/EMF/WMF/PSD/Affinity I/O, egui docking/widgets, MCP, packaging); CoralCraft-owned work is only the CorelDRAW extension | License-compatible (`MIT OR Apache-2.0`); copy freely with notices kept; attributed in [`NOTICE`](../NOTICE); syncs logged in `docs/upstream-vectorcraft.md` |
+| `tracedraw/` | MIT OR Apache-2.0 | **Primary CorelDRAW-extension reference**: independent CDR format layer, CDR reader/writer, PowerClip, live effects, typography, tracing, colour, print, and acceptance evidence | Source may be adapted with notices after module review; never import assets wholesale; record adaptations in `NOTICE` and `docs/upstream-vectorcraft.md`; feature claims require local test evidence |
 | `craft-anything/` | MIT OR Apache-2.0 | Evidence-backed Study → Build → Check → Refine loop, headless-first tools, typed outcomes, bounded agent iterations, and small roadmap units | Methodology reference only; do not add its source or assets to CoralCraft |
 | `designcraft/` | Apache-2.0 | **Multi-page layout foundation**: reuse and adapt multi-page spreads, master pages, guides, and page-panel mechanics for CorelDRAW's multi-page publication model | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
 | `cadcraft/` | Apache-2.0 | **Clean-room binary format & CAD precedent**: DXF/DWG handling and clean-room binary format test patterns | License-compatible (`Apache-2.0`); attributed in [`NOTICE`](../NOTICE) |
@@ -39,18 +40,19 @@
 
 ## D. Pinned Commits (`scripts/bootstrap-refs.sh`)
 
-Pinned on 2026-10-19, `vector-studio/` added 2026-10-21; `vectorcraft/` updated and `craft-anything/` added 2026-11-06 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
+Pinned on 2026-10-19, `vector-studio/` added 2026-10-21; `vectorcraft/` updated and `craft-anything/` added 2026-11-06; `tracedraw/` added and `libcdr/` refreshed 2026-11-09 (keep `scripts/bootstrap-refs.sh` and this table synchronized):
 
 | Directory | Upstream | Pinned Commit |
 | --- | --- | --- |
 | `vectorcraft/` | `github.com/storytold/vectorcraft` | `36ef34dfdd8dfd1abc19fd209678860a00583558` |
+| `tracedraw/` | `github.com/tracedraw/tracedraw` | `aac8563a5b4eb8399d86d285f8aa69a6ffc0deee` |
 | `craft-anything/` | `github.com/storytold/craft-anything` | `6e0978a08598ef0e46a81b29c11471dac23cd95b` |
 | `designcraft/` | `github.com/storytold/designcraft` | `443ea4640ca368fcf0241b04813bd3817acd5df8` |
 | `cadcraft/` | `github.com/storytold/cadcraft` | `0b32c2e6a14c761835ea62c01e7b20845971d781` |
 | `craft-libs/` | `github.com/storytold/craft-libs` | `ae2f796b673f29cf3161f36eb6a8933f0a3fe028` |
 | `craft-common-actions/` | `github.com/storytold/craft-common-actions` | `d7bf8f06e138618890d0ebe8a84a18b010bf3f66` |
 | `craft-fonts/` | `github.com/storytold/craft-fonts` | `d1cf47d05e04426615fbda1d637b9ca6b1e7af35` |
-| `libcdr/` | `github.com/LibreOffice/libcdr` | `22c396810e72d40b94f78c192eb06e6d09bc34a0` |
+| `libcdr/` | `github.com/LibreOffice/libcdr` | `f4cd1f9fa64a312190357bfa33ca80c51512bb2b` |
 | `cdr-spec/` | `github.com/photopea/CDR-specification` | `f91b3c7e8c812b28473f6399e95a624a72a3d6b8` |
 | `uniconvertor/` | `github.com/sk1project/uniconvertor` | `973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472` (AGPL — do not read source) |
 | `rea/` | `github.com/cyberkaida/reverse-engineering-assistant` | `a05a6b0a18649efd6d74ec8447bdadf8d468c365` |

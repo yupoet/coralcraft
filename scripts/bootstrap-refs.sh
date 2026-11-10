@@ -23,13 +23,14 @@ fi
 # sparse-subdir is for monorepos where only one subdirectory is relevant (cone-mode sparse checkout).
 ENTRIES=(
   "vectorcraft|https://github.com/storytold/vectorcraft.git|36ef34dfdd8dfd1abc19fd209678860a00583558"
+  "tracedraw|https://github.com/tracedraw/tracedraw.git|aac8563a5b4eb8399d86d285f8aa69a6ffc0deee"
   "craft-anything|https://github.com/storytold/craft-anything.git|6e0978a08598ef0e46a81b29c11471dac23cd95b"
   "designcraft|https://github.com/storytold/designcraft.git|443ea4640ca368fcf0241b04813bd3817acd5df8"
   "cadcraft|https://github.com/storytold/cadcraft.git|0b32c2e6a14c761835ea62c01e7b20845971d781"
   "craft-libs|https://github.com/storytold/craft-libs.git|ae2f796b673f29cf3161f36eb6a8933f0a3fe028"
   "craft-common-actions|https://github.com/storytold/craft-common-actions.git|d7bf8f06e138618890d0ebe8a84a18b010bf3f66"
   "craft-fonts|https://github.com/storytold/craft-fonts.git|d1cf47d05e04426615fbda1d637b9ca6b1e7af35"
-  "libcdr|https://github.com/LibreOffice/libcdr.git|22c396810e72d40b94f78c192eb06e6d09bc34a0"
+  "libcdr|https://github.com/LibreOffice/libcdr.git|f4cd1f9fa64a312190357bfa33ca80c51512bb2b"
   "cdr-spec|https://github.com/photopea/CDR-specification.git|f91b3c7e8c812b28473f6399e95a624a72a3d6b8"
   "uniconvertor|https://github.com/sk1project/uniconvertor.git|973d5b6f8fccce7e7bf9bc88e91bc80f9f9d9472"
   "rea|https://github.com/cyberkaida/reverse-engineering-assistant.git|a05a6b0a18649efd6d74ec8447bdadf8d468c365"
