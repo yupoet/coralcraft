@@ -8,7 +8,7 @@ Measured with the same-revision CLI/xtask binaries: the JSON command catalog was
 
 | Slice | Existing implementation | Existing evidence | P3 acceptance still required |
 |---|---|---|---|
-| PowerClip | `object.clippingMask.make/release/editContents/editMask` in `crates/engine/src/cmd/object/commands.rs`; clip-group document/render support | Engine clip-group, selection, bounds, flattening tests | CorelDRAW menu/control workflow, nested/native editing, independent SVG `clipPath` and Hayro-backed PDF evidence |
+| PowerClip | `object.clippingMask.make/release/editContents/editMask` in `crates/engine/src/cmd/object/commands.rs`; clip-group document/render support | **P3 Task 2:** two engine lifecycle tests and one CorelDRAW Object-menu test pass; native editing/nesting/release, independent `usvg` and Hayro-backed PDF reads | Dedicated CorelDRAW PowerClip naming and lock-contents-to-frame UI remain open; CDR mapping is audited in Task 10 |
 | Blend | `object.blend.make/options/info/release/expand`, spine and order commands in `cmd/live/`; `panels/blend.rs`, `dialogs/blend_options.rs`, canvas blend controls | Engine live Blend and bounds tests | CorelDRAW controls, parameter/source edit after native reopen, independent export |
 | Contour | Existing contour effect and `canvas/contour_bar.rs` | Existing effect/tool tests | Live parameter editing, native persistence, independent export |
 | Envelope | `object.envelope.makeWithWarp/makeWithMesh/makeWithTopObject`, reset/options/release/expand/editContents/setMeshPoint | Document live expansion and engine tests | CorelDRAW interaction and native/interchange evidence |

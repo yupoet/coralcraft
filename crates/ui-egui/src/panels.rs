@@ -653,6 +653,9 @@ mod tests_constrain;
 // CoralCraft: the CorelDRAW core dockers (P1 Task 8).
 #[cfg(test)]
 mod tests_coreldraw_dockers;
+// CoralCraft: signature-effect workflows (P3 Task 2).
+#[cfg(test)]
+mod tests_coreldraw_effects;
 // CoralCraft: the CorelDRAW text Property Bar (P2 Task 2).
 #[cfg(test)]
 mod tests_coreldraw_text;

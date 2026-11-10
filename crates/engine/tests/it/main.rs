@@ -20,6 +20,8 @@ mod coreldraw_cdr_text;
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).
 mod coreldraw_pages;
+// CoralCraft: the CorelDRAW PowerClip lifecycle (P3 Task 2).
+mod coreldraw_powerclip;
 // CoralCraft: the P1 persistence audit (P1 Task 11).
 mod coreldraw_p1_persistence;
 // CoralCraft: the CorelDRAW fill/outline appearance (P1 Task 7).

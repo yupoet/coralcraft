@@ -42,11 +42,11 @@
 - Create: `docs/p3-inventory.md`
 - Create: this plan
 
-- [ ] **Step 1: Capture the actual catalog and measured baseline**
+- [x] **Step 1: Capture the actual catalog and measured baseline**
 
 Run `cargo run -p coralcraft-cli -- commands` and `cargo xtask stats`. Inventory the clip, live, effect, paint, transparency, image, and trace command families; the Blend/Image Trace/Properties/Appearance/Transparency panels; native wire support; CDR mappings; and existing independent SVG/PDF readers.
 
-- [ ] **Step 2: Write and commit the inventory**
+- [x] **Step 2: Write and commit the inventory**
 
 For every P3 slice record its existing entry points, current test evidence, missing behaviour, and required independent evidence. Commit the inventory and plan with `docs: plan the P3 effects and image workflows`.
 
@@ -58,7 +58,7 @@ For every P3 slice record its existing entry points, current test evidence, miss
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 - Modify only on measured gaps: `crates/engine/src/cmd/object/commands.rs`, `crates/ui-egui/src/menus/`
 
-- [ ] **Step 1: Write the failing lifecycle test**
+- [x] **Step 1: Write the failing lifecycle test**
 
 Create two paths in paint order and run:
 
@@ -72,11 +72,11 @@ s.execute("object.clippingMask.editMask", &json!({})).unwrap();
 
 Require editable contents/mask selection, undo/redo, nested clips, release, and native reopen. Export SVG and require independent `usvg` parsing plus a non-empty `clipPath`; export PDF and read it through `vectorcraft_pdf::import`.
 
-- [ ] **Step 2: Verify CorelDRAW interaction and fix only measured gaps**
+- [x] **Step 2: Verify CorelDRAW interaction and fix only measured gaps**
 
 Drive Object menu place-inside/edit/extract actions in the CorelDRAW workspace through their real controls. Reuse `object.clippingMask.*`; add aliases or menu wiring only if the test exposes a missing workflow. Locking contents must not silently flatten the source.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run `cargo test -p vectorcraft-engine --test it coreldraw_powerclip -- --nocapture` and `cargo test -p vectorcraft-ui-egui coreldraw_effects -- --nocapture`. Commit with `feat: complete the CorelDRAW PowerClip workflow` when production wiring changes, otherwise `test: verify the CorelDRAW PowerClip workflow`.
 
