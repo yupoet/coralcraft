@@ -16,9 +16,7 @@ const END: &str = "<!-- END GENERATED TOOL LIST -->";
 
 fn live_tools() -> Vec<(String, String)> {
     let mut server = Server::new(Box::new(Headless::with_document()));
-    let response = server
-        .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#)
-        .expect("tools/list returns a response");
+    let response = server.handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).expect("tools/list returns a response");
     let value: Value = serde_json::from_str(&response).unwrap();
     let mut tools: Vec<(String, String)> = value["result"]["tools"]
         .as_array()
@@ -26,11 +24,7 @@ fn live_tools() -> Vec<(String, String)> {
         .iter()
         .map(|tool| {
             let name = tool["name"].as_str().unwrap().to_owned();
-            let description = tool["description"]
-                .as_str()
-                .unwrap_or_default()
-                .replace('|', "\\|")
-                .replace('\n', " ");
+            let description = tool["description"].as_str().unwrap_or_default().replace('|', "\\|").replace('\n', " ");
             (name, description)
         })
         .collect();
@@ -60,10 +54,7 @@ fn document() -> String {
 fn docs_mcp_md_tool_list_matches_live_registry() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/mcp.md");
     let doc = document();
-    let start = doc
-        .find(BEGIN)
-        .or_else(|| doc.find(LEGACY_BEGIN))
-        .expect("docs/mcp.md is missing the BEGIN marker");
+    let start = doc.find(BEGIN).or_else(|| doc.find(LEGACY_BEGIN)).expect("docs/mcp.md is missing the BEGIN marker");
     let end = doc.find(END).expect("docs/mcp.md is missing the END marker") + END.len();
     let expected = render_block(&live_tools());
     let current = &doc[start..end];
