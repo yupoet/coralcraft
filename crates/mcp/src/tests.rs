@@ -1815,3 +1815,35 @@ fn p1_commands_run_through_run_command() {
     assert_eq!(r["isError"], false, "{r}");
     assert!(r.to_string().contains("ids"), "{r}");
 }
+
+// CoralCraft: P2 commands through the generic MCP run_command surface (P2 Task 11).
+#[test]
+fn p2_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    call(&mut s, 1, "run_command", json!({"command": "file.new", "params": {"width": 400, "height": 300}}));
+    let table = call(
+        &mut s,
+        2,
+        "run_command",
+        json!({"command": "layout.table", "params": {"x": 20, "y": 30, "width": 200, "height": 80, "rows": 2, "columns": 2, "text": [["A", "B"], ["C", "D"]]}}),
+    );
+    assert_eq!(table["isError"], false, "{table}");
+    let made: Value = serde_json::from_str(&text_of(&table)).unwrap();
+    assert_eq!((made["rows"].as_u64(), made["columns"].as_u64()), (Some(2), Some(2)));
+    assert!(made["id"].is_u64(), "the table command changed the document: {made}");
+
+    let invalid = call(
+        &mut s,
+        3,
+        "run_command",
+        json!({"command": "layout.table", "params": {"x": 0, "y": 0, "width": 100, "height": 100, "rows": 0, "columns": 2}}),
+    );
+    assert_eq!(invalid["isError"], true, "invalid input is an MCP error result: {invalid}");
+    assert!(text_of(&invalid).contains("positive"), "{invalid}");
+
+    let field = call(&mut s, 4, "run_command", json!({"command": "text.pageNumber.insert", "params": {"x": 20, "y": 260, "size": 12}}));
+    assert_eq!(field["isError"], false, "{field}");
+    let id = serde_json::from_str::<Value>(&text_of(&field)).unwrap()["id"].as_u64().unwrap();
+    let node = call(&mut s, 5, "run_command", json!({"command": "document.node", "params": {"id": id, "summary": true}}));
+    assert_eq!(node["isError"], false, "the page-number object is inspectable after insertion: {node}");
+}
