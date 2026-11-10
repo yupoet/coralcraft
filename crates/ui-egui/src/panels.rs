@@ -650,6 +650,9 @@ mod tests_blend;
 mod tests_brush_libraries;
 #[cfg(test)]
 mod tests_constrain;
+// CoralCraft: the CorelDRAW core dockers (P1 Task 8).
+#[cfg(test)]
+mod tests_coreldraw_dockers;
 #[cfg(test)]
 mod tests_css_properties;
 #[cfg(test)]

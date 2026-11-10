@@ -28,7 +28,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P1.5 Snapping and dynamic guides (this commit): new `view.snapToGuides` toggle through `UiState`/`ViewInfo`/`ToolContext` (default on, so upstream behaviour is unchanged), the CorelDRAW Snapping menu names (Snap to Objects/Grid/Guidelines + Dynamic Guides as the construction-guides preference), deterministic snap test + toggle/menu/persistence tests. Dynamic-guide angle editing deferred to P2+.
 - [x] P1.6 Transforms, Align & Distribute docker behaviours (this commit): CorelDRAW Property Bar Mirror buttons + Rotation field over `object.reflect`/`object.rotate`; distribute modes verified with independent SVG parses + native reopen in `crates/engine/tests/it/coreldraw_transform.rs`; the docker fields are the synced Transform/Align panels.
 - [x] P1.7 Fills, outlines, and the Outline Pen dialog (this commit): `crates/ui-egui/src/dialogs/outline_pen.rs` (F12 in the CorelDRAW preset, `ui.outlinePen`, Object › Outline Pen…) over `stroke.set`/`paint.setStroke`; appearance persistence + independent SVG + CDR7 round trip in `crates/engine/tests/it/coreldraw_appearance.rs`.
-- [ ] P1.8 Core dockers (Object Properties, Objects, Transform, Align).
+- [x] P1.8 Core dockers (this commit): the CorelDRAW workspace's Object Properties/Objects/Transform/Align dockers are the synced panels; behaviour evidence (fields reflect the selection, edits run the shared commands, Apply to Duplicate = the commands' `copy` param) in `crates/ui-egui/src/panels/tests_coreldraw_dockers.rs`.
 - [ ] P1.9 Object/colour styles and symbols (basics).
 - [ ] P1.10 Pages and master layers — daily-use completion.
 - [ ] P1.11 Native persistence and CDR mapping for all P1 semantics.
