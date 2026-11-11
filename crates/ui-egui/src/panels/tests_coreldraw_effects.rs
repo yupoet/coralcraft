@@ -297,3 +297,57 @@ fn coreldraw_transparency_panel_makes_options_and_releases_an_opacity_mask() {
     assert!(st.doc.node(target).unwrap().path_data().is_some());
     assert!(st.selection.objects.iter().any(|id| st.doc.node(*id).is_some_and(|node| node.path_data().is_some() && node.id != target)));
 }
+
+#[test]
+fn coreldraw_pattern_menu_and_options_run_a_real_edit_done_lifecycle() {
+    fn menu_item(app: &mut crate::VectorcraftApp, label: &str) {
+        let entry = crate::menus::menu_entries(app)
+            .into_iter()
+            .find(|entry| entry.path == ["Object", "Pattern"] && entry.label == label)
+            .unwrap_or_else(|| panic!("Object > Pattern > {label} is listed"));
+        assert!(entry.enabled, "Object > Pattern > {label} is enabled");
+        let (command, params) = crate::menus::click_target(&entry.label, entry.command.as_deref().unwrap(), &entry.params);
+        crate::menus::invoke(app, &command, params);
+    }
+    fn click_done(app: &mut crate::VectorcraftApp) {
+        use egui_kittest::kittest::Queryable;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(560.0, 700.0))
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                crate::theme::install_fonts(ctx);
+                crate::theme::apply(ctx, Default::default());
+            })
+            .build_ui(|ui| super::pattern_options::show(app, ui));
+        harness.run_steps(6);
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Done").click();
+        harness.run_steps(4);
+    }
+    let definition_color = |app: &crate::VectorcraftApp, name: &str| {
+        app.session.active().unwrap().doc.pattern(name).unwrap().art.iter().find_map(|node| node.appearance.fill_paint().color()).unwrap().to_hex()
+    };
+
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    menu_item(&mut app, "Make");
+    assert_eq!(app.ui.open_panel.as_deref(), Some("patternOptions"), "Make opens the existing Pattern Options panel");
+    let name = app.session.active().unwrap().doc.pattern_edit.as_ref().expect("Make enters pattern editing").pattern.clone();
+    let tile = app.session.active().unwrap().selection.objects[0];
+    run(&mut app, "paint.setFill", json!({"id": tile.0, "color": "#123456"}));
+    click_done(&mut app);
+    assert!(app.session.active().unwrap().doc.pattern_edit.is_none(), "the visible Done button leaves pattern editing");
+    assert_eq!(definition_color(&app, &name), "#123456", "Done saves the edited tile art");
+
+    let target = run(&mut app, "shape.rectangle", json!({"x": 120, "y": 30, "width": 60, "height": 50}))["id"].as_u64().unwrap();
+    run(&mut app, "paint.setFill", json!({"id": target, "swatch": name}));
+    run(&mut app, "select.set", json!({"ids": [target]}));
+    app.ui.open_panel = None;
+    menu_item(&mut app, "Edit Pattern");
+    assert_eq!(app.ui.open_panel.as_deref(), Some("patternOptions"), "Edit reopens Pattern Options");
+    assert_eq!(app.session.active().unwrap().doc.pattern_edit.as_ref().map(|edit| edit.pattern.as_str()), Some(name.as_str()));
+    let tile = app.session.active().unwrap().selection.objects[0];
+    run(&mut app, "paint.setFill", json!({"id": tile.0, "color": "#abcdef"}));
+    click_done(&mut app);
+    assert!(app.session.active().unwrap().doc.pattern_edit.is_none());
+    assert_eq!(definition_color(&app, &name), "#abcdef", "the second edit/Done lifecycle saves the ordinary colour edit");
+}

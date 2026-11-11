@@ -99,7 +99,7 @@ s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 1, "x": 90.0, "
 
 Assert undo/redo, native editability, and independent SVG/PDF structure. Do not accept a preview-only fill as editable semantics.
 
-Progress: fountain, vector-pattern, and mesh tests pass with native edit/reopen and independent SVG/PDF reads. Two-colour/bitmap patterns and textures remain uncovered, so this step stays open.
+Progress: fountain, vector-pattern, and mesh tests pass with native edit/reopen and independent SVG/PDF reads. Generic two-colour vector and bitmap `PatternDef.art` are now covered: ordinary edits, undo/redo, native reopen, exact independent `usvg` tile colours/pixels, reconstructed Hayro PDF pattern/tile art, and actual CorelDRAW Pattern Make/Edit/Done UI evidence pass. The bitmap scenario replaces the selected embedded image through `file.place {replace:true}` and keeps the vector target unflattened. These are generic pattern-art workflows, not a Corel-specific foreground/background/kind model; CDR pattern parameter fidelity remains open because generic export substitutes a default checkerboard. Texture fill remains unsupported, so this step stays open.
 
 - [x] **Step 2: Verify transparency and merge behaviour**
 
