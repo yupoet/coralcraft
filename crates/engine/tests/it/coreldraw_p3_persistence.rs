@@ -653,3 +653,56 @@ fn invisible_and_shadowed_gradient_alpha_stays_silent() {
         }
     }
 }
+
+#[test]
+fn visible_appearance_item_effects_warn_with_object_effects_and_controls_stay_silent() {
+    let mut s = session();
+    let target = rectangle(&mut s, 100.0);
+    s.execute("effect.apply", &json!({"id": target, "effect": "blur.gaussian", "item": 0, "params": {"radius": 3}})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.effects_at(Some(0)).unwrap().len(), 1);
+    assert!(s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.effects.is_empty());
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 1, "item-only {format}: {exported}");
+        assert!(
+            exported["warnings"].as_array().unwrap().iter().any(|warning| {
+                warning.as_str().is_some_and(|text| text.contains("blur.gaussian") && !text.contains("adjust.brightnessContrast"))
+            })
+        );
+    }
+
+    let mut combined = session();
+    let combined_target = rectangle(&mut combined, 100.0);
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "adjust.brightnessContrast", "item": null})).unwrap();
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "blur.gaussian", "item": null})).unwrap();
+    for format in ["cdr", "cmx"] {
+        let exported = combined.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 1, "combined {format}: {exported}");
+        assert!(
+            exported["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning.as_str().is_some_and(|text| text.contains("adjust.brightnessContrast, blur.gaussian")) })
+        );
+    }
+
+    let mut invisible = session();
+    let invisible_target = rectangle(&mut invisible, 100.0);
+    invisible.execute("effect.apply", &json!({"id": invisible_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    invisible.execute("effect.setParams", &json!({"id": invisible_target, "index": 0, "item": 0, "visible": false})).unwrap();
+
+    let mut shadowed = session();
+    let shadowed_target = rectangle(&mut shadowed, 100.0);
+    shadowed.execute("effect.apply", &json!({"id": shadowed_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_target})).unwrap();
+
+    for (name, s) in [("invisible effect", &mut invisible), ("shadowed item", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 0, "{name} in {format}: {exported}");
+        }
+    }
+}

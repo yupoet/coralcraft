@@ -2191,11 +2191,24 @@ struct ConvertedObject {
     shell_restored: bool,
 }
 
-fn expected_vc_projection(node: &Node, offset: Vec2, meta: Option<&CoralCraftDocData>) -> Option<ExpectedProjection> {
+fn expected_vc_projection(
+    node: &Node,
+    offset: Vec2,
+    meta: Option<&CoralCraftDocData>,
+    warnings: &mut ExportWarningLedger,
+) -> Option<ExpectedProjection> {
     let metadata = meta?.object_meta.get(&node.id.0)?;
     if let Some(value) = meta.and_then(|data| data.extra.get(&original_vc_extra_key(node.id.0))) {
         let projection = serde_json::from_value(value.clone()).ok()?;
         return Some(ExpectedProjection::Stored(Box::new(projection)));
+    }
+    if let ObjectKind::Bitmap { pixel_width, pixel_height, .. } = &metadata.original.kind {
+        let width = (*pixel_width).max(1);
+        let height = (*pixel_height).max(1);
+        if let Err(error) = checked_rgba_len(width, height) {
+            record_conversion_error(warnings, error);
+            return None;
+        }
     }
     let mut document = VcDocument::new(595.275_590_551_181_2, 841.889_763_779_527_6);
     let mut used_ids = std::collections::BTreeSet::new();
@@ -2537,7 +2550,7 @@ fn convert_vc_node_to_cdr(
     meta: Option<&CoralCraftDocData>,
     warnings: &mut ExportWarningLedger,
 ) -> ObjectNode {
-    let expected = expected_vc_projection(node, offset, meta);
+    let expected = expected_vc_projection(node, offset, meta, warnings);
     let expected_node = expected.as_ref().and_then(|projection| {
         let metadata = meta.and_then(|data| data.object_meta.get(&node.id.0))?;
         Some(ExpectedNode { projection: projection.projection(), original: &metadata.original })
@@ -2569,7 +2582,7 @@ fn convert_vc_node_to_cdr_with_expected(
     } else {
         node
     };
-    let (fill, outline) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
+    let (fill, outline, item_effects) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
     if let NodeKind::Text(tobj) = &node.kind {
         for run in &tobj.runs {
             let _ = map_vc_paint_to_cdr_color(&run.style.fill, warnings);
@@ -2591,6 +2604,9 @@ fn convert_vc_node_to_cdr_with_expected(
 
     let oid = ObjectId(node.id.0.max(1));
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects, warnings);
+    for item_effects in item_effects {
+        let _ = convert_vc_effects_to_cdr(item_effects, warnings);
+    }
 
     let mut powerclip_children = Vec::new();
     let mut powerclip_frame = None;
@@ -2822,9 +2838,14 @@ fn convert_vc_node_to_cdr_with_expected(
     ConvertedObject { object: cnode, shell_restored: false }
 }
 
-fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLedger) -> (Option<FillStyle>, Option<OutlineStyle>) {
+fn convert_vc_appearance_to_cdr<'a>(
+    ap: &'a Appearance,
+    warnings: &mut ExportWarningLedger,
+) -> (Option<FillStyle>, Option<OutlineStyle>, Vec<&'a [Effect]>) {
     let mut fill_paint = None;
     let mut stroke_paint = None;
+    let mut fill_effects = None;
+    let mut stroke_effects = None;
     let mut first_fill_idx = None;
     let mut first_stroke_idx = None;
 
@@ -2833,10 +2854,12 @@ fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLed
             AppearanceItem::Fill(fl) if fl.visible && !fl.paint.is_none() => {
                 first_fill_idx.get_or_insert(idx);
                 fill_paint = Some(&fl.paint);
+                fill_effects = Some(fl.effects.as_slice());
             }
             AppearanceItem::Stroke(sl) if sl.visible && !sl.paint.is_none() => {
                 first_stroke_idx.get_or_insert(idx);
                 stroke_paint = Some(sl);
+                stroke_effects = Some(sl.effects.as_slice());
             }
             _ => {}
         }
@@ -2850,7 +2873,8 @@ fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLed
         outl.behind_fill = true;
     }
 
-    (fill, outline)
+    let item_effects = [fill_effects, stroke_effects].into_iter().flatten().collect();
+    (fill, outline, item_effects)
 }
 
 fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {

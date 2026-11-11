@@ -296,10 +296,10 @@ fn unchanged_fountain_mask_restores_exactly_but_edited_mask_warns() {
     let mut unchanged = import_restorable(original.clone());
     let (converted, warnings) = corel_import::export_document_with_warnings(&unchanged).unwrap();
     assert_eq!(only_object(&converted).transparency, expected);
-    assert_eq!(warning_count(&warnings, DROPPED_MASK_CATEGORY), 0, "{warnings:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
     for (_, with_warnings) in cdr_cmx_writers() {
         let (_, warnings) = with_warnings(&unchanged).unwrap();
-        assert_eq!(warning_count(&warnings, DROPPED_MASK_CATEGORY), 0, "{warnings:?}");
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     let id = restorable_id(&unchanged, "Fountain Mask");
@@ -465,6 +465,38 @@ fn huge_original_bitmap_returns_conversion_error_instead_of_allocating() {
     let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
     let metadata = value["object_meta"].as_object_mut().unwrap().values_mut().next().unwrap();
     metadata["original"] = serde_json::to_value(&original).unwrap();
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+
+    let error = corel_import::export_document_with_warnings(&doc).unwrap_err();
+    assert!(matches!(error, corel_import::CorelImportError::Conversion(message) if message.contains("bitmap") && message.contains("64")));
+}
+
+#[test]
+fn huge_original_bitmap_legacy_reconstruction_returns_conversion_error_instead_of_allocating() {
+    let mut original = ObjectNode::new(
+        ObjectId(93),
+        Some("Huge Legacy Original".into()),
+        ObjectKind::Bitmap {
+            pixel_width: 1,
+            pixel_height: 1,
+            dpi_x: F64::new(72.0).unwrap(),
+            dpi_y: F64::new(72.0).unwrap(),
+            rgba_pixels: vec![255, 255, 255, 255],
+        },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(original.clone());
+    let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &mut original.kind else { panic!("bitmap") };
+    *pixel_width = u32::MAX;
+    *pixel_height = u32::MAX;
+    rgba_pixels.clear();
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    for metadata in value["object_meta"].as_object_mut().unwrap().values_mut() {
+        metadata["original"] = serde_json::to_value(&original).unwrap();
+        metadata.as_object_mut().unwrap().remove("original_vc");
+    }
+    value["extra"].as_object_mut().unwrap().retain(|key, _| !key.starts_with("corel.import.original_vc.v1."));
     doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
 
     let error = corel_import::export_document_with_warnings(&doc).unwrap_err();
