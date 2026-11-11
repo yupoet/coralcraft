@@ -1847,3 +1847,32 @@ fn p2_commands_run_through_run_command() {
     let node = call(&mut s, 5, "run_command", json!({"command": "document.node", "params": {"id": id, "summary": true}}));
     assert_eq!(node["isError"], false, "the page-number object is inspectable after insertion: {node}");
 }
+
+// CoralCraft: bitmap resampling through the generic MCP run_command surface (P3 Task 8).
+#[test]
+fn bitmap_resample_runs_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    call(&mut s, 1, "run_command", json!({"command": "file.new", "params": {"width": 200, "height": 200}}));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([30, 120, 180, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = call(
+        &mut s,
+        2,
+        "run_command",
+        json!({"command": "file.place", "params": {"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}}),
+    );
+    assert_eq!(placed["isError"], false, "{placed}");
+    let bitmap = serde_json::from_str::<Value>(&text_of(&placed)).unwrap()["ids"][0].as_u64().unwrap();
+    call(&mut s, 3, "run_command", json!({"command": "select.none", "params": {}}));
+    let resampled = call(
+        &mut s,
+        4,
+        "run_command",
+        json!({"command": "object.resampleImage", "params": {"id": bitmap, "width": 12, "height": 9, "filter": "lanczos3"}}),
+    );
+    assert_eq!(resampled["isError"], false, "{resampled}");
+    let result = serde_json::from_str::<Value>(&text_of(&resampled)).unwrap();
+    assert_eq!((result["id"].as_u64(), result["width"].as_u64(), result["height"].as_u64()), (Some(bitmap), Some(12), Some(9)));
+    let invalid = call(&mut s, 5, "run_command", json!({"command": "object.resampleImage", "params": {"id": bitmap, "width": 0, "height": 9}}));
+    assert_eq!(invalid["isError"], true, "{invalid}");
+}

@@ -1,5 +1,5 @@
 //! Object menu long tail: Lock/Hide All Artwork Above & Other Layers, Transform Each, Reset
-//! Bounding Box, Rasterize, Crop Image, Mask (an image), Create Trim Marks, Convert to Shape and
+//! Bounding Box, Rasterize, Crop/Resample Image, Mask (an image), Create Trim Marks, Convert to Shape and
 //! Artboards → Convert / Rearrange. (Live blends are in `live.rs`.)
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -136,6 +136,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "{rect?: [x, y, width, height] | trim?: true (to the pixels that aren't fully transparent, pixel for pixel; an image with none to cut is left as it is, trimmed: false)} crop the selected image (default: to the artboard it sits on) → {id, width, height, trimmed? (with trim), warning? (without trim: the image couldn't be decoded, as object.rasterize says)}",
             has_image,
             crop_image
+        ),
+        // CoralCraft: shared bitmap resampling for the CorelDRAW image workflow (P3 Task 8).
+        cmd!(
+            "object.resampleImage",
+            "Resample Image",
+            ["Object"],
+            None,
+            "{id?: image node id (default: the selected image), width, height (positive whole pixels within the raster allocation limit), filter?: nearest|triangle|catmullRom|lanczos3 (lanczos3)} resample an image into an embedded PNG without changing its node, appearance or display bounds; CMYK and 32-bit-float rasters are refused rather than converted → {id, width, height, filter}",
+            has_doc,
+            resample_image
         ),
         cmd!(
             "object.maskImage",
@@ -905,6 +915,93 @@ fn object_mosaic(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn polygon_path(pts: &[Point]) -> PathData {
     PathData::single(vectorcraft_geom::SubPath::new(pts.iter().map(|p| Anchor::corner(*p)).collect(), true))
+}
+
+// CoralCraft: resample the existing raster object in place; every fallible check precedes the edit.
+fn resample_image(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "object.resampleImage";
+    let width = whole_or(p, "width", 0, C)?;
+    let height = whole_or(p, "height", 0, C)?;
+    if width == 0 || height == 0 {
+        return Err(bad(C, "`width` and `height` must be positive whole numbers"));
+    }
+    let (width, height) =
+        (u32::try_from(width).map_err(|_| bad(C, "`width` is too large"))?, u32::try_from(height).map_err(|_| bad(C, "`height` is too large"))?);
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > crate::cmd::fileio::MAX_RASTER_ALLOC / 4 {
+        return Err(bad(C, format!("an output image of {width} × {height} pixels is too large to draw")));
+    }
+    let filter_name = match p.get("filter").filter(|v| !v.is_null()) {
+        Some(v) => v.as_str().ok_or_else(|| bad(C, "`filter` must be nearest, triangle, catmullRom or lanczos3"))?,
+        None => "lanczos3",
+    };
+    let filter = match filter_name {
+        "nearest" => image::imageops::FilterType::Nearest,
+        "triangle" => image::imageops::FilterType::Triangle,
+        "catmullRom" => image::imageops::FilterType::CatmullRom,
+        "lanczos3" => image::imageops::FilterType::Lanczos3,
+        _ => return Err(bad(C, "`filter` must be nearest, triangle, catmullRom or lanczos3")),
+    };
+    let st = s.doc()?;
+    let id = match p.get("id").filter(|v| !v.is_null()) {
+        Some(v) => NodeId(v.as_u64().ok_or_else(|| bad(C, "`id` must be an image node id"))?),
+        None => st
+            .selection
+            .objects
+            .iter()
+            .copied()
+            .find(|id| matches!(st.doc.node(*id).map(|n| &n.kind), Some(NodeKind::Image(_))))
+            .ok_or_else(|| bad(C, "select an image or pass `id`"))?,
+    };
+    let node = st.doc.node(id).cloned().ok_or(EngineError::NoNode(id))?;
+    let NodeKind::Image(im) = &node.kind else { return Err(bad(C, "the identified object is not an image")) };
+    let blob = st.doc.images.get(&im.key).ok_or_else(|| bad(C, "the image's pixels are missing"))?;
+    if blob.is_cmyk() {
+        return Err(bad(C, "CMYK rasters can't be resampled without changing their colour model"));
+    }
+    let reader = || {
+        image::ImageReader::new(std::io::Cursor::new(blob.bytes.as_slice()))
+            .with_guessed_format()
+            .map_err(|_| bad(C, "the image's pixels can't be read"))
+    };
+    let (source_width, source_height) = reader()?.into_dimensions().map_err(|e| bad(C, format!("the image's pixels can't be read: {e}")))?;
+    if u64::from(source_width) * u64::from(source_height) > crate::cmd::fileio::MAX_RASTER_ALLOC / 4 {
+        return Err(bad(C, format!("an image of {source_width} × {source_height} pixels is too large to draw")));
+    }
+    let mut reader = reader()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(crate::cmd::fileio::MAX_RASTER_ALLOC);
+    reader.limits(limits);
+    let decoded = reader.decode().map_err(|e| bad(C, format!("the image's pixels can't be read: {e}")))?;
+    if matches!(&decoded, image::DynamicImage::ImageRgb32F(_) | image::DynamicImage::ImageRgba32F(_)) {
+        return Err(bad(C, "32-bit-float rasters can't be resampled to PNG without changing their sample format"));
+    }
+    let output_bytes =
+        pixels.checked_mul(u64::from(decoded.color().bytes_per_pixel())).ok_or_else(|| bad(C, "the output image is too large to draw"))?;
+    if output_bytes > crate::cmd::fileio::MAX_RASTER_ALLOC {
+        return Err(bad(C, format!("an output image of {width} × {height} pixels is too large to draw")));
+    }
+    let resized = decoded.resize_exact(width, height, filter);
+    let mut png = Vec::new();
+    resized
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| bad(C, format!("the resampled image can't be written: {e}")))?;
+    let mut replacement = (**im).clone();
+    replacement.width = width;
+    replacement.height = height;
+    replacement.xf = im.xf * Affine::scale_non_uniform(f64::from(im.width) / f64::from(width), f64::from(im.height) / f64::from(height));
+    replacement.link = None;
+    replacement.pixels = None;
+    s.edit("Resample Image", |d, _| {
+        let key = unique_key(d, "resample");
+        replacement.key = key.clone();
+        d.images.insert(key, vectorcraft_doc::ImageBlob::new("image/png", png));
+        if let Some(n) = d.node_mut(id) {
+            n.kind = NodeKind::Image(Box::new(replacement));
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "id": id.0, "width": width, "height": height, "filter": filter_name }))
 }
 
 fn crop_image(s: &mut Session, p: &Value) -> Result<Value> {

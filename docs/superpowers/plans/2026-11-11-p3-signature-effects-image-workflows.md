@@ -218,15 +218,15 @@ Run the focused tests plus `vectorcraft-effects` and Appearance suites. Commit w
 
 Place a handcrafted synthetic bitmap; exercise crop, resample, colour adjustment, and a common bitmap effect using existing commands. Assert source pixels, adjustment parameters, undo/redo, native reopen, and PowerClip composition. Do not turn editable vectors into bitmaps to satisfy the scenario.
 
-Progress: crop, undo/redo, brightness/contrast parameters, native reopen, and independent SVG evidence pass. No dedicated resample command or external-editor result has been verified, so this task remains open.
+Progress: crop, undo/redo, brightness/contrast parameters, native reopen, and independent SVG evidence pass. The new shared `object.resampleImage` command now passes selected/explicit-image dispatch, decoded output dimensions and pixels, node/appearance/display-bounds preservation, undo/redo, native reopen, independent `usvg`, invalid-input atomicity, CMYK rejection, and real MCP `run_command` evidence. PowerClip composition and additional bitmap effects remain open, so this step stays open.
 
-- [ ] **Step 2: Verify external-editor handoff honestly**
+- [x] **Step 2: Verify external-editor handoff honestly**
 
-Exercise the existing external-editor command if present. Require an explicit unavailable/error result when no editor is configured; no test may claim a round trip it did not execute.
+The existing Links panel suite passes 9/9, including system handoff, explicit absent-service errors, PhotoCraft fallback, and launch-error propagation. These synthetic service callbacks prove the launch contract only; no external-editor round trip is claimed.
 
 - [ ] **Step 3: Verify and commit**
 
-Run the image workflow and existing bitmap/effect tests. Commit only implemented and observed behaviour.
+Run the image workflow and existing bitmap/effect tests. Commit only implemented and observed behaviour. The resample/MCP/handoff slice is committed while the remaining Step 1 workflows stay open.
 
 ### Task 9: Complete PowerTRACE outline/centreline workflows
 
@@ -287,7 +287,7 @@ Run the persistence test, `corel-import`, `coralcraft-cdr`, and hostile-input su
 
 - [x] **Step 1: Run every new P3 command through `run_command`**
 
-P3 added no new command IDs, so there is no new registry surface to test. All exercised workflows already use the shared `Session::execute` dispatch consumed by MCP. Existing commands need no duplicate MCP tool.
+All exercised workflows use the shared `Session::execute` dispatch consumed by MCP. The Task 8 slice added `object.resampleImage` and proves it through real `run_command`, including an invalid-input error; no duplicate MCP tool was added.
 
 - [x] **Step 2: Regenerate and verify the live registry**
 
