@@ -198,7 +198,7 @@ The new conversion warnings are exactly:
 
 - `gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable`
 - `enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable`
-- `unsupported bitmap effects are dropped in CDR/CMX: <sorted, deduplicated effect IDs>; native effect parameters remain editable`
+- `unsupported bitmap effects are dropped in CDR/CMX: <sorted, deduplicated IDs>; native effect parameters remain editable`
 - `missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged`
 - `undecodable or empty image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged`
 
