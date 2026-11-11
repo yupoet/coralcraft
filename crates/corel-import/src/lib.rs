@@ -140,10 +140,13 @@ pub struct CoralCraftLayerMeta {
 }
 
 /// Per-object lossless CorelDRAW snapshot keyed by `vectorcraft_doc::NodeId` (`u64`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CoralCraftObjectMeta {
     /// Original CorelDRAW `ObjectNode` snapshot prior to any interactive edits in VectorCraft.
     pub original: ObjectNode,
+    /// Full imported VectorCraft projection, stored only on each top-level imported object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_vc: Option<Box<Node>>,
     /// Page index (`Some(i)`) whose artboard offset was applied to this node, or `None` for local/master coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_index: Option<usize>,
@@ -153,7 +156,7 @@ pub struct CoralCraftObjectMeta {
 }
 
 /// Top-level CorelDRAW metadata and lossless residuals stored in `Document::unknown["coralcraft"]`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CoralCraftDocData {
     #[serde(default)]
     pub schema: SchemaVersion,
@@ -847,7 +850,7 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = m_layer.printable;
                 for obj in &m_layer.objects {
-                    let cnode = convert_cdr_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode = convert_cdr_root_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
                     children.push(Arc::new(cnode));
                 }
             }
@@ -879,7 +882,8 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = layer.printable;
                 for obj in &layer.objects {
-                    let cnode = convert_cdr_node_to_vc(obj, offset, Some(p_idx), &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode =
+                        convert_cdr_root_node_to_vc(obj, offset, Some(p_idx), &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
                     children.push(Arc::new(cnode));
                 }
             }
@@ -911,7 +915,7 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = m_layer.printable;
                 for obj in &m_layer.objects {
-                    let cnode = convert_cdr_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode = convert_cdr_root_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
                     children.push(Arc::new(cnode));
                 }
             }
@@ -1690,6 +1694,23 @@ fn build_fountain_opacity_mask(mask_id: NodeId, bounds: VcRect, geometry: Founta
 }
 
 #[allow(clippy::too_many_arguments)]
+fn convert_cdr_root_node_to_vc(
+    cdr_node: &ObjectNode,
+    offset: Vec2,
+    page_index: Option<usize>,
+    doc: &mut VcDocument,
+    used_ids: &mut std::collections::BTreeSet<u64>,
+    object_meta: &mut BTreeMap<u64, CoralCraftObjectMeta>,
+    warnings: &mut Vec<String>,
+) -> Node {
+    let node = convert_cdr_node_to_vc(cdr_node, offset, page_index, doc, used_ids, object_meta, warnings);
+    if let Some(metadata) = object_meta.get_mut(&node.id.0) {
+        metadata.original_vc = Some(Box::new(node.clone()));
+    }
+    node
+}
+
+#[allow(clippy::too_many_arguments)]
 fn convert_cdr_node_to_vc(
     cdr_node: &ObjectNode,
     offset: Vec2,
@@ -1711,7 +1732,7 @@ fn convert_cdr_node_to_vc(
         }
     };
 
-    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), page_index, initial_local_bounds: None });
+    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), original_vc: None, page_index, initial_local_bounds: None });
 
     let xf = map_affine_to_vc(cdr_node.transform, offset);
     let local_bounds = cdr_node.kind.local_bounds().map(|r| {
@@ -2056,6 +2077,331 @@ fn convert_vc_layer_to_cdr(
     clayer
 }
 
+#[derive(Clone, Copy)]
+struct ExpectedNode<'a> {
+    projection: &'a Node,
+    original: &'a ObjectNode,
+}
+
+enum ExpectedProjection<'a> {
+    Stored(&'a Node),
+    Reconstructed { projection: Box<Node>, document: Box<VcDocument> },
+}
+
+impl ExpectedProjection<'_> {
+    fn projection(&self) -> &Node {
+        match self {
+            Self::Stored(node) => node,
+            Self::Reconstructed { projection, .. } => projection,
+        }
+    }
+
+    fn document(&self) -> Option<&VcDocument> {
+        match self {
+            Self::Stored(_) => None,
+            Self::Reconstructed { document, .. } => Some(document),
+        }
+    }
+}
+
+struct ConvertedObject {
+    object: ObjectNode,
+    shell_restored: bool,
+}
+
+fn expected_vc_projection<'a>(node: &Node, offset: Vec2, meta: Option<&'a CoralCraftDocData>) -> Option<ExpectedProjection<'a>> {
+    let metadata = meta?.object_meta.get(&node.id.0)?;
+    if let Some(projection) = metadata.original_vc.as_deref() {
+        return Some(ExpectedProjection::Stored(projection));
+    }
+    let mut document = VcDocument::new(595.275_590_551_181_2, 841.889_763_779_527_6);
+    let mut used_ids = std::collections::BTreeSet::new();
+    let mut temporary_metadata = BTreeMap::new();
+    let mut temporary_warnings = Vec::new();
+    let projection = convert_cdr_node_to_vc(
+        &metadata.original,
+        offset,
+        metadata.page_index,
+        &mut document,
+        &mut used_ids,
+        &mut temporary_metadata,
+        &mut temporary_warnings,
+    );
+    Some(ExpectedProjection::Reconstructed { projection: Box::new(projection), document: Box::new(document) })
+}
+
+fn projection_children_mut(kind: &mut NodeKind) -> Option<&mut Vec<Arc<Node>>> {
+    match kind {
+        NodeKind::Layer { children, .. }
+        | NodeKind::Group { children, .. }
+        | NodeKind::Compound { children, .. }
+        | NodeKind::Blend { children, .. }
+        | NodeKind::Envelope { content: children, .. }
+        | NodeKind::Intertwine { children } => Some(children),
+        _ => None,
+    }
+}
+
+fn normalize_mask_art(node: &mut Node) {
+    node.id = NodeId(0);
+    match &mut node.kind {
+        NodeKind::Text(text) => {
+            text.cached_bounds = None;
+            text.cached_baselines.clear();
+        }
+        NodeKind::Image(image) => {
+            image.key.clear();
+            image.pixels = None;
+        }
+        _ => {}
+    }
+    if let Some(mask) = node.extras_if_any().and_then(|extras| extras.mask.as_deref_mut()) {
+        normalize_mask_art(Arc::make_mut(&mut mask.art));
+    }
+    if let Some(children) = projection_children_mut(&mut node.kind) {
+        for child in children {
+            normalize_mask_art(Arc::make_mut(child));
+        }
+    }
+}
+
+fn normalized_projection_shell(node: &Node) -> Node {
+    let mut shell = node.clone();
+    shell.id = NodeId(0);
+    match &mut shell.kind {
+        NodeKind::Text(text) => {
+            text.cached_bounds = None;
+            text.cached_baselines.clear();
+        }
+        NodeKind::Image(image) => {
+            image.key.clear();
+            image.pixels = None;
+        }
+        _ => {}
+    }
+    if let Some(mask) = shell.extras_if_any().and_then(|extras| extras.mask.as_deref_mut()) {
+        normalize_mask_art(Arc::make_mut(&mut mask.art));
+    }
+    if let Some(children) = projection_children_mut(&mut shell.kind) {
+        children.clear();
+    }
+    shell
+}
+
+fn encoded_original_bitmap(original: &ObjectNode) -> Option<Vec<u8>> {
+    let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &original.kind else {
+        return None;
+    };
+    let width = (*pixel_width).max(1);
+    let height = (*pixel_height).max(1);
+    let expected_len = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let mut raw = rgba_pixels.clone();
+    if raw.len() < expected_len {
+        raw.resize(expected_len, 255);
+    } else if raw.len() > expected_len {
+        raw.truncate(expected_len);
+    }
+    let image = image::RgbaImage::from_raw(width, height, raw)?;
+    let mut bytes = Vec::new();
+    image.write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png).ok()?;
+    Some(bytes)
+}
+
+fn image_contents_match(current: &Node, expected: ExpectedNode<'_>, doc: &VcDocument, expected_doc: Option<&VcDocument>) -> bool {
+    if let (NodeKind::Image(current_image), NodeKind::Image(expected_image)) = (&current.kind, &expected.projection.kind) {
+        let current_bytes = doc.images.get(&current_image.key).map(|blob| blob.bytes.as_slice());
+        let expected_from_doc = expected_doc.and_then(|document| document.images.get(&expected_image.key)).map(|blob| blob.bytes.as_slice());
+        let encoded_original = if expected_from_doc.is_none() { encoded_original_bitmap(expected.original) } else { None };
+        let expected_bytes = expected_from_doc.or(encoded_original.as_deref());
+        if !matches!((current_bytes, expected_bytes), (Some(current), Some(expected)) if current == expected) {
+            return false;
+        }
+    }
+    match (current.extras().mask.as_deref(), expected.projection.extras().mask.as_deref()) {
+        (Some(current_mask), Some(expected_mask)) => {
+            image_contents_match(&current_mask.art, ExpectedNode { projection: &expected_mask.art, original: expected.original }, doc, expected_doc)
+        }
+        _ => true,
+    }
+}
+
+fn bounds_match(current: &Node, expected: &Node) -> bool {
+    let mut current = current.clone();
+    let mut expected = expected.clone();
+    if let NodeKind::Text(text) = &mut current.kind {
+        text.cached_bounds = None;
+        text.cached_baselines.clear();
+    }
+    if let NodeKind::Text(text) = &mut expected.kind {
+        text.cached_bounds = None;
+        text.cached_baselines.clear();
+    }
+    match (current.geometric_bounds(), expected.geometric_bounds()) {
+        (Some(current), Some(expected)) => {
+            (current.x0 - expected.x0).abs() < 1e-4
+                && (current.y0 - expected.y0).abs() < 1e-4
+                && (current.x1 - expected.x1).abs() < 1e-4
+                && (current.y1 - expected.y1).abs() < 1e-4
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn projection_matches(current: &Node, expected: ExpectedNode<'_>, doc: &VcDocument, expected_doc: Option<&VcDocument>) -> bool {
+    current.name == expected.projection.name
+        && current.visible == expected.projection.visible
+        && current.locked == expected.projection.locked
+        && bounds_match(current, expected.projection)
+        && image_contents_match(current, expected, doc, expected_doc)
+        && normalized_projection_shell(current) == normalized_projection_shell(expected.projection)
+}
+
+fn expected_group_child<'a>(expected: ExpectedNode<'a>, current: &Node, index: usize) -> Option<ExpectedNode<'a>> {
+    let NodeKind::Group { children: expected_projection, clip: false } = &expected.projection.kind else {
+        return None;
+    };
+    let expected_original: &[ObjectNode] = match &expected.original.kind {
+        ObjectKind::Group { children } => children,
+        ObjectKind::Unsupported(unsupported) => &unsupported.children,
+        _ => return None,
+    };
+    if expected_projection.len() != expected_original.len() {
+        return None;
+    }
+    let at_index = expected_projection.get(index).zip(expected_original.get(index));
+    if let Some((projection, original)) = at_index
+        && projection.id == current.id
+    {
+        return Some(ExpectedNode { projection, original });
+    }
+    let mut matching = expected_projection.iter().zip(expected_original).filter(|(projection, _)| projection.id == current.id);
+    let (projection, original) = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(ExpectedNode { projection, original })
+}
+
+fn expected_powerclip_child<'a>(expected: ExpectedNode<'a>, current: &Node, index: usize) -> Option<ExpectedNode<'a>> {
+    let NodeKind::Group { children: expected_projection, clip: true } = &expected.projection.kind else {
+        return None;
+    };
+    if expected_projection.len() != expected.original.powerclip_children.len().saturating_add(1) {
+        return None;
+    }
+    let projection = expected_projection.get(index.saturating_add(1))?;
+    let original = expected.original.powerclip_children.get(index)?;
+    if projection.id == current.id {
+        return Some(ExpectedNode { projection, original });
+    }
+    let mut matching =
+        expected_projection.iter().skip(1).zip(&expected.original.powerclip_children).filter(|(projection, _)| projection.id == current.id);
+    let (projection, original) = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    Some(ExpectedNode { projection, original })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_original_node(
+    node: &Node,
+    offset: Vec2,
+    doc: &VcDocument,
+    meta: Option<&CoralCraftDocData>,
+    expected: ExpectedNode<'_>,
+    expected_doc: Option<&VcDocument>,
+    warnings: &mut ExportWarningLedger,
+) -> Option<ConvertedObject> {
+    let mut restored = expected.original.clone();
+    match (&node.kind, &mut restored.kind) {
+        (NodeKind::Group { children, clip: false }, ObjectKind::Group { children: original_children }) => {
+            *original_children = children
+                .iter()
+                .enumerate()
+                .map(|(index, child)| {
+                    convert_vc_node_to_cdr_with_expected(
+                        child,
+                        offset,
+                        doc,
+                        meta,
+                        expected_group_child(expected, child, index),
+                        expected_doc,
+                        warnings,
+                    )
+                    .object
+                })
+                .collect();
+            Some(ConvertedObject { object: restored, shell_restored: true })
+        }
+        (NodeKind::Group { children, clip: false }, ObjectKind::Unsupported(unsupported)) => {
+            unsupported.children = children
+                .iter()
+                .enumerate()
+                .map(|(index, child)| {
+                    convert_vc_node_to_cdr_with_expected(
+                        child,
+                        offset,
+                        doc,
+                        meta,
+                        expected_group_child(expected, child, index),
+                        expected_doc,
+                        warnings,
+                    )
+                    .object
+                })
+                .collect();
+            Some(ConvertedObject { object: restored, shell_restored: true })
+        }
+        (NodeKind::Group { children, clip: true }, restored_kind) if !restored.powerclip_children.is_empty() => {
+            let current_frame = children.first()?;
+            let NodeKind::Group { children: expected_children, clip: true } = &expected.projection.kind else {
+                return None;
+            };
+            let expected_frame = expected_children.first()?;
+            let frame = convert_vc_node_to_cdr_with_expected(
+                current_frame,
+                offset,
+                doc,
+                meta,
+                Some(ExpectedNode { projection: expected_frame, original: expected.original }),
+                expected_doc,
+                warnings,
+            );
+            restored.powerclip_children = children
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(index, child)| {
+                    convert_vc_node_to_cdr_with_expected(
+                        child,
+                        offset,
+                        doc,
+                        meta,
+                        expected_powerclip_child(expected, child, index),
+                        expected_doc,
+                        warnings,
+                    )
+                    .object
+                })
+                .collect();
+            if !frame.shell_restored {
+                let frame = frame.object;
+                *restored_kind = frame.kind;
+                restored.fill = frame.fill;
+                restored.outline = frame.outline;
+                restored.transform = frame.transform;
+                restored.opacity = frame.opacity;
+                restored.effects = frame.effects;
+            }
+            Some(ConvertedObject { object: restored, shell_restored: true })
+        }
+        _ if !matches!(node.kind, NodeKind::Group { .. }) => Some(ConvertedObject { object: restored, shell_restored: true }),
+        _ => None,
+    }
+}
+
 fn convert_vc_node_to_cdr(
     node: &Node,
     offset: Vec2,
@@ -2063,10 +2409,29 @@ fn convert_vc_node_to_cdr(
     meta: Option<&CoralCraftDocData>,
     warnings: &mut ExportWarningLedger,
 ) -> ObjectNode {
+    let expected = expected_vc_projection(node, offset, meta);
+    let expected_node = expected.as_ref().and_then(|projection| {
+        let metadata = meta.and_then(|data| data.object_meta.get(&node.id.0))?;
+        Some(ExpectedNode { projection: projection.projection(), original: &metadata.original })
+    });
+    convert_vc_node_to_cdr_with_expected(node, offset, doc, meta, expected_node, expected.as_ref().and_then(ExpectedProjection::document), warnings)
+        .object
+}
+
+#[allow(clippy::too_many_arguments)]
+fn convert_vc_node_to_cdr_with_expected(
+    node: &Node,
+    offset: Vec2,
+    doc: &VcDocument,
+    meta: Option<&CoralCraftDocData>,
+    expected: Option<ExpectedNode<'_>>,
+    expected_doc: Option<&VcDocument>,
+    warnings: &mut ExportWarningLedger,
+) -> ConvertedObject {
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
     warnings.live_trace |= node.extras().trace.is_some();
     if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
-        let _ = convert_vc_node_to_cdr(&mask.art, offset, doc, meta, warnings);
+        let _ = convert_vc_node_to_cdr_with_expected(&mask.art, offset, doc, meta, None, None, warnings);
     }
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
@@ -2087,53 +2452,18 @@ fn convert_vc_node_to_cdr(
     {
         let _ = map_vc_paint_to_cdr_color(paint, warnings);
     }
-    if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
-        // Check if the node's basic properties and page-local bounds were untouched in VectorCraft; if so,
-        // restore the exact original ObjectNode (updating any recursive children if it is a Group or PowerClip).
-        let name_matches =
-            node.name == ometa.original.name || (ometa.original.name.is_none() && matches!(&ometa.original.kind, ObjectKind::Unsupported(_)));
-        let bounds_match = matches!(&ometa.original.kind, ObjectKind::Unsupported(_))
-            || match (ometa.initial_local_bounds, node.geometric_bounds()) {
-                (Some([ix0, iy0, ix1, iy1]), Some(b)) => {
-                    ((b.x0 - offset.x) - ix0.get()).abs() < 1e-4
-                        && ((b.y0 - offset.y) - iy0.get()).abs() < 1e-4
-                        && ((b.x1 - offset.x) - ix1.get()).abs() < 1e-4
-                        && ((b.y1 - offset.y) - iy1.get()).abs() < 1e-4
-                }
-                _ => true,
-            };
-        if name_matches && bounds_match && node.visible == ometa.original.visible && node.locked == ometa.original.locked {
-            let mut restored = ometa.original.clone();
-            match (&node.kind, &mut restored.kind) {
-                (NodeKind::Group { children: vc_ch, clip: false }, ObjectKind::Group { children: cdr_ch }) if vc_ch.len() == cdr_ch.len() => {
-                    *cdr_ch = vc_ch.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
-                    return restored;
-                }
-                (NodeKind::Group { children: vc_ch, clip: true }, _)
-                    if !restored.powerclip_children.is_empty() && vc_ch.len() == restored.powerclip_children.len().saturating_add(1) =>
-                {
-                    if let Some(frame) = vc_ch.first() {
-                        let _ = convert_vc_node_to_cdr(frame, offset, doc, meta, warnings);
-                    }
-                    restored.powerclip_children = vc_ch.iter().skip(1).map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
-                    return restored;
-                }
-                _ => {
-                    if let NodeKind::Group { children, .. } = &node.kind {
-                        for child in children {
-                            let _ = convert_vc_node_to_cdr(child, offset, doc, meta, warnings);
-                        }
-                    }
-                    return restored;
-                }
-            }
-        }
+    if let Some(expected) = expected
+        && projection_matches(node, expected, doc, expected_doc)
+        && let Some(restored) = restore_original_node(node, offset, doc, meta, expected, expected_doc, warnings)
+    {
+        return restored;
     }
 
     let oid = ObjectId(node.id.0.max(1));
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects);
 
     let mut powerclip_children = Vec::new();
+    let mut powerclip_frame = None;
     let neg_offset = Vec2::new(-offset.x, -offset.y);
     let kind = match &node.kind {
         NodeKind::Path { path, rule, live, .. } => match live.as_deref() {
@@ -2203,16 +2533,35 @@ fn convert_vc_node_to_cdr(
         NodeKind::Group { children, clip } => {
             if *clip && !children.is_empty() {
                 if let Some(first) = children.first() {
-                    let frame_cdr = convert_vc_node_to_cdr(first, offset, doc, meta, warnings);
-                    for ch in children.iter().skip(1) {
-                        powerclip_children.push(convert_vc_node_to_cdr(ch, offset, doc, meta, warnings));
+                    let expected_frame = expected.and_then(|expected| {
+                        let NodeKind::Group { children: expected_children, clip: true } = &expected.projection.kind else {
+                            return None;
+                        };
+                        if expected.original.powerclip_children.is_empty() {
+                            return None;
+                        }
+                        Some(ExpectedNode { projection: expected_children.first()?, original: expected.original })
+                    });
+                    let frame = convert_vc_node_to_cdr_with_expected(first, offset, doc, meta, expected_frame, expected_doc, warnings).object;
+                    for (index, child) in children.iter().skip(1).enumerate() {
+                        let expected_child = expected.and_then(|expected| expected_powerclip_child(expected, child, index));
+                        powerclip_children
+                            .push(convert_vc_node_to_cdr_with_expected(child, offset, doc, meta, expected_child, expected_doc, warnings).object);
                     }
-                    frame_cdr.kind
+                    powerclip_frame = Some(frame.clone());
+                    frame.kind
                 } else {
                     ObjectKind::Group { children: Vec::new() }
                 }
             } else {
-                let cdr_children = children.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
+                let cdr_children = children
+                    .iter()
+                    .enumerate()
+                    .map(|(index, child)| {
+                        let expected_child = expected.and_then(|expected| expected_group_child(expected, child, index));
+                        convert_vc_node_to_cdr_with_expected(child, offset, doc, meta, expected_child, expected_doc, warnings).object
+                    })
+                    .collect();
                 ObjectKind::Group { children: cdr_children }
             }
         }
@@ -2309,16 +2658,24 @@ fn convert_vc_node_to_cdr(
         let [_, _, _, _, tx, ty] = local_xf.as_coeffs();
         cnode.transform = Affine2::translation(tx, ty).unwrap_or(Affine2::IDENTITY);
     }
+    if let Some(frame) = powerclip_frame {
+        cnode.fill = frame.fill;
+        cnode.outline = frame.outline;
+        cnode.transform = frame.transform;
+        cnode.opacity = frame.opacity;
+        cnode.effects = frame.effects;
+    } else {
+        cnode.opacity = F64::new(f64::from(node.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
+        cnode.effects = effects;
+    }
     cnode.visible = node.visible;
     cnode.locked = node.locked;
-    cnode.opacity = F64::new(f64::from(node.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
-    cnode.effects = effects;
     cnode.powerclip_children = powerclip_children;
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
         cnode.residual = ometa.original.residual.clone();
         cnode.extra = ometa.original.extra.clone();
     }
-    cnode
+    ConvertedObject { object: cnode, shell_restored: false }
 }
 
 fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLedger) -> (Option<FillStyle>, Option<OutlineStyle>) {

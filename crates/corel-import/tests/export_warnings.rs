@@ -81,7 +81,7 @@ fn metadata_restoration_still_warns_for_new_pattern_and_live_trace() {
     assert_eq!(warnings.iter().filter(|warning| warning.contains("generic Pattern")).count(), 1, "{warnings:?}");
     assert_eq!(warnings.iter().filter(|warning| warning.contains("live trace")).count(), 1, "{warnings:?}");
     assert!(warnings.iter().any(|warning| warning.contains("or dropped")));
-    assert!(matches!(converted.pages[0].layers[0].objects[0].fill, Some(corel_import::coralcraft_doc::FillStyle::Uniform { .. })));
+    assert!(matches!(converted.pages[0].layers[0].objects[0].fill, Some(corel_import::coralcraft_doc::FillStyle::TwoColorPattern { .. })));
     assert_eq!(corel_import::export_document(&doc).unwrap(), converted);
 }
 
