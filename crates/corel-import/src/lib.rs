@@ -2112,10 +2112,20 @@ fn convert_vc_node_to_cdr(
                 (NodeKind::Group { children: vc_ch, clip: true }, _)
                     if !restored.powerclip_children.is_empty() && vc_ch.len() == restored.powerclip_children.len().saturating_add(1) =>
                 {
+                    if let Some(frame) = vc_ch.first() {
+                        let _ = convert_vc_node_to_cdr(frame, offset, doc, meta, warnings);
+                    }
                     restored.powerclip_children = vc_ch.iter().skip(1).map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
                     return restored;
                 }
-                _ => return restored,
+                _ => {
+                    if let NodeKind::Group { children, .. } = &node.kind {
+                        for child in children {
+                            let _ = convert_vc_node_to_cdr(child, offset, doc, meta, warnings);
+                        }
+                    }
+                    return restored;
+                }
             }
         }
     }

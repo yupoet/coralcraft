@@ -9,7 +9,7 @@
 ## 0l. [Open, P3 Task 10] Early metadata restoration can restore old appearance after edits
 
 - `convert_vc_node_to_cdr`'s metadata-restoration predicate compares name, page-local bounds, visibility, and lock state, but not appearance. An imported object subsequently edited to a different paint can therefore restore the original object's appearance rather than the edited one. This is a restoration-mapping limitation, not a claim that warning collection preserves the edit.
-- Warning detection now runs before that return for ordinary appearance, every text run, and image colorize, so generic Pattern substitution/drop is reported even when old appearance is restored. Live trace was already detected before it. The restoration predicate and old API output are unchanged in this warning-only slice; a broader appearance-aware restoration redesign remains open.
+- Warning detection now runs before that return for ordinary appearance, every text run, and image colorize, so generic Pattern substitution/drop is reported even when old appearance is restored. Structurally mismatched current groups are traversed into a discarded warning-only value, and restored PowerClip frames are inspected before contents. Live trace was already detected before restoration. Restoration mappings and same-revision legacy-wrapper output are unchanged in this warning-only slice; a broader appearance-aware restoration redesign remains open.
 
 ## 0j. [Resolved 2026-11-11] Concurrent Cargo feature builds can invalidate a doctest dependency
 

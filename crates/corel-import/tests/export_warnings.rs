@@ -22,7 +22,7 @@ fn patterned_document() -> Document {
 }
 
 #[test]
-fn warning_returning_export_apis_preserve_existing_results() {
+fn warning_returning_apis_match_legacy_wrappers() {
     let doc = patterned_document();
     let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
     assert_eq!(corel_import::export_document(&doc).unwrap(), converted);
@@ -134,4 +134,62 @@ fn metadata_restoration_still_warns_for_image_colorize() {
 
     let (_, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
     assert_eq!(warnings.iter().filter(|warning| warning.contains("generic Pattern")).count(), 1, "{warnings:?}");
+}
+
+fn rect_object(id: u64, name: &str, rect: [f64; 4]) -> ObjectNode {
+    ObjectNode::new(
+        ObjectId(id),
+        Some(name.to_owned()),
+        ObjectKind::Rect(RectSpec::sharp(CdrRect::new(rect[0], rect[1], rect[2], rect[3]).unwrap())),
+        Some(corel_import::coralcraft_doc::FillStyle::uniform(CdrColor::BLACK)),
+        None,
+    )
+}
+
+#[test]
+fn restored_group_with_changed_child_count_still_warns_for_nested_pattern() {
+    let group = ObjectNode::new(
+        ObjectId(50),
+        Some("Restorable Group".into()),
+        ObjectKind::Group { children: vec![rect_object(51, "Big", [10.0, 10.0, 100.0, 100.0]), rect_object(52, "Small", [20.0, 20.0, 30.0, 30.0])] },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(group);
+    let id = restorable_id(&doc, "Restorable Group");
+    let NodeKind::Group { children, .. } = &mut doc.node_mut(id).unwrap().kind else { panic!("group") };
+    children.retain(|child| child.name.as_deref() != Some("Small"));
+    assert_eq!(children.len(), 1);
+    std::sync::Arc::make_mut(&mut children[0]).appearance.set_fill(pattern());
+
+    for (existing, with_warnings) in [
+        (corel_import::write_cdr7_document as ExistingWriter, corel_import::write_cdr7_document_with_warnings as WarningWriter),
+        (corel_import::write_cmx1_document as ExistingWriter, corel_import::write_cmx1_document_with_warnings as WarningWriter),
+    ] {
+        let (bytes, warnings) = with_warnings(&doc).unwrap();
+        assert_eq!(warnings.iter().filter(|warning| warning.contains("generic Pattern")).count(), 1, "{warnings:?}");
+        assert_eq!(existing(&doc).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn restored_powerclip_frame_pattern_and_trace_warn() {
+    let mut frame = rect_object(60, "Frame", [10.0, 10.0, 100.0, 100.0]);
+    frame.powerclip_children.push(rect_object(61, "Contents", [20.0, 20.0, 30.0, 30.0]));
+    let mut doc = import_restorable(frame);
+    let id = restorable_id(&doc, "Frame");
+    let NodeKind::Group { children, .. } = &mut doc.node_mut(id).unwrap().kind else { panic!("PowerClip") };
+    let frame = std::sync::Arc::make_mut(&mut children[0]);
+    frame.appearance.set_fill(pattern());
+    frame.extras_mut().trace = Some(Box::new(serde_json::json!({"preset": "Custom", "params": {}, "view": "outlines"})));
+
+    for (existing, with_warnings) in [
+        (corel_import::write_cdr7_document as ExistingWriter, corel_import::write_cdr7_document_with_warnings as WarningWriter),
+        (corel_import::write_cmx1_document as ExistingWriter, corel_import::write_cmx1_document_with_warnings as WarningWriter),
+    ] {
+        let (bytes, warnings) = with_warnings(&doc).unwrap();
+        assert_eq!(warnings.iter().filter(|warning| warning.contains("generic Pattern")).count(), 1, "{warnings:?}");
+        assert_eq!(warnings.iter().filter(|warning| warning.contains("live trace")).count(), 1, "{warnings:?}");
+        assert_eq!(existing(&doc).unwrap(), bytes);
+    }
 }
