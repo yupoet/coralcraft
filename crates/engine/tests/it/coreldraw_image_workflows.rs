@@ -1,12 +1,357 @@
 //! CoralCraft: bitmap and PowerTRACE workflows over the shared tracer (P3 Tasks 8–9).
 
+use std::collections::BTreeSet;
+
 use serde_json::json;
-use vectorcraft_doc::{NodeId, NodeKind, TraceView};
+use vectorcraft_color::Paint;
+use vectorcraft_doc::{AppearanceItem, LineCap, LineJoin, Node, NodeId, NodeKind, TraceView};
 use vectorcraft_engine::Session;
 
 fn native_reopen(s: &mut Session) {
     let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
     s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+}
+
+fn session_with_image(image: &image::RgbaImage) -> (Session, u64) {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 240, "height": 240})).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = s
+        .execute(
+            "file.place",
+            &json!({"name": "handcrafted.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        )
+        .unwrap();
+    (s, placed["ids"][0].as_u64().unwrap())
+}
+
+fn collect_paths<'a>(node: &'a Node, paths: &mut Vec<&'a Node>) {
+    if node.path_data().is_some() {
+        paths.push(node);
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_paths(child, paths);
+        }
+    }
+}
+
+fn traced_paths(s: &Session, id: u64) -> Vec<&Node> {
+    let mut paths = vec![];
+    collect_paths(s.doc().unwrap().doc.node(NodeId(id)).unwrap(), &mut paths);
+    paths
+}
+
+fn solid_fills(s: &Session, id: u64) -> BTreeSet<String> {
+    traced_paths(s, id).into_iter().filter_map(|node| node.appearance.fill_paint().color().map(|color| color.to_hex())).collect()
+}
+
+fn independent_svg(s: &mut Session) -> usvg::Tree {
+    let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
+    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of PowerTRACE output")
+}
+
+fn usvg_solid_fills(group: &usvg::Group, fills: &mut BTreeSet<[u8; 3]>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => usvg_solid_fills(child, fills),
+            usvg::Node::Path(path) if !path.data().is_empty() => {
+                if let Some(fill) = path.fill()
+                    && let usvg::Paint::Color(color) = fill.paint()
+                {
+                    fills.insert([color.red, color.green, color.blue]);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn usvg_path_metrics(group: &usvg::Group) -> (usize, usize) {
+    let mut metrics = (0, 0);
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => {
+                let child = usvg_path_metrics(child);
+                metrics.0 += child.0;
+                metrics.1 += child.1;
+            }
+            usvg::Node::Path(path) if !path.data().is_empty() => {
+                metrics.0 += 1;
+                metrics.1 += path.data().segments().count();
+            }
+            _ => {}
+        }
+    }
+    metrics
+}
+
+fn has_exported_centreline(group: &usvg::Group) -> bool {
+    group.children().iter().any(|node| match node {
+        usvg::Node::Group(child) => has_exported_centreline(child),
+        usvg::Node::Path(path) => !path.data().is_empty() && path.fill().is_none() && path.stroke().is_some_and(|stroke| stroke.width().get() > 0.0),
+        _ => false,
+    })
+}
+
+#[test]
+fn powertrace_centreline_survives_view_expand_native_reopen_and_independent_svg() {
+    let image = image::RgbaImage::from_fn(100, 100, |x, y| {
+        if (10..90).contains(&x) && (49..52).contains(&y) { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255; 4]) }
+    });
+    let (mut s, bitmap) = session_with_image(&image);
+    let params = json!({"mode": "blackAndWhite", "ignoreWhite": true, "fills": true, "strokes": true, "strokeWidth": 5});
+    let made = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": params})).unwrap();
+    assert_eq!(made["paths"], 1);
+    let trace = made["id"].as_u64().unwrap();
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(trace)).unwrap().kind, NodeKind::Group { .. }));
+    let paths = traced_paths(&s, trace);
+    assert_eq!(paths.len(), 1);
+    let line = paths[0];
+    assert_eq!(line.appearance.fill_paint(), Paint::None);
+    assert_eq!(line.appearance.items.iter().filter(|item| matches!(item, AppearanceItem::Stroke(_))).count(), 1);
+    let stroke = line.appearance.stroke().unwrap();
+    assert!((stroke.width - 3.0).abs() < 0.75, "the three-pixel source line has a meaningful resulting width: {}", stroke.width);
+    assert_eq!((stroke.cap, stroke.join), (LineCap::Square, LineJoin::Round));
+    let subpath = &line.path_data().unwrap().subpaths[0];
+    assert!(!subpath.closed);
+    let first = subpath.anchors.first().unwrap().p;
+    let last = subpath.anchors.last().unwrap().p;
+    assert!((first.y - last.y).abs() < 0.1, "the horizontal source has horizontal centreline endpoints: {first:?} … {last:?}");
+    assert!(((first.x - last.x).abs() - 79.0).abs() < 3.0, "the hard-ended source spans x = 10..89: {first:?} … {last:?}");
+
+    s.execute("imageTrace.setView", &json!({"id": trace, "view": "outlines"})).unwrap();
+    native_reopen(&mut s);
+    let reopened = s.doc().unwrap().doc.node(NodeId(trace)).unwrap();
+    assert_eq!(reopened.trace_view(), TraceView::Outlines);
+    assert_eq!(reopened.extras().trace.as_ref().unwrap()["params"]["strokes"], true);
+
+    let expanded = s.execute("imageTrace.makeAndExpand", &json!({"id": trace, "preset": "Default", "params": params})).unwrap();
+    let expanded_id = expanded["id"].as_u64().unwrap();
+    assert_ne!(expanded_id, trace, "makeAndExpand is a new make at the same layer position");
+    assert_eq!(expanded["paths"], 1);
+    let group = s.doc().unwrap().doc.node(NodeId(expanded_id)).unwrap();
+    assert!(group.extras().trace.is_none());
+    assert!(group.children().unwrap().iter().all(|child| !matches!(child.kind, NodeKind::Image(_))));
+    let paths = traced_paths(&s, expanded_id);
+    assert_eq!(paths.len(), 1);
+    assert!(!paths[0].path_data().unwrap().subpaths[0].closed);
+    assert_eq!(paths[0].appearance.fill_paint(), Paint::None);
+    assert!(paths[0].appearance.stroke().is_some());
+    native_reopen(&mut s);
+    assert!(traced_paths(&s, expanded_id)[0].appearance.stroke().is_some());
+    let tree = independent_svg(&mut s);
+    assert!(has_exported_centreline(tree.root()), "usvg finds a nonempty unfilled stroked centreline");
+}
+
+#[test]
+fn powertrace_limited_palette_retrace_reduces_document_and_exported_colours() {
+    let image = image::RgbaImage::from_fn(60, 60, |x, y| match (x < 30, y < 30) {
+        (true, true) => image::Rgba([230, 20, 20, 255]),
+        (false, true) => image::Rgba([20, 180, 40, 255]),
+        (true, false) => image::Rgba([30, 60, 220, 255]),
+        (false, false) => image::Rgba([250, 230, 10, 255]),
+    });
+    let (mut s, bitmap) = session_with_image(&image);
+    let make = |s: &mut Session, id: u64, colors: u64| {
+        s.execute("imageTrace.make", &json!({"id": id, "preset": "Default", "params": {"mode": "color", "palette": "limited", "colors": colors}}))
+            .unwrap()
+    };
+    let four = make(&mut s, bitmap, 4);
+    assert_eq!((four["paths"].as_u64(), four["colors"].as_u64()), (Some(4), Some(4)));
+    let four_id = four["id"].as_u64().unwrap();
+    assert_eq!(solid_fills(&s, four_id).len(), 4);
+    let mut exported = BTreeSet::new();
+    usvg_solid_fills(independent_svg(&mut s).root(), &mut exported);
+    assert_eq!(exported.len(), 4, "independent four-colour fills: {exported:?}");
+
+    let two = make(&mut s, four_id, 2);
+    assert!(two["paths"].as_u64().is_some_and(|paths| paths > 0));
+    assert_eq!(two["colors"], 2);
+    let two_id = two["id"].as_u64().unwrap();
+    assert_ne!(two_id, four_id);
+    assert_eq!(solid_fills(&s, two_id).len(), 2);
+    let mut exported = BTreeSet::new();
+    usvg_solid_fills(independent_svg(&mut s).root(), &mut exported);
+    assert_eq!(exported.len(), 2, "independent two-colour fills: {exported:?}");
+    native_reopen(&mut s);
+    assert_eq!(solid_fills(&s, two_id).len(), 2);
+    let expanded = s
+        .execute(
+            "imageTrace.makeAndExpand",
+            &json!({"id": two_id, "preset": "Default", "params": {"mode": "color", "palette": "limited", "colors": 2}}),
+        )
+        .unwrap();
+    let expanded_id = expanded["id"].as_u64().unwrap();
+    assert!(expanded["paths"].as_u64().is_some_and(|paths| paths > 0));
+    assert_eq!(solid_fills(&s, expanded_id).len(), 2);
+    let mut exported = BTreeSet::new();
+    usvg_solid_fills(independent_svg(&mut s).root(), &mut exported);
+    assert_eq!(exported.len(), 2);
+}
+
+#[test]
+fn powertrace_paths_fidelity_changes_anchors_on_a_fixed_sine_fixture() {
+    let image = image::RgbaImage::from_fn(200, 100, |x, y| {
+        let boundary = (f64::from(y) / 12.0).sin() * 20.0 + 100.0;
+        if f64::from(x) < boundary { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255; 4]) }
+    });
+    let expanded = |paths: u64| {
+        let (mut s, bitmap) = session_with_image(&image);
+        let result = s
+            .execute(
+                "imageTrace.makeAndExpand",
+                &json!({"id": bitmap, "preset": "Default", "params": {"mode": "blackAndWhite", "ignoreWhite": true, "paths": paths}}),
+            )
+            .unwrap();
+        let id = result["id"].as_u64().unwrap();
+        native_reopen(&mut s);
+        let anchors = traced_paths(&s, id).iter().map(|node| node.path_data().unwrap().anchor_count()).sum::<usize>();
+        let exported = usvg_path_metrics(independent_svg(&mut s).root());
+        assert!(exported.0 > 0 && exported.1 > 0);
+        (anchors, exported.1)
+    };
+    let low = expanded(0);
+    let high = expanded(100);
+    assert!(high.0 > low.0, "document anchors on this fixed fixture: high {} low {}", high.0, low.0);
+    assert!(high.1 > low.1, "independent exported segments on this fixed fixture: high {} low {}", high.1, low.1);
+}
+
+#[test]
+fn powertrace_saved_presets_live_in_prefs_and_keep_full_trace_settings_in_native_documents() {
+    let image = image::RgbaImage::from_fn(40, 40, |x, y| {
+        if (5..35).contains(&x) && (5..35).contains(&y) { image::Rgba([20, 40, 80, 255]) } else { image::Rgba([255; 4]) }
+    });
+    let (mut s, bitmap) = session_with_image(&image);
+    let history = s.doc().unwrap().history.undo.len();
+    let created = s.execute("imageTrace.presets.save", &json!({"name": "Fine Detail", "params": {"ignoreWhite": true, "paths": 70}})).unwrap();
+    assert_eq!((created["created"].as_bool(), created["name"].as_str()), (Some(true), Some("Fine Detail")));
+    s.execute("imageTrace.presets.save", &json!({"name": "Other", "params": {"noise": 5}})).unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), history, "saving presets is not a document edit");
+
+    let made = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "fine detail"})).unwrap();
+    let first = made["id"].as_u64().unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(first)).unwrap().extras().trace.as_ref().unwrap()["preset"], "Fine Detail");
+    let updated = s.execute("imageTrace.presets.save", &json!({"name": "fine detail", "params": {"corners": 10}})).unwrap();
+    assert_eq!(updated["created"], false);
+    assert_eq!(
+        (updated["params"]["ignoreWhite"].as_bool(), updated["params"]["paths"].as_f64(), updated["params"]["corners"].as_f64()),
+        (Some(true), Some(70.0), Some(10.0))
+    );
+    let renamed = s.execute("imageTrace.presets.save", &json!({"name": "Fine Detail", "newName": "Fine Curves"})).unwrap();
+    assert_eq!(
+        (renamed["renamedFrom"].as_str(), renamed["params"]["paths"].as_f64(), renamed["params"]["corners"].as_f64()),
+        (Some("Fine Detail"), Some(70.0), Some(10.0))
+    );
+    let list = s.execute("imageTrace.presets", &json!({})).unwrap();
+    let saved = list["presets"].as_array().unwrap().iter().find(|preset| preset["name"] == "Fine Curves").unwrap();
+    assert_eq!(saved["builtIn"], false);
+    assert_eq!(saved["params"]["ignoreWhite"], true);
+    assert_eq!(list["revision"], s.trace_presets_revision());
+
+    let custom = s.execute("imageTrace.make", &json!({"id": first, "preset": "fine curves", "params": {"paths": 20}})).unwrap();
+    let trace = custom["id"].as_u64().unwrap();
+    s.execute("imageTrace.setView", &json!({"id": trace, "view": "outlines"})).unwrap();
+    let stored = s.doc().unwrap().doc.node(NodeId(trace)).unwrap().extras().trace.clone().unwrap();
+    assert_eq!(stored["preset"], "Custom");
+    assert_eq!(
+        (stored["params"]["paths"].as_f64(), stored["params"]["corners"].as_f64(), stored["params"]["ignoreWhite"].as_bool()),
+        (Some(20.0), Some(10.0), Some(true))
+    );
+    let prefs: vectorcraft_engine::Prefs = serde_json::from_str(&serde_json::to_string(&s.prefs).unwrap()).unwrap();
+    assert_eq!(prefs.trace_presets, s.prefs.trace_presets);
+
+    let native = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    let mut reopened = Session::new();
+    reopened.execute("document.open", &json!({"dataBase64": native})).unwrap();
+    assert!(reopened.prefs.trace_presets.is_empty(), "the preset library is preferences, not document data");
+    let reopened_node = reopened.doc().unwrap().doc.node(NodeId(trace)).unwrap();
+    assert_eq!(reopened_node.trace_view(), TraceView::Outlines);
+    assert_eq!(reopened_node.extras().trace.as_ref(), Some(&stored));
+
+    let before = s.prefs.trace_presets.clone();
+    let revision = s.trace_presets_revision();
+    for params in [
+        json!({"name": "Fine Curves", "newName": "other"}),
+        json!({"name": "Missing", "newName": "New"}),
+        json!({"name": 7}),
+        json!({"name": "Bad", "preset": "No Such"}),
+        json!({"name": "Bad", "params": {"fills": false, "strokes": false}}),
+    ] {
+        assert!(s.execute("imageTrace.presets.save", &params).is_err(), "{params}");
+        assert_eq!(s.prefs.trace_presets, before);
+        assert_eq!(s.trace_presets_revision(), revision);
+    }
+    let history = s.doc().unwrap().history.undo.len();
+    assert_eq!(s.execute("imageTrace.presets.delete", &json!({"name": "FINE CURVES"})).unwrap()["deleted"], "Fine Curves");
+    s.execute("imageTrace.presets.delete", &json!({"name": "Other"})).unwrap();
+    assert!(s.prefs.trace_presets.is_empty());
+    assert_eq!(s.doc().unwrap().history.undo.len(), history, "deleting presets is not a document edit");
+    assert!(s.execute("imageTrace.make", &json!({"id": trace, "preset": "Fine Curves"})).is_err());
+}
+
+#[test]
+fn powertrace_make_retrace_view_and_invalid_edit_have_exact_history_semantics() {
+    let image = image::RgbaImage::from_fn(60, 60, |x, y| match (x < 30, y < 30) {
+        (true, true) => image::Rgba([230, 20, 20, 255]),
+        (false, true) => image::Rgba([20, 180, 40, 255]),
+        (true, false) => image::Rgba([30, 60, 220, 255]),
+        (false, false) => image::Rgba([250, 230, 10, 255]),
+    });
+    let (mut s, bitmap) = session_with_image(&image);
+    let original = json!({"mode": "color", "palette": "limited", "colors": 4});
+    let history = s.doc().unwrap().history.undo.len();
+    let position = |s: &Session, id| {
+        let (parent, index, _) = s.doc().unwrap().doc.position(NodeId(id)).unwrap();
+        (parent, index)
+    };
+    let bitmap_position = position(&s, bitmap);
+    let first = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": original})).unwrap()["id"].as_u64().unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), history + 1);
+    assert_eq!(position(&s, first), bitmap_position, "make replaces the bitmap at the same layer position");
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().kind, NodeKind::Image(_)));
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(bitmap)]);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    assert!(s.doc().unwrap().doc.node(NodeId(first)).unwrap().extras().trace.is_some());
+
+    let second = s
+        .execute("imageTrace.make", &json!({"id": first, "preset": "Default", "params": {"mode": "color", "palette": "limited", "colors": 2}}))
+        .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    assert_ne!(second, first);
+    assert_eq!(position(&s, second), bitmap_position, "retrace replaces the first group at the same layer position");
+    assert_eq!(s.doc().unwrap().history.undo.len(), history + 2);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(first)).unwrap().extras().trace.as_ref().unwrap()["params"]["colors"], 4);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(second)]);
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().extras().trace.as_ref().unwrap()["params"]["colors"], 2);
+
+    let before = s.doc().unwrap().doc.clone();
+    let selection = s.active().unwrap().selection.clone();
+    let undo = s.doc().unwrap().history.undo.len();
+    let redo = s.doc().unwrap().history.redo.len();
+    assert!(s.execute("imageTrace.make", &json!({"id": second, "preset": "Default", "params": {"fills": false, "strokes": false}})).is_err());
+    assert_eq!(s.doc().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().selection, selection);
+    assert_eq!((s.doc().unwrap().history.undo.len(), s.doc().unwrap().history.redo.len()), (undo, redo));
+
+    let anchors = traced_paths(&s, second).iter().map(|node| node.path_data().unwrap().anchor_count()).sum::<usize>();
+    s.execute("imageTrace.setView", &json!({"id": second, "view": "outlines"})).unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1);
+    assert_eq!(traced_paths(&s, second).iter().map(|node| node.path_data().unwrap().anchor_count()).sum::<usize>(), anchors, "view does not retrace");
+    s.execute("imageTrace.setView", &json!({"id": second, "view": "outlines"})).unwrap();
+    assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1, "an unchanged view adds no step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().trace_view(), TraceView::Result);
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().trace_view(), TraceView::Outlines);
 }
 
 #[test]

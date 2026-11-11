@@ -147,30 +147,143 @@ fn coreldraw_appearance_docker_shows_and_edits_the_ordered_effect_stack() {
 
 #[test]
 fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
+    use egui_kittest::kittest::Queryable;
+
+    fn choose(h: &mut egui_kittest::Harness<'_, crate::VectorcraftApp>, current: &str, item: &str) {
+        let label = match current {
+            "Default" => "Preset:",
+            "Color" => "Mode:",
+            "Tracing Result" => "View:",
+            other => panic!("unexpected combo value {other}"),
+        };
+        let combo = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, label);
+        assert_eq!(combo.value().as_deref(), Some(current));
+        combo.click();
+        h.run_steps(2);
+        h.get_by_label(item).click();
+        h.run_steps(4);
+    }
+
+    fn release_slider(h: &mut egui_kittest::Harness<'_, crate::VectorcraftApp>, label: &str, high: bool) {
+        h.run_steps(2);
+        let rail =
+            h.ctx.data(|d| d.get_temp::<egui::Rect>(egui::Id::unique(("trace-slider", label)))).unwrap_or_else(|| panic!("{label} slider rail"));
+        let at = if high { rail.right_center() - egui::vec2(2.0, 0.0) } else { rail.left_center() + egui::vec2(2.0, 0.0) };
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.input_mut().events.extend([egui::Event::PointerMoved(at), press(true)]);
+        h.run_steps(2);
+        h.input_mut().events.push(press(false));
+        h.run_steps(4);
+    }
+
+    fn selected(app: &crate::VectorcraftApp) -> NodeId {
+        app.session.active().unwrap().selection.objects[0]
+    }
+
+    fn undo(app: &crate::VectorcraftApp) -> usize {
+        app.session.active().unwrap().history.undo.len()
+    }
+
+    fn anchors(app: &crate::VectorcraftApp) -> usize {
+        let node = app.session.active().unwrap().doc.node(selected(app)).unwrap();
+        node.children().unwrap().iter().filter_map(|child| child.path_data().map(|path| path.anchor_count())).sum()
+    }
+
     let mut app = app_with_rect();
     crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let image = image::RgbaImage::from_fn(96, 96, |x, y| {
+        let boundary = 48.0 + (f64::from(y) / 10.0).sin() * 12.0;
+        let left = f64::from(x) < boundary;
+        let top = y < 48;
+        let rgba = match (left, top) {
+            (true, true) => [180, 30, 30, 255],
+            (true, false) => [30, 150, 50, 255],
+            (false, true) => [30, 80, 190, 255],
+            (false, false) => [220, 180, 30, 255],
+        };
+        image::Rgba(rgba)
+    });
     let mut png = std::io::Cursor::new(Vec::new());
-    image::RgbaImage::from_fn(16, 16, |x, y| {
-        if (3..13).contains(&x) && (3..13).contains(&y) { image::Rgba([20, 40, 80, 255]) } else { image::Rgba([255; 4]) }
-    })
-    .write_to(&mut png, image::ImageFormat::Png)
-    .unwrap();
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
     let placed = run(
         &mut app,
         "file.place",
-        json!({"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        json!({"name": "four-colour-sine.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
     );
-    let bitmap = placed["ids"][0].as_u64().unwrap();
-    let ctx = egui::Context::default();
-    crate::theme::install_fonts(&ctx);
-    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], super::image_trace::show);
-    for label in ["Preset", "Mode", "View"] {
-        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
-    }
-    let trace = NodeId(run(&mut app, "imageTrace.make", json!({"id": bitmap, "params": {"ignoreWhite": true}}))["id"].as_u64().unwrap());
-    assert!(app.session.active().unwrap().doc.node(trace).unwrap().extras().trace.is_some());
-    let expanded = run(&mut app, "imageTrace.makeAndExpand", json!({"id": trace.0}));
-    assert!(expanded["paths"].as_u64().unwrap() > 0, "{expanded}");
+    assert_eq!(placed["ids"].as_array().unwrap().len(), 1);
+
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(520.0, 820.0))
+        .with_accessibility_check(false)
+        .with_context_setup(|ctx| {
+            crate::theme::install_fonts(ctx);
+            crate::theme::apply(ctx, Default::default());
+        })
+        .build_ui_state(|ui, app: &mut crate::VectorcraftApp| super::image_trace::show(app, ui), app);
+    h.run_steps(6);
+
+    let preview = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Preview");
+    preview.click();
+    h.run_steps(2);
+    assert!(!h.state().ui.image_trace_preview);
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Preview").click();
+    h.run_steps(2);
+    assert!(h.state().ui.image_trace_preview);
+
+    choose(&mut h, "Default", "6 Colors");
+    let before = undo(h.state());
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Trace").click();
+    h.run_steps(4);
+    assert_eq!(undo(h.state()), before + 1);
+    let first = selected(h.state());
+    let node = h.state().session.active().unwrap().doc.node(first).unwrap();
+    assert_eq!(node.extras().trace.as_ref().unwrap()["preset"], "6 Colors");
+
+    choose(&mut h, "Color", "Color");
+    assert_eq!(undo(h.state()), before + 2, "the visible Mode control retraces once");
+    let second = selected(h.state());
+    assert_ne!(second, first, "panel retraces replace the target with a new group ID");
+    assert_eq!(h.state().session.active().unwrap().doc.node(second).unwrap().extras().trace.as_ref().unwrap()["params"]["mode"], "color");
+
+    let before = undo(h.state());
+    release_slider(&mut h, "Colors", false);
+    assert_eq!(undo(h.state()), before + 1, "one slider release is one undo step");
+    let reduced = selected(h.state());
+    assert_ne!(reduced, second);
+    let node = h.state().session.active().unwrap().doc.node(reduced).unwrap();
+    assert_eq!(node.extras().trace.as_ref().unwrap()["params"]["colors"], 2);
+    let fills: std::collections::BTreeSet<_> =
+        node.children().unwrap().iter().filter_map(|child| child.appearance.fill_paint().color().map(|color| color.to_hex())).collect();
+    assert_eq!(fills.len(), 2, "the visible Colors control produces two unique fills: {fills:?}");
+
+    let before_anchors = anchors(h.state());
+    let before = undo(h.state());
+    release_slider(&mut h, "Paths", false);
+    assert_eq!(undo(h.state()), before + 1);
+    let smoothed = selected(h.state());
+    assert_ne!(smoothed, reduced);
+    let node = h.state().session.active().unwrap().doc.node(smoothed).unwrap();
+    assert_eq!(node.extras().trace.as_ref().unwrap()["params"]["paths"], 0.0);
+    assert!(anchors(h.state()) < before_anchors, "Paths reduces anchors on this fixed curved fixture");
+    let smoothed_anchors = anchors(h.state());
+
+    let before = undo(h.state());
+    choose(&mut h, "Tracing Result", "Outlines");
+    assert_eq!(selected(h.state()), smoothed, "View does not retrace or replace the group");
+    assert_eq!(anchors(h.state()), smoothed_anchors, "the smoothed geometry is unchanged by View");
+    assert_eq!(undo(h.state()), before + 1, "View is one document edit");
+    let node = h.state().session.active().unwrap().doc.node(smoothed).unwrap();
+    assert_eq!(node.trace_view(), vectorcraft_doc::TraceView::Outlines);
+
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Expand").click();
+    h.run_steps(4);
+    assert_eq!(selected(h.state()), smoothed, "Expand retains the group ID");
+    assert_eq!(undo(h.state()), before + 2);
+    assert_eq!(anchors(h.state()), smoothed_anchors, "Expand retains the traced paths");
+    let expanded = h.state().session.active().unwrap().doc.node(smoothed).unwrap();
+    assert!(expanded.extras().trace.is_none());
+    assert!(expanded.children().unwrap().iter().all(|child| !matches!(child.kind, NodeKind::Image(_))));
+    assert!(expanded.children().unwrap().iter().any(|child| child.path_data().is_some()));
 }
 
 #[test]

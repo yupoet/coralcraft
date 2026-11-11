@@ -236,7 +236,7 @@ Run the image workflow and existing bitmap/effect tests. Image workflows pass 11
 - Modify: `crates/engine/tests/it/coreldraw_image_workflows.rs`
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 
-- [ ] **Step 1: Write the failing trace composition test**
+- [x] **Step 1: Write the failing trace composition test**
 
 Use a handcrafted bitmap and run:
 
@@ -249,15 +249,15 @@ assert!(expanded["paths"].as_u64().is_some_and(|paths| paths > 0));
 
 Verify outline and centreline modes supported by `vectorcraft-trace`, colour reduction, smoothing, presets, undo/redo, editable expanded paths, and native reopen. Parse the expanded SVG independently with `usvg`.
 
-Progress: synthetic colour tracing, Outlines view, native live-trace reopen, editable expanded paths, and independent SVG evidence pass. Centreline, colour-reduction, smoothing, presets, and undo/redo coverage remain open, so this task is not checked.
+Complete: handcrafted outline and centreline traces cover make, Outlines view, make-and-expand, editable paths, native reopen, and independent `usvg` structure. The centreline is one open, unfilled, meaningfully stroked path with known source direction/length and square caps. Limited-palette retrace reduces four unique fills to two in the document and independently in `usvg`. Higher Paths fidelity adds anchors on the fixed sine fixture in both document and exported path data; no universal monotonicity is claimed. Saved-preset create/case-insensitive apply/canonical naming/list/update/rename/delete/revision/invalid-input evidence passes. The library round-trips through Prefs, not `.vectorcraft`; native reopen keeps the trace object's own preset/full params/view. Make/retrace/view undo/redo and invalid-retrace atomicity pass.
 
-- [ ] **Step 2: Verify the Image Trace docker and CorelDRAW naming**
+- [x] **Step 2: Verify the Image Trace docker and CorelDRAW naming**
 
-Drive preset, mode, colour, smoothing, view, and expand controls in the CorelDRAW workspace. Reuse `panels/image_trace.rs`; only add a CorelDRAW label/mapping where the workflow already has the same semantics.
+Complete: the actual CorelDRAW Image Trace panel is driven through AccessKit-named Preset/Mode/View combo boxes and Preview/Trace/Expand controls, plus synthetic-pointer Colors and Paths sliders. The lifecycle proves two unique colours, changed Paths parameters/anchors, View without retrace, fresh IDs for each retrace, and same-ID expansion without retained bitmap/trace metadata. No parallel tracer or production mapping was added.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
-Run `coreldraw_image_workflows`, the CorelDRAW UI filter, and `vectorcraft-trace` tests. Commit with `feat: complete CorelDRAW PowerTRACE workflows` or `test:` if evidence-only.
+`coreldraw_image_workflows` passes 16/16, CorelDRAW effects UI 10/10, Image Trace panel tests 43/43, `vectorcraft-trace` 252 passed / 3 existing ignored, and engine `image_trace` tests 30/30. Formatting, focused engine/UI Clippy with `-D warnings`, and MCP `docs_sync` 2/2 pass. This is an evidence-only `test:` slice; no production behavior changed.
 
 ### Task 10: Audit native and CDR/CMX persistence and fallbacks
 
