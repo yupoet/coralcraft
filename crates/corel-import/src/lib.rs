@@ -43,6 +43,12 @@ pub const PAGE_GAP_PT: f64 = 40.0;
 /// Key in `vectorcraft_doc::Document::unknown` storing lossless CorelDRAW metadata and residuals.
 pub const CORALCRAFT_UNKNOWN_KEY: &str = "coralcraft";
 
+const ORIGINAL_VC_EXTRA_PREFIX: &str = "corel.import.original_vc.v1";
+
+fn original_vc_extra_key(id: u64) -> String {
+    format!("{ORIGINAL_VC_EXTRA_PREFIX}.{id}")
+}
+
 /// Stroke width in points used in `vectorcraft-doc` to represent a CorelDRAW Hairline (`0.0 pt`).
 pub const HAIRLINE_WIDTH_PT: f64 = 0.25;
 
@@ -140,13 +146,10 @@ pub struct CoralCraftLayerMeta {
 }
 
 /// Per-object lossless CorelDRAW snapshot keyed by `vectorcraft_doc::NodeId` (`u64`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoralCraftObjectMeta {
     /// Original CorelDRAW `ObjectNode` snapshot prior to any interactive edits in VectorCraft.
     pub original: ObjectNode,
-    /// Full imported VectorCraft projection, stored only on each top-level imported object.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_vc: Option<Box<Node>>,
     /// Page index (`Some(i)`) whose artboard offset was applied to this node, or `None` for local/master coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_index: Option<usize>,
@@ -156,7 +159,7 @@ pub struct CoralCraftObjectMeta {
 }
 
 /// Top-level CorelDRAW metadata and lossless residuals stored in `Document::unknown["coralcraft"]`.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoralCraftDocData {
     #[serde(default)]
     pub schema: SchemaVersion,
@@ -818,6 +821,7 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
 
     let mut layer_meta_map: BTreeMap<u64, CoralCraftLayerMeta> = BTreeMap::new();
     let mut object_meta_map: BTreeMap<u64, CoralCraftObjectMeta> = BTreeMap::new();
+    let mut original_vc = BTreeMap::new();
     let mut vc_layers: Vec<Arc<Node>> = Vec::new();
     let mut used_node_ids = std::collections::BTreeSet::new();
 
@@ -850,7 +854,16 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = m_layer.printable;
                 for obj in &m_layer.objects {
-                    let cnode = convert_cdr_root_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode = convert_cdr_root_node_to_vc(
+                        obj,
+                        Vec2::ZERO,
+                        None,
+                        &mut doc,
+                        &mut used_node_ids,
+                        &mut object_meta_map,
+                        &mut original_vc,
+                        &mut warnings,
+                    );
                     children.push(Arc::new(cnode));
                 }
             }
@@ -882,8 +895,16 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = layer.printable;
                 for obj in &layer.objects {
-                    let cnode =
-                        convert_cdr_root_node_to_vc(obj, offset, Some(p_idx), &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode = convert_cdr_root_node_to_vc(
+                        obj,
+                        offset,
+                        Some(p_idx),
+                        &mut doc,
+                        &mut used_node_ids,
+                        &mut object_meta_map,
+                        &mut original_vc,
+                        &mut warnings,
+                    );
                     children.push(Arc::new(cnode));
                 }
             }
@@ -915,7 +936,16 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
             if let NodeKind::Layer { printable, children, .. } = &mut lnode.kind {
                 *printable = m_layer.printable;
                 for obj in &m_layer.objects {
-                    let cnode = convert_cdr_root_node_to_vc(obj, Vec2::ZERO, None, &mut doc, &mut used_node_ids, &mut object_meta_map, &mut warnings);
+                    let cnode = convert_cdr_root_node_to_vc(
+                        obj,
+                        Vec2::ZERO,
+                        None,
+                        &mut doc,
+                        &mut used_node_ids,
+                        &mut object_meta_map,
+                        &mut original_vc,
+                        &mut warnings,
+                    );
                     children.push(Arc::new(cnode));
                 }
             }
@@ -941,6 +971,11 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
     doc.layers = vc_layers;
     doc.fix_next_id();
 
+    let mut extra = cdr_doc.extra.clone();
+    for (id, projection) in original_vc {
+        let value = serde_json::to_value(projection).map_err(|e| CorelImportError::Conversion(e.to_string()))?;
+        extra.insert(original_vc_extra_key(id), value);
+    }
     let cc_data = CoralCraftDocData {
         schema: cdr_doc.schema,
         doc_id: cdr_doc.id,
@@ -952,7 +987,7 @@ pub fn import_document(cdr_doc: &CdrDocument) -> Result<(VcDocument, Vec<String>
         layer_meta: layer_meta_map,
         object_meta: object_meta_map,
         residual: cdr_doc.residual.clone(),
-        extra: cdr_doc.extra.clone(),
+        extra,
     };
     write_coralcraft_data(&mut doc, &cc_data)?;
 
@@ -1017,7 +1052,12 @@ pub fn export_document_with_warnings(doc: &VcDocument) -> Result<(CdrDocument, V
         cdr_doc.units = meta.units;
         cdr_doc.palette = meta.palette.clone();
         cdr_doc.residual = meta.residual.clone();
-        cdr_doc.extra = meta.extra.clone();
+        cdr_doc.extra = meta
+            .extra
+            .iter()
+            .filter(|(key, _)| !key.starts_with(ORIGINAL_VC_EXTRA_PREFIX))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
     } else {
         // Synthesize Corel palette swatches from non-reserved VectorCraft swatches
         let mut custom_swatches = Vec::new();
@@ -1701,12 +1741,11 @@ fn convert_cdr_root_node_to_vc(
     doc: &mut VcDocument,
     used_ids: &mut std::collections::BTreeSet<u64>,
     object_meta: &mut BTreeMap<u64, CoralCraftObjectMeta>,
+    original_vc: &mut BTreeMap<u64, Node>,
     warnings: &mut Vec<String>,
 ) -> Node {
     let node = convert_cdr_node_to_vc(cdr_node, offset, page_index, doc, used_ids, object_meta, warnings);
-    if let Some(metadata) = object_meta.get_mut(&node.id.0) {
-        metadata.original_vc = Some(Box::new(node.clone()));
-    }
+    original_vc.insert(node.id.0, node.clone());
     node
 }
 
@@ -1732,7 +1771,7 @@ fn convert_cdr_node_to_vc(
         }
     };
 
-    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), original_vc: None, page_index, initial_local_bounds: None });
+    object_meta.insert(nid.0, CoralCraftObjectMeta { original: cdr_node.clone(), page_index, initial_local_bounds: None });
 
     let xf = map_affine_to_vc(cdr_node.transform, offset);
     let local_bounds = cdr_node.kind.local_bounds().map(|r| {
@@ -2083,12 +2122,12 @@ struct ExpectedNode<'a> {
     original: &'a ObjectNode,
 }
 
-enum ExpectedProjection<'a> {
-    Stored(&'a Node),
+enum ExpectedProjection {
+    Stored(Box<Node>),
     Reconstructed { projection: Box<Node>, document: Box<VcDocument> },
 }
 
-impl ExpectedProjection<'_> {
+impl ExpectedProjection {
     fn projection(&self) -> &Node {
         match self {
             Self::Stored(node) => node,
@@ -2109,10 +2148,11 @@ struct ConvertedObject {
     shell_restored: bool,
 }
 
-fn expected_vc_projection<'a>(node: &Node, offset: Vec2, meta: Option<&'a CoralCraftDocData>) -> Option<ExpectedProjection<'a>> {
+fn expected_vc_projection(node: &Node, offset: Vec2, meta: Option<&CoralCraftDocData>) -> Option<ExpectedProjection> {
     let metadata = meta?.object_meta.get(&node.id.0)?;
-    if let Some(projection) = metadata.original_vc.as_deref() {
-        return Some(ExpectedProjection::Stored(projection));
+    if let Some(value) = meta.and_then(|data| data.extra.get(&original_vc_extra_key(node.id.0))) {
+        let projection = serde_json::from_value(value.clone()).ok()?;
+        return Some(ExpectedProjection::Stored(Box::new(projection)));
     }
     let mut document = VcDocument::new(595.275_590_551_181_2, 841.889_763_779_527_6);
     let mut used_ids = std::collections::BTreeSet::new();
@@ -2225,17 +2265,23 @@ fn image_contents_match(current: &Node, expected: ExpectedNode<'_>, doc: &VcDocu
     }
 }
 
+fn clear_text_layout_caches(node: &mut Node) {
+    if let NodeKind::Text(text) = &mut node.kind {
+        text.cached_bounds = None;
+        text.cached_baselines.clear();
+    }
+    if let Some(children) = projection_children_mut(&mut node.kind) {
+        for child in children {
+            clear_text_layout_caches(Arc::make_mut(child));
+        }
+    }
+}
+
 fn bounds_match(current: &Node, expected: &Node) -> bool {
     let mut current = current.clone();
     let mut expected = expected.clone();
-    if let NodeKind::Text(text) = &mut current.kind {
-        text.cached_bounds = None;
-        text.cached_baselines.clear();
-    }
-    if let NodeKind::Text(text) = &mut expected.kind {
-        text.cached_bounds = None;
-        text.cached_baselines.clear();
-    }
+    clear_text_layout_caches(&mut current);
+    clear_text_layout_caches(&mut expected);
     match (current.geometric_bounds(), expected.geometric_bounds()) {
         (Some(current), Some(expected)) => {
             (current.x0 - expected.x0).abs() < 1e-4
@@ -2394,6 +2440,8 @@ fn restore_original_node(
                 restored.opacity = frame.opacity;
                 restored.transparency = frame.transparency;
                 restored.effects = frame.effects;
+                restored.visible = frame.visible;
+                restored.locked = frame.locked;
             }
             Some(ConvertedObject { object: restored, shell_restored: true })
         }
@@ -2665,12 +2713,14 @@ fn convert_vc_node_to_cdr_with_expected(
         cnode.opacity = frame.opacity;
         cnode.transparency = frame.transparency;
         cnode.effects = frame.effects;
+        cnode.visible = frame.visible;
+        cnode.locked = frame.locked;
     } else {
         cnode.opacity = F64::new(f64::from(node.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
         cnode.effects = effects;
+        cnode.visible = node.visible;
+        cnode.locked = node.locked;
     }
-    cnode.visible = node.visible;
-    cnode.locked = node.locked;
     cnode.powerclip_children = powerclip_children;
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
         cnode.residual = ometa.original.residual.clone();

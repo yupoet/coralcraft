@@ -101,6 +101,7 @@ fn clear_original_vc(doc: &mut Document) {
     for metadata in value["object_meta"].as_object_mut().unwrap().values_mut() {
         metadata.as_object_mut().unwrap().remove("original_vc");
     }
+    value["extra"].as_object_mut().unwrap().retain(|key, _| !key.starts_with("corel.import.original_vc.v1."));
     doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
 }
 
@@ -455,16 +456,16 @@ fn unchanged_native_fills_residuals_and_source_document_remain_exact() {
 fn snapshot_persists_natively_only_on_top_level_imported_objects() {
     let doc = import_restorable(nested_group());
     let metadata = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap();
-    assert!(metadata["object_meta"]["60"].get("original_vc").is_some());
-    assert!(metadata["object_meta"]["61"].get("original_vc").is_none());
-    assert!(metadata["object_meta"]["62"].get("original_vc").is_none());
+    assert!(metadata["extra"]["corel.import.original_vc.v1.60"].is_object());
+    assert!(metadata["extra"].get("corel.import.original_vc.v1.61").is_none());
+    assert!(metadata["extra"].get("corel.import.original_vc.v1.62").is_none());
 
     let bytes = vectorcraft_format::save(&doc, false);
     let reopened = vectorcraft_format::load(&bytes).unwrap();
     let metadata = reopened.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap();
-    assert!(metadata["object_meta"]["60"].get("original_vc").is_some());
-    assert!(metadata["object_meta"]["61"].get("original_vc").is_none());
-    assert!(metadata["object_meta"]["62"].get("original_vc").is_none());
+    assert!(metadata["extra"]["corel.import.original_vc.v1.60"].is_object());
+    assert!(metadata["extra"].get("corel.import.original_vc.v1.61").is_none());
+    assert!(metadata["extra"].get("corel.import.original_vc.v1.62").is_none());
 }
 
 #[test]
@@ -561,4 +562,118 @@ fn missing_current_bounds_fail_closed_for_original_unknown_fill() {
     let exported = corel_import::export_document(&doc).unwrap();
     assert_eq!(only_object(&exported).fill, Some(FillStyle::uniform(CdrColor::gray(0.5).unwrap())));
     assert!(matches!(only_object(&exported).kind, ObjectKind::Path(_)));
+}
+
+fn shell_residual() -> Residual {
+    Residual { chunks: vec![RawChunk { tag: ChunkTag(*b"keep"), flags: 0, slot: 0, payload: RawPayload(vec![7, 6, 5]), src_offset: 0 }] }
+}
+
+fn group_with_nested_point_text() -> ObjectNode {
+    let mut group = ObjectNode::new(
+        ObjectId(120),
+        Some("Text Group".into()),
+        ObjectKind::Group { children: vec![text_object(121, "Nested Text", "AB")] },
+        Some(FillStyle::Unknown { tag: ChunkTag(*b"unkn"), payload: RawPayload(vec![1, 3, 5]) }),
+        None,
+    );
+    group.residual = shell_residual();
+    group
+}
+
+fn unsupported_with_nested_point_text() -> ObjectNode {
+    let unsupported = UnsupportedObject {
+        tag: ChunkTag(*b"mesh"),
+        class_hint: Some("Text Container".into()),
+        payload: RawPayload(vec![2, 4, 6]),
+        fallback_bounds: None,
+        absolute_geometry: false,
+        children: vec![text_object(131, "Nested Text", "AB")],
+        residual: shell_residual(),
+    };
+    ObjectNode::new(
+        ObjectId(130),
+        None,
+        ObjectKind::Unsupported(unsupported),
+        Some(FillStyle::Unknown { tag: ChunkTag(*b"unkn"), payload: RawPayload(vec![1, 3, 5]) }),
+        None,
+    )
+}
+
+fn assert_nested_text_cache_restores(original: ObjectNode, text_id: u64, legacy: bool) {
+    let expected = original.clone();
+    let mut doc = import_restorable(original);
+    if legacy {
+        clear_original_vc(&mut doc);
+    }
+    let NodeKind::Text(text) = &mut doc.node_mut(NodeId(text_id)).unwrap().kind else { panic!("nested text") };
+    text.cached_bounds = Some(Rect::new(-200.0, -200.0, 500.0, 500.0));
+    text.cached_baselines = vec![(Point::new(-200.0, -200.0), Point::new(500.0, 500.0))];
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert_eq!(only_object(&exported), &expected, "legacy={legacy}");
+}
+
+#[test]
+fn stored_group_nested_text_cache_differences_restore_shell() {
+    assert_nested_text_cache_restores(group_with_nested_point_text(), 121, false);
+}
+
+#[test]
+fn legacy_group_nested_text_cache_differences_restore_shell() {
+    assert_nested_text_cache_restores(group_with_nested_point_text(), 121, true);
+}
+
+#[test]
+fn stored_unsupported_nested_text_cache_differences_restore_shell() {
+    assert_nested_text_cache_restores(unsupported_with_nested_point_text(), 131, false);
+}
+
+#[test]
+fn legacy_unsupported_nested_text_cache_differences_restore_shell() {
+    assert_nested_text_cache_restores(unsupported_with_nested_point_text(), 131, true);
+}
+
+#[test]
+fn powerclip_frame_visible_and_locked_win_in_restored_shell() {
+    let mut doc = import_restorable(powerclip());
+    let frame_id = clip_frame_id(&doc);
+    let frame = doc.node_mut(frame_id).unwrap();
+    frame.visible = false;
+    frame.locked = true;
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(!only_object(&exported).visible);
+    assert!(only_object(&exported).locked);
+}
+
+#[test]
+fn powerclip_frame_visible_and_locked_win_in_outer_fallback() {
+    let mut doc = import_restorable(powerclip());
+    let frame_id = clip_frame_id(&doc);
+    let frame = doc.node_mut(frame_id).unwrap();
+    frame.visible = false;
+    frame.locked = true;
+    doc.node_mut(NodeId(80)).unwrap().name = Some("Changed outer shell".into());
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(!only_object(&exported).visible);
+    assert!(only_object(&exported).locked);
+}
+
+#[test]
+fn old_style_object_metadata_literal_and_eq_remain_source_compatible() {
+    fn assert_eq_trait<T: Eq>(_: &T) {}
+
+    let metadata = corel_import::CoralCraftObjectMeta {
+        original: rect_object(140, "Old Literal", [10.0, 10.0, 100.0, 100.0]),
+        page_index: Some(0),
+        initial_local_bounds: None,
+    };
+    assert_eq_trait(&metadata);
+    assert_eq!(metadata.clone(), metadata);
+
+    let mut data = corel_import::CoralCraftDocData::default();
+    data.object_meta.insert(140, metadata);
+    assert_eq_trait(&data);
+    assert_eq!(data.clone(), data);
 }
