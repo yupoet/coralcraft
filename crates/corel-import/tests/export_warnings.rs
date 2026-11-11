@@ -777,3 +777,89 @@ fn nested_exact_mesh_restoration_stays_silent_when_parent_restoration_fails() {
     assert!(matches!(&nested.kind, ObjectKind::Group { children } if !children.is_empty()));
     assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
 }
+
+#[test]
+fn nested_exact_mesh_restoration_stays_silent_when_live_parent_restoration_fails() {
+    let mut nested_original = ObjectNode::new(
+        ObjectId(131),
+        Some("Nested Live Restored Mesh".into()),
+        ObjectKind::Group { children: vec![rect_object(132, "Original Live Nested Patch", [10.0, 20.0, 110.0, 80.0])] },
+        None,
+        None,
+    );
+    nested_original.opacity = F64::new(0.37).unwrap();
+    let parent = ObjectNode::new(
+        ObjectId(130),
+        Some("Original Live Parent".into()),
+        ObjectKind::Group { children: vec![nested_original.clone()] },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(parent);
+    let parent_id = restorable_id(&doc, "Original Live Parent");
+    let nested_id =
+        doc.node(parent_id).unwrap().children().unwrap().iter().find(|child| child.name.as_deref() == Some("Nested Live Restored Mesh")).unwrap().id;
+
+    let mesh_source = mesh_document(0.25);
+    let NodeKind::Mesh(mesh) = &mesh_source.layers[0].children().unwrap()[0].kind else { panic!("mesh") };
+    let nested = doc.node_mut(nested_id).unwrap();
+    nested.kind = NodeKind::Mesh(mesh.clone());
+    nested.opacity = 1.0;
+    let nested = doc.node(nested_id).unwrap().clone();
+    doc.node_mut(parent_id).unwrap().kind = NodeKind::Blend { children: vec![std::sync::Arc::new(nested)], spec: Default::default() };
+    let expanded = vectorcraft_doc::live::expand_deep(doc.node(parent_id).unwrap(), None);
+    let key = format!("corel.import.original_vc.v1.{}", parent_id.0);
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    value["extra"].as_object_mut().unwrap().insert(key, serde_json::to_value(expanded).unwrap());
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+    doc.node_mut(parent_id).unwrap().name = Some("Changed Live Parent".into());
+
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    let ObjectKind::Group { children } = &only_object(&converted).kind else { panic!("converted live parent group") };
+    let nested = children.iter().find(|child| child.name.as_deref() == Some("Nested Live Restored Mesh")).unwrap();
+    assert_eq!(nested.opacity.get(), 0.37, "the nested original shell restored instead of using current opacity 1.0");
+    assert!(matches!(&nested.kind, ObjectKind::Group { children } if !children.is_empty()));
+    assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+}
+
+fn mesh_mask_document(name: &str, force_fallback: bool) -> (Document, corel_import::coralcraft_doc::TransparencyStyle) {
+    let mut original = rect_object(140, name, [10.0, 10.0, 100.0, 100.0]);
+    original.transparency = Some(corel_import::coralcraft_doc::TransparencyStyle::fountain_linear(45.0, 1.0, 0.2));
+    let expected = original.transparency.clone().unwrap();
+    let mut doc = import_restorable(original);
+    let id = restorable_id(&doc, name);
+    let mesh_source = mesh_document(0.25);
+    let NodeKind::Mesh(mesh) = &mesh_source.layers[0].children().unwrap()[0].kind else { panic!("mesh") };
+    let owner = doc.node_mut(id).unwrap();
+    let mut extras = owner.extras_mut();
+    let mask = extras.mask.as_deref_mut().unwrap();
+    std::sync::Arc::make_mut(&mut mask.art).kind = NodeKind::Mesh(mesh.clone());
+    drop(extras);
+
+    let key = format!("corel.import.original_vc.v1.{}", id.0);
+    let projection = doc.node(id).unwrap().clone();
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    value["extra"].as_object_mut().unwrap().insert(key, serde_json::to_value(projection).unwrap());
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+    if force_fallback {
+        doc.node_mut(id).unwrap().name = Some("Changed Mask Owner".into());
+    }
+    (doc, expected)
+}
+
+#[test]
+fn exact_restored_owner_with_translucent_mesh_mask_stays_silent() {
+    let (doc, expected) = mesh_mask_document("Restored Mesh Mask", false);
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(only_object(&converted).transparency, Some(expected));
+    assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+}
+
+#[test]
+fn fallback_owner_with_translucent_mesh_mask_warns_once() {
+    let (doc, _) = mesh_mask_document("Fallback Mesh Mask", true);
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert!(only_object(&converted).transparency.is_none());
+    assert_eq!(warnings.iter().filter(|warning| warning.as_str() == MESH_OPACITY_WARNING).count(), 1, "{warnings:?}");
+    assert_eq!(warning_count(&warnings, DROPPED_MASK_CATEGORY), 1, "{warnings:?}");
+}

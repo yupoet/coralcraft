@@ -706,6 +706,7 @@ struct ExportWarningLedger {
     gradient_alpha: bool,
     dropped_opacity_mask: bool,
     mesh_point_opacity: bool,
+    mesh_point_opacity_sources: BTreeSet<u64>,
     unsupported_bitmap_effects: BTreeSet<String>,
     missing_image_pixels: bool,
     undecodable_image_pixels: bool,
@@ -2593,15 +2594,21 @@ fn convert_vc_node_to_cdr_with_expected(
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
     warnings.live_trace |= node.extras().trace.is_some();
     let has_enabled_opacity_mask = node.extras().mask.as_deref().is_some_and(|mask| !mask.disabled);
+    let mut mask_mesh_point_opacity = None;
     if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
+        let checkpoint = (warnings.mesh_point_opacity, warnings.mesh_point_opacity_sources.clone());
         let _ = convert_vc_node_to_cdr_with_expected(&mask.art, offset, doc, meta, None, None, warnings);
+        mask_mesh_point_opacity = Some((warnings.mesh_point_opacity, warnings.mesh_point_opacity_sources.clone()));
+        warnings.mesh_point_opacity = checkpoint.0;
+        warnings.mesh_point_opacity_sources = checkpoint.1;
     }
-    let mut has_mesh_point_opacity = false;
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
         node.walk(&mut |descendant| {
-            if let NodeKind::Mesh(mesh) = &descendant.kind {
-                has_mesh_point_opacity |= mesh.points.iter().any(|point| point.opacity < 1.0);
+            if let NodeKind::Mesh(mesh) = &descendant.kind
+                && mesh.points.iter().any(|point| point.opacity < 1.0)
+            {
+                warnings.mesh_point_opacity_sources.insert(descendant.id.0);
             }
         });
         expanded = vectorcraft_doc::live::expand_deep(node, None);
@@ -2630,8 +2637,13 @@ fn convert_vc_node_to_cdr_with_expected(
     {
         return restored;
     }
+    if let Some((mask_warning, mask_sources)) = mask_mesh_point_opacity {
+        warnings.mesh_point_opacity |= mask_warning;
+        warnings.mesh_point_opacity_sources.extend(mask_sources);
+    }
     warnings.dropped_opacity_mask |= has_enabled_opacity_mask;
-    warnings.mesh_point_opacity |= has_mesh_point_opacity;
+    let drops_mesh_point_opacity = warnings.mesh_point_opacity_sources.contains(&node.id.0);
+    warnings.mesh_point_opacity |= drops_mesh_point_opacity;
 
     let oid = ObjectId(node.id.0.max(1));
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects, warnings);

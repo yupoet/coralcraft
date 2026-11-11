@@ -397,10 +397,12 @@ pub fn expand_deep_hooks(n: &Node, hooks: Hooks) -> Node {
     out
 }
 
-// CoralCraft: whether the latest outermost [`expand_deep`] on this thread produced an empty group
-// for any originally live node. The status persists after that expansion and resets at the next one.
-/// Reports empty live geometry, including generation-budget exhaustion, during the latest
-/// outermost [`expand_deep`] on this thread. Nested failures remain set until the next expansion.
+// CoralCraft: whether the latest outermost deep expansion on this thread produced an empty group
+// for any originally live node, using the existing live-evaluation guard rather than a second nesting mechanism.
+/// Reports empty live geometry, including generation-budget exhaustion, during the latest outermost
+/// [`expand_deep`] or [`expand_deep_hooks`] call on this thread. Reentrant deep expansions under
+/// live-evaluation hooks preserve the outer status. It persists after the outermost call returns
+/// and resets only at the next outermost deep expansion.
 #[must_use]
 pub fn live_expansion_failed() -> bool {
     EMPTY_LIVE_EXPANSION.get()
