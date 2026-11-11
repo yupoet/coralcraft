@@ -301,13 +301,21 @@ fn coreldraw_transparency_panel_makes_options_and_releases_an_opacity_mask() {
 #[test]
 fn coreldraw_pattern_menu_and_options_run_a_real_edit_done_lifecycle() {
     fn menu_item(app: &mut crate::VectorcraftApp, label: &str) {
-        let entry = crate::menus::menu_entries(app)
-            .into_iter()
-            .find(|entry| entry.path == ["Object", "Pattern"] && entry.label == label)
-            .unwrap_or_else(|| panic!("Object > Pattern > {label} is listed"));
-        assert!(entry.enabled, "Object > Pattern > {label} is enabled");
-        let (command, params) = crate::menus::click_target(&entry.label, entry.command.as_deref().unwrap(), &entry.params);
-        crate::menus::invoke(app, &command, params);
+        fn show(app: &mut crate::VectorcraftApp, ui: &mut egui::Ui) {
+            crate::menus::menu_bar(app, ui);
+        }
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, Default::default());
+        let shown = super::tests_appearance::frame_events(&ctx, app, vec![], show);
+        let object = super::tests_appearance::text_rect(&shown, "Object").center();
+        super::tests_appearance::click(&ctx, app, object, show);
+        let shown = super::tests_appearance::frame_events(&ctx, app, vec![], show);
+        let pattern = super::tests_appearance::text_rect(&shown, "Pattern").center();
+        super::tests_appearance::click(&ctx, app, pattern, show);
+        let shown = super::tests_appearance::frame_events(&ctx, app, vec![], show);
+        let item = super::tests_appearance::text_rect(&shown, label).center();
+        super::tests_appearance::click(&ctx, app, item, show);
     }
     fn click_done(app: &mut crate::VectorcraftApp) {
         use egui_kittest::kittest::Queryable;
@@ -341,9 +349,8 @@ fn coreldraw_pattern_menu_and_options_run_a_real_edit_done_lifecycle() {
     let target = run(&mut app, "shape.rectangle", json!({"x": 120, "y": 30, "width": 60, "height": 50}))["id"].as_u64().unwrap();
     run(&mut app, "paint.setFill", json!({"id": target, "swatch": name}));
     run(&mut app, "select.set", json!({"ids": [target]}));
-    app.ui.open_panel = None;
     menu_item(&mut app, "Edit Pattern");
-    assert_eq!(app.ui.open_panel.as_deref(), Some("patternOptions"), "Edit reopens Pattern Options");
+    assert_eq!(app.ui.open_panel.as_deref(), Some("patternOptions"), "Edit keeps the existing Pattern Options panel active");
     assert_eq!(app.session.active().unwrap().doc.pattern_edit.as_ref().map(|edit| edit.pattern.as_str()), Some(name.as_str()));
     let tile = app.session.active().unwrap().selection.objects[0];
     run(&mut app, "paint.setFill", json!({"id": tile.0, "color": "#abcdef"}));
