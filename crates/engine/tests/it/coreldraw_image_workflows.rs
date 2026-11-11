@@ -384,18 +384,24 @@ fn bitmap_powerclip_gaussian_blur_stays_live_and_exports_connected_structure() {
     s.execute("object.clippingMask.editContents", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().selection.objects, vec![NodeId(bitmap)]);
 
+    let expected_doc = vectorcraft_render::effects::bake_document(&s.doc().unwrap().doc).expect("export bakes the colour adjustment");
+    let NodeKind::Image(expected_image) = &expected_doc.node(NodeId(bitmap)).unwrap().kind else { panic!("export keeps the bitmap as an image") };
+    let expected_pixels = image::load_from_memory(&expected_doc.image_blob(expected_image).unwrap().bytes).unwrap().to_rgba8();
+    assert_ne!(expected_pixels, source, "the expected export pixels include the colour adjustment");
+
     let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the clipped blurred bitmap");
-    fn image_matches(image: &usvg::Image, source: &image::RgbaImage) -> bool {
-        if (image.size().width() as u32, image.size().height() as u32) != source.dimensions() {
+    fn image_matches(image: &usvg::Image, expected: &image::RgbaImage) -> bool {
+        if (image.size().width() as u32, image.size().height() as u32) != expected.dimensions() {
             return false;
         }
         match image.kind() {
-            usvg::ImageKind::PNG(bytes) => image::load_from_memory(bytes.as_slice()).map(|decoded| decoded.to_rgba8()).is_ok_and(|pixels| {
-                let mut colors = pixels.pixels();
-                let Some(first) = colors.next() else { return false };
-                colors.any(|pixel| pixel != first)
-            }),
+            usvg::ImageKind::PNG(bytes) => {
+                let decoded = image::load_from_memory(bytes.as_slice()).expect("the independently parsed PNG decodes").to_rgba8();
+                assert_eq!(decoded.dimensions(), expected.dimensions());
+                assert_eq!(decoded, *expected, "the exported PNG has the colour-adjusted RGBA pixels");
+                true
+            }
             _ => false,
         }
     }
@@ -433,7 +439,10 @@ fn bitmap_powerclip_gaussian_blur_stays_live_and_exports_connected_structure() {
                 _ => false,
             })
     }
-    assert!(connected_clip(tree.root(), &source), "a non-empty vector clip contains actual image content under a Gaussian filter: {svg}");
+    assert!(
+        connected_clip(tree.root(), &expected_pixels),
+        "a non-empty vector clip contains the expected adjusted image under a Gaussian filter: {svg}"
+    );
 
     let pdf = vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({"format": "pdf"})).unwrap()["dataBase64"].as_str().unwrap())
         .unwrap();

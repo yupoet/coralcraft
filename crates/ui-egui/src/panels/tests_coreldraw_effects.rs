@@ -189,18 +189,42 @@ fn coreldraw_gaussian_dialog_edits_a_selected_bitmaps_shared_effect_stack() {
     let bitmap = NodeId(placed["ids"][0].as_u64().unwrap());
     run(&mut app, "select.set", json!({"ids": [bitmap.0]}));
 
-    crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": "blur.gaussian"}));
+    let entry = crate::menus::menu_entries(&app)
+        .into_iter()
+        .find(|entry| entry.path == ["Effect", "Blur"] && entry.label == "Gaussian Blur…")
+        .expect("Effect > Blur > Gaussian Blur is listed");
+    assert!(entry.enabled);
+    let (command, params) = crate::menus::click_target(&entry.label, entry.command.as_deref().unwrap(), &entry.params);
+    crate::menus::invoke(&mut app, &command, params);
     let dialog = app.ui.dialog.as_ref().expect("the generic Gaussian Blur dialog opens");
     assert_eq!(dialog.kind, "effect");
     assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("blur.gaussian"));
     assert_eq!(dialog.fields.get("__label").and_then(serde_json::Value::as_str), Some("Gaussian Blur"));
-    let text = crate::tests_labels::painted_text(&mut app, |app, ui| crate::dialogs::show(app, ui.ctx()));
-    assert!(text.contains("Radius"), "Gaussian dialog rows: {text}");
 
-    app.ui.dialog.as_mut().unwrap().fields.insert("radius".into(), json!(8.0));
-    let _ = crate::tests_labels::painted_text(&mut app, |app, ui| crate::dialogs::show(app, ui.ctx()));
+    use egui_kittest::kittest::Queryable;
     let before = app.session.doc().unwrap().history.undo.len();
-    crate::dialogs::confirm(&mut app).unwrap();
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(900.0, 700.0))
+        .with_context_setup(|ctx| {
+            crate::theme::install_fonts(ctx);
+            crate::theme::apply(ctx, Default::default());
+        })
+        .build_ui(|ui| crate::dialogs::show(&mut app, ui.ctx()));
+    harness.run_steps(6);
+    let radius = harness.get_by_role_and_label(egui::accesskit::Role::TextInput, "Radius:");
+    assert_eq!(radius.value().as_deref(), Some("5 pt"));
+    radius.click();
+    harness.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    radius.type_text("8");
+    harness.run_steps(4);
+    harness.key_press(egui::Key::Tab);
+    harness.run_steps(4);
+    let radius = harness.get_by_role_and_label(egui::accesskit::Role::TextInput, "Radius:");
+    assert_eq!(radius.value().as_deref(), Some("8 pt"));
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+    harness.run_steps(4);
+    drop(harness);
+
     assert!(app.ui.dialog.is_none());
     assert_eq!(app.session.doc().unwrap().history.undo.len(), before + 1);
     let node = app.session.active().unwrap().doc.node(bitmap).unwrap();
