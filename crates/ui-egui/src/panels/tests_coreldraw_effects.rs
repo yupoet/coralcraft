@@ -180,6 +180,17 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
         app.session.active().unwrap().selection.objects[0]
     }
 
+    fn fill_palette(app: &crate::VectorcraftApp, id: NodeId) -> std::collections::BTreeSet<String> {
+        let node = app.session.active().unwrap().doc.node(id).unwrap();
+        node.children().unwrap().iter().filter_map(|child| child.appearance.fill_paint().color().map(|color| color.to_hex())).collect()
+    }
+
+    fn assert_color_result(app: &crate::VectorcraftApp, id: NodeId, expected: &std::collections::BTreeSet<String>) {
+        let node = app.session.active().unwrap().doc.node(id).unwrap();
+        assert_eq!(node.extras().trace.as_ref().unwrap()["params"]["mode"], "color");
+        assert_eq!(fill_palette(app, id), *expected, "Color restores the complete original palette, not stale grayscale geometry");
+    }
+
     fn undo(app: &crate::VectorcraftApp) -> usize {
         app.session.active().unwrap().history.undo.len()
     }
@@ -252,6 +263,8 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     let first = selected(h.state());
     let node = h.state().session.active().unwrap().doc.node(first).unwrap();
     assert_eq!(node.extras().trace.as_ref().unwrap()["preset"], "6 Colors");
+    let initial_palette = fill_palette(h.state(), first);
+    assert!(!initial_palette.is_empty());
 
     choose(&mut h, "Color", "Grayscale");
     assert_eq!(undo(h.state()), before + 2, "changing the visible Mode control retraces once");
@@ -263,7 +276,7 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     assert_eq!(undo(h.state()), before + 3, "changing Mode back to Color is another single retrace");
     let second = selected(h.state());
     assert_ne!(second, grayscale);
-    assert_eq!(h.state().session.active().unwrap().doc.node(second).unwrap().extras().trace.as_ref().unwrap()["params"]["mode"], "color");
+    assert_color_result(h.state(), second, &initial_palette);
 
     let before = undo(h.state());
     release_slider(&mut h, "Colors", false);
