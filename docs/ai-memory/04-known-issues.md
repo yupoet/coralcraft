@@ -1,5 +1,11 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0m. [Resolved 2026-11-12, P3 Task 10] Transparency/bitmap fallbacks were silent and white allocation was unbounded
+
+- Gradient stop alpha, enabled opacity masks that could not be restored exactly, and visible unsupported bitmap effects were dropped without warnings. Missing and corrupt image bytes shared an unreported white fallback. The fallback and `encoded_original_bitmap` used saturating dimension arithmetic followed by allocation, which could still panic or request an enormous buffer.
+- Conversion now records separate gradient/mask/effect/missing-image/decode-image warnings. Unchanged imported CDR Fountain masks restore exactly with no dropped-mask warning; edited masks warn and export converted `transparency: None`; disabled masks stay silent. Unsupported effect IDs are sorted/deduplicated from the existing six-arm supported match. Missing blobs and present-but-undecodable or empty pixels remain distinct, valid white images do not warn, and native image bytes/references are unchanged.
+- Both allocation paths use checked `u64` arithmetic and `coralcraft_cdr::parse::MAX_BITMAP_PIXELS` (64 Mpx / 256 MiB), returning `CorelImportError::Conversion` on overflow or over-budget fallback dimensions. Ordinary small opaque-white fallback semantics are unchanged. Exact warning strings and the failing-first/green evidence are in `docs/p3-inventory.md` §14. No new CDR fidelity is claimed; the combined matrix and S2 remain open.
+
 ## 0k. [Resolved 2026-11-11, P3 Task 10] Generic pattern and live-trace CDR/CMX fallbacks were silent
 
 - Used generic `Paint::Pattern` fills are substituted by `corel-import` with a default 12 pt black/white checkerboard, while strokes/text/colorize and other pattern colour queries can become black or be dropped; CDR/CMX export previously emitted no warning. Live trace groups likewise exported their ordinary children without their `extras().trace` preset/params/view or source relationship and emitted no warning.

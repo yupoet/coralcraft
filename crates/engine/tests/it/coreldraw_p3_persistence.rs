@@ -534,3 +534,122 @@ fn active_opacity_mask_pattern_and_live_trace_warn_once() {
         assert_channel_warnings(&exported, format, true);
     }
 }
+
+fn gradient_with_opacity(opacity: f32) -> Paint {
+    let stops = vec![
+        vectorcraft_color::GradientStop { opacity, ..vectorcraft_color::GradientStop::new(0.0, Color::BLACK) },
+        vectorcraft_color::GradientStop::new(1.0, Color::WHITE),
+    ];
+    Paint::Gradient(Box::new(vectorcraft_color::GradientPaint::new(vectorcraft_color::Gradient::new(vectorcraft_color::GradientKind::Linear, stops))))
+}
+
+fn session_with_gradient_and_mask(opacity: f32, disabled: bool) -> (Session, u64) {
+    let mut s = session();
+    let target = rectangle(&mut s, 100.0);
+    let mask = rectangle(&mut s, 20.0);
+    s.edit("Gradient alpha", move |d, _| {
+        d.node_mut(NodeId(target)).unwrap().appearance.set_fill(gradient_with_opacity(opacity));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.set", &json!({"ids": [target, mask]})).unwrap();
+    let made = s.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    assert_eq!(made["id"].as_u64().unwrap(), target);
+    if disabled {
+        s.edit("Disable mask", move |d, _| {
+            d.node_mut(NodeId(target)).unwrap().extras_mut().mask.as_deref_mut().unwrap().disabled = true;
+            Ok(())
+        })
+        .unwrap();
+    }
+    (s, target)
+}
+
+fn assert_gradient_and_mask(doc: &Document, id: u64, opacity: f32, disabled: bool) {
+    let node = doc.node(NodeId(id)).unwrap();
+    let Paint::Gradient(gradient) = node.appearance.fill_paint() else { panic!("editable native gradient") };
+    assert_eq!(gradient.gradient.stops[0].opacity, opacity);
+    let mask = node.extras().mask.as_deref().unwrap();
+    assert_eq!(mask.disabled, disabled);
+    assert!(matches!(mask.art.kind, NodeKind::Path { .. }));
+}
+
+#[test]
+fn gradient_alpha_and_enabled_mask_warn_once_and_remain_natively_editable() {
+    let (mut s, target) = session_with_gradient_and_mask(0.25, false);
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.25, false);
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 1, "{format}: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "enabled opacity masks"), 1, "{format}: {exported}");
+        assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.25, false);
+        let converted = corel_import::export_document(&s.doc().unwrap().doc).unwrap();
+        assert!(converted.pages[0].layers[0].objects[0].transparency.is_none());
+    }
+    assert_eq!(native_bytes(&mut s), native);
+
+    s.edit("Edit native gradient and mask", move |d, _| {
+        let node = d.node_mut(NodeId(target)).unwrap();
+        let gradient = node
+            .appearance
+            .items
+            .iter_mut()
+            .find_map(|item| match item.paint_mut() {
+                Paint::Gradient(gradient) => Some(gradient),
+                _ => None,
+            })
+            .unwrap();
+        gradient.gradient.stops[0].opacity = 0.7;
+        let mut extras = node.extras_mut();
+        let mask = extras.mask.as_deref_mut().unwrap();
+        std::sync::Arc::make_mut(&mut mask.art).appearance.set_fill(Paint::solid(Color::gray(0.4)));
+        Ok(())
+    })
+    .unwrap();
+    let revised = native_bytes(&mut s);
+    open_native(&mut s, &revised);
+    assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.7, false);
+
+    let (mut opaque, opaque_target) = session_with_gradient_and_mask(1.0, true);
+    assert_gradient_and_mask(&opaque.doc().unwrap().doc, opaque_target, 1.0, true);
+    for format in ["cdr", "cmx"] {
+        let exported = opaque.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 0, "{format}: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "enabled opacity masks"), 0, "{format}: {exported}");
+    }
+}
+
+#[test]
+fn invisible_and_shadowed_gradient_alpha_stays_silent() {
+    let (mut invisible, target) = session_with_gradient_and_mask(0.25, true);
+    invisible
+        .edit("Hide gradient", move |d, _| {
+            let node = d.node_mut(NodeId(target)).unwrap();
+            node.extras_mut().mask = None;
+            let AppearanceItem::Fill(fill) = &mut node.appearance.items[0] else { panic!("fill") };
+            fill.visible = false;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut shadowed = session();
+    let shadowed_target = rectangle(&mut shadowed, 100.0);
+    shadowed
+        .edit("Gradient alpha", move |d, _| {
+            d.node_mut(NodeId(shadowed_target)).unwrap().appearance.set_fill(gradient_with_opacity(0.25));
+            Ok(())
+        })
+        .unwrap();
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_target})).unwrap();
+    shadowed.execute("appearance.setItem", &json!({"id": shadowed_target, "index": 2, "color": "#112233"})).unwrap();
+
+    for (name, s) in [("invisible", &mut invisible), ("shadowed", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 0, "{name} in {format}: {exported}");
+        }
+    }
+}

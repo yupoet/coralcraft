@@ -2,7 +2,7 @@
 //! and `vectorcraft-doc` (`vectorcraft_doc::Document`), preserving lossless CorelDRAW residuals under
 //! `Document::unknown["coralcraft"]`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -691,11 +691,23 @@ pub fn import_legacy_coralcraft_bytes(bytes: &[u8]) -> Result<(VcDocument, Vec<S
 const GENERIC_PATTERN_WARNING: &str = "generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable";
 const LIVE_TRACE_WARNING: &str =
     "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
+const GRADIENT_ALPHA_WARNING: &str = "gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable";
+const DROPPED_MASK_WARNING: &str = "enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable";
+const MISSING_IMAGE_WARNING: &str =
+    "missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
+const DECODE_IMAGE_WARNING: &str =
+    "undecodable or empty image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
 
 #[derive(Default)]
 struct ExportWarningLedger {
     generic_pattern: bool,
     live_trace: bool,
+    gradient_alpha: bool,
+    dropped_opacity_mask: bool,
+    unsupported_bitmap_effects: BTreeSet<String>,
+    missing_image_pixels: bool,
+    undecodable_image_pixels: bool,
+    conversion_error: Option<String>,
 }
 
 impl ExportWarningLedger {
@@ -707,7 +719,30 @@ impl ExportWarningLedger {
         if self.live_trace {
             warnings.push(LIVE_TRACE_WARNING.to_owned());
         }
+        if self.gradient_alpha {
+            warnings.push(GRADIENT_ALPHA_WARNING.to_owned());
+        }
+        if self.dropped_opacity_mask {
+            warnings.push(DROPPED_MASK_WARNING.to_owned());
+        }
+        if !self.unsupported_bitmap_effects.is_empty() {
+            let ids = self.unsupported_bitmap_effects.into_iter().collect::<Vec<_>>().join(", ");
+            warnings.push(format!("unsupported bitmap effects are dropped in CDR/CMX: {ids}; native effect parameters remain editable"));
+        }
+        if self.missing_image_pixels {
+            warnings.push(MISSING_IMAGE_WARNING.to_owned());
+        }
+        if self.undecodable_image_pixels {
+            warnings.push(DECODE_IMAGE_WARNING.to_owned());
+        }
         warnings
+    }
+
+    fn finish(self) -> Result<Vec<String>, CorelImportError> {
+        if let Some(error) = self.conversion_error {
+            return Err(CorelImportError::Conversion(error));
+        }
+        Ok(self.into_warnings())
     }
 }
 
@@ -1292,7 +1327,8 @@ pub fn export_document_with_warnings(doc: &VcDocument) -> Result<(CdrDocument, V
     }
 
     let _ = cdr_doc.validate();
-    Ok((cdr_doc, warnings.into_warnings()))
+    let warnings = warnings.finish()?;
+    Ok((cdr_doc, warnings))
 }
 
 fn best_artboard_for_node(node: &Node, artboards: &[Artboard]) -> usize {
@@ -1391,7 +1427,14 @@ fn map_vc_color_to_cdr(c: &VcColor) -> CdrColor {
     }
 }
 
+fn note_gradient_alpha(paint: &Paint, warnings: &mut ExportWarningLedger) {
+    if matches!(paint, Paint::Gradient(gradient) if gradient.gradient.stops.iter().any(|stop| stop.opacity < 1.0)) {
+        warnings.gradient_alpha = true;
+    }
+}
+
 fn map_vc_paint_to_cdr_color(p: &Paint, warnings: &mut ExportWarningLedger) -> Option<CdrColor> {
+    note_gradient_alpha(p, warnings);
     match p {
         Paint::None => None,
         Paint::Solid { swatch: Some(sw), .. } if sw == REGISTRATION => Some(CdrColor::Registration),
@@ -2228,13 +2271,34 @@ fn normalized_projection_shell(node: &Node) -> Node {
     shell
 }
 
-fn encoded_original_bitmap(original: &ObjectNode) -> Option<Vec<u8>> {
+fn checked_rgba_len(width: u32, height: u32) -> Result<usize, String> {
+    let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| format!("bitmap fallback dimensions {width}x{height} overflow"))?;
+    if pixels > coralcraft_cdr::parse::MAX_BITMAP_PIXELS as u64 {
+        return Err(format!("bitmap fallback dimensions {width}x{height} exceed the 64 Mpx / 256 MiB budget"));
+    }
+    let bytes = pixels.checked_mul(4).ok_or_else(|| format!("bitmap fallback dimensions {width}x{height} overflow"))?;
+    usize::try_from(bytes).map_err(|_| format!("bitmap fallback dimensions {width}x{height} exceed this platform's address space"))
+}
+
+fn record_conversion_error(warnings: &mut ExportWarningLedger, error: String) {
+    if warnings.conversion_error.is_none() {
+        warnings.conversion_error = Some(error);
+    }
+}
+
+fn encoded_original_bitmap(original: &ObjectNode, warnings: &mut ExportWarningLedger) -> Option<Vec<u8>> {
     let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &original.kind else {
         return None;
     };
     let width = (*pixel_width).max(1);
     let height = (*pixel_height).max(1);
-    let expected_len = (width as usize).saturating_mul(height as usize).saturating_mul(4);
+    let expected_len = match checked_rgba_len(width, height) {
+        Ok(len) => len,
+        Err(error) => {
+            record_conversion_error(warnings, error);
+            return None;
+        }
+    };
     let mut raw = rgba_pixels.clone();
     if raw.len() < expected_len {
         raw.resize(expected_len, 255);
@@ -2247,20 +2311,30 @@ fn encoded_original_bitmap(original: &ObjectNode) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn image_contents_match(current: &Node, expected: ExpectedNode<'_>, doc: &VcDocument, expected_doc: Option<&VcDocument>) -> bool {
+fn image_contents_match(
+    current: &Node,
+    expected: ExpectedNode<'_>,
+    doc: &VcDocument,
+    expected_doc: Option<&VcDocument>,
+    warnings: &mut ExportWarningLedger,
+) -> bool {
     if let (NodeKind::Image(current_image), NodeKind::Image(expected_image)) = (&current.kind, &expected.projection.kind) {
         let current_bytes = doc.images.get(&current_image.key).map(|blob| blob.bytes.as_slice());
         let expected_from_doc = expected_doc.and_then(|document| document.images.get(&expected_image.key)).map(|blob| blob.bytes.as_slice());
-        let encoded_original = if expected_from_doc.is_none() { encoded_original_bitmap(expected.original) } else { None };
+        let encoded_original = if expected_from_doc.is_none() { encoded_original_bitmap(expected.original, warnings) } else { None };
         let expected_bytes = expected_from_doc.or(encoded_original.as_deref());
         if !matches!((current_bytes, expected_bytes), (Some(current), Some(expected)) if current == expected) {
             return false;
         }
     }
     match (current.extras().mask.as_deref(), expected.projection.extras().mask.as_deref()) {
-        (Some(current_mask), Some(expected_mask)) => {
-            image_contents_match(&current_mask.art, ExpectedNode { projection: &expected_mask.art, original: expected.original }, doc, expected_doc)
-        }
+        (Some(current_mask), Some(expected_mask)) => image_contents_match(
+            &current_mask.art,
+            ExpectedNode { projection: &expected_mask.art, original: expected.original },
+            doc,
+            expected_doc,
+            warnings,
+        ),
         _ => true,
     }
 }
@@ -2293,12 +2367,18 @@ fn bounds_match(current: &Node, expected: &Node) -> bool {
     }
 }
 
-fn projection_matches(current: &Node, expected: ExpectedNode<'_>, doc: &VcDocument, expected_doc: Option<&VcDocument>) -> bool {
+fn projection_matches(
+    current: &Node,
+    expected: ExpectedNode<'_>,
+    doc: &VcDocument,
+    expected_doc: Option<&VcDocument>,
+    warnings: &mut ExportWarningLedger,
+) -> bool {
     current.name == expected.projection.name
         && current.visible == expected.projection.visible
         && current.locked == expected.projection.locked
         && bounds_match(current, expected.projection)
-        && image_contents_match(current, expected, doc, expected_doc)
+        && image_contents_match(current, expected, doc, expected_doc, warnings)
         && normalized_projection_shell(current) == normalized_projection_shell(expected.projection)
 }
 
@@ -2478,6 +2558,7 @@ fn convert_vc_node_to_cdr_with_expected(
 ) -> ConvertedObject {
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
     warnings.live_trace |= node.extras().trace.is_some();
+    let has_enabled_opacity_mask = node.extras().mask.as_deref().is_some_and(|mask| !mask.disabled);
     if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
         let _ = convert_vc_node_to_cdr_with_expected(&mask.art, offset, doc, meta, None, None, warnings);
     }
@@ -2501,14 +2582,15 @@ fn convert_vc_node_to_cdr_with_expected(
         let _ = map_vc_paint_to_cdr_color(paint, warnings);
     }
     if let Some(expected) = expected
-        && projection_matches(node, expected, doc, expected_doc)
+        && projection_matches(node, expected, doc, expected_doc, warnings)
         && let Some(restored) = restore_original_node(node, offset, doc, meta, expected, expected_doc, warnings)
     {
         return restored;
     }
+    warnings.dropped_opacity_mask |= has_enabled_opacity_mask;
 
     let oid = ObjectId(node.id.0.max(1));
-    let effects = convert_vc_effects_to_cdr(&node.appearance.effects);
+    let effects = convert_vc_effects_to_cdr(&node.appearance.effects, warnings);
 
     let mut powerclip_children = Vec::new();
     let mut powerclip_frame = None;
@@ -2668,16 +2750,29 @@ fn convert_vc_node_to_cdr_with_expected(
             let mut rgba_pixels = Vec::new();
             let mut pw = im.width.max(1);
             let mut ph = im.height.max(1);
-            if let Some(blob) = doc.images.get(&im.key)
-                && let Ok(decoded) = image::load_from_memory(&blob.bytes)
-            {
-                let rgba = decoded.to_rgba8();
-                pw = rgba.width().max(1);
-                ph = rgba.height().max(1);
-                rgba_pixels = rgba.into_raw();
+            if let Some(blob) = doc.images.get(&im.key) {
+                match image::load_from_memory(&blob.bytes) {
+                    Ok(decoded) => {
+                        let rgba = decoded.to_rgba8();
+                        pw = rgba.width().max(1);
+                        ph = rgba.height().max(1);
+                        let decoded_pixels = rgba.into_raw();
+                        if decoded_pixels.is_empty() {
+                            warnings.undecodable_image_pixels = true;
+                        } else {
+                            rgba_pixels = decoded_pixels;
+                        }
+                    }
+                    Err(_) => warnings.undecodable_image_pixels = true,
+                }
+            } else {
+                warnings.missing_image_pixels = true;
             }
             if rgba_pixels.is_empty() {
-                rgba_pixels = vec![255; (pw as usize).saturating_mul(ph as usize).saturating_mul(4)];
+                match checked_rgba_len(pw, ph) {
+                    Ok(len) => rgba_pixels = vec![255; len],
+                    Err(error) => record_conversion_error(warnings, error),
+                }
             }
             let [a0, a1, a2, a3, ..] = im.xf.as_coeffs();
             let sx = a0.hypot(a1).max(1e-3);
@@ -2759,6 +2854,7 @@ fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLed
 }
 
 fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {
+    note_gradient_alpha(paint, warnings);
     match paint {
         Paint::None => None,
         Paint::Solid { .. } => map_vc_paint_to_cdr_color(paint, warnings).map(FillStyle::uniform),
@@ -2818,7 +2914,7 @@ fn convert_vc_stroke_to_outline(sl: &StrokeLayer, warnings: &mut ExportWarningLe
     Some(outl)
 }
 
-fn convert_vc_effects_to_cdr(effects: &[Effect]) -> Vec<VectorEffect> {
+fn convert_vc_effects_to_cdr(effects: &[Effect], warnings: &mut ExportWarningLedger) -> Vec<VectorEffect> {
     let mut out = Vec::new();
     for eff in effects {
         if !eff.visible {
@@ -2868,7 +2964,9 @@ fn convert_vc_effects_to_cdr(effects: &[Effect]) -> Vec<VectorEffect> {
                     out.push(VectorEffect::Distortion { kind: DistortionKind::Twister, amplitude, frequency: F64::ONE });
                 }
             }
-            _ => {}
+            id => {
+                warnings.unsupported_bitmap_effects.insert(id.to_owned());
+            }
         }
     }
     out
