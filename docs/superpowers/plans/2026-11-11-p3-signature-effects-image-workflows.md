@@ -101,13 +101,15 @@ Assert undo/redo, native editability, and independent SVG/PDF structure. Do not 
 
 Progress: fountain, vector-pattern, and mesh tests pass with native edit/reopen and independent SVG/PDF reads. Two-colour/bitmap patterns and textures remain uncovered, so this step stays open.
 
-- [ ] **Step 2: Verify transparency and merge behaviour**
+- [x] **Step 2: Verify transparency and merge behaviour**
 
 Exercise uniform/graded transparency, merge modes, and opacity masks through existing transparency commands and panels. Require source editability and explicit export fallback where an output format cannot retain the live model.
 
+Complete: the earlier uniform-opacity + Multiply evidence is joined by graded stop-opacity editing with undo/redo and native reopen. Independent `usvg` checks prove the exported linear-gradient offsets, colours, and alpha values; Hayro-backed PDF import proves one page containing vector geometry, not live PDF gradient editing. A top vector object becomes real mask art outside the layer tree; clip/invert, disable/enable, source/target editing, undo/redo, native reopen, and release/restoration pass. Independent `usvg` proves a luminance mask containing the edited vector art is connected to the red target. Hayro-backed PDF import proves a page and reconstructed vector soft-mask structure, not the original native editing relationships. The actual CorelDRAW Transparency panel's Make Mask, Invert Mask, and Release controls pass through AccessKit/synthetic input. SVG retains the live gradient/mask structures; PDF evidence is limited to the reconstructed page/vector/mask structures stated above, with native sources remaining the editable authority. No production change was needed.
+
 - [ ] **Step 3: Verify and commit**
 
-Run the new engine/UI filters plus existing mesh and transparency suites. Commit with `test: verify CorelDRAW fills and transparency` if evidence-only, or a focused `feat:` for reproduced gaps.
+Run the new engine/UI filters plus existing mesh and transparency suites. Commit with `test: verify CorelDRAW fills and transparency` if evidence-only, or a focused `feat:` for reproduced gaps. Step 3 remains open until the Step 1 paint families and the final combined fill/transparency verification and commits are complete; the Step 2 evidence commit does not close it.
 
 ### Task 4: Prove Blend and Contour interactive editing
 

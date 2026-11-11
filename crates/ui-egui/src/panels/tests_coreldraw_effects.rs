@@ -234,3 +234,66 @@ fn coreldraw_gaussian_dialog_edits_a_selected_bitmaps_shared_effect_stack() {
     assert_eq!(effects[0].id, "blur.gaussian");
     assert_eq!(effects[0].params["radius"].as_f64(), Some(8.0));
 }
+
+#[test]
+fn coreldraw_transparency_panel_makes_options_and_releases_an_opacity_mask() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let target = app.session.active().unwrap().selection.objects[0];
+    let mask = NodeId(run(&mut app, "shape.rectangle", json!({"x": 30, "y": 20, "width": 35, "height": 40}))["id"].as_u64().unwrap());
+    run(&mut app, "select.set", json!({"ids": [target.0, mask.0]}));
+
+    use egui_kittest::kittest::Queryable;
+    {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(520.0, 420.0))
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                crate::theme::install_fonts(ctx);
+                crate::theme::apply(ctx, Default::default());
+            })
+            .build_ui(|ui| super::transparency::show(&mut app, ui));
+        harness.run_steps(6);
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Make Mask").click();
+        harness.run_steps(4);
+    }
+    let model =
+        app.session.active().unwrap().doc.node(target).unwrap().extras().mask.as_deref().expect("the visible Make Mask button creates a mask");
+    assert_eq!(model.art.id, mask);
+    assert!(model.art.path_data().is_some());
+    assert!(app.session.active().unwrap().doc.node(mask).is_none());
+
+    {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(520.0, 420.0))
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                crate::theme::install_fonts(ctx);
+                crate::theme::apply(ctx, Default::default());
+            })
+            .build_ui(|ui| super::transparency::show(&mut app, ui));
+        harness.run_steps(4);
+        harness.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Invert Mask").click();
+        harness.run_steps(4);
+    }
+    assert!(app.session.active().unwrap().doc.node(target).unwrap().extras().mask.as_deref().unwrap().invert);
+
+    {
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(520.0, 420.0))
+            .with_accessibility_check(false)
+            .with_context_setup(|ctx| {
+                crate::theme::install_fonts(ctx);
+                crate::theme::apply(ctx, Default::default());
+            })
+            .build_ui(|ui| super::transparency::show(&mut app, ui));
+        harness.run_steps(4);
+        harness.get_by_role_and_label(egui::accesskit::Role::Button, "Release").click();
+        harness.run_steps(4);
+    }
+
+    let st = app.session.active().unwrap();
+    assert!(st.doc.node(target).unwrap().extras().mask.is_none());
+    assert!(st.doc.node(target).unwrap().path_data().is_some());
+    assert!(st.selection.objects.iter().any(|id| st.doc.node(*id).is_some_and(|node| node.path_data().is_some() && node.id != target)));
+}
