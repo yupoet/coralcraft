@@ -2243,7 +2243,6 @@ fn bounds_match(current: &Node, expected: &Node) -> bool {
                 && (current.x1 - expected.x1).abs() < 1e-4
                 && (current.y1 - expected.y1).abs() < 1e-4
         }
-        (None, None) => true,
         _ => false,
     }
 }
@@ -2393,6 +2392,7 @@ fn restore_original_node(
                 restored.outline = frame.outline;
                 restored.transform = frame.transform;
                 restored.opacity = frame.opacity;
+                restored.transparency = frame.transparency;
                 restored.effects = frame.effects;
             }
             Some(ConvertedObject { object: restored, shell_restored: true })
@@ -2663,6 +2663,7 @@ fn convert_vc_node_to_cdr_with_expected(
         cnode.outline = frame.outline;
         cnode.transform = frame.transform;
         cnode.opacity = frame.opacity;
+        cnode.transparency = frame.transparency;
         cnode.effects = frame.effects;
     } else {
         cnode.opacity = F64::new(f64::from(node.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);

@@ -494,3 +494,71 @@ fn legacy_fallback_also_fails_closed_for_current_edits() {
     let exported = corel_import::export_document(&doc).unwrap();
     assert_red(only_object(&exported));
 }
+
+fn transparent_powerclip() -> ObjectNode {
+    let mut frame = powerclip();
+    frame.transparency = Some(TransparencyStyle::fountain_linear(45.0, 1.0, 0.2));
+    frame
+}
+
+fn clip_frame_id(doc: &Document) -> NodeId {
+    doc.node(doc.node(NodeId(80)).unwrap().children().unwrap()[0].id).unwrap().id
+}
+
+#[test]
+fn powerclip_frame_transparency_edit_uses_current_conversion() {
+    let mut doc = import_restorable(transparent_powerclip());
+    let frame_id = clip_frame_id(&doc);
+    let frame = doc.node_mut(frame_id).unwrap();
+    let mut extras = frame.extras_mut();
+    let mask = extras.mask.as_mut().unwrap();
+    Arc::make_mut(&mut mask.art).appearance.set_fill(red_fill());
+    drop(extras);
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(only_object(&exported).transparency.is_none());
+}
+
+#[test]
+fn powerclip_frame_transparency_removal_uses_current_conversion_in_restore_and_fallback() {
+    let mut restored = import_restorable(transparent_powerclip());
+    let frame_id = clip_frame_id(&restored);
+    restored.node_mut(frame_id).unwrap().extras_mut().mask = None;
+    assert!(only_object(&corel_import::export_document(&restored).unwrap()).transparency.is_none());
+
+    let mut fallback = import_restorable(transparent_powerclip());
+    let frame_id = clip_frame_id(&fallback);
+    fallback.node_mut(frame_id).unwrap().extras_mut().mask = None;
+    fallback.node_mut(NodeId(80)).unwrap().name = Some("Changed outer shell".into());
+    let exported = corel_import::export_document(&fallback).unwrap();
+    assert!(only_object(&exported).transparency.is_none());
+}
+
+#[test]
+fn unchanged_transparent_powerclip_still_restores_original_transparency() {
+    let original = transparent_powerclip();
+    let expected = original.transparency.clone();
+    let doc = import_restorable(original);
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert_eq!(only_object(&exported).transparency, expected);
+}
+
+#[test]
+fn missing_current_bounds_fail_closed_for_original_unknown_fill() {
+    let unsupported = UnsupportedObject {
+        tag: ChunkTag(*b"mesh"),
+        class_hint: Some("No Bounds".into()),
+        payload: RawPayload(vec![1, 2, 3]),
+        fallback_bounds: None,
+        absolute_geometry: false,
+        children: Vec::new(),
+        residual: Residual::default(),
+    };
+    let mut object = ObjectNode::new(ObjectId(110), None, ObjectKind::Unsupported(unsupported), None, None);
+    object.fill = Some(FillStyle::Unknown { tag: ChunkTag(*b"unkn"), payload: RawPayload(vec![4, 5, 6]) });
+    let doc = import_restorable(object);
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert_eq!(only_object(&exported).fill, Some(FillStyle::uniform(CdrColor::gray(0.5).unwrap())));
+    assert!(matches!(only_object(&exported).kind, ObjectKind::Path(_)));
+}
