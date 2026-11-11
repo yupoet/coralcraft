@@ -41,7 +41,7 @@ Measured with the same-revision CLI/xtask binaries: the JSON command catalog was
 
 P2's final `cargo xtask ci` result was fmt and Clippy passed, workspace tests 4,375 passed and 1 failed. The only failure was known-issue 0b (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`), an existing x86_64 macOS 1-ulp issue. All gates skipped by that stop were run separately and passed. P3 must record its own results and must not describe that baseline as a clean full-CI pass.
 
-Final P3 working-tree stats: 2,046 files, 881,107 lines, 14,684 test attributes, and 66 proptest blocks. The desktop layer totals 532,107 lines (`vectorcraft-ui-egui` 213,435 + `coralcraft` 13,519 + `vectorcraft-tools` 57,314 + `vectorcraft-engine` 247,839).
+Final P3 working-tree stats: 2,046 files, 881,116 lines, 14,684 test attributes, and 66 proptest blocks. The desktop layer totals 532,116 lines (`vectorcraft-ui-egui` 213,435 + `coralcraft` 13,519 + `vectorcraft-tools` 57,314 + `vectorcraft-engine` 247,848).
 
 P3 gate: the first CI run stopped on formatting in the new acceptance test; after formatting and re-running that test, the full gate passed fmt and Clippy, then workspace tests finished **4,375 passed / 1 failed / 2 ignored**, solely known-issue 0b. The large-edit 50,000-object test passed without the earlier concurrent-build timeout. Doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm were then run separately and all exited successfully. Both no-default-feature dependency trees contain no `bundled-fonts` feature. Wasm emitted four existing UI warnings, not errors. This is not a clean full-CI claim because known-issue 0b remains red.
 

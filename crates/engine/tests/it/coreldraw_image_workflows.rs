@@ -384,9 +384,18 @@ fn bitmap_powerclip_gaussian_blur_stays_live_and_exports_connected_structure() {
     s.execute("object.clippingMask.editContents", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().selection.objects, vec![NodeId(bitmap)]);
 
-    let expected_doc = vectorcraft_render::effects::bake_document(&s.doc().unwrap().doc).expect("export bakes the colour adjustment");
-    let NodeKind::Image(expected_image) = &expected_doc.node(NodeId(bitmap)).unwrap().kind else { panic!("export keeps the bitmap as an image") };
-    let expected_pixels = image::load_from_memory(&expected_doc.image_blob(expected_image).unwrap().bytes).unwrap().to_rgba8();
+    // Independent oracle for brightness 3 and contrast 5: bend tones by 2^-0.03, spread them
+    // around 0.5 by 1/(1-0.05*0.99), clamp to 0..1, and round to u8. Alpha is unchanged.
+    let gamma = 2f32.powf(-0.03);
+    let spread = 1.0 / (1.0 - 0.05 * 0.99);
+    let expected_pixels = image::RgbaImage::from_fn(source.width(), source.height(), |x, y| {
+        let pixel = source.get_pixel(x, y).0;
+        let adjusted = |channel: u8| {
+            let bent = (channel as f32 / 255.0).powf(gamma);
+            (((bent - 0.5) * spread + 0.5).clamp(0.0, 1.0) * 255.0).round() as u8
+        };
+        image::Rgba([adjusted(pixel[0]), adjusted(pixel[1]), adjusted(pixel[2]), pixel[3]])
+    });
     assert_ne!(expected_pixels, source, "the expected export pixels include the colour adjustment");
 
     let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
