@@ -41,7 +41,7 @@ Measured with the same-revision CLI/xtask binaries: the JSON command catalog was
 
 P2's final `cargo xtask ci` result was fmt and Clippy passed, workspace tests 4,375 passed and 1 failed. The only failure was known-issue 0b (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`), an existing x86_64 macOS 1-ulp issue. All gates skipped by that stop were run separately and passed. P3 must record its own results and must not describe that baseline as a clean full-CI pass.
 
-Current P3 working-tree stats after the Task 10 normalized-warning review slice: 2,047 files, 882,735 lines, 14,702 test attributes, and 66 proptest blocks. The desktop layer totals 533,636 lines (`vectorcraft-ui-egui` 213,705 + `coralcraft` 13,519 + `vectorcraft-tools` 57,314 + `vectorcraft-engine` 249,098).
+Current P3 working-tree stats after the Task 10 channel-coverage slice: 2,047 files, 882,871 lines, 14,706 test attributes, and 66 proptest blocks. The desktop layer totals 533,762 lines (`vectorcraft-ui-egui` 213,705 + `coralcraft` 13,519 + `vectorcraft-tools` 57,314 + `vectorcraft-engine` 249,224).
 
 P3 gate: the first CI run stopped on formatting in the new acceptance test; after formatting and re-running that test, the full gate passed fmt and Clippy, then workspace tests finished **4,375 passed / 1 failed / 2 ignored**, solely known-issue 0b. The large-edit 50,000-object test passed without the earlier concurrent-build timeout. Doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm were then run separately and all exited successfully. Both no-default-feature dependency trees contain no `bundled-fonts` feature. Wasm emitted four existing UI warnings, not errors. This is not a clean full-CI claim because known-issue 0b remains red.
 
@@ -70,7 +70,7 @@ Task 9 final gate at `7f1c82107`: `cargo xtask ci` passed fmt and Clippy, then e
 
 The two new CDR/CMX warnings are exactly:
 
-- `generic Pattern fills use a default black/white checkerboard and other Pattern paints become black in CDR/CMX; native pattern definitions and paints remain editable`
+- `generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable`
 - `live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects`
 
 Warnings are collected during `corel-import` conversion through `export_document_with_warnings` and the warning-returning CDR7/CDRX/CMX1 writers; existing export/write APIs retain their signatures and byte-for-byte results. The engine supplies its normalized export document after linked-art materialization and `without_edit_modes`, so linked `PlacedDocument::art` is covered exactly once per fallback category. Appearance warnings are emitted only for the last visible fill/stroke actually converted (plus actual text-style colour fallback), never for invisible or shadowed items, unused definitions, or symbol/mask editing-only layers. Direct `corel_import::export_document` inspection proves the existing 12 pt black/white checker substitution. The trace warning is driven by actual `extras().trace` metadata during the same node conversion, so expanded traces do not warn.
@@ -91,3 +91,18 @@ The fix keeps warning text unchanged and records it in `corel-import` at actual 
 GREEN: persistence **8/8**, public export API compatibility **1/1**, complete CorelDRAW integration **69/69**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 1 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully. Self-skipping oracle/sample tests remain non-certifying; Task 10/P3.10, P3, and S2 stay open.
 
 The normalized-review full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 7. Task 10 remaining conversion channels
+
+Final review found four coverage gaps: later text-run Pattern fills, any text-run Pattern stroke, image colorize Pattern, and enabled opacity-mask art containing Pattern plus live trace metadata. Before the production change, the three paint-channel tests returned `warnings == []`; the active-mask test returned no live-trace warning, and the shared wording assertion failed because dropped channels were not named.
+
+Conversion now checks every text run's fill/stroke and image `extras().colorize`, and recursively inspects enabled `extras().mask` art. Temporary editing layers remain excluded by normalization, while the active-mask case warns once per category. The pattern warning is now exactly:
+
+`generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable`
+
+This wording distinguishes substitution from dropped paint/metadata; no preservation or new format mapping is claimed. The live-trace warning is unchanged. Linked placed art, visible-paint selection, unused-definition/expanded-trace controls, temporary symbol/mask editing controls, and old API byte compatibility remain covered.
+
+GREEN: persistence **12/12**, public export API compatibility **1/1**, complete CorelDRAW integration **73/73**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 1 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully. Self-skipping oracle/sample tests remain non-certifying; Task 10/P3.10, P3, and S2 stay open.
+
+The channel-coverage full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.

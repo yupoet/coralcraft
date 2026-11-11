@@ -682,7 +682,7 @@ pub fn import_legacy_coralcraft_bytes(bytes: &[u8]) -> Result<(VcDocument, Vec<S
     import_document(&cdr_doc)
 }
 
-const GENERIC_PATTERN_WARNING: &str = "generic Pattern fills use a default black/white checkerboard and other Pattern paints become black in CDR/CMX; native pattern definitions and paints remain editable";
+const GENERIC_PATTERN_WARNING: &str = "generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable";
 const LIVE_TRACE_WARNING: &str =
     "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
 
@@ -2065,6 +2065,9 @@ fn convert_vc_node_to_cdr(
 ) -> ObjectNode {
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
     warnings.live_trace |= node.extras().trace.is_some();
+    if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
+        let _ = convert_vc_node_to_cdr(&mask.art, offset, doc, meta, warnings);
+    }
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
         expanded = vectorcraft_doc::live::expand_deep(node, None);
@@ -2273,6 +2276,10 @@ fn convert_vc_node_to_cdr(
 
     let mut cnode = ObjectNode::new(oid, node.name.clone(), kind, fill, outline);
     if let NodeKind::Text(tobj) = &node.kind {
+        for run in &tobj.runs {
+            let _ = map_vc_paint_to_cdr_color(&run.style.fill, warnings);
+            let _ = map_vc_paint_to_cdr_color(&run.style.stroke, warnings);
+        }
         let st = tobj.first_style();
         if cnode.fill.is_none()
             && let Some(col) = map_vc_paint_to_cdr_color(&st.fill, warnings)
@@ -2281,6 +2288,9 @@ fn convert_vc_node_to_cdr(
         }
     }
     if let NodeKind::Image(im) = &node.kind {
+        if let Some(paint) = node.extras().colorize.as_deref() {
+            let _ = map_vc_paint_to_cdr_color(paint, warnings);
+        }
         let local_xf = affine_mul(Affine::translate(neg_offset), im.xf);
         let [_, _, _, _, tx, ty] = local_xf.as_coeffs();
         cnode.transform = Affine2::translation(tx, ty).unwrap_or(Affine2::IDENTITY);

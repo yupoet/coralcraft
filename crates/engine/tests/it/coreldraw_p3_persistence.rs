@@ -3,8 +3,8 @@
 use corel_import::coralcraft_color::Color as CdrColor;
 use corel_import::coralcraft_doc::{FillStyle, PatternKind};
 use serde_json::json;
-use vectorcraft_color::Paint;
-use vectorcraft_doc::{AppearanceItem, Document, Node, NodeId, NodeKind};
+use vectorcraft_color::{Color, Paint};
+use vectorcraft_doc::{AppearanceItem, Document, Node, NodeId, NodeKind, TextRun};
 use vectorcraft_engine::Session;
 
 fn session() -> Session {
@@ -117,14 +117,12 @@ fn has_live_trace_warning(warnings: &[serde_json::Value]) -> bool {
     })
 }
 
-fn session_with_trace() -> (Session, u64) {
+fn make_trace(s: &mut Session) -> u64 {
     let image = image::RgbaImage::from_fn(60, 60, |x, y| {
         if (12..48).contains(&x) && (12..48).contains(&y) { image::Rgba([20, 40, 80, 255]) } else { image::Rgba([255; 4]) }
     });
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
-    let mut s = Session::new();
-    s.execute("file.new", &json!({"width": 120, "height": 120})).unwrap();
     let placed = s
         .execute(
             "file.place",
@@ -139,7 +137,26 @@ fn session_with_trace() -> (Session, u64) {
         )
         .unwrap();
     assert!(made["paths"].as_u64().is_some_and(|paths| paths > 0));
-    (s, made["id"].as_u64().unwrap())
+    made["id"].as_u64().unwrap()
+}
+
+fn session_with_trace() -> (Session, u64) {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 120, "height": 120})).unwrap();
+    let trace = make_trace(&mut s);
+    (s, trace)
+}
+
+fn pattern_paint(name: &str) -> Paint {
+    Paint::Pattern { pattern: name.to_owned(), xf: Default::default() }
+}
+
+fn session_with_unused_pattern(name: &str) -> Session {
+    let mut s = session();
+    let tile = rectangle(&mut s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": name, "edit": false})).unwrap();
+    s
 }
 
 #[test]
@@ -180,6 +197,7 @@ fn generic_pattern_export_warns_without_mutating_the_editable_native_pattern() {
                 warning.as_str().is_some_and(|text| {
                     text.contains("generic Pattern")
                         && text.contains("default black/white checkerboard")
+                        && text.contains("or dropped")
                         && text.contains("native")
                         && text.contains("editable")
                 })
@@ -400,11 +418,119 @@ fn temporary_symbol_and_mask_editing_layers_do_not_warn() {
     assert!(mask.doc().unwrap().doc.node(NodeId(masked)).unwrap().extras().mask.is_some());
     mask.execute("transparency.editOpacityMask", &json!({"id": masked})).unwrap();
     assert!(mask.doc().unwrap().doc.mask_edit.is_some());
+    // Keep the active mask solid so only the temporary editing layer carries the pattern.
+    {
+        let state = mask.doc_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        let node = doc.node_mut(NodeId(masked)).unwrap();
+        let mut extras = node.extras_mut();
+        let mask_model = extras.mask.as_deref_mut().unwrap();
+        std::sync::Arc::make_mut(&mut mask_model.art).appearance.set_fill(Paint::solid(Color::WHITE));
+    }
 
     for (name, s) in [("symbol", &mut symbol), ("mask", &mut mask)] {
         for format in ["cdr", "cmx"] {
             let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
             assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 0, "{name} editing-only pattern must not warn in {format}: {exported}");
         }
+    }
+}
+
+fn assert_channel_warnings(exported: &serde_json::Value, format: &str, trace: bool) {
+    assert_eq!(fallback_warning_count(exported, "generic Pattern"), 1, "{format} pattern warnings: {exported}");
+    assert_eq!(fallback_warning_count(exported, "live trace"), usize::from(trace), "{format} trace warnings: {exported}");
+    assert!(exported["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("or dropped"))));
+}
+
+#[test]
+fn later_text_run_pattern_fill_warns() {
+    let mut s = session_with_unused_pattern("Later Run Tile");
+    let text = s.execute("text.create", &json!({"x": 20, "y": 60, "text": "AB", "size": 24})).unwrap()["id"].as_u64().unwrap();
+    s.edit("Pattern in the later text run", move |d, _| {
+        let NodeKind::Text(object) = &mut d.node_mut(NodeId(text)).unwrap().kind else { panic!("text object") };
+        let mut later = object.runs[0].style.clone();
+        later.fill = pattern_paint("Later Run Tile");
+        object.runs.push(TextRun::new("B", later));
+        Ok(())
+    })
+    .unwrap();
+    let NodeKind::Text(object) = &s.doc().unwrap().doc.node(NodeId(text)).unwrap().kind else { panic!("text object") };
+    assert!(!matches!(object.runs[0].style.fill, Paint::Pattern { .. }));
+    assert!(matches!(object.runs[1].style.fill, Paint::Pattern { .. }));
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn text_run_pattern_stroke_warns() {
+    let mut s = session_with_unused_pattern("Run Stroke Tile");
+    let text = s.execute("text.create", &json!({"x": 20, "y": 60, "text": "A", "size": 24})).unwrap()["id"].as_u64().unwrap();
+    s.edit("Pattern text stroke", move |d, _| {
+        let NodeKind::Text(object) = &mut d.node_mut(NodeId(text)).unwrap().kind else { panic!("text object") };
+        object.runs[0].style.stroke = pattern_paint("Run Stroke Tile");
+        object.runs[0].style.stroke_width = 1.5;
+        Ok(())
+    })
+    .unwrap();
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn image_pattern_colorize_warns() {
+    let mut s = session_with_unused_pattern("Colorize Tile");
+    let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([128, 128, 128, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = s
+        .execute(
+            "file.place",
+            &json!({"name": "gray.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        )
+        .unwrap();
+    let image = placed["ids"][0].as_u64().unwrap();
+    s.edit("Pattern image colorize", move |d, _| {
+        d.node_mut(NodeId(image)).unwrap().extras_mut().colorize = Some(Box::new(pattern_paint("Colorize Tile")));
+        Ok(())
+    })
+    .unwrap();
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn active_opacity_mask_pattern_and_live_trace_warn_once() {
+    let mut s = session_with_unused_pattern("Active Mask Tile");
+    let target = rectangle(&mut s, 150.0);
+    s.execute("paint.setFill", &json!({"id": target, "color": "#ff0000"})).unwrap();
+    let trace = make_trace(&mut s);
+    let path = ordinary_paths(&s.doc().unwrap().doc)[0].id;
+    s.edit("Pattern in active mask art", move |d, _| {
+        d.node_mut(path).unwrap().appearance.set_fill(pattern_paint("Active Mask Tile"));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.set", &json!({"ids": [target, trace]})).unwrap();
+    let made = s.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    let masked = made["id"].as_u64().unwrap();
+    assert_eq!(masked, target);
+    let node = s.doc().unwrap().doc.node(NodeId(masked)).unwrap();
+    let mask = node.extras().mask.as_deref().unwrap();
+    assert!(!mask.disabled);
+    assert!(mask.art.extras().trace.is_some());
+    assert!(s.doc().unwrap().doc.mask_edit.is_none());
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, true);
     }
 }
