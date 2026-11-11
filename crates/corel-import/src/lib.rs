@@ -2597,13 +2597,13 @@ fn convert_vc_node_to_cdr_with_expected(
         let _ = convert_vc_node_to_cdr_with_expected(&mask.art, offset, doc, meta, None, None, warnings);
     }
     let mut has_mesh_point_opacity = false;
-    node.walk(&mut |descendant| {
-        if let NodeKind::Mesh(mesh) = &descendant.kind {
-            has_mesh_point_opacity |= mesh.points.iter().any(|point| point.opacity < 1.0);
-        }
-    });
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
+        node.walk(&mut |descendant| {
+            if let NodeKind::Mesh(mesh) = &descendant.kind {
+                has_mesh_point_opacity |= mesh.points.iter().any(|point| point.opacity < 1.0);
+            }
+        });
         expanded = vectorcraft_doc::live::expand_deep(node, None);
         if vectorcraft_doc::live::live_expansion_failed() {
             record_conversion_error(warnings, "live expansion produced an empty object; refusing to export empty CDR/CMX geometry".to_owned());

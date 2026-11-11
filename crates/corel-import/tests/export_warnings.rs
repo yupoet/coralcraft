@@ -731,3 +731,49 @@ fn nested_empty_live_child_fails_closed_instead_of_exporting_an_empty_object() {
         assert_empty_live_conversion_error(with_warnings(&doc));
     }
 }
+
+#[test]
+fn nested_exact_mesh_restoration_stays_silent_when_parent_restoration_fails() {
+    let mut nested_original = ObjectNode::new(
+        ObjectId(121),
+        Some("Nested Restored Mesh".into()),
+        ObjectKind::Group { children: vec![rect_object(122, "Original Nested Patch", [10.0, 20.0, 110.0, 80.0])] },
+        None,
+        None,
+    );
+    nested_original.opacity = F64::new(0.37).unwrap();
+    let parent = ObjectNode::new(
+        ObjectId(120),
+        Some("Original Parent".into()),
+        ObjectKind::Group { children: vec![nested_original.clone(), rect_object(123, "Sibling", [120.0, 20.0, 130.0, 80.0])] },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(parent);
+    let parent_id = restorable_id(&doc, "Original Parent");
+    let nested_id =
+        doc.node(parent_id).unwrap().children().unwrap().iter().find(|child| child.name.as_deref() == Some("Nested Restored Mesh")).unwrap().id;
+    doc.node_mut(parent_id).unwrap().name = Some("Changed Parent".into());
+
+    let mesh_source = mesh_document(0.25);
+    let NodeKind::Mesh(mesh) = &mesh_source.layers[0].children().unwrap()[0].kind else { panic!("mesh") };
+    let nested = doc.node_mut(nested_id).unwrap();
+    nested.kind = NodeKind::Mesh(mesh.clone());
+    nested.opacity = 1.0;
+    let expanded = vectorcraft_doc::live::expand_deep(doc.node(nested_id).unwrap(), None);
+    let key = format!("corel.import.original_vc.v1.{}", parent_id.0);
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    let mut projection: Node = serde_json::from_value(value["extra"][&key].clone()).unwrap();
+    let NodeKind::Group { children, .. } = &mut projection.kind else { panic!("parent projection") };
+    let nested_projection = children.iter_mut().find(|child| child.id == nested_id).unwrap();
+    *nested_projection = expanded.into();
+    value["extra"].as_object_mut().unwrap().insert(key, serde_json::to_value(projection).unwrap());
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    let ObjectKind::Group { children } = &only_object(&converted).kind else { panic!("converted parent group") };
+    let nested = children.iter().find(|child| child.name.as_deref() == Some("Nested Restored Mesh")).unwrap();
+    assert_eq!(nested.opacity.get(), 0.37, "the nested original shell restored instead of using current opacity 1.0");
+    assert!(matches!(&nested.kind, ObjectKind::Group { children } if !children.is_empty()));
+    assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+}
