@@ -452,7 +452,7 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
-    // CoralCraft: CDR/CMX carry evaluated page text and live geometry, while native documents keep their sources.
+    // CoralCraft: CDR/CMX carry evaluated page text and substituted geometry/appearance, while native documents keep their sources.
     if matches!(f.id, "cdr" | "cmx") {
         let has_page_numbers = doc.layers.iter().any(|layer| {
             let mut found = false;
@@ -462,6 +462,26 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
         if has_page_numbers {
             enc.warnings.push(
                 "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
+            );
+        }
+        let mut has_generic_patterns = false;
+        let mut has_live_traces = false;
+        for layer in &doc.layers {
+            vectorcraft_doc::swatches::walk_with_masks(layer, &mut |node| {
+                has_generic_patterns |=
+                    vectorcraft_doc::swatches::node_paints(node).any(|paint| matches!(paint, vectorcraft_color::Paint::Pattern { .. }));
+                has_live_traces |= node.extras().trace.is_some();
+            });
+        }
+        if has_generic_patterns {
+            enc.warnings.push(
+                "generic Pattern fills use a default black/white checkerboard and other Pattern paints become black in CDR/CMX; native pattern definitions and paints remain editable".into(),
+            );
+        }
+        if has_live_traces {
+            enc.warnings.push(
+                "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects"
+                    .into(),
             );
         }
         let mut live_kinds = std::collections::BTreeSet::new();

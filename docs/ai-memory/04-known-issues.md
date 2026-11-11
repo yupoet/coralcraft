@@ -1,5 +1,11 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0k. [Resolved 2026-11-11, P3 Task 10] Generic pattern and live-trace CDR/CMX fallbacks were silent
+
+- Used generic `Paint::Pattern` fills are substituted by `corel-import` with a default 12 pt black/white checkerboard, while strokes/text/colorize and other pattern colour queries can become black; CDR/CMX export previously emitted no warning. Live trace groups likewise exported their ordinary children without their `extras().trace` preset/params/view or source relationship and emitted no warning.
+- The existing encoder warning collector now walks actual node paints with `walk_with_masks` and `node_paints` and inspects actual `extras().trace` metadata. Unused pattern definitions and expanded traces do not warn. Native documents retain editable pattern definitions and live trace settings; CDR/CMX self-reimport is supplementary appearance/ordinary-object evidence, not native-pattern or live-PowerTRACE certification.
+- Exact new warnings are recorded in `docs/p3-inventory.md`. The combined mesh/transparency/bitmap/residual matrix and S2 real oracle/sample certification remain open.
+
 ## 0j. [Resolved 2026-11-11] Concurrent Cargo feature builds can invalidate a doctest dependency
 
 - Running `cargo test --workspace --doc` concurrently with default-feature and no-default-feature UI builds once failed because `libcraft_update-….rlib` no longer existed at the path captured by rustdoc. This was a build-directory race, not a product test failure.
