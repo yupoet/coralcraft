@@ -152,7 +152,7 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     fn choose(h: &mut egui_kittest::Harness<'_, crate::VectorcraftApp>, current: &str, item: &str) {
         let label = match current {
             "Default" => "Preset:",
-            "Color" => "Mode:",
+            "Color" | "Grayscale" => "Mode:",
             "Tracing Result" => "View:",
             other => panic!("unexpected combo value {other}"),
         };
@@ -187,6 +187,20 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     fn anchors(app: &crate::VectorcraftApp) -> usize {
         let node = app.session.active().unwrap().doc.node(selected(app)).unwrap();
         node.children().unwrap().iter().filter_map(|child| child.path_data().map(|path| path.anchor_count())).sum()
+    }
+
+    fn assert_grayscale_result(app: &crate::VectorcraftApp, id: NodeId) {
+        let node = app.session.active().unwrap().doc.node(id).unwrap();
+        assert_eq!(node.extras().trace.as_ref().unwrap()["params"]["mode"], "grayscale");
+        let fills: Vec<_> = node.children().unwrap().iter().filter_map(|child| child.appearance.fill_paint().color()).collect();
+        assert!(!fills.is_empty());
+        assert!(
+            fills.into_iter().all(|color| {
+                let [r, g, b, _] = color.to_rgba8(1.0);
+                r == g && g == b
+            }),
+            "Grayscale mode produces only neutral fills"
+        );
     }
 
     let mut app = app_with_rect();
@@ -239,10 +253,16 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     let node = h.state().session.active().unwrap().doc.node(first).unwrap();
     assert_eq!(node.extras().trace.as_ref().unwrap()["preset"], "6 Colors");
 
-    choose(&mut h, "Color", "Color");
-    assert_eq!(undo(h.state()), before + 2, "the visible Mode control retraces once");
+    choose(&mut h, "Color", "Grayscale");
+    assert_eq!(undo(h.state()), before + 2, "changing the visible Mode control retraces once");
+    let grayscale = selected(h.state());
+    assert_ne!(grayscale, first, "panel retraces replace the target with a new group ID");
+    assert_grayscale_result(h.state(), grayscale);
+
+    choose(&mut h, "Grayscale", "Color");
+    assert_eq!(undo(h.state()), before + 3, "changing Mode back to Color is another single retrace");
     let second = selected(h.state());
-    assert_ne!(second, first, "panel retraces replace the target with a new group ID");
+    assert_ne!(second, grayscale);
     assert_eq!(h.state().session.active().unwrap().doc.node(second).unwrap().extras().trace.as_ref().unwrap()["params"]["mode"], "color");
 
     let before = undo(h.state());

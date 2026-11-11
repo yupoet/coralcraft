@@ -95,6 +95,32 @@ fn has_exported_centreline(group: &usvg::Group) -> bool {
     })
 }
 
+fn has_edited_exported_centreline(group: &usvg::Group) -> bool {
+    group.children().iter().any(|node| match node {
+        usvg::Node::Group(child) => has_edited_exported_centreline(child),
+        usvg::Node::Path(path) if !path.data().is_empty() && path.fill().is_none() => path.stroke().is_some_and(|stroke| {
+            (stroke.width().get() - 7.25).abs() < 0.001
+                && matches!(stroke.paint(), usvg::Paint::Color(color) if [color.red, color.green, color.blue] == [224, 72, 56])
+        }),
+        _ => false,
+    })
+}
+
+fn assert_edited_centreline(s: &Session, id: NodeId) {
+    let node = s.doc().unwrap().doc.node(id).unwrap();
+    assert!(!node.path_data().unwrap().subpaths[0].closed);
+    assert_eq!(node.appearance.fill_paint(), Paint::None);
+    assert_eq!(node.appearance.stroke().unwrap().paint.color().unwrap().to_hex(), "#e04838");
+    assert_eq!(node.appearance.stroke().unwrap().width, 7.25);
+}
+
+fn assert_selected_at(s: &Session, id: u64, expected: (Option<NodeId>, usize)) {
+    assert!(s.doc().unwrap().doc.node(NodeId(id)).is_some());
+    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(id)]);
+    let (parent, index, _) = s.doc().unwrap().doc.position(NodeId(id)).unwrap();
+    assert_eq!((parent, index), expected);
+}
+
 #[test]
 fn powertrace_centreline_survives_view_expand_native_reopen_and_independent_svg() {
     let image = image::RgbaImage::from_fn(100, 100, |x, y| {
@@ -127,9 +153,16 @@ fn powertrace_centreline_survives_view_expand_native_reopen_and_independent_svg(
     assert_eq!(reopened.trace_view(), TraceView::Outlines);
     assert_eq!(reopened.extras().trace.as_ref().unwrap()["params"]["strokes"], true);
 
+    let trace_position = s.doc().unwrap().doc.position(NodeId(trace)).unwrap();
     let expanded = s.execute("imageTrace.makeAndExpand", &json!({"id": trace, "preset": "Default", "params": params})).unwrap();
     let expanded_id = expanded["id"].as_u64().unwrap();
-    assert_ne!(expanded_id, trace, "makeAndExpand is a new make at the same layer position");
+    assert_ne!(expanded_id, trace);
+    let expanded_position = s.doc().unwrap().doc.position(NodeId(expanded_id)).unwrap();
+    assert_eq!(
+        (expanded_position.0, expanded_position.1),
+        (trace_position.0, trace_position.1),
+        "makeAndExpand replaces the live trace at the same layer position"
+    );
     assert_eq!(expanded["paths"], 1);
     let group = s.doc().unwrap().doc.node(NodeId(expanded_id)).unwrap();
     assert!(group.extras().trace.is_none());
@@ -139,10 +172,17 @@ fn powertrace_centreline_survives_view_expand_native_reopen_and_independent_svg(
     assert!(!paths[0].path_data().unwrap().subpaths[0].closed);
     assert_eq!(paths[0].appearance.fill_paint(), Paint::None);
     assert!(paths[0].appearance.stroke().is_some());
+    let centreline = paths[0].id;
+    s.execute("select.set", &json!({"ids": [centreline.0]})).unwrap();
+    assert_eq!(s.active().unwrap().selection.objects, vec![centreline]);
+    s.execute("paint.setStroke", &json!({"color": "#e04838"})).unwrap();
+    s.execute("stroke.set", &json!({"weight": 7.25})).unwrap();
+    assert_edited_centreline(&s, centreline);
     native_reopen(&mut s);
-    assert!(traced_paths(&s, expanded_id)[0].appearance.stroke().is_some());
+    assert_edited_centreline(&s, centreline);
     let tree = independent_svg(&mut s);
     assert!(has_exported_centreline(tree.root()), "usvg finds a nonempty unfilled stroked centreline");
+    assert!(has_edited_exported_centreline(tree.root()), "usvg finds the reopened centreline's literal edited colour and width");
 }
 
 #[test]
@@ -309,13 +349,19 @@ fn powertrace_make_retrace_view_and_invalid_edit_have_exact_history_semantics() 
     let bitmap_position = position(&s, bitmap);
     let first = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": original})).unwrap()["id"].as_u64().unwrap();
     assert_eq!(s.doc().unwrap().history.undo.len(), history + 1);
-    assert_eq!(position(&s, first), bitmap_position, "make replaces the bitmap at the same layer position");
-    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    assert_selected_at(&s, first, bitmap_position);
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(matches!(s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().kind, NodeKind::Image(_)));
-    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(bitmap)]);
+    assert!(s.doc().unwrap().doc.node(NodeId(first)).is_none());
+    assert_selected_at(&s, bitmap, bitmap_position);
     s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    assert_eq!(
+        s.doc().unwrap().doc.position(NodeId(bitmap)).unwrap().0,
+        Some(NodeId(first)),
+        "make redo retains the bitmap as the first trace's source child"
+    );
+    assert!(!s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().visible);
+    assert_selected_at(&s, first, bitmap_position);
     assert!(s.doc().unwrap().doc.node(NodeId(first)).unwrap().extras().trace.is_some());
 
     let second = s
@@ -324,13 +370,15 @@ fn powertrace_make_retrace_view_and_invalid_edit_have_exact_history_semantics() 
         .as_u64()
         .unwrap();
     assert_ne!(second, first);
-    assert_eq!(position(&s, second), bitmap_position, "retrace replaces the first group at the same layer position");
+    assert_selected_at(&s, second, bitmap_position);
     assert_eq!(s.doc().unwrap().history.undo.len(), history + 2);
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(first)]);
+    assert!(s.doc().unwrap().doc.node(NodeId(second)).is_none());
+    assert_selected_at(&s, first, bitmap_position);
     assert_eq!(s.doc().unwrap().doc.node(NodeId(first)).unwrap().extras().trace.as_ref().unwrap()["params"]["colors"], 4);
     s.execute("edit.redo", &json!({})).unwrap();
-    assert_eq!(s.active().unwrap().selection.objects, vec![NodeId(second)]);
+    assert!(s.doc().unwrap().doc.node(NodeId(first)).is_none());
+    assert_selected_at(&s, second, bitmap_position);
     assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().extras().trace.as_ref().unwrap()["params"]["colors"], 2);
 
     let before = s.doc().unwrap().doc.clone();
@@ -340,18 +388,24 @@ fn powertrace_make_retrace_view_and_invalid_edit_have_exact_history_semantics() 
     assert!(s.execute("imageTrace.make", &json!({"id": second, "preset": "Default", "params": {"fills": false, "strokes": false}})).is_err());
     assert_eq!(s.doc().unwrap().doc, before);
     assert_eq!(s.active().unwrap().selection, selection);
+    assert_eq!(position(&s, second), bitmap_position);
     assert_eq!((s.doc().unwrap().history.undo.len(), s.doc().unwrap().history.redo.len()), (undo, redo));
 
     let anchors = traced_paths(&s, second).iter().map(|node| node.path_data().unwrap().anchor_count()).sum::<usize>();
     s.execute("imageTrace.setView", &json!({"id": second, "view": "outlines"})).unwrap();
     assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1);
+    assert_selected_at(&s, second, bitmap_position);
     assert_eq!(traced_paths(&s, second).iter().map(|node| node.path_data().unwrap().anchor_count()).sum::<usize>(), anchors, "view does not retrace");
     s.execute("imageTrace.setView", &json!({"id": second, "view": "outlines"})).unwrap();
     assert_eq!(s.doc().unwrap().history.undo.len(), undo + 1, "an unchanged view adds no step");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().trace_view(), TraceView::Result);
+    assert_selected_at(&s, second, bitmap_position);
+    assert_eq!((s.doc().unwrap().history.undo.len(), s.doc().unwrap().history.redo.len()), (undo, 1));
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(s.doc().unwrap().doc.node(NodeId(second)).unwrap().trace_view(), TraceView::Outlines);
+    assert_selected_at(&s, second, bitmap_position);
+    assert_eq!((s.doc().unwrap().history.undo.len(), s.doc().unwrap().history.redo.len()), (undo + 1, 0));
 }
 
 #[test]
