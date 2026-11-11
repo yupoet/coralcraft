@@ -647,7 +647,7 @@ fn powerclip_frame_visible_and_locked_win_in_restored_shell() {
 }
 
 #[test]
-fn powerclip_frame_visible_and_locked_win_in_outer_fallback() {
+fn powerclip_outer_visible_and_locked_win_when_outer_and_frame_both_change() {
     let mut doc = import_restorable(powerclip());
     let frame_id = clip_frame_id(&doc);
     let frame = doc.node_mut(frame_id).unwrap();
@@ -656,8 +656,8 @@ fn powerclip_frame_visible_and_locked_win_in_outer_fallback() {
     doc.node_mut(NodeId(80)).unwrap().name = Some("Changed outer shell".into());
 
     let exported = corel_import::export_document(&doc).unwrap();
-    assert!(!only_object(&exported).visible);
-    assert!(only_object(&exported).locked);
+    assert!(only_object(&exported).visible);
+    assert!(!only_object(&exported).locked);
 }
 
 #[test]
@@ -676,4 +676,41 @@ fn old_style_object_metadata_literal_and_eq_remain_source_compatible() {
     data.object_meta.insert(140, metadata);
     assert_eq_trait(&data);
     assert_eq!(data.clone(), data);
+}
+
+#[test]
+fn powerclip_outer_only_visible_and_locked_changes_win_over_unchanged_frame() {
+    let mut doc = import_restorable(powerclip());
+    let outer = doc.node_mut(NodeId(80)).unwrap();
+    outer.visible = false;
+    outer.locked = true;
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(!only_object(&exported).visible);
+    assert!(only_object(&exported).locked);
+}
+
+#[test]
+fn powerclip_outer_wins_when_outer_and_frame_have_conflicting_changes() {
+    let mut doc = import_restorable(powerclip());
+    doc.node_mut(NodeId(80)).unwrap().visible = false;
+    let frame_id = clip_frame_id(&doc);
+    doc.node_mut(frame_id).unwrap().locked = true;
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(!only_object(&exported).visible, "current outer visibility wins over the original frame");
+    assert!(!only_object(&exported).locked, "current outer lock state wins over the changed frame");
+}
+
+#[test]
+fn powerclip_outer_wins_by_default_without_expected_metadata() {
+    let mut doc = import_restorable(powerclip());
+    doc.node_mut(NodeId(80)).unwrap().visible = false;
+    let frame_id = clip_frame_id(&doc);
+    doc.node_mut(frame_id).unwrap().locked = true;
+    doc.unknown.remove(corel_import::CORALCRAFT_UNKNOWN_KEY);
+
+    let exported = corel_import::export_document(&doc).unwrap();
+    assert!(!only_object(&exported).visible);
+    assert!(!only_object(&exported).locked);
 }

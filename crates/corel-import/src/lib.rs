@@ -2713,14 +2713,12 @@ fn convert_vc_node_to_cdr_with_expected(
         cnode.opacity = frame.opacity;
         cnode.transparency = frame.transparency;
         cnode.effects = frame.effects;
-        cnode.visible = frame.visible;
-        cnode.locked = frame.locked;
     } else {
         cnode.opacity = F64::new(f64::from(node.opacity.clamp(0.0, 1.0))).unwrap_or(F64::ONE);
         cnode.effects = effects;
-        cnode.visible = node.visible;
-        cnode.locked = node.locked;
     }
+    cnode.visible = node.visible;
+    cnode.locked = node.locked;
     cnode.powerclip_children = powerclip_children;
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
         cnode.residual = ometa.original.residual.clone();
