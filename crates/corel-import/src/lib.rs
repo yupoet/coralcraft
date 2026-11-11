@@ -2191,6 +2191,27 @@ struct ConvertedObject {
     shell_restored: bool,
 }
 
+fn original_tree_has_valid_bitmap_sizes(original: &ObjectNode, warnings: &mut ExportWarningLedger) -> bool {
+    let mut pending = vec![original];
+    while let Some(current) = pending.pop() {
+        if let ObjectKind::Bitmap { pixel_width, pixel_height, .. } = &current.kind {
+            let width = (*pixel_width).max(1);
+            let height = (*pixel_height).max(1);
+            if let Err(error) = checked_rgba_len(width, height) {
+                record_conversion_error(warnings, error);
+                return false;
+            }
+        }
+        match &current.kind {
+            ObjectKind::Group { children } => pending.extend(children.iter()),
+            ObjectKind::Unsupported(unsupported) => pending.extend(unsupported.children.iter()),
+            _ => {}
+        }
+        pending.extend(current.powerclip_children.iter());
+    }
+    true
+}
+
 fn expected_vc_projection(
     node: &Node,
     offset: Vec2,
@@ -2202,13 +2223,8 @@ fn expected_vc_projection(
         let projection = serde_json::from_value(value.clone()).ok()?;
         return Some(ExpectedProjection::Stored(Box::new(projection)));
     }
-    if let ObjectKind::Bitmap { pixel_width, pixel_height, .. } = &metadata.original.kind {
-        let width = (*pixel_width).max(1);
-        let height = (*pixel_height).max(1);
-        if let Err(error) = checked_rgba_len(width, height) {
-            record_conversion_error(warnings, error);
-            return None;
-        }
+    if !original_tree_has_valid_bitmap_sizes(&metadata.original, warnings) {
+        return None;
     }
     let mut document = VcDocument::new(595.275_590_551_181_2, 841.889_763_779_527_6);
     let mut used_ids = std::collections::BTreeSet::new();

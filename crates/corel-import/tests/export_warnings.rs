@@ -502,3 +502,85 @@ fn huge_original_bitmap_legacy_reconstruction_returns_conversion_error_instead_o
     let error = corel_import::export_document_with_warnings(&doc).unwrap_err();
     assert!(matches!(error, corel_import::CorelImportError::Conversion(message) if message.contains("bitmap") && message.contains("64")));
 }
+
+fn small_bitmap_object(id: u64, name: &str) -> ObjectNode {
+    ObjectNode::new(
+        ObjectId(id),
+        Some(name.to_owned()),
+        ObjectKind::Bitmap {
+            pixel_width: 1,
+            pixel_height: 1,
+            dpi_x: F64::new(72.0).unwrap(),
+            dpi_y: F64::new(72.0).unwrap(),
+            rgba_pixels: vec![255, 255, 255, 255],
+        },
+        None,
+        None,
+    )
+}
+
+fn make_bitmap_huge(object: &mut ObjectNode) {
+    let ObjectKind::Bitmap { pixel_width, pixel_height, rgba_pixels, .. } = &mut object.kind else { panic!("bitmap") };
+    *pixel_width = u32::MAX;
+    *pixel_height = u32::MAX;
+    rgba_pixels.clear();
+}
+
+fn replace_original_tree_and_clear_sidecar(doc: &mut Document, original: &ObjectNode) {
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    for metadata in value["object_meta"].as_object_mut().unwrap().values_mut() {
+        metadata["original"] = serde_json::to_value(original).unwrap();
+        metadata.as_object_mut().unwrap().remove("original_vc");
+    }
+    value["extra"].as_object_mut().unwrap().retain(|key, _| !key.starts_with("corel.import.original_vc.v1."));
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+}
+
+fn assert_huge_nested_bitmap_error(doc: &Document) {
+    let error = corel_import::export_document_with_warnings(doc).unwrap_err();
+    assert!(matches!(error, corel_import::CorelImportError::Conversion(message) if message.contains("bitmap") && message.contains("64")));
+}
+
+#[test]
+fn huge_nested_group_bitmap_legacy_reconstruction_returns_conversion_error_instead_of_allocating() {
+    let mut original = ObjectNode::new(
+        ObjectId(100),
+        Some("Legacy Group".into()),
+        ObjectKind::Group {
+            children: vec![ObjectNode::new(
+                ObjectId(101),
+                Some("Nested Group".into()),
+                ObjectKind::Group { children: vec![small_bitmap_object(102, "Deep Bitmap")] },
+                None,
+                None,
+            )],
+        },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(original.clone());
+    let ObjectKind::Group { children } = &mut original.kind else { panic!("outer group") };
+    let ObjectKind::Group { children: nested } = &mut children[0].kind else { panic!("nested group") };
+    make_bitmap_huge(&mut nested[0]);
+    replace_original_tree_and_clear_sidecar(&mut doc, &original);
+
+    assert_huge_nested_bitmap_error(&doc);
+}
+
+#[test]
+fn huge_nested_powerclip_bitmap_legacy_reconstruction_returns_conversion_error_instead_of_allocating() {
+    let mut original = rect_object(110, "Legacy PowerClip", [10.0, 10.0, 100.0, 100.0]);
+    original.powerclip_children.push(ObjectNode::new(
+        ObjectId(111),
+        Some("PowerClip Group".into()),
+        ObjectKind::Group { children: vec![small_bitmap_object(112, "PowerClip Bitmap")] },
+        None,
+        None,
+    ));
+    let mut doc = import_restorable(original.clone());
+    let ObjectKind::Group { children } = &mut original.powerclip_children[0].kind else { panic!("PowerClip group") };
+    make_bitmap_huge(&mut children[0]);
+    replace_original_tree_and_clear_sidecar(&mut doc, &original);
+
+    assert_huge_nested_bitmap_error(&doc);
+}
