@@ -2075,6 +2075,18 @@ fn convert_vc_node_to_cdr(
     } else {
         node
     };
+    let (fill, outline) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
+    if let NodeKind::Text(tobj) = &node.kind {
+        for run in &tobj.runs {
+            let _ = map_vc_paint_to_cdr_color(&run.style.fill, warnings);
+            let _ = map_vc_paint_to_cdr_color(&run.style.stroke, warnings);
+        }
+    }
+    if matches!(node.kind, NodeKind::Image(_))
+        && let Some(paint) = node.extras().colorize.as_deref()
+    {
+        let _ = map_vc_paint_to_cdr_color(paint, warnings);
+    }
     if let Some(ometa) = meta.and_then(|m| m.object_meta.get(&node.id.0)) {
         // Check if the node's basic properties and page-local bounds were untouched in VectorCraft; if so,
         // restore the exact original ObjectNode (updating any recursive children if it is a Group or PowerClip).
@@ -2109,7 +2121,6 @@ fn convert_vc_node_to_cdr(
     }
 
     let oid = ObjectId(node.id.0.max(1));
-    let (fill, outline) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects);
 
     let mut powerclip_children = Vec::new();
@@ -2276,10 +2287,6 @@ fn convert_vc_node_to_cdr(
 
     let mut cnode = ObjectNode::new(oid, node.name.clone(), kind, fill, outline);
     if let NodeKind::Text(tobj) = &node.kind {
-        for run in &tobj.runs {
-            let _ = map_vc_paint_to_cdr_color(&run.style.fill, warnings);
-            let _ = map_vc_paint_to_cdr_color(&run.style.stroke, warnings);
-        }
         let st = tobj.first_style();
         if cnode.fill.is_none()
             && let Some(col) = map_vc_paint_to_cdr_color(&st.fill, warnings)
@@ -2288,9 +2295,6 @@ fn convert_vc_node_to_cdr(
         }
     }
     if let NodeKind::Image(im) = &node.kind {
-        if let Some(paint) = node.extras().colorize.as_deref() {
-            let _ = map_vc_paint_to_cdr_color(paint, warnings);
-        }
         let local_xf = affine_mul(Affine::translate(neg_offset), im.xf);
         let [_, _, _, _, tx, ty] = local_xf.as_coeffs();
         cnode.transform = Affine2::translation(tx, ty).unwrap_or(Affine2::IDENTITY);

@@ -6,6 +6,11 @@
 - `corel-import` now records fallbacks during conversion, after the engine materializes linked art and removes temporary edit modes. This covers linked `PlacedDocument::art` once per category and follows the converter's last-visible fill/stroke selection. Every text run's fill/stroke, image colorize, and enabled opacity-mask art are covered; dropped channels are named explicitly rather than described as preserved. Invisible/shadowed patterns, unused definitions, expanded traces, and symbol/mask editing-only art do not warn. Native documents retain editable pattern definitions and live trace settings; CDR/CMX self-reimport is supplementary appearance/ordinary-object evidence, not native-pattern or live-PowerTRACE certification.
 - Exact new warnings are recorded in `docs/p3-inventory.md`. The combined mesh/transparency/bitmap/residual matrix and S2 real oracle/sample certification remain open.
 
+## 0l. [Open, P3 Task 10] Early metadata restoration can restore old appearance after edits
+
+- `convert_vc_node_to_cdr`'s metadata-restoration predicate compares name, page-local bounds, visibility, and lock state, but not appearance. An imported object subsequently edited to a different paint can therefore restore the original object's appearance rather than the edited one. This is a restoration-mapping limitation, not a claim that warning collection preserves the edit.
+- Warning detection now runs before that return for ordinary appearance, every text run, and image colorize, so generic Pattern substitution/drop is reported even when old appearance is restored. Live trace was already detected before it. The restoration predicate and old API output are unchanged in this warning-only slice; a broader appearance-aware restoration redesign remains open.
+
 ## 0j. [Resolved 2026-11-11] Concurrent Cargo feature builds can invalidate a doctest dependency
 
 - Running `cargo test --workspace --doc` concurrently with default-feature and no-default-feature UI builds once failed because `libcraft_update-….rlib` no longer existed at the path captured by rustdoc. This was a build-directory race, not a product test failure.
