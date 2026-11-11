@@ -1,5 +1,10 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0j. [Resolved 2026-11-11] Concurrent Cargo feature builds can invalidate a doctest dependency
+
+- Running `cargo test --workspace --doc` concurrently with default-feature and no-default-feature UI builds once failed because `libcraft_update-….rlib` no longer existed at the path captured by rustdoc. This was a build-directory race, not a product test failure.
+- Do not run different feature sets against the same target directory in parallel for the final gate. Rerun doctests, no-bundled-fonts tests/Clippy/install-font checks, and wasm serially; the complete serial chain passed without cleaning the cache or changing source.
+
 ## 0i. [Resolved 2026-11-11, P3 Task 8] Resize float-intermediate allocation exceeds the raster budget
 
 - `image 0.25.10` `resize_exact` allocates an Rgba32F intermediate of `source_width × output_height × 16` bytes for non-empty, dimension-changing resizes, plus the final typed output and reusable `f32` filter-weight vectors. Same-size and empty-source paths skip the intermediate and weights.
