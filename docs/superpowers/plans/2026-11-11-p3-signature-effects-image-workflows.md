@@ -214,19 +214,19 @@ Run the focused tests plus `vectorcraft-effects` and Appearance suites. Commit w
 - Modify: `crates/engine/tests/it/main.rs`
 - Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
 
-- [ ] **Step 1: Add failing bitmap workflow evidence**
+- [x] **Step 1: Add bitmap workflow evidence**
 
 Place a handcrafted synthetic bitmap; exercise crop, resample, colour adjustment, and a common bitmap effect using existing commands. Assert source pixels, adjustment parameters, undo/redo, native reopen, and PowerClip composition. Do not turn editable vectors into bitmaps to satisfy the scenario.
 
-Progress: crop, undo/redo, brightness/contrast parameters, native reopen, and independent SVG evidence pass. The new shared `object.resampleImage` command now passes selected/explicit-image dispatch, decoded output dimensions and pixels, node/appearance/display-bounds preservation, undo/redo, native reopen, independent `usvg`, invalid-input atomicity, CMYK rejection, and real MCP `run_command` evidence. PowerClip composition and additional bitmap effects remain open, so this step stays open.
+Complete: crop, resample, brightness/contrast, undo/redo, native reopen, and invalid-input evidence pass. The final PowerClip scenario retains the original embedded PNG bytes and decoded pixels, a vector frame and live clip group, and the ordered adjustment/Gaussian effect stack with radius undo/redo after native reopen. Independent `usvg` proves a non-empty vector clip containing actual PNG content under the connected Gaussian filter. Hayro-backed PDF import proves one real page and its rendered raster composition; it does not expose live clip/effect semantics. The existing CorelDRAW Gaussian dialog opens for a selected bitmap and confirms its radius into the shared appearance stack without a new dialog or production change.
 
 - [x] **Step 2: Verify external-editor handoff honestly**
 
 The existing Links panel suite passes 9/9, including system handoff, explicit absent-service errors, PhotoCraft fallback, and launch-error propagation. These synthetic service callbacks prove the launch contract only; no external-editor round trip is claimed.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
-Run the image workflow and existing bitmap/effect tests. Commit only implemented and observed behaviour. The resample/MCP/handoff slice is committed while the remaining Step 1 workflows stay open.
+Run the image workflow and existing bitmap/effect tests. Image workflows pass 11/11, PowerClip 2/2, CorelDRAW effects UI 8/8, raster filters 11/11, Gaussian SVG 3/3, and `vectorcraft-effects` 380 passed / 2 ignored. Existing bitmap-filtered tests, fmt, focused Clippy, and unblessed MCP `docs_sync` 2/2 also pass. The final slice is evidence-only; no production bug was exposed.
 
 ### Task 9: Complete PowerTRACE outline/centreline workflows
 

@@ -334,3 +334,116 @@ fn linked_bitmap_resample_embeds_a_derived_png_without_touching_the_source_file(
     assert_eq!(std::fs::read(&path).unwrap(), source_before);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn bitmap_powerclip_gaussian_blur_stays_live_and_exports_connected_structure() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 160, "height": 120})).unwrap();
+    let (png, source) = synthetic_rgba_png(24, 18);
+    let bitmap = s
+        .execute(
+            "file.place",
+            &json!({"name": "powerclip-source.png", "dataBase64": vectorcraft_format::base64_encode(&png), "link": false, "at": [20, 30]}),
+        )
+        .unwrap()["ids"][0]
+        .as_u64()
+        .unwrap();
+    let frame = s.execute("shape.rectangle", &json!({"x": 28, "y": 34, "width": 42, "height": 32})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [bitmap, frame]})).unwrap();
+    let clip = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+
+    s.execute("effect.apply", &json!({"id": bitmap, "effect": "adjust.brightnessContrast", "params": {"brightness": 3, "contrast": 5}})).unwrap();
+    s.execute("effect.apply", &json!({"id": bitmap, "effect": "blur.gaussian", "params": {"radius": 2}})).unwrap();
+    s.execute("effect.setParams", &json!({"id": bitmap, "index": 1, "params": {"radius": 8}})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().appearance.effects[1].params["radius"].as_f64(), Some(8.0));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().appearance.effects[1].params["radius"].as_f64(), Some(2.0));
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().appearance.effects[1].params["radius"].as_f64(), Some(8.0));
+
+    native_reopen(&mut s);
+    let doc = &s.doc().unwrap().doc;
+    let NodeKind::Group { clip: true, children } = &doc.node(NodeId(clip)).unwrap().kind else { panic!("native reopen keeps a live clip group") };
+    assert_eq!(children.iter().map(|child| child.id).collect::<Vec<_>>(), [NodeId(frame), NodeId(bitmap)]);
+    let NodeKind::Path { path, .. } = &doc.node(NodeId(frame)).unwrap().kind else { panic!("the PowerClip frame remains a vector path") };
+    assert!(!path.is_empty());
+    let bitmap_node = doc.node(NodeId(bitmap)).unwrap();
+    let NodeKind::Image(im) = &bitmap_node.kind else { panic!("the clipped source remains an editable bitmap") };
+    assert!(im.link.is_none());
+    assert_eq!((im.width, im.height), (24, 18));
+    let blob = &doc.images[&im.key];
+    assert_eq!(blob.mime, "image/png");
+    assert_eq!(blob.bytes.as_slice(), png.as_slice(), "native reopen retains the original embedded PNG bytes");
+    assert_eq!(image::load_from_memory(&blob.bytes).unwrap().to_rgba8(), source);
+    let effects = &bitmap_node.appearance.effects;
+    assert_eq!(effects.iter().map(|effect| effect.id.as_str()).collect::<Vec<_>>(), ["adjust.brightnessContrast", "blur.gaussian"]);
+    assert_eq!((effects[0].params["brightness"].as_f64(), effects[0].params["contrast"].as_f64()), (Some(3.0), Some(5.0)));
+    assert_eq!(effects[1].params["radius"].as_f64(), Some(8.0));
+    assert!(doc.is_editable(NodeId(bitmap)) && doc.is_editable(NodeId(frame)));
+    s.execute("select.set", &json!({"ids": [clip]})).unwrap();
+    s.execute("object.clippingMask.editContents", &json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().selection.objects, vec![NodeId(bitmap)]);
+
+    let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the clipped blurred bitmap");
+    fn image_matches(image: &usvg::Image, source: &image::RgbaImage) -> bool {
+        if (image.size().width() as u32, image.size().height() as u32) != source.dimensions() {
+            return false;
+        }
+        match image.kind() {
+            usvg::ImageKind::PNG(bytes) => image::load_from_memory(bytes.as_slice()).map(|decoded| decoded.to_rgba8()).is_ok_and(|pixels| {
+                let mut colors = pixels.pixels();
+                let Some(first) = colors.next() else { return false };
+                colors.any(|pixel| pixel != first)
+            }),
+            _ => false,
+        }
+    }
+    fn contains_source_image(group: &usvg::Group, source: &image::RgbaImage) -> bool {
+        group.children().iter().any(|node| match node {
+            usvg::Node::Group(child) => contains_source_image(child, source),
+            usvg::Node::Image(image) => image_matches(image, source),
+            _ => false,
+        })
+    }
+    fn blurred_source(group: &usvg::Group, source: &image::RgbaImage) -> bool {
+        let gaussian = group.filters().iter().any(|filter| {
+            filter.primitives().iter().any(|primitive| match primitive.kind() {
+                usvg::filter::Kind::GaussianBlur(blur) => {
+                    matches!(blur.input(), usvg::filter::Input::SourceGraphic)
+                        && (blur.std_dev_x().get() - 4.0).abs() < 1e-4
+                        && (blur.std_dev_y().get() - 4.0).abs() < 1e-4
+                }
+                _ => false,
+            })
+        });
+        (gaussian && contains_source_image(group, source))
+            || group.children().iter().any(|node| match node {
+                usvg::Node::Group(child) => blurred_source(child, source),
+                _ => false,
+            })
+    }
+    fn connected_clip(group: &usvg::Group, source: &image::RgbaImage) -> bool {
+        let vector_clip = group
+            .clip_path()
+            .is_some_and(|clip| clip.root().children().iter().any(|node| matches!(node, usvg::Node::Path(path) if !path.data().is_empty())));
+        (vector_clip && blurred_source(group, source))
+            || group.children().iter().any(|node| match node {
+                usvg::Node::Group(child) => connected_clip(child, source),
+                _ => false,
+            })
+    }
+    assert!(connected_clip(tree.root(), &source), "a non-empty vector clip contains actual image content under a Gaussian filter: {svg}");
+
+    let pdf = vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({"format": "pdf"})).unwrap()["dataBase64"].as_str().unwrap())
+        .unwrap();
+    let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed clipped-bitmap PDF read");
+    assert_eq!(imported.artboards.len(), 1);
+    let mut pdf_images = 0;
+    imported.walk(|node| {
+        if matches!(node.kind, NodeKind::Image(_)) {
+            pdf_images += 1;
+        }
+    });
+    assert!(pdf_images > 0, "the PDF reader reconstructs a real page and rendered raster composition, not live clip/effect semantics");
+}

@@ -172,3 +172,41 @@ fn coreldraw_image_trace_panel_runs_the_shared_powertrace_workflow() {
     let expanded = run(&mut app, "imageTrace.makeAndExpand", json!({"id": trace.0}));
     assert!(expanded["paths"].as_u64().unwrap() > 0, "{expanded}");
 }
+
+#[test]
+fn coreldraw_gaussian_dialog_edits_a_selected_bitmaps_shared_effect_stack() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_fn(12, 8, |x, y| image::Rgba([(x * 17) as u8, (y * 29) as u8, 90, 255]))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let placed = run(
+        &mut app,
+        "file.place",
+        json!({"name": "dialog-source.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [30, 40]}),
+    );
+    let bitmap = NodeId(placed["ids"][0].as_u64().unwrap());
+    run(&mut app, "select.set", json!({"ids": [bitmap.0]}));
+
+    crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": "blur.gaussian"}));
+    let dialog = app.ui.dialog.as_ref().expect("the generic Gaussian Blur dialog opens");
+    assert_eq!(dialog.kind, "effect");
+    assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("blur.gaussian"));
+    assert_eq!(dialog.fields.get("__label").and_then(serde_json::Value::as_str), Some("Gaussian Blur"));
+    let text = crate::tests_labels::painted_text(&mut app, |app, ui| crate::dialogs::show(app, ui.ctx()));
+    assert!(text.contains("Radius"), "Gaussian dialog rows: {text}");
+
+    app.ui.dialog.as_mut().unwrap().fields.insert("radius".into(), json!(8.0));
+    let _ = crate::tests_labels::painted_text(&mut app, |app, ui| crate::dialogs::show(app, ui.ctx()));
+    let before = app.session.doc().unwrap().history.undo.len();
+    crate::dialogs::confirm(&mut app).unwrap();
+    assert!(app.ui.dialog.is_none());
+    assert_eq!(app.session.doc().unwrap().history.undo.len(), before + 1);
+    let node = app.session.active().unwrap().doc.node(bitmap).unwrap();
+    assert!(matches!(node.kind, NodeKind::Image(_)));
+    let effects = &node.appearance.effects;
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].id, "blur.gaussian");
+    assert_eq!(effects[0].params["radius"].as_f64(), Some(8.0));
+}
