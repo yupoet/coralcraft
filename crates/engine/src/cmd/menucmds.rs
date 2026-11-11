@@ -917,6 +917,29 @@ fn polygon_path(pts: &[Point]) -> PathData {
     PathData::single(vectorcraft_geom::SubPath::new(pts.iter().map(|p| Anchor::corner(*p)).collect(), true))
 }
 
+// CoralCraft: image 0.25's dimension-changing resize allocates an Rgba32F intermediate and
+// filter-weight vectors; same-size and empty-source paths allocate neither.
+pub(crate) fn check_resample_intermediates(source_width: u32, source_height: u32, width: u32, height: u32, max_alloc: u64) -> Result<()> {
+    const C: &str = "object.resampleImage";
+    if source_width == 0 || source_height == 0 || (source_width, source_height) == (width, height) {
+        return Ok(());
+    }
+    let intermediate = u64::from(source_width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(16))
+        .ok_or_else(|| bad(C, "the resampling intermediate is too large to draw"))?;
+    if intermediate > max_alloc {
+        return Err(bad(C, format!("a resampling intermediate of {source_width} × {height} float pixels is too large to draw")));
+    }
+    for samples in [source_width, source_height] {
+        let weights = u64::from(samples).checked_mul(4).ok_or_else(|| bad(C, "the resampling filter weights are too large to draw"))?;
+        if weights > max_alloc {
+            return Err(bad(C, "the resampling filter weights are too large to draw"));
+        }
+    }
+    Ok(())
+}
+
 // CoralCraft: resample the existing raster object in place; every fallible check precedes the edit.
 fn resample_image(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "object.resampleImage";
@@ -981,6 +1004,8 @@ fn resample_image(s: &mut Session, p: &Value) -> Result<Value> {
     if output_bytes > crate::cmd::fileio::MAX_RASTER_ALLOC {
         return Err(bad(C, format!("an output image of {width} × {height} pixels is too large to draw")));
     }
+    let (source_width, source_height) = (decoded.width(), decoded.height());
+    check_resample_intermediates(source_width, source_height, width, height, crate::cmd::fileio::MAX_RASTER_ALLOC)?;
     let resized = decoded.resize_exact(width, height, filter);
     let mut png = Vec::new();
     resized

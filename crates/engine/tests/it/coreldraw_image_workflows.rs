@@ -139,7 +139,8 @@ fn bitmap_resample_preserves_identity_bounds_appearance_and_native_history() {
     assert_eq!(node.appearance.effects[0].params["contrast"].as_f64(), Some(11.0));
     let NodeKind::Image(im) = &node.kind else { panic!("resampled node stays an image") };
     assert_eq!((im.width, im.height), (12, 9));
-    assert_eq!(im.xf, before_xf * vectorcraft_geom::Affine::scale_non_uniform(4.0 / 12.0, 2.0 / 9.0));
+    let expected_xf = before_xf * vectorcraft_geom::Affine::scale_non_uniform(4.0 / 12.0, 2.0 / 9.0);
+    assert_eq!(im.xf, expected_xf);
     assert!(im.link.is_none());
     let blob = &s.doc().unwrap().doc.images[&im.key];
     assert_eq!(blob.mime, "image/png");
@@ -161,7 +162,21 @@ fn bitmap_resample_preserves_identity_bounds_appearance_and_native_history() {
     let decoded = image::load_from_memory(&s.doc().unwrap().doc.images[&im.key].bytes).unwrap();
     assert_eq!((decoded.width(), decoded.height()), (12, 9));
     let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
-    usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the resampled bitmap");
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse of the resampled bitmap");
+    fn image_node(node: &usvg::Node) -> Option<&usvg::Image> {
+        match node {
+            usvg::Node::Group(group) => group.children().iter().find_map(image_node),
+            usvg::Node::Image(image) => Some(image),
+            _ => None,
+        }
+    }
+    let image = tree.root().children().iter().find_map(image_node).expect("an independently parsed image node");
+    assert_eq!((image.size().width(), image.size().height()), (12.0, 9.0));
+    let actual = image.abs_transform();
+    let actual = [actual.sx, actual.ky, actual.kx, actual.sy, actual.tx, actual.ty];
+    for (actual, expected) in actual.into_iter().zip(expected_xf.as_coeffs()) {
+        assert!((actual - expected as f32).abs() < 5e-4, "independent image transform: {actual} != {expected}");
+    }
 }
 
 #[test]
@@ -251,4 +266,71 @@ fn cmyk_bitmap_resample_is_rejected_atomically() {
     assert!(error.contains("CMYK"), "{error}");
     assert_eq!(s.doc().unwrap().doc, before);
     assert_eq!(s.doc().unwrap().history.undo.len(), history);
+}
+
+#[test]
+fn extreme_aspect_ratio_resample_is_rejected_before_float_intermediate_allocation() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+    let (png, _) = synthetic_rgba_png(32_768, 1);
+    let bitmap = s
+        .execute("file.place", &json!({"name": "wide.png", "dataBase64": vectorcraft_format::base64_encode(&png), "link": false, "at": [40, 40]}))
+        .unwrap()["ids"][0]
+        .as_u64()
+        .unwrap();
+    let before = s.doc().unwrap().doc.clone();
+    let history = s.doc().unwrap().history.undo.len();
+    let error = s.execute("object.resampleImage", &json!({"id": bitmap, "width": 1, "height": 16_384, "filter": "nearest"})).unwrap_err().to_string();
+    assert!(error.contains("intermediate"), "{error}");
+    assert_eq!(s.doc().unwrap().doc, before);
+    assert_eq!(s.doc().unwrap().history.undo.len(), history);
+}
+
+#[test]
+fn every_resample_filter_mapping_produces_the_library_pixels() {
+    for (name, filter) in [
+        ("nearest", image::imageops::FilterType::Nearest),
+        ("triangle", image::imageops::FilterType::Triangle),
+        ("catmullRom", image::imageops::FilterType::CatmullRom),
+    ] {
+        let mut s = Session::new();
+        s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+        let (png, source) = synthetic_rgba_png(4, 2);
+        let bitmap = s
+            .execute(
+                "file.place",
+                &json!({"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png), "link": false, "at": [40, 50]}),
+            )
+            .unwrap()["ids"][0]
+            .as_u64()
+            .unwrap();
+        let result = s.execute("object.resampleImage", &json!({"id": bitmap, "width": 3, "height": 3, "filter": name})).unwrap();
+        assert_eq!(result["filter"].as_str(), Some(name));
+        let NodeKind::Image(im) = &s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().kind else { panic!("resampled image") };
+        let decoded = image::load_from_memory(&s.doc().unwrap().doc.images[&im.key].bytes).unwrap().to_rgba8();
+        assert_eq!(decoded, image::imageops::resize(&source, 3, 3, filter), "{name}");
+    }
+}
+
+#[test]
+fn linked_bitmap_resample_embeds_a_derived_png_without_touching_the_source_file() {
+    let dir = vectorcraft_testkit::temp_dir("coreldraw-linked-resample");
+    let path = dir.join("linked.png");
+    let (png, _) = synthetic_rgba_png(4, 2);
+    std::fs::write(&path, &png).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 200, "height": 200})).unwrap();
+    let bitmap = s.execute("file.place", &json!({"path": path.to_string_lossy(), "link": true, "at": [40, 50]})).unwrap()["ids"][0].as_u64().unwrap();
+    let NodeKind::Image(linked) = &s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().kind else { panic!("linked source") };
+    assert!(linked.link.is_some());
+    let source_before = std::fs::read(&path).unwrap();
+    s.execute("object.resampleImage", &json!({"id": bitmap, "width": 8, "height": 4, "filter": "nearest"})).unwrap();
+    let NodeKind::Image(im) = &s.doc().unwrap().doc.node(NodeId(bitmap)).unwrap().kind else { panic!("derived image") };
+    assert!(im.link.is_none());
+    let blob = &s.doc().unwrap().doc.images[&im.key];
+    assert_eq!(blob.mime, "image/png");
+    let decoded = image::load_from_memory(&blob.bytes).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (8, 4));
+    assert_eq!(std::fs::read(&path).unwrap(), source_before);
+    let _ = std::fs::remove_dir_all(dir);
 }

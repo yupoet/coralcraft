@@ -1,5 +1,10 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0i. [Resolved 2026-11-11, P3 Task 8] Resize float-intermediate allocation exceeds the raster budget
+
+- `image 0.25.10` `resize_exact` allocates an Rgba32F intermediate of `source_width × output_height × 16` bytes for non-empty, dimension-changing resizes, plus the final typed output and reusable `f32` filter-weight vectors. Same-size and empty-source paths skip the intermediate and weights.
+- `object.resampleImage` now checks those intermediate and weight allocations with checked arithmetic before resizing. The `32768×1 -> 1×16384` regression rejects an 8 GiB intermediate without attempting the allocation and leaves the document and undo history unchanged. Normal resizing, every filter mapping, same-size/empty shortcut arithmetic, linked-source derivation, and structural independent `usvg` image size/transform evidence pass.
+
 ## 0h. [Resolved 2026-11-11, P3 Task 10] CDR live objects silently exported as empty paths
 
 - `corel-import::convert_vc_node_to_cdr` previously sent Blend/Envelope/Mesh and other live kinds to its fallback with `node.path_data().cloned().unwrap_or_default()`, which could write an empty path without a warning.
