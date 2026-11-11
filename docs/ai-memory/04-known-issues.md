@@ -1,5 +1,12 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0n. [Resolved 2026-11-12, P3 Task 10] Mesh point opacity was silently dropped and empty live expansion exported successfully
+
+- Mesh expansion stores point opacity on `FillLayer`, but CDR appearance conversion selected only its paint, producing opaque patches without a named warning. Invalid/empty meshes and nested live children could also become successful empty CDR/CMX objects; generation exhaustion returned the same empty-group representation.
+- Conversion now detects original mesh point opacity before expansion and emits the exact warning in `docs/p3-inventory.md` §17 only after exact original restoration fails. All-opaque and exactly restored meshes stay silent; tessellated path colour/coordinates remain and resulting CDR object opacity is 1.0, while native mesh points remain editable.
+- `vectorcraft_doc::live::live_expansion_failed()` reports whether the latest outermost deep expansion on the current thread produced an empty group for any originally live node. It resets at the next outermost expansion and remains sticky across nested failures, including the unchanged 4,000,000-object budget being exhausted. `corel-import` turns that status into `CorelImportError::Conversion` through every existing fallible export/writer. Doc tests prove the real exhaustion branch with a test-local RAII budget override and reset; no public override or changed expansion signature exists.
+- RED/GREEN evidence and all focused gate counts are in §17. CDR/CMX self-reimport contains ordinary non-empty vector paths without live mesh metadata; it is not live-mesh or independent format certification. The combined matrix and S2 remain open, and Task 10/P3.10/P3 are not closed. Full CI/later serial gates remain for the controller.
+
 ## 0m. [Resolved 2026-11-12, P3 Task 10] Transparency/bitmap fallbacks were silent and white allocation was unbounded
 
 - Gradient stop alpha, enabled opacity masks that could not be restored exactly, and visible unsupported bitmap effects were dropped without warnings. Missing and corrupt image bytes shared an unreported white fallback. The fallback and `encoded_original_bitmap` used saturating dimension arithmetic followed by allocation, which could still panic or request an enormous buffer.

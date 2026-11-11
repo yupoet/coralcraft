@@ -697,6 +697,7 @@ const MISSING_IMAGE_WARNING: &str =
     "missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
 const DECODE_IMAGE_WARNING: &str =
     "undecodable or empty image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
+const MESH_OPACITY_WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
 
 #[derive(Default)]
 struct ExportWarningLedger {
@@ -704,6 +705,7 @@ struct ExportWarningLedger {
     live_trace: bool,
     gradient_alpha: bool,
     dropped_opacity_mask: bool,
+    mesh_point_opacity: bool,
     unsupported_bitmap_effects: BTreeSet<String>,
     missing_image_pixels: bool,
     undecodable_image_pixels: bool,
@@ -724,6 +726,9 @@ impl ExportWarningLedger {
         }
         if self.dropped_opacity_mask {
             warnings.push(DROPPED_MASK_WARNING.to_owned());
+        }
+        if self.mesh_point_opacity {
+            warnings.push(MESH_OPACITY_WARNING.to_owned());
         }
         if !self.unsupported_bitmap_effects.is_empty() {
             let ids = self.unsupported_bitmap_effects.into_iter().collect::<Vec<_>>().join(", ");
@@ -2591,9 +2596,18 @@ fn convert_vc_node_to_cdr_with_expected(
     if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
         let _ = convert_vc_node_to_cdr_with_expected(&mask.art, offset, doc, meta, None, None, warnings);
     }
+    let mut has_mesh_point_opacity = false;
+    node.walk(&mut |descendant| {
+        if let NodeKind::Mesh(mesh) = &descendant.kind {
+            has_mesh_point_opacity |= mesh.points.iter().any(|point| point.opacity < 1.0);
+        }
+    });
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
         expanded = vectorcraft_doc::live::expand_deep(node, None);
+        if vectorcraft_doc::live::live_expansion_failed() {
+            record_conversion_error(warnings, "live expansion produced an empty object; refusing to export empty CDR/CMX geometry".to_owned());
+        }
         &expanded
     } else {
         node
@@ -2617,6 +2631,7 @@ fn convert_vc_node_to_cdr_with_expected(
         return restored;
     }
     warnings.dropped_opacity_mask |= has_enabled_opacity_mask;
+    warnings.mesh_point_opacity |= has_mesh_point_opacity;
 
     let oid = ObjectId(node.id.0.max(1));
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects, warnings);

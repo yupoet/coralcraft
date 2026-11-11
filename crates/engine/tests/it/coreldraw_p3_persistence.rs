@@ -706,3 +706,52 @@ fn visible_appearance_item_effects_warn_with_object_effects_and_controls_stay_si
         }
     }
 }
+
+#[test]
+fn mesh_points_survive_native_reopen_and_cdr_cmx_keep_only_opaque_tessellated_paths() {
+    const WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+    let mut s = session();
+    let shape = rectangle(&mut s, 20.0);
+    s.execute("object.mesh.create", &json!({"id": shape, "rows": 2, "cols": 2})).unwrap();
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 4, "color": "#28aa5a", "opacity": 0.5})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": 75, "y": 60})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": 85, "y": 65, "handle": 0})).unwrap();
+    let NodeKind::Mesh(expected) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("created mesh") };
+    let expected = expected.clone();
+
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    let NodeKind::Mesh(mesh) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("native mesh reopen") };
+    assert_eq!((mesh.rows, mesh.cols), (2, 2));
+    assert_eq!(mesh.points.len(), expected.points.len());
+    for (index, (actual, expected)) in mesh.points.iter().zip(&expected.points).enumerate() {
+        assert_eq!(actual.p, expected.p, "point {index} position");
+        assert_eq!(actual.color, expected.color, "point {index} colour");
+        assert_eq!(actual.opacity, expected.opacity, "point {index} opacity");
+        assert_eq!(actual.handles, expected.handles, "point {index} handles");
+    }
+
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 1, "x": 95, "y": 45})).unwrap();
+    let NodeKind::Mesh(edited) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("edited native mesh") };
+    assert_eq!(edited.points[0].color.to_hex(), "#ff0000");
+    assert_eq!(edited.points[0].opacity, 0.75);
+    assert_eq!(edited.points[1].p, vectorcraft_geom::Point::new(95.0, 45.0));
+
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert_eq!(warnings.iter().filter(|warning| warning.as_str() == Some(WARNING)).count(), 1, "{format}: {warnings:?}");
+        assert_eq!(native_bytes(&mut s), native, "{format} export leaves native mesh data unchanged");
+        s.execute("document.open", &json!({"name": format!("mesh.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        assert!(!ordinary_paths(doc).is_empty(), "{format} reopens ordinary non-empty vector paths");
+        let mut live_meshes = 0;
+        for layer in &doc.layers {
+            layer.walk(&mut |node| live_meshes += usize::from(matches!(node.kind, NodeKind::Mesh(_))));
+        }
+        assert_eq!(live_meshes, 0, "{format} has no live mesh metadata or restoration claim");
+    }
+}

@@ -368,10 +368,16 @@ pub fn expand_deep(n: &Node, outline: Outliner) -> Node {
 /// copy expanded on its own, so step counts capped one by one multiplied. Past it, live art
 /// expands to nothing.
 pub fn expand_deep_hooks(n: &Node, hooks: Hooks) -> Node {
-    let _generating = Generating::enter();
-    let mut out = if is_live(n) {
+    let generating = Generating::enter();
+    // CoralCraft: one status describes the complete outermost expansion, including nested live art.
+    if generating.0 {
+        EMPTY_LIVE_EXPANSION.set(false);
+    }
+    let live = is_live(n);
+    let mut out = if live {
         let g = expanded_group_hooks(n, hooks);
         if !Generating::charge(g.count()) {
+            EMPTY_LIVE_EXPANSION.set(true);
             return Node::new(n.id, NodeKind::Group { children: vec![], clip: false });
         }
         g
@@ -385,7 +391,19 @@ pub fn expand_deep_hooks(n: &Node, hooks: Hooks) -> Node {
             }
         }
     }
+    if live && out.children().is_some_and(Vec::is_empty) {
+        EMPTY_LIVE_EXPANSION.set(true);
+    }
     out
+}
+
+// CoralCraft: whether the latest outermost [`expand_deep`] on this thread produced an empty group
+// for any originally live node. The status persists after that expansion and resets at the next one.
+/// Reports empty live geometry, including generation-budget exhaustion, during the latest
+/// outermost [`expand_deep`] on this thread. Nested failures remain set until the next expansion.
+#[must_use]
+pub fn live_expansion_failed() -> bool {
+    EMPTY_LIVE_EXPANSION.get()
 }
 
 /// Most objects one evaluation of live art (an expansion, an envelope's mapping and everything
@@ -396,6 +414,8 @@ std::thread_local! {
     /// What is left of [`MAX_GENERATED`] for the evaluation running on this thread; `None` outside
     /// one.
     static GENERATED_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    // CoralCraft: sticky only within one outermost expansion; queried after its budget is dropped.
+    static EMPTY_LIVE_EXPANSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The outermost live evaluation on this thread: it starts [`GENERATED_LEFT`] and ends it.
@@ -456,4 +476,61 @@ pub(crate) fn max_outset(nodes: &[Arc<Node>], symbols: Option<&crate::SymbolBoxe
         });
     }
     o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct BudgetOverride {
+        previous: Option<usize>,
+        _evaluation: Generating,
+    }
+
+    impl BudgetOverride {
+        fn new(budget: usize) -> Self {
+            let evaluation = Generating(false);
+            let previous = GENERATED_LEFT.replace(Some(budget));
+            Self { previous, _evaluation: evaluation }
+        }
+    }
+
+    impl Drop for BudgetOverride {
+        fn drop(&mut self) {
+            GENERATED_LEFT.set(self.previous);
+        }
+    }
+
+    fn mesh_node(id: u64, valid: bool) -> Node {
+        let mesh = if valid {
+            GradientMesh::from_surface(1, 1, &|u, v| Point::new(u * 10.0, v * 10.0), &|_, _| Color::BLACK)
+        } else {
+            GradientMesh { rows: 1, cols: 1, points: Vec::new() }
+        };
+        Node::new(NodeId(id), NodeKind::Mesh(mesh))
+    }
+
+    #[test]
+    fn empty_live_expansion_status_is_public_and_reset_by_the_next_expansion() {
+        let expanded = expand_deep(&mesh_node(1, false), None);
+        assert!(expanded.children().is_some_and(Vec::is_empty));
+        assert!(live_expansion_failed());
+
+        let expanded = expand_deep(&mesh_node(2, true), None);
+        assert!(expanded.children().is_some_and(|children| !children.is_empty()));
+        assert!(!live_expansion_failed());
+    }
+
+    #[test]
+    fn test_budget_override_proves_real_exhaustion_and_resets_on_drop() {
+        let budget = BudgetOverride::new(0);
+        let expanded = expand_deep(&mesh_node(3, true), None);
+        assert!(expanded.children().is_some_and(Vec::is_empty));
+        assert!(live_expansion_failed());
+        drop(budget);
+
+        let expanded = expand_deep(&mesh_node(4, true), None);
+        assert!(expanded.children().is_some_and(|children| !children.is_empty()));
+        assert!(!live_expansion_failed());
+    }
 }

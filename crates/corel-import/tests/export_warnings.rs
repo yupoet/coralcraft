@@ -584,3 +584,150 @@ fn huge_nested_powerclip_bitmap_legacy_reconstruction_returns_conversion_error_i
 
     assert_huge_nested_bitmap_error(&doc);
 }
+
+const MESH_OPACITY_WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+fn mesh_document(opacity: f32) -> Document {
+    let mut doc = Document::new(120.0, 120.0);
+    let id = doc.alloc_id();
+    let mut mesh =
+        vectorcraft_doc::GradientMesh::from_surface(1, 1, &|u, v| vectorcraft_geom::Point::new(10.0 + 100.0 * u, 20.0 + 60.0 * v), &|_, _| {
+            vectorcraft_color::Color::rgb8(40, 170, 90)
+        });
+    mesh.points[2].opacity = opacity;
+    doc.insert(doc.default_layer(), 0, Node::new(id, NodeKind::Mesh(mesh))).unwrap();
+    doc
+}
+
+fn path_points(path: &corel_import::coralcraft_geom::Path) -> Vec<CdrPoint> {
+    let mut points = Vec::new();
+    for element in &path.elements {
+        match *element {
+            corel_import::coralcraft_geom::PathElement::MoveTo(point) | corel_import::coralcraft_geom::PathElement::LineTo(point) => {
+                points.push(point)
+            }
+            corel_import::coralcraft_geom::PathElement::QuadTo { ctrl, end } => points.extend([ctrl, end]),
+            corel_import::coralcraft_geom::PathElement::CubicTo { c1, c2, end } => points.extend([c1, c2, end]),
+            corel_import::coralcraft_geom::PathElement::Close => {}
+        }
+    }
+    points
+}
+
+fn assert_opaque_tessellated_mesh(doc: &CdrDocument) {
+    let root = only_object(doc);
+    assert_eq!(root.opacity.get(), 1.0);
+    let ObjectKind::Group { children } = &root.kind else { panic!("expanded mesh group") };
+    assert!(!children.is_empty());
+    let expected_fill = Some(corel_import::coralcraft_doc::FillStyle::uniform(CdrColor::rgb8(40, 170, 90)));
+    let mut points = Vec::new();
+    for child in children {
+        assert_eq!(child.opacity.get(), 1.0);
+        assert_eq!(child.fill, expected_fill);
+        let ObjectKind::Path(path) = &child.kind else { panic!("ordinary tessellated path") };
+        assert!(!path.elements.is_empty());
+        points.extend(path_points(path));
+    }
+    assert!(!points.is_empty());
+    let x0 = points.iter().map(|point| point.x.get()).fold(f64::INFINITY, f64::min);
+    let x1 = points.iter().map(|point| point.x.get()).fold(f64::NEG_INFINITY, f64::max);
+    let y0 = points.iter().map(|point| point.y.get()).fold(f64::INFINITY, f64::min);
+    let y1 = points.iter().map(|point| point.y.get()).fold(f64::NEG_INFINITY, f64::max);
+    assert!((x0 - 10.0).abs() < 1e-6 && (x1 - 110.0).abs() < 1e-6, "retained x coordinates: {x0}..{x1}");
+    assert!((y0 - 20.0).abs() < 1e-6 && (y1 - 80.0).abs() < 1e-6, "retained y coordinates: {y0}..{y1}");
+}
+
+#[test]
+fn mesh_point_opacity_warns_once_and_exports_opaque_tessellated_paths() {
+    let doc = mesh_document(0.25);
+    let native = doc.layers[0].children().unwrap()[0].clone();
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(warnings.iter().filter(|warning| warning.as_str() == MESH_OPACITY_WARNING).count(), 1, "{warnings:?}");
+    assert_opaque_tessellated_mesh(&converted);
+    assert_eq!(doc.layers[0].children().unwrap()[0], native);
+
+    for (existing, with_warnings) in cdr_cmx_writers() {
+        let (bytes, warnings) = with_warnings(&doc).unwrap();
+        assert_eq!(warnings.iter().filter(|warning| warning.as_str() == MESH_OPACITY_WARNING).count(), 1, "{warnings:?}");
+        assert_eq!(existing(&doc).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn all_opaque_mesh_stays_silent() {
+    let doc = mesh_document(1.0);
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+    assert_opaque_tessellated_mesh(&converted);
+    for (_, with_warnings) in cdr_cmx_writers() {
+        let (_, warnings) = with_warnings(&doc).unwrap();
+        assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+    }
+}
+
+#[test]
+fn exact_mesh_restoration_stays_silent() {
+    let original = ObjectNode::new(
+        ObjectId(120),
+        Some("Restored Mesh Fallback".into()),
+        ObjectKind::Group { children: vec![rect_object(121, "Original Patch", [10.0, 20.0, 110.0, 80.0])] },
+        None,
+        None,
+    );
+    let mut doc = import_restorable(original);
+    let id = restorable_id(&doc, "Restored Mesh Fallback");
+    let mesh_source = mesh_document(0.25);
+    let NodeKind::Mesh(mesh) = &mesh_source.layers[0].children().unwrap()[0].kind else { panic!("mesh") };
+    doc.node_mut(id).unwrap().kind = NodeKind::Mesh(mesh.clone());
+    let expanded = vectorcraft_doc::live::expand_deep(doc.node(id).unwrap(), None);
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).unwrap().clone();
+    value["extra"].as_object_mut().unwrap().insert(format!("corel.import.original_vc.v1.{}", id.0), serde_json::to_value(expanded).unwrap());
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+
+    let (_, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert!(!warnings.iter().any(|warning| warning.as_str() == MESH_OPACITY_WARNING), "{warnings:?}");
+}
+
+fn invalid_mesh(id: u64) -> Node {
+    Node::new(NodeId(id), NodeKind::Mesh(vectorcraft_doc::GradientMesh { rows: 1, cols: 1, points: Vec::new() }))
+}
+
+fn invalid_mesh_document(nested: bool) -> Document {
+    let mut doc = Document::new(120.0, 120.0);
+    let id = doc.alloc_id();
+    let child = invalid_mesh(doc.alloc_id().0);
+    let root = if nested {
+        Node::new(id, NodeKind::Blend { children: vec![std::sync::Arc::new(child)], spec: Default::default() })
+    } else {
+        Node::new(id, child.kind)
+    };
+    doc.insert(doc.default_layer(), 0, root).unwrap();
+    doc
+}
+
+fn assert_empty_live_conversion_error<T>(result: Result<T, corel_import::CorelImportError>) {
+    assert!(matches!(result, Err(corel_import::CorelImportError::Conversion(message)) if message.contains("live") && message.contains("empty")));
+}
+
+#[test]
+fn empty_live_expansion_fails_closed_through_every_public_export_and_writer() {
+    let doc = invalid_mesh_document(false);
+    assert_empty_live_conversion_error(corel_import::export_document(&doc));
+    assert_empty_live_conversion_error(corel_import::export_document_with_warnings(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cdr7_document(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cdr7_document_with_warnings(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cdrx_zip_document(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cdrx_zip_document_with_warnings(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cmx1_document(&doc));
+    assert_empty_live_conversion_error(corel_import::write_cmx1_document_with_warnings(&doc));
+}
+
+#[test]
+fn nested_empty_live_child_fails_closed_instead_of_exporting_an_empty_object() {
+    let doc = invalid_mesh_document(true);
+    assert_empty_live_conversion_error(corel_import::export_document(&doc));
+    for (existing, with_warnings) in cdr_cmx_writers() {
+        assert_empty_live_conversion_error(existing(&doc));
+        assert_empty_live_conversion_error(with_warnings(&doc));
+    }
+}

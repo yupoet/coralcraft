@@ -59,7 +59,7 @@ pub use envelope::{
 pub(crate) use expand::max_outset;
 pub use expand::{
     Hooks, MAX_GENERATED, Outliner, PatternTiles, affine_near, expand_deep, expand_deep_hooks, expand_live, expand_live_hooks, expand_live_with,
-    expanded_group, expanded_group_hooks, is_live, mesh_quad_nodes, subtree_has_live,
+    expanded_group, expanded_group_hooks, is_live, live_expansion_failed, mesh_quad_nodes, subtree_has_live,
 };
 #[cfg(test)]
 use mesh::grid_eval;
