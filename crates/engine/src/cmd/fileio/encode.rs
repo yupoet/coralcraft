@@ -464,26 +464,6 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
                 "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
             );
         }
-        let mut has_generic_patterns = false;
-        let mut has_live_traces = false;
-        for layer in &doc.layers {
-            vectorcraft_doc::swatches::walk_with_masks(layer, &mut |node| {
-                has_generic_patterns |=
-                    vectorcraft_doc::swatches::node_paints(node).any(|paint| matches!(paint, vectorcraft_color::Paint::Pattern { .. }));
-                has_live_traces |= node.extras().trace.is_some();
-            });
-        }
-        if has_generic_patterns {
-            enc.warnings.push(
-                "generic Pattern fills use a default black/white checkerboard and other Pattern paints become black in CDR/CMX; native pattern definitions and paints remain editable".into(),
-            );
-        }
-        if has_live_traces {
-            enc.warnings.push(
-                "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects"
-                    .into(),
-            );
-        }
         let mut live_kinds = std::collections::BTreeSet::new();
         for layer in &doc.layers {
             layer.walk(&mut |node| {
@@ -586,14 +566,22 @@ fn encode_files(doc: &Document, f: &Format, p: &Value) -> Result<Encoded> {
         // CoralCraft: CorelDRAW (.cdr) — CDR7 classic RIFF or CDRX modern X4+ ZIP+RIFF.
         "cdr" => {
             let ver = p.get("cdrVersion").or_else(|| p.get("version")).and_then(Value::as_str).unwrap_or("cdr7");
-            match ver.to_ascii_lowercase().as_str() {
-                "cdr7" | "7" | "riff" => corel_import::write_cdr7_document(doc).map_err(|e| bad(C, format!("CDR7 encode failed: {e}")))?,
-                "cdrx" | "x4" | "zip" => corel_import::write_cdrx_zip_document(doc).map_err(|e| bad(C, format!("CDRX encode failed: {e}")))?,
+            let (bytes, warnings) = match ver.to_ascii_lowercase().as_str() {
+                "cdr7" | "7" | "riff" => {
+                    corel_import::write_cdr7_document_with_warnings(doc).map_err(|e| bad(C, format!("CDR7 encode failed: {e}")))?
+                }
+                "cdrx" | "x4" | "zip" => {
+                    corel_import::write_cdrx_zip_document_with_warnings(doc).map_err(|e| bad(C, format!("CDRX encode failed: {e}")))?
+                }
                 other => return Err(bad(C, format!("cdrVersion `{other}`: cdr7 or cdrx"))),
-            }
+            };
+            return Ok(Encoded { warnings, ..Encoded::one(bytes) });
         }
         // CoralCraft: Corel Presentation Exchange (.cmx) — CMX1 RIFF container.
-        "cmx" => corel_import::write_cmx1_document(doc).map_err(|e| bad(C, format!("CMX1 encode failed: {e}")))?,
+        "cmx" => {
+            let (bytes, warnings) = corel_import::write_cmx1_document_with_warnings(doc).map_err(|e| bad(C, format!("CMX1 encode failed: {e}")))?;
+            return Ok(Encoded { warnings, ..Encoded::one(bytes) });
+        }
         "pdf" => {
             let (bytes, warnings) = super::pdf::encode(C, doc, p)?;
             return Ok(Encoded { warnings, ..Encoded::one(bytes) });

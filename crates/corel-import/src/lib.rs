@@ -682,22 +682,60 @@ pub fn import_legacy_coralcraft_bytes(bytes: &[u8]) -> Result<(VcDocument, Vec<S
     import_document(&cdr_doc)
 }
 
+const GENERIC_PATTERN_WARNING: &str = "generic Pattern fills use a default black/white checkerboard and other Pattern paints become black in CDR/CMX; native pattern definitions and paints remain editable";
+const LIVE_TRACE_WARNING: &str =
+    "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
+
+#[derive(Default)]
+struct ExportWarningLedger {
+    generic_pattern: bool,
+    live_trace: bool,
+}
+
+impl ExportWarningLedger {
+    fn into_warnings(self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.generic_pattern {
+            warnings.push(GENERIC_PATTERN_WARNING.to_owned());
+        }
+        if self.live_trace {
+            warnings.push(LIVE_TRACE_WARNING.to_owned());
+        }
+        warnings
+    }
+}
+
 /// Encodes a [`vectorcraft_doc::Document`] as a CorelDRAW v7 RIFF `.cdr` byte stream.
 pub fn write_cdr7_document(doc: &VcDocument) -> Result<Vec<u8>, CorelImportError> {
-    let cdr_doc = export_document(doc)?;
-    Ok(coralcraft_cdr::write_cdr7(&cdr_doc)?)
+    write_cdr7_document_with_warnings(doc).map(|(bytes, _)| bytes)
+}
+
+/// Encodes a [`vectorcraft_doc::Document`] as a CorelDRAW v7 RIFF `.cdr` byte stream with conversion warnings.
+pub fn write_cdr7_document_with_warnings(doc: &VcDocument) -> Result<(Vec<u8>, Vec<String>), CorelImportError> {
+    let (cdr_doc, warnings) = export_document_with_warnings(doc)?;
+    Ok((coralcraft_cdr::write_cdr7(&cdr_doc)?, warnings))
 }
 
 /// Encodes a [`vectorcraft_doc::Document`] as a CorelDRAW X4+ ZIP+RIFF `.cdr` byte stream.
 pub fn write_cdrx_zip_document(doc: &VcDocument) -> Result<Vec<u8>, CorelImportError> {
-    let cdr_doc = export_document(doc)?;
-    Ok(coralcraft_cdr::write_cdrx_zip(&cdr_doc)?)
+    write_cdrx_zip_document_with_warnings(doc).map(|(bytes, _)| bytes)
+}
+
+/// Encodes a [`vectorcraft_doc::Document`] as a CorelDRAW X4+ ZIP+RIFF `.cdr` byte stream with conversion warnings.
+pub fn write_cdrx_zip_document_with_warnings(doc: &VcDocument) -> Result<(Vec<u8>, Vec<String>), CorelImportError> {
+    let (cdr_doc, warnings) = export_document_with_warnings(doc)?;
+    Ok((coralcraft_cdr::write_cdrx_zip(&cdr_doc)?, warnings))
 }
 
 /// Encodes a [`vectorcraft_doc::Document`] as a Corel Presentation Exchange `.cmx` (`RIFF CMX1`) byte stream.
 pub fn write_cmx1_document(doc: &VcDocument) -> Result<Vec<u8>, CorelImportError> {
-    let cdr_doc = export_document(doc)?;
-    Ok(coralcraft_cdr::write_cmx1(&cdr_doc)?)
+    write_cmx1_document_with_warnings(doc).map(|(bytes, _)| bytes)
+}
+
+/// Encodes a [`vectorcraft_doc::Document`] as a Corel Presentation Exchange `.cmx` (`RIFF CMX1`) byte stream with conversion warnings.
+pub fn write_cmx1_document_with_warnings(doc: &VcDocument) -> Result<(Vec<u8>, Vec<String>), CorelImportError> {
+    let (cdr_doc, warnings) = export_document_with_warnings(doc)?;
+    Ok((coralcraft_cdr::write_cmx1(&cdr_doc)?, warnings))
 }
 
 /// Maps a [`coralcraft_doc::Document`] onto a [`vectorcraft_doc::Document`], preserving lossless residuals
@@ -957,6 +995,12 @@ fn flatten_page_numbers(node: &mut Node, page: usize) {
 /// Maps a [`vectorcraft_doc::Document`] back to a [`coralcraft_doc::Document`], restoring any lossless
 /// CorelDRAW metadata and residuals stored in `Document::unknown["coralcraft"]`.
 pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError> {
+    export_document_with_warnings(doc).map(|(converted, _)| converted)
+}
+
+/// [`export_document`], with warnings for the fallbacks actually used during conversion.
+pub fn export_document_with_warnings(doc: &VcDocument) -> Result<(CdrDocument, Vec<String>), CorelImportError> {
+    let mut warnings = ExportWarningLedger::default();
     let maybe_meta = read_coralcraft_data(doc);
     let mut cdr_doc = CdrDocument::new_a4_portrait();
     cdr_doc.title.clone_from(&doc.title);
@@ -1061,10 +1105,10 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                                     best_artboard_for_node(ch, &doc.artboards)
                                 };
                                 if target_ab == p_idx {
-                                    clayer.objects.push(convert_vc_node_to_cdr(ch, offset, doc, Some(meta)));
+                                    clayer.objects.push(convert_vc_node_to_cdr(ch, offset, doc, Some(meta), &mut warnings));
                                 } else {
                                     let other_off = artboard_offsets.get(target_ab).copied().unwrap_or(Vec2::ZERO);
-                                    spilled.entry(target_ab).or_default().push(convert_vc_node_to_cdr(ch, other_off, doc, Some(meta)));
+                                    spilled.entry(target_ab).or_default().push(convert_vc_node_to_cdr(ch, other_off, doc, Some(meta), &mut warnings));
                                 }
                             }
                         }
@@ -1094,7 +1138,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         if flatten {
                             remove_page_numbers(Arc::make_mut(&mut source));
                         }
-                        let clayer = convert_vc_layer_to_cdr(&source, Some(lmeta), master_off, doc, Some(meta));
+                        let clayer = convert_vc_layer_to_cdr(&source, Some(lmeta), master_off, doc, Some(meta), &mut warnings);
                         if let Some(existing) = cdr_doc.master_layers.iter_mut().find(|ml| ml.id == clayer.id) {
                             *existing = clayer;
                         } else if matches!(clayer.role, LayerRole::Desktop | LayerRole::Guides | LayerRole::Grid)
@@ -1123,7 +1167,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                                 let origin = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
                                 page_art.id = NodeId(lnode.id.0.saturating_mul(1000).saturating_add(page_index as u64).max(1));
                                 page_art.transform(vectorcraft_geom::Affine::translate((offset.x - origin.x, offset.y - origin.y)), false);
-                                let mut clayer = convert_vc_layer_to_cdr(&page_art, None, offset, doc, None);
+                                let mut clayer = convert_vc_layer_to_cdr(&page_art, None, offset, doc, None, &mut warnings);
                                 clayer.role = LayerRole::Normal;
                                 page.layers.push(clayer);
                             }
@@ -1132,7 +1176,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                 }
             } else if cdr_doc.pages.len() <= 1 {
                 let offset = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
-                let clayer = convert_vc_layer_to_cdr(lnode, None, offset, doc, Some(meta));
+                let clayer = convert_vc_layer_to_cdr(lnode, None, offset, doc, Some(meta), &mut warnings);
                 if let Some(page0) = cdr_doc.pages.first_mut() {
                     page0.layers.push(clayer);
                 }
@@ -1150,7 +1194,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         for child in children {
                             let target_ab = best_artboard_for_node(child, &doc.artboards);
                             if target_ab == p_idx {
-                                clayer.objects.push(convert_vc_node_to_cdr(child, offset, doc, Some(meta)));
+                                clayer.objects.push(convert_vc_node_to_cdr(child, offset, doc, Some(meta), &mut warnings));
                             }
                         }
                     }
@@ -1168,7 +1212,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
             let offset = artboard_offsets.first().copied().unwrap_or(Vec2::ZERO);
             if let Some(page0) = cdr_doc.pages.first_mut() {
                 for lnode in &doc.layers {
-                    page0.layers.push(convert_vc_layer_to_cdr(lnode, None, offset, doc, None));
+                    page0.layers.push(convert_vc_layer_to_cdr(lnode, None, offset, doc, None, &mut warnings));
                 }
             }
         } else {
@@ -1186,7 +1230,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
                         for child in children {
                             let target_ab = best_artboard_for_node(child, &doc.artboards);
                             if target_ab == p_idx {
-                                clayer.objects.push(convert_vc_node_to_cdr(child, offset, doc, None));
+                                clayer.objects.push(convert_vc_node_to_cdr(child, offset, doc, None, &mut warnings));
                             }
                         }
                     }
@@ -1204,7 +1248,7 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
     }
 
     let _ = cdr_doc.validate();
-    Ok(cdr_doc)
+    Ok((cdr_doc, warnings.into_warnings()))
 }
 
 fn best_artboard_for_node(node: &Node, artboards: &[Artboard]) -> usize {
@@ -1303,7 +1347,7 @@ fn map_vc_color_to_cdr(c: &VcColor) -> CdrColor {
     }
 }
 
-fn map_vc_paint_to_cdr_color(p: &Paint) -> Option<CdrColor> {
+fn map_vc_paint_to_cdr_color(p: &Paint, warnings: &mut ExportWarningLedger) -> Option<CdrColor> {
     match p {
         Paint::None => None,
         Paint::Solid { swatch: Some(sw), .. } if sw == REGISTRATION => Some(CdrColor::Registration),
@@ -1315,7 +1359,10 @@ fn map_vc_paint_to_cdr_color(p: &Paint) -> Option<CdrColor> {
         }
         Paint::Solid { color, .. } => Some(map_vc_color_to_cdr(color)),
         Paint::Gradient(gp) => gp.gradient.stops.first().map(|s| map_vc_color_to_cdr(&s.color)),
-        Paint::Pattern { .. } => Some(CdrColor::BLACK),
+        Paint::Pattern { .. } => {
+            warnings.generic_pattern = true;
+            Some(CdrColor::BLACK)
+        }
     }
 }
 
@@ -1986,6 +2033,7 @@ fn convert_vc_layer_to_cdr(
     offset: Vec2,
     doc: &VcDocument,
     meta: Option<&CoralCraftDocData>,
+    warnings: &mut ExportWarningLedger,
 ) -> CdrLayer {
     let lid = lmeta.map_or(LayerId(lnode.id.0.max(1)), |m| if m.layer_id.0 > 0 { m.layer_id } else { LayerId(lnode.id.0.max(1)) });
     let name = lnode.name.clone().unwrap_or_else(|| "Layer 1".to_owned());
@@ -2002,14 +2050,21 @@ fn convert_vc_layer_to_cdr(
     if let NodeKind::Layer { printable, children, .. } = &lnode.kind {
         clayer.printable = *printable;
         for ch in children {
-            clayer.objects.push(convert_vc_node_to_cdr(ch, offset, doc, meta));
+            clayer.objects.push(convert_vc_node_to_cdr(ch, offset, doc, meta, warnings));
         }
     }
     clayer
 }
 
-fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Option<&CoralCraftDocData>) -> ObjectNode {
+fn convert_vc_node_to_cdr(
+    node: &Node,
+    offset: Vec2,
+    doc: &VcDocument,
+    meta: Option<&CoralCraftDocData>,
+    warnings: &mut ExportWarningLedger,
+) -> ObjectNode {
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
+    warnings.live_trace |= node.extras().trace.is_some();
     let expanded;
     let node = if vectorcraft_doc::live::is_live(node) {
         expanded = vectorcraft_doc::live::expand_deep(node, None);
@@ -2036,13 +2091,13 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
             let mut restored = ometa.original.clone();
             match (&node.kind, &mut restored.kind) {
                 (NodeKind::Group { children: vc_ch, clip: false }, ObjectKind::Group { children: cdr_ch }) if vc_ch.len() == cdr_ch.len() => {
-                    *cdr_ch = vc_ch.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta)).collect();
+                    *cdr_ch = vc_ch.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
                     return restored;
                 }
                 (NodeKind::Group { children: vc_ch, clip: true }, _)
                     if !restored.powerclip_children.is_empty() && vc_ch.len() == restored.powerclip_children.len().saturating_add(1) =>
                 {
-                    restored.powerclip_children = vc_ch.iter().skip(1).map(|c| convert_vc_node_to_cdr(c, offset, doc, meta)).collect();
+                    restored.powerclip_children = vc_ch.iter().skip(1).map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
                     return restored;
                 }
                 _ => return restored,
@@ -2051,7 +2106,7 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
     }
 
     let oid = ObjectId(node.id.0.max(1));
-    let (fill, outline) = convert_vc_appearance_to_cdr(&node.appearance);
+    let (fill, outline) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
     let effects = convert_vc_effects_to_cdr(&node.appearance.effects);
 
     let mut powerclip_children = Vec::new();
@@ -2124,16 +2179,16 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
         NodeKind::Group { children, clip } => {
             if *clip && !children.is_empty() {
                 if let Some(first) = children.first() {
-                    let frame_cdr = convert_vc_node_to_cdr(first, offset, doc, meta);
+                    let frame_cdr = convert_vc_node_to_cdr(first, offset, doc, meta, warnings);
                     for ch in children.iter().skip(1) {
-                        powerclip_children.push(convert_vc_node_to_cdr(ch, offset, doc, meta));
+                        powerclip_children.push(convert_vc_node_to_cdr(ch, offset, doc, meta, warnings));
                     }
                     frame_cdr.kind
                 } else {
                     ObjectKind::Group { children: Vec::new() }
                 }
             } else {
-                let cdr_children = children.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta)).collect();
+                let cdr_children = children.iter().map(|c| convert_vc_node_to_cdr(c, offset, doc, meta, warnings)).collect();
                 ObjectKind::Group { children: cdr_children }
             }
         }
@@ -2220,7 +2275,7 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
     if let NodeKind::Text(tobj) = &node.kind {
         let st = tobj.first_style();
         if cnode.fill.is_none()
-            && let Some(col) = map_vc_paint_to_cdr_color(&st.fill)
+            && let Some(col) = map_vc_paint_to_cdr_color(&st.fill, warnings)
         {
             cnode.fill = Some(FillStyle::uniform(col));
         }
@@ -2242,9 +2297,9 @@ fn convert_vc_node_to_cdr(node: &Node, offset: Vec2, doc: &VcDocument, meta: Opt
     cnode
 }
 
-fn convert_vc_appearance_to_cdr(ap: &Appearance) -> (Option<FillStyle>, Option<OutlineStyle>) {
-    let mut fill = None;
-    let mut outline = None;
+fn convert_vc_appearance_to_cdr(ap: &Appearance, warnings: &mut ExportWarningLedger) -> (Option<FillStyle>, Option<OutlineStyle>) {
+    let mut fill_paint = None;
+    let mut stroke_paint = None;
     let mut first_fill_idx = None;
     let mut first_stroke_idx = None;
 
@@ -2252,16 +2307,18 @@ fn convert_vc_appearance_to_cdr(ap: &Appearance) -> (Option<FillStyle>, Option<O
         match item {
             AppearanceItem::Fill(fl) if fl.visible && !fl.paint.is_none() => {
                 first_fill_idx.get_or_insert(idx);
-                fill = convert_vc_paint_to_fill(&fl.paint);
+                fill_paint = Some(&fl.paint);
             }
             AppearanceItem::Stroke(sl) if sl.visible && !sl.paint.is_none() => {
                 first_stroke_idx.get_or_insert(idx);
-                outline = convert_vc_stroke_to_outline(sl);
+                stroke_paint = Some(sl);
             }
             _ => {}
         }
     }
 
+    let fill = fill_paint.and_then(|paint| convert_vc_paint_to_fill(paint, warnings));
+    let mut outline = stroke_paint.and_then(|stroke| convert_vc_stroke_to_outline(stroke, warnings));
     if let (Some(s_idx), Some(f_idx), Some(outl)) = (first_stroke_idx, first_fill_idx, outline.as_mut())
         && s_idx < f_idx
     {
@@ -2271,10 +2328,10 @@ fn convert_vc_appearance_to_cdr(ap: &Appearance) -> (Option<FillStyle>, Option<O
     (fill, outline)
 }
 
-fn convert_vc_paint_to_fill(paint: &Paint) -> Option<FillStyle> {
+fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {
     match paint {
         Paint::None => None,
-        Paint::Solid { .. } => map_vc_paint_to_cdr_color(paint).map(FillStyle::uniform),
+        Paint::Solid { .. } => map_vc_paint_to_cdr_color(paint, warnings).map(FillStyle::uniform),
         Paint::Gradient(gp) => {
             let mut stops = Vec::with_capacity(gp.gradient.stops.len());
             for st in &gp.gradient.stops {
@@ -2296,17 +2353,20 @@ fn convert_vc_paint_to_fill(paint: &Paint) -> Option<FillStyle> {
             };
             Some(FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops })
         }
-        Paint::Pattern { .. } => Some(FillStyle::TwoColorPattern {
-            kind: PatternKind::Checkerboard,
-            fg_color: CdrColor::BLACK,
-            bg_color: CdrColor::WHITE,
-            tile_size_pt: F64::new(12.0).unwrap_or(F64::ONE),
-        }),
+        Paint::Pattern { .. } => {
+            warnings.generic_pattern = true;
+            Some(FillStyle::TwoColorPattern {
+                kind: PatternKind::Checkerboard,
+                fg_color: CdrColor::BLACK,
+                bg_color: CdrColor::WHITE,
+                tile_size_pt: F64::new(12.0).unwrap_or(F64::ONE),
+            })
+        }
     }
 }
 
-fn convert_vc_stroke_to_outline(sl: &StrokeLayer) -> Option<OutlineStyle> {
-    let color = map_vc_paint_to_cdr_color(&sl.paint)?;
+fn convert_vc_stroke_to_outline(sl: &StrokeLayer, warnings: &mut ExportWarningLedger) -> Option<OutlineStyle> {
+    let color = map_vc_paint_to_cdr_color(&sl.paint, warnings)?;
     let width_pt = if (sl.width - HAIRLINE_WIDTH_PT).abs() < 1e-6 { F64::ZERO } else { F64::new(sl.width.max(0.0)).unwrap_or(F64::ZERO) };
     let mut outl = OutlineStyle::with_width(color, width_pt);
     outl.cap = match sl.cap {

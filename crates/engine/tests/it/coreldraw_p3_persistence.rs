@@ -4,7 +4,7 @@ use corel_import::coralcraft_color::Color as CdrColor;
 use corel_import::coralcraft_doc::{FillStyle, PatternKind};
 use serde_json::json;
 use vectorcraft_color::Paint;
-use vectorcraft_doc::{Document, Node, NodeId, NodeKind};
+use vectorcraft_doc::{AppearanceItem, Document, Node, NodeId, NodeKind};
 use vectorcraft_engine::Session;
 
 fn session() -> Session {
@@ -311,5 +311,100 @@ fn expanded_trace_edits_round_trip_without_a_live_trace_warning() {
         assert_eq!(paths.len(), 1);
         assert_edited_expanded_path(paths[0], &edited);
         assert_eq!(trace_and_image_counts(doc).0, 0);
+    }
+}
+
+fn session_with_pattern(name: &str) -> (Session, u64) {
+    let mut s = session();
+    let tile = rectangle(&mut s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": name, "edit": false})).unwrap();
+    let target = rectangle(&mut s, 70.0);
+    s.execute("paint.setFill", &json!({"id": target, "swatch": name})).unwrap();
+    (s, target)
+}
+
+fn fallback_warning_count(exported: &serde_json::Value, category: &str) -> usize {
+    exported["warnings"].as_array().unwrap().iter().filter(|warning| warning.as_str().is_some_and(|text| text.contains(category))).count()
+}
+
+#[test]
+fn linked_placed_pattern_and_live_trace_warn_once_per_fallback_category() {
+    let (mut source, trace) = session_with_trace();
+    add_nested_pattern(&mut source);
+    assert!(source.doc().unwrap().doc.node(NodeId(trace)).unwrap().extras().trace.is_some());
+    let linked = native_bytes(&mut source);
+    let path = std::env::temp_dir().join(format!("coralcraft-p3-linked-{}.vectorcraft", std::process::id()));
+    std::fs::write(&path, vectorcraft_format::base64_decode(&linked).unwrap()).unwrap();
+    let mut parent = session();
+    let placed = parent.execute("file.place", &json!({"path": path, "link": true, "at": [20, 20]})).unwrap();
+    assert_eq!(placed["linked"], true);
+
+    for format in ["cdr", "cmx"] {
+        let exported = parent.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 1, "{format} pattern warnings: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "live trace"), 1, "{format} trace warnings: {exported}");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+fn add_nested_pattern(s: &mut Session) {
+    let tile = rectangle(s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": "Nested Tile", "edit": false})).unwrap();
+    let target = rectangle(s, 70.0);
+    s.execute("paint.setFill", &json!({"id": target, "swatch": "Nested Tile"})).unwrap();
+}
+
+#[test]
+fn invisible_and_shadowed_pattern_items_do_not_warn() {
+    let (mut invisible, invisible_id) = session_with_pattern("Invisible Tile");
+    invisible.execute("appearance.setItem", &json!({"id": invisible_id, "index": 0, "visible": false})).unwrap();
+
+    let (mut shadowed, shadowed_id) = session_with_pattern("Shadowed Tile");
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_id})).unwrap();
+    shadowed.execute("appearance.setItem", &json!({"id": shadowed_id, "index": 2, "color": "#112233"})).unwrap();
+    let items = &shadowed.doc().unwrap().doc.node(NodeId(shadowed_id)).unwrap().appearance.items;
+    assert!(
+        matches!(items.last(), Some(AppearanceItem::Fill(fill)) if matches!(fill.paint, Paint::Solid { .. })),
+        "last visible fill is solid: {items:?}"
+    );
+
+    for (name, s) in [("invisible", &mut invisible), ("shadowed", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 0, "{name} pattern must not warn in {format}: {exported}");
+        }
+    }
+}
+
+#[test]
+fn temporary_symbol_and_mask_editing_layers_do_not_warn() {
+    let (mut symbol, symbol_id) = session_with_pattern("Symbol Edit Tile");
+    symbol.execute("select.set", &json!({"ids": [symbol_id]})).unwrap();
+    symbol.execute("symbol.new", &json!({"name": "Temporary Symbol"})).unwrap();
+    symbol.execute("symbol.edit", &json!({"name": "Temporary Symbol"})).unwrap();
+    assert!(symbol.doc().unwrap().doc.symbol_edit.is_some());
+
+    let mut mask = session();
+    let target = rectangle(&mut mask, 150.0);
+    mask.execute("paint.setFill", &json!({"id": target, "color": "#ff0000"})).unwrap();
+    let tile = rectangle(&mut mask, 5.0);
+    mask.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    mask.execute("object.pattern.make", &json!({"id": tile, "name": "Mask Edit Tile", "edit": false})).unwrap();
+    let mask_id = rectangle(&mut mask, 70.0);
+    mask.execute("paint.setFill", &json!({"id": mask_id, "swatch": "Mask Edit Tile"})).unwrap();
+    mask.execute("select.set", &json!({"ids": [target, mask_id]})).unwrap();
+    let made = mask.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    let masked = made["id"].as_u64().unwrap();
+    assert!(mask.doc().unwrap().doc.node(NodeId(masked)).unwrap().extras().mask.is_some());
+    mask.execute("transparency.editOpacityMask", &json!({"id": masked})).unwrap();
+    assert!(mask.doc().unwrap().doc.mask_edit.is_some());
+
+    for (name, s) in [("symbol", &mut symbol), ("mask", &mut mask)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 0, "{name} editing-only pattern must not warn in {format}: {exported}");
+        }
     }
 }
