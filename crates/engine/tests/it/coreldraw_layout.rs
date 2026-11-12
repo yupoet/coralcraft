@@ -333,3 +333,75 @@ fn coreldraw_page_number_on_a_normal_page_uses_its_cdr_page_text() {
         .collect::<Vec<_>>();
     assert_eq!(texts, ["2"], "the normal-page CDR object carries its evaluated number, not the placeholder");
 }
+
+// CoralCraft (P2.TABLE-UI, the P2 follow-up in docs/gaps.md): `layout.tableEdit` inserts and
+// deletes rows and columns of a `layout.table` group, keeping the cell texts in their shifted
+// places, as one undo step, atomically on invalid input, and durably through a native reopen.
+#[test]
+fn coreldraw_table_rows_and_columns_edit_through_the_command() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    let table = s.execute("layout.table", &json!({"x": 20, "y": 30, "width": 300, "height": 120, "rows": 2, "columns": 3, "text": [["Name", "Qty", "Price"], ["Apple", "2", "3.50"]]})).unwrap();
+    let group = NodeId(table["id"].as_u64().unwrap());
+    let children = |s: &Session| match &s.doc().unwrap().doc.node(group).unwrap().kind {
+        NodeKind::Group { children, .. } => children.clone(),
+        _ => panic!("table is not a group"),
+    };
+    let texts = |s: &Session| {
+        children(s)
+            .iter()
+            .filter_map(|node| match &node.kind {
+                NodeKind::Text(text) => Some(text.plain_text()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Insert a row before row 2: an empty row of cells between the two text rows.
+    let r = s.execute("layout.tableEdit", &json!({"id": group.0, "action": "insertRow", "at": 1})).unwrap();
+    assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(3), Some(3)));
+    assert_eq!(children(&s).len(), 18, "three rows of three cells");
+    assert_eq!(texts(&s), vec!["Name", "Qty", "Price", "", "", "", "Apple", "2", "3.50"], "the texts shift with their rows");
+
+    // Delete the last column (Price): a two-column table keeps the first two texts of each row.
+    s.execute("layout.tableEdit", &json!({"id": group.0, "action": "deleteColumn", "at": 2})).unwrap();
+    assert_eq!(children(&s).len(), 12, "three rows of two cells");
+    assert_eq!(texts(&s), vec!["Name", "Qty", "", "", "Apple", "2"]);
+
+    // Undo both edits as their own steps, back to the original table.
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(texts(&s).last().map(String::as_str), Some("3.50"), "the deleted column returns");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(texts(&s), vec!["Name", "Qty", "Price", "Apple", "2", "3.50"]);
+
+    // Native reopen keeps the edited table editable.
+    s.execute("layout.tableEdit", &json!({"id": group.0, "action": "insertColumn", "at": 0})).unwrap();
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    let found = s.execute("document.inspect", &json!({})).unwrap();
+    let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(svg.contains("Apple"), "the reopened table holds its texts: {svg}");
+    let _ = found;
+
+    // Invalid input changes nothing: the last row or column stays, ranges check, unknown ids and
+    // actions refuse.
+    s.execute("layout.table", &json!({"x": 0, "y": 0, "width": 40, "height": 20, "rows": 1, "columns": 1, "text": [["Only"]]})).unwrap();
+    let one = s.execute("document.inspect", &json!({})).unwrap();
+    let _ = one;
+    let before = s.doc().unwrap().doc.clone();
+    let history = s.doc().unwrap().history.undo.len();
+    for params in [
+        json!({"id": 999, "action": "insertRow"}),
+        json!({"id": group.0, "action": "warpRow"}),
+        json!({"id": group.0}),
+        json!({"id": group.0, "action": "deleteRow", "at": 9}),
+        json!({"id": group.0, "action": "insertColumn", "at": 999}),
+    ] {
+        assert!(s.execute("layout.tableEdit", &params).is_err(), "invalid tableEdit input: {params}");
+        assert_eq!(s.doc().unwrap().doc, before, "invalid input changed the document: {params}");
+        assert_eq!(s.doc().unwrap().history.undo.len(), history, "invalid input added history: {params}");
+    }
+    // A non-table object refuses too.
+    let path = s.execute("path.create", &json!({"d": "M 0 0 L 10 10"})).unwrap()["id"].as_u64().unwrap();
+    assert!(s.execute("layout.tableEdit", &json!({"id": path, "action": "insertRow"})).is_err());
+}

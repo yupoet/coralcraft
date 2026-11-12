@@ -45,7 +45,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 
 **P2 follow-ups found by implementation:**
 - [x] P2.CDR-TEXT Link the public-spec `stlt` Font Encoding / `font` Encoding ID records to their text runs (this commit): `parse_stlt_font_records`/`parse_font_chunk` build the encoding tables, `ParserCtx::resolved_text_encoding` resolves them (a stlt record's non-zero encoding wins, zero inherits the `font` table's entry — libcdr's order), and 8-bit `txtd` decodes with the one encoding all records agree on; disagreeing or absent records keep strict ASCII, and no code page is ever guessed from the bytes (REV-0011). S2 remains open.
-- [ ] P2.TABLE-UI Add interactive table selection, row/column insertion/deletion, resizing, and cell navigation around the `layout.table` objects; P2 delivered the editable object model and command, not a complete table tool.
+- [x] P2.TABLE-UI Table structural editing through the command + Property Bar (this commit): `layout.tableEdit {id, action, at?}` inserts/deletes rows and columns of a `layout.table` group, keeping cell texts in their shifted places (one undo step, atomic on invalid input, native-reopen tested); the CorelDRAW workspace's Property Bar shows Insert/Delete Row/Column on a selected table. Cell-level canvas picking, drag-resizing and keyboard navigation remain future tool work.
 - [ ] P2.INLINE-FIELDS Extend the dedicated page-number object model only if a failing inline-text workflow requires fields mixed into longer runs; do not infer that support from the current object-level field.
 
 Completed migration steps (V0–V4.2):
