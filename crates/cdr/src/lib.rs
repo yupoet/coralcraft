@@ -2401,3 +2401,127 @@ mod tests {
         assert_eq!(x6_parsed.document.pages[1].layers[0].objects[0].name.as_deref(), Some("Page2Rounded"));
     }
 }
+
+// CoralCraft (P2.CDR-TEXT, the P2 follow-up in docs/gaps.md): the public-spec `LIST stlt` Font
+// Encoding records and `font` chunks' Encoding IDs link to 8-bit `txtd` text through
+// `parse_stlt_font_records`/`parse_font_chunk` and `ParserCtx::resolved_text_encoding` — built as
+// a minimal CDR7 RIFF with an stlt, a font chunk, and one text object.
+#[cfg(test)]
+mod stlt_encoding_tests {
+    use super::parse_document;
+    use coralcraft_doc::ObjectKind;
+
+    /// One RIFF chunk (fourcc, u32 size, payload, pad).
+    fn chunk(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(fourcc);
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(payload);
+        if payload.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    /// One LIST chunk (type, body).
+    fn list(list_type: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(list_type);
+        payload.extend_from_slice(body);
+        chunk(b"LIST", &payload)
+    }
+
+    /// An stlt with `records` font records (style id, font id, encoding), at CDR7 sizes.
+    fn stlt(records: &[(u32, u16, u16)]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(b"stlt");
+        body.extend_from_slice(&1u32.to_le_bytes()); // Number of Records (the style records, unread)
+        body.extend_from_slice(&0u32.to_le_bytes()); // Fill IDs Map12: none
+        body.extend_from_slice(&0u32.to_le_bytes()); // Outline IDs Map12: none
+        body.extend_from_slice(&(records.len() as u32).to_le_bytes()); // Number of Fonts
+        for &(style_id, font_id, encoding) in records {
+            body.extend_from_slice(&style_id.to_le_bytes());
+            body.extend([0u8; 12]); // unknown (V<1000)
+            body.extend_from_slice(&font_id.to_le_bytes());
+            body.extend_from_slice(&encoding.to_le_bytes());
+            body.extend([0u8; 8]); // unknown
+            body.extend([0u8; 4]); // font size coordinate (V>=600: 4 bytes)
+            body.extend([0u8; 12]); // trailing unknown (V<1000)
+        }
+        body.extend_from_slice(&0u32.to_le_bytes()); // Align IDs Map12: none
+        list(b"stlt", &body)
+    }
+
+    /// A CDR7 RIFF: the doc-level chunks `extra`, then one page holding one text object whose
+    /// txtd is `tag` + `text` bytes.
+    fn cdr7_with(extra: &[Vec<u8>], tag: u8, text: &[u8]) -> Vec<u8> {
+        let mut txtd = vec![tag];
+        txtd.extend_from_slice(text);
+        txtd.push(0);
+        let obj = list(b"obj ", &chunk(b"txtd", &txtd));
+        let layr = list(b"layr", &obj);
+        let page = list(b"page", &layr);
+        let extras = extra.iter().flatten().cloned().collect::<Vec<u8>>();
+        let vrsn = chunk(b"vrsn", &700u16.to_le_bytes());
+        let mut riff = Vec::new();
+        // The RIFF size counts the 4-byte form type with the payload.
+        let size = vrsn.len().saturating_add(extras.len()).saturating_add(page.len()).saturating_add(4);
+        riff.extend_from_slice(b"RIFF");
+        riff.extend_from_slice(&(size as u32).to_le_bytes());
+        riff.extend_from_slice(b"CDR ");
+        riff.extend_from_slice(&vrsn);
+        riff.extend_from_slice(&extras);
+        riff.extend_from_slice(&page);
+        riff
+    }
+
+    /// The single text object's text.
+    fn text_of(bytes: &[u8]) -> String {
+        let outcome = parse_document(bytes).expect("parses");
+        let page = outcome.document.pages.first().expect("a page");
+        let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
+        let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object: {:?}", object.kind) };
+        spec.text.clone()
+    }
+
+    /// A stlt font record's own Font Encoding (0xee = Central European, windows-1250) decodes the
+    /// 8-bit text it governs: "Łódź" in 1250 bytes, not the strict-ASCII error it was.
+    #[test]
+    fn stlt_font_encoding_decodes_eight_bit_text() {
+        let bytes = cdr7_with(&[stlt(&[(1, 0, 0xee)])], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        assert_eq!(text_of(&bytes), "Łódź");
+    }
+
+    /// A stlt record with no encoding of its own inherits the `font` table's entry for the font it
+    /// names (libcdr's resolution order): font 3's 0xcc (Russian, windows-1251) decodes "Москва".
+    #[test]
+    fn stlt_record_inherits_the_font_tables_encoding() {
+        let font = chunk(b"font", &[3, 0, 0xcc, 0, 0, 0, 0, 0, b'A', b'r', b'i', b'a', b'l', 0, 0, 0, 0, 0]);
+        let bytes = cdr7_with(&[font, stlt(&[(1, 3, 0)])], 0x00, &[0xcc, 0xee, 0xf1, 0xea, 0xe2, 0xe0]);
+        assert_eq!(text_of(&bytes), "Москва");
+    }
+
+    /// Disagreeing recorded encodings never pick one: the 8-bit text keeps strict ASCII (its
+    /// error path) and the raw txtd stays a residual, exactly as before the linkage.
+    #[test]
+    fn disagreeing_encodings_never_guess_a_code_page() {
+        let bytes = cdr7_with(&[stlt(&[(1, 0, 0xee), (2, 0, 0xcc)])], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        let outcome = parse_document(&bytes).expect("parses");
+        assert!(
+            outcome.parse_warnings.iter().any(|w| w.contains("W-TXTD-DECODE")),
+            "the strict decode failed as before: {:?}",
+            outcome.parse_warnings
+        );
+        let page = outcome.document.pages.first().expect("a page");
+        let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
+        let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object") };
+        assert_eq!(spec.text, "Text", "no code page was guessed");
+    }
+
+    /// Without any font records, 8-bit text is strict ASCII as before: plain ASCII decodes and
+    /// non-ASCII fails into the warning and residual path.
+    #[test]
+    fn without_font_records_eight_bit_text_stays_strict_ascii() {
+        assert_eq!(text_of(&cdr7_with(&[], 0x00, b"Plain")), "Plain");
+    }
+}

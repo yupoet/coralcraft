@@ -44,7 +44,7 @@ The full task text and rules are in [`superpowers/plans/2026-10-21-vectorcraft-f
 - [x] P2.12 Three-page brochure acceptance with styled/linked/path text, wrapping, dynamic page numbers, editable table, embedded synthetic bitmap, native revision/reorder, independent `usvg`, and a three-page Hayro-backed PDF read. **Next: P3 (Signature Effects and Image Workflows).**
 
 **P2 follow-ups found by implementation:**
-- [ ] P2.CDR-TEXT Link the public-spec `stlt` Font Encoding / `font` Encoding ID records to their text runs, then call the bounded decoder in `crates/cdr/src/text.rs`. The decoder, strict `txtd` errors/warnings, and residual writer mapping are implemented and tested, but this font-record association is not; do not guess a code page from the bytes. S2 remains open.
+- [x] P2.CDR-TEXT Link the public-spec `stlt` Font Encoding / `font` Encoding ID records to their text runs (this commit): `parse_stlt_font_records`/`parse_font_chunk` build the encoding tables, `ParserCtx::resolved_text_encoding` resolves them (a stlt record's non-zero encoding wins, zero inherits the `font` table's entry — libcdr's order), and 8-bit `txtd` decodes with the one encoding all records agree on; disagreeing or absent records keep strict ASCII, and no code page is ever guessed from the bytes (REV-0011). S2 remains open.
 - [ ] P2.TABLE-UI Add interactive table selection, row/column insertion/deletion, resizing, and cell navigation around the `layout.table` objects; P2 delivered the editable object model and command, not a complete table tool.
 - [ ] P2.INLINE-FIELDS Extend the dedicated page-number object model only if a failing inline-text workflow requires fields mixed into longer runs; do not infer that support from the current object-level field.
 
