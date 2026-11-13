@@ -1,8 +1,8 @@
 # P3 Signature Effects and Image Workflows Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** execute one task at a time, test-first. This file keeps only the open tasks and their acceptance conditions. Delivered history, RED/GREEN evidence, and focused-gate results live in [`docs/p3-inventory.md`](../../p3-inventory.md) — do not append logs here or to `docs/gaps.md`.
 
-**Goal:** Deliver editable PowerClip, advanced fill/transparency, live-effect, bitmap, and tracing workflows with native persistence, explicit interchange fallbacks, shared automation, and independently read poster/traced-image acceptance evidence.
+**Goal:** Deliver the D4 signature workflows — PowerClip, interactive effects with handles, Corel fills (pattern parameters, texture, merge modes), PowerTRACE — on the VectorCraft base, with native editability, independent SVG/PDF evidence, and explicit CDR/CMX degradations. A catalog effect id alone is never completion.
 
 **Architecture:** VectorCraft remains the only document, effects, tracing, renderer, command, and UI base. Reuse its clip groups, `NodeKind::Blend`/`Envelope`, appearance effect stack, mesh and paint models, `vectorcraft-trace`, dockers, and control-bar overlays. Add only CorelDRAW-specific mappings and gaps proven by failing tests; never introduce a TraceDraw document, renderer, text engine, or automation engine.
 
@@ -24,6 +24,7 @@
 - `docs/p3-inventory.md`: measured command, UI, persistence, export, and open-gap inventory.
 - `crates/engine/tests/it/coreldraw_powerclip.rs`: PowerClip lifecycle and interchange.
 - `crates/engine/tests/it/coreldraw_fills_transparency.rs`: advanced paint, mesh, and transparency.
+- `crates/engine/tests/it/coreldraw_texture.rs`: the texture-fill reusable-model slice (Task T1).
 - `crates/engine/tests/it/coreldraw_live_effects.rs`: Blend/Contour/Envelope/Distort and effect-stack evidence.
 - `crates/engine/tests/it/coreldraw_image_workflows.rs`: bitmap editing and PowerTRACE evidence.
 - `crates/engine/tests/it/coreldraw_p3_persistence.rs`: consolidated native/CDR/CMX persistence and warning audit.
@@ -36,297 +37,100 @@
 - `crates/mcp/tests/docs_sync.rs`, `docs/mcp.md`: live registry and generated documentation.
 - `docs/target-app-parity.md`, `docs/gaps.md`, `ROADMAP.md`, `docs/ai-memory/03-current.md`: evidence and queue updates.
 
-### Task 1: Build the P3 inventory and evidence anchors
+### Delivered (terse; evidence in `docs/p3-inventory.md`)
 
-**Files:**
-- Create: `docs/p3-inventory.md`
-- Create: this plan
+Tasks 1, 2, 4, 5, 7, 8, 9, 11 complete; Task 3 Step 2 (transparency/masks) complete; Task 10's
+mesh-opacity/empty-live slices and the mesh expansion-provenance closure (`d18ce9f3b`) complete;
+Task 12's historical acceptance recorded. The open work is the task list below, in order.
 
-- [x] **Step 1: Capture the actual catalog and measured baseline**
+---
 
-Run `cargo run -p coralcraft-cli -- commands` and `cargo xtask stats`. Inventory the clip, live, effect, paint, transparency, image, and trace command families; the Blend/Image Trace/Properties/Appearance/Transparency panels; native wire support; CDR mappings; and existing independent SVG/PDF readers.
+## Open tasks
 
-- [x] **Step 2: Write and commit the inventory**
+### Task T1: Texture fill — the reusable model (P3.3, slice 1 of 3) — CURRENT
 
-For every P3 slice record its existing entry points, current test evidence, missing behaviour, and required independent evidence. Commit the inventory and plan with `docs: plan the P3 effects and image workflows`.
+Mirror the pattern architecture (`Paint::Pattern` + document `patterns`) with a texture model that
+is **not** an ordinary pattern relabelled: a document-level reusable `TextureDef` (name, procedural
+`kind` with parameters, two colours), a distinct `Paint::Texture` referencing it, deterministic
+bounded synthesis for render/export, and shared-engine commands.
 
-### Task 2: Complete the PowerClip editing lifecycle
+**Positive/negative matrix:** [`docs/p3-inventory.md` §19](../../p3-inventory.md) freezes this
+slice's semantics; write the matrix there before implementation and keep it in sync.
 
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_powerclip.rs`
-- Modify: `crates/engine/tests/it/main.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-- Modify only on measured gaps: `crates/engine/src/cmd/object/commands.rs`, `crates/ui-egui/src/menus/`
+**Acceptance (all required; nothing substitutes):**
+- Real editing through commands: create/edit a definition, apply to objects, edit propagates to
+  every user; undo/redo of each step.
+- Native reopen keeps the definition and its users editable (edit-after-reopen proven).
+- Independent evidence: `usvg` reads the synthesized tiles' actual geometry/colours in SVG; the
+  Hayro-backed PDF reader reconstructs the tile art (structure, not live-PDF claims).
+- CDR/CMX export carries an explicit texture fallback warning (never a silent checkerboard).
+- Negatives: applying an unknown texture errors; the texture is not listed by pattern queries and
+  a pattern is not accepted where a texture is required.
 
-- [x] **Step 1: Write the failing lifecycle test**
+### Task T2: Corel Pattern parameters (P3.3, slice 2 of 3)
 
-Create two paths in paint order and run:
+Map the CorelDRAW pattern model's foreground/background/kind parameters onto the synced pattern
+architecture, or degrade with a precise warning naming exactly what is lost. Generic `PatternDef.art`
+workflows are already proven and do not count for this task.
 
-```rust
-s.execute("select.set", &json!({"ids": [contents, frame]})).unwrap();
-let clip = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
-s.execute("object.clippingMask.editContents", &json!({})).unwrap();
-s.execute("object.move", &json!({"dx": 12.0, "dy": 4.0})).unwrap();
-s.execute("object.clippingMask.editMask", &json!({})).unwrap();
-```
+**Acceptance:** a parameter-level mapping with tests for each parameter (edit, undo/redo, native
+reopen), or per-parameter fallback warnings; independent SVG/PDF evidence; CDR/CMX behaviour stated
+explicitly (today's default checkerboard substitution becomes a named, warned degradation or a real
+mapping).
 
-Require editable contents/mask selection, undo/redo, nested clips, release, and native reopen. Export SVG and require independent `usvg` parsing plus a non-empty `clipPath`; export PDF and read it through `vectorcraft_pdf::import`.
+### Task T3: Merge-mode matrix and combined transparency (P3.3, slice 3 of 3)
 
-- [x] **Step 2: Verify CorelDRAW interaction and fix only measured gaps**
+**Acceptance:** the merge-mode matrix (each supported mode: edit, undo/redo, native reopen,
+independent SVG/PDF read); combined scenarios of mesh + gradient + opacity mask with their CDR/CMX
+channel warnings deduplicated; per-mode or per-combination degradation warnings where CDR/CMX
+cannot retain the semantics.
 
-Drive Object menu place-inside/edit/extract actions in the CorelDRAW workspace through their real controls. Reuse `object.clippingMask.*`; add aliases or menu wiring only if the test exposes a missing workflow. Locking contents must not silently flatten the source.
+### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split)
 
-- [x] **Step 3: Verify and commit**
+Each is its own task with the same acceptance shape; none substitutes for another:
+**E1 Symmetry · E2 Block Shadow · E3 Perspective · E4 Lens · E5 Push/Pull and Zipper dedicated
+handles · E6 PowerClip lock-contents-to-frame UI.**
 
-Run `cargo test -p vectorcraft-engine --test it coreldraw_powerclip -- --nocapture` and `cargo test -p vectorcraft-ui-egui coreldraw_effects -- --nocapture`. Commit with `feat: complete the CorelDRAW PowerClip workflow` when production wiring changes, otherwise `test: verify the CorelDRAW PowerClip workflow`.
+**Acceptance per task:** existing-capability inventory first; a failing scenario written before the
+fix; native edit and reopen; the real rendered control (synthetic input/AccessKit, not command-only
+invocation); independent SVG/PDF reading; an explicit CDR/CMX degradation. A catalog effect id
+existing is not completion.
 
-### Task 3: Verify advanced fills and transparency semantics
+### Task M: P3.10 combined matrix (old Task 10 closure)
 
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_fills_transparency.rs`
-- Modify: `crates/engine/tests/it/main.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
+Replace the generic "combined matrix" wording with explicit fixtures: nested PowerClip; translucent
+mesh inside Repeat/Blend; gradient + opacity mask; bitmap + trace; metadata residual and
+restoration-failure paths.
 
-- [ ] **Step 1: Add failing evidence for each supported paint family**
+**Acceptance:** native reopen editable; direct CDR model checks; CDR/CMX ordinary-vector
+supplementary evidence; warning deduplication; non-empty output; abnormal-input and
+generation-budget errors. Self-round-trips and self-skipping oracles are not independent
+certification; S2 stays open.
 
-Exercise fountain, two-colour, vector/bitmap pattern, texture, and mesh fills through existing `paint.*` and `object.mesh.*` commands. For example:
+### Task 12 (historical, retained)
 
-```rust
-s.execute("object.mesh.create", &json!({"id": shape, "rows": 2, "cols": 2})).unwrap();
-s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 0, "color": "#ff0000"})).unwrap();
-s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 1, "x": 90.0, "y": 30.0})).unwrap();
-```
+The recorded poster/traced-image acceptance stands as evidence. It does **not** replace Task 13.
 
-Assert undo/redo, native editability, and independent SVG/PDF structure. Do not accept a preview-only fill as editable semantics.
+### Task 13: final P3 gate — OPEN
 
-Progress: fountain, vector-pattern, and mesh tests pass with native edit/reopen and independent SVG/PDF reads. Generic two-colour vector and bitmap `PatternDef.art` are now covered: ordinary edits, undo/redo, native reopen, exact independent `usvg` tile colours/pixels, reconstructed Hayro PDF pattern/tile art, and actual rendered CorelDRAW Object > Pattern Make/Edit controls driven by synthetic pointer events and Pattern Options Done clicked through AccessKit pass. The bitmap scenario replaces the selected embedded image through `file.place {replace:true}` and keeps the vector target unflattened. These are generic pattern-art workflows, not a Corel-specific foreground/background/kind model; CDR pattern parameter fidelity remains open because generic export substitutes a default checkerboard. Texture fill remains unsupported, so this step stays open.
+- [ ] Rerun `run_command` MCP coverage and `docs_sync` for every command added during P3.
+- [ ] Rerun the poster/traced-image acceptance scenarios on the final tree.
+- [ ] Full `cargo xtask ci` plus every serial gate; results recorded verbatim (known-issue 0b
+      documented, not silenced) in `docs/p3-inventory.md`.
+- [ ] Update parity rows only where new evidence exists.
+- [ ] P3 closes only when every open item above is resolved; unresolved items become named
+      follow-ups, never silent closures.
 
-- [x] **Step 2: Verify transparency and merge behaviour**
+---
 
-Exercise uniform/graded transparency, merge modes, and opacity masks through existing transparency commands and panels. Require source editability and explicit export fallback where an output format cannot retain the live model.
+## Maintenance rules
 
-Complete: the earlier uniform-opacity + Multiply evidence is joined by graded stop-opacity editing with undo/redo and native reopen. Independent `usvg` checks prove the exported linear-gradient offsets, colours, and alpha values; Hayro-backed PDF import proves one page containing vector geometry, not live PDF gradient editing. A top vector object becomes real mask art outside the layer tree; clip/invert, disable/enable, source/target editing, undo/redo, native reopen, and release/restoration pass. Independent `usvg` proves a luminance mask containing the edited vector art is connected to the red target. Hayro-backed PDF import proves a page and reconstructed vector soft-mask structure, not the original native editing relationships. The actual CorelDRAW Transparency panel's Make Mask, Invert Mask, and Release controls pass through AccessKit/synthetic input. SVG retains the live gradient/mask structures; PDF evidence is limited to the reconstructed page/vector/mask structures stated above, with native sources remaining the editable authority. No production change was needed.
-
-- [ ] **Step 3: Verify and commit**
-
-Run the new engine/UI filters plus existing mesh and transparency suites. Commit with `test: verify CorelDRAW fills and transparency` if evidence-only, or a focused `feat:` for reproduced gaps. Step 3 remains open until the Step 1 paint families and the final combined fill/transparency verification and commits are complete; the Step 2 evidence commit does not close it.
-
-### Task 4: Prove Blend and Contour interactive editing
-
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_live_effects.rs`
-- Modify: `crates/engine/tests/it/main.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [x] **Step 1: Write the live Blend test**
-
-```rust
-let blend = s.execute("object.blend.make", &json!({"ids": [a, b], "steps": 4})).unwrap()["id"].as_u64().unwrap();
-s.execute("object.blend.options", &json!({"id": blend, "steps": 7})).unwrap();
-s.execute("select.set", &json!({"ids": [blend]})).unwrap();
-let info = s.execute("object.blend.info", &json!({})).unwrap();
-assert_eq!(info["steps"].as_u64(), Some(7));
-```
-
-Edit spine anchors, reverse direction/order, undo/redo, release, and reopen natively. Independent SVG output must contain expanded visible geometry while the native source stays a live Blend.
-
-- [x] **Step 2: Write the Contour and on-canvas evidence**
-
-Exercise the existing contour effect and `canvas/contour_bar.rs` controls with real pointer input; verify parameter edits and source geometry remain editable. Add no second contour renderer or effect model.
-
-- [x] **Step 3: Verify and commit**
-
-Run the live-effect engine filter, CorelDRAW UI filter, and existing blend/contour suites. Commit with `feat: complete CorelDRAW blend and contour editing` or `test:` when evidence-only.
-
-### Task 5: Prove Envelope and Distort editing
-
-**Files:**
-- Modify: `crates/engine/tests/it/coreldraw_live_effects.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [x] **Step 1: Add failing Envelope evidence**
-
-Create a warp envelope, change its options, edit its contents, reopen natively, then reset to a mesh and edit a mesh point before a second reopen and explicit expansion:
-
-```rust
-s.execute("select.set", &json!({"ids": [shape]})).unwrap();
-let envelope = s.execute("object.envelope.makeWithWarp", &json!({"style": "arc", "bend": 25.0})).unwrap()["id"].as_u64().unwrap();
-s.execute("object.envelope.resetWithMesh", &json!({"id": envelope, "rows": 2, "cols": 2})).unwrap();
-s.execute("object.envelope.setMeshPoint", &json!({"id": envelope, "index": 4, "x": 85.0, "y": 45.0})).unwrap();
-```
-
-- [x] **Step 2: Add Distort and UI evidence**
-
-Apply the existing twister effect through `effect.apply`, edit with `effect.setParams`, and open its real dialog in the CorelDRAW workspace. Require native parameter persistence and independent exported geometry.
-
-- [x] **Step 3: Verify and commit**
-
-Run the new filters and existing envelope/effect suites. Commit only the tested slice.
-
-### Task 6: Complete Extrude, shadows, and remaining signature effects
-
-**Files:**
-- Modify: `crates/engine/tests/it/coreldraw_live_effects.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [ ] **Step 1: Inventory and test each effect against D4**
-
-Cover Extrude, Drop/Block Shadow, Transparency, Lens, Perspective, Bevel, and Symmetry using existing effect IDs discovered by `effect.list`. A representative test applies and edits an effect:
-
-```rust
-let applied = s.execute("effect.apply", &json!({"id": shape, "effect": effect_id, "params": params})).unwrap();
-let index = applied["index"].as_u64().unwrap();
-s.execute("effect.setParams", &json!({"id": shape, "index": index, "params": revised})).unwrap();
-```
-
-Require source/parameters to survive native reopen; record unsupported target behaviours explicitly rather than inventing an effect.
-
-Progress: Extrude + Bevel and Drop Shadow pass native/edit/independent SVG+PDF and dialog evidence. Block Shadow, Lens, Perspective, and Symmetry remain open, so this task is not checked.
-
-- [ ] **Step 2: Verify real controls and independent export**
-
-Drive the existing dialogs, property bars, or canvas handles in the CorelDRAW workspace. Parse SVG with `usvg` and PDF with Hayro; distinguish retained vector semantics from raster fallback.
-
-- [ ] **Step 3: Verify and commit**
-
-Run focused engine/UI tests and existing effect catalog suites. Commit each measured implementation gap with its regression test; do not mark absent effects complete from catalog presence alone.
-
-### Task 7: Complete ordered live-effect stack operations
-
-**Files:**
-- Modify: `crates/engine/tests/it/coreldraw_live_effects.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [x] **Step 1: Write the failing stack test**
-
-Apply two compatible effects, then run `effect.move`, `effect.duplicate`, `effect.setParams {"visible": false}`, `effect.remove`, and `effect.expandAppearance`. Assert exact order, parameters, visibility, undo/redo, and native reopen. Verify cloning through the existing clone/copy-properties workflow rather than adding a parallel stack.
-
-- [x] **Step 2: Verify the Appearance docker**
-
-Drive reorder, hide, edit, duplicate, remove, and expand through the actual CorelDRAW workspace Appearance controls. Failed commands must leave document and history unchanged.
-
-- [x] **Step 3: Verify and commit**
-
-Run the focused tests plus `vectorcraft-effects` and Appearance suites. Commit with `feat: complete CorelDRAW live-effect stack editing` or `test:` if evidence-only.
-
-### Task 8: Complete bitmap placement and common editing workflows
-
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_image_workflows.rs`
-- Modify: `crates/engine/tests/it/main.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [x] **Step 1: Add bitmap workflow evidence**
-
-Place a handcrafted synthetic bitmap; exercise crop, resample, colour adjustment, and a common bitmap effect using existing commands. Assert source pixels, adjustment parameters, undo/redo, native reopen, and PowerClip composition. Do not turn editable vectors into bitmaps to satisfy the scenario.
-
-Complete: crop, resample, brightness/contrast, undo/redo, native reopen, and invalid-input evidence pass. The final PowerClip scenario retains the original embedded PNG bytes and decoded pixels, a vector frame and live clip group, and the ordered adjustment/Gaussian effect stack with radius undo/redo after native reopen. Independent `usvg` proves a non-empty vector clip containing actual PNG content under the connected Gaussian filter. Hayro-backed PDF import proves one real page and its rendered raster composition; it does not expose live clip/effect semantics. The existing CorelDRAW Gaussian dialog opens for a selected bitmap and confirms its radius into the shared appearance stack without a new dialog or production change.
-
-- [x] **Step 2: Verify external-editor handoff honestly**
-
-The existing Links panel suite passes 9/9, including system handoff, explicit absent-service errors, PhotoCraft fallback, and launch-error propagation. These synthetic service callbacks prove the launch contract only; no external-editor round trip is claimed.
-
-- [x] **Step 3: Verify and commit**
-
-Run the image workflow and existing bitmap/effect tests. Image workflows pass 11/11, PowerClip 2/2, CorelDRAW effects UI 8/8, raster filters 11/11, Gaussian SVG 3/3, and `vectorcraft-effects` 380 passed / 2 ignored. Existing bitmap-filtered tests, fmt, focused Clippy, and unblessed MCP `docs_sync` 2/2 also pass. The final slice is evidence-only; no production bug was exposed.
-
-### Task 9: Complete PowerTRACE outline/centreline workflows
-
-**Files:**
-- Modify: `crates/engine/tests/it/coreldraw_image_workflows.rs`
-- Modify: `crates/ui-egui/src/panels/tests_coreldraw_effects.rs`
-
-- [x] **Step 1: Write the failing trace composition test**
-
-Use a handcrafted bitmap and run:
-
-```rust
-let traced = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": {"mode": "color"}})).unwrap()["id"].as_u64().unwrap();
-s.execute("imageTrace.setView", &json!({"id": traced, "view": "outlines"})).unwrap();
-let expanded = s.execute("imageTrace.makeAndExpand", &json!({"id": traced})).unwrap();
-assert!(expanded["paths"].as_u64().is_some_and(|paths| paths > 0));
-```
-
-Verify outline and centreline modes supported by `vectorcraft-trace`, colour reduction, smoothing, presets, undo/redo, editable expanded paths, and native reopen. Parse the expanded SVG independently with `usvg`.
-
-Complete: handcrafted outline and centreline traces cover make, Outlines view, make-and-expand, editable paths, native reopen, and independent `usvg` structure. The centreline is one open, unfilled, meaningfully stroked path with known source direction/length and square caps. After expansion its own path is selected and edited to `#e04838` at 7.25 pt; native reopen preserves those edits. Independent `usvg` finds exactly one matching path, verifies the literal stroke, no Close segment, and horizontal source endpoint relationship/length. Limited-palette retrace reduces four unique fills to two in the document and independently in `usvg`. Higher Paths fidelity adds anchors on the fixed sine fixture in both document and exported path data; no universal monotonicity is claimed. Saved-preset create/case-insensitive apply/canonical naming/list/update/rename/delete/revision/invalid-input evidence passes. The library round-trips through Prefs, not `.vectorcraft`; native reopen keeps the trace object's own preset/full params/view. Make/make-and-expand/retrace/view undo/redo verify object identity, selection, actual parent/stacking position and history stacks, including live metadata/hidden-source restoration and expanded editable geometry. Invalid retrace runs with exactly one redo entry and leaves document, selection, position, undo length, and that non-empty redo length unchanged before redo succeeds.
-
-- [x] **Step 2: Verify the Image Trace docker and CorelDRAW naming**
-
-Complete: the actual CorelDRAW Image Trace panel is driven through AccessKit-named Preset/Mode/View combo boxes and Preview/Trace/Expand controls, plus synthetic-pointer Colors and Paths sliders. A genuine Color→Grayscale→Color sequence checks stored modes, neutral-only grayscale fills, and exact restoration of the complete initial Colour palette, so stale grayscale geometry fails. The lifecycle also proves two unique colours, changed Paths parameters/anchors, View without retrace, fresh IDs for each retrace, and same-ID expansion without retained bitmap/trace metadata. No parallel tracer or production mapping was added.
-
-- [x] **Step 3: Verify and commit**
-
-`coreldraw_image_workflows` passes 16/16, CorelDRAW effects UI 10/10, Image Trace panel tests 43/43, `vectorcraft-trace` 252 passed / 3 existing ignored, and engine `image_trace` tests 30/30. Formatting, focused engine/UI Clippy with `-D warnings`, and MCP `docs_sync` 2/2 pass. This is an evidence-only `test:` slice; no production behavior changed.
-
-### Task 10: Audit native and CDR/CMX persistence and fallbacks
-
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_p3_persistence.rs`
-- Modify: `crates/engine/tests/it/main.rs`
-- Modify only on measured gaps: `crates/engine/src/cmd/fileio/encode.rs`, `crates/corel-import/src/lib.rs`, `crates/cdr/src/`
-
-- [ ] **Step 1: Write failing persistence and warning tests**
-
-Build a document with nested PowerClip, live effects, mesh/transparency, bitmap, and trace output. Reopen native and edit every source. Export CDR7/CMX1 and require supported structures to reopen; unsupported live semantics must return a named warning and retain a native residual where the format permits. Never claim CDR dynamic effects from a flattened self-round trip.
-
-Progress: CDR/CMX PowerClip + Extrude/Drop Shadow evidence passes. A failing Blend test exposed silent empty-path export; live nodes now use `vectorcraft_doc::live::expand_deep` and return a named warning. The focused fallback-warning slice adds failing-first CDR/CMX tests for used generic pattern paints and live trace metadata. Both now warn explicitly; native pattern definitions and trace preset/params/view remain editable, retrace works after native reopen, CDR/CMX self-reimport contains only ordinary vectors/source images without `extras().trace`, and edited expanded centreline colour/geometry survives with no live-trace warning. Unused pattern definitions do not warn. Quality-review regressions then moved warning collection into `corel-import` conversion: linked placed pattern/trace art warns once per category, invisible and shadowed pattern items stay silent, and temporary symbol/mask editing layers stay silent. Public warning-returning export/write APIs preserve the existing APIs and bytes. Final channel regressions add later text-run Pattern fill, text-run Pattern stroke, image colorize Pattern, and enabled opacity-mask art containing Pattern plus live trace metadata. Their warnings now distinguish checkerboard/black substitution from dropped channels; no preservation is claimed. Metadata-restoration regressions add imported path, later text-run, and image-colorize objects subsequently edited to Pattern, with live trace as the early-return control. Warning detection now runs before early restoration without changing restored bytes. Nested structural mismatches convert current children into a discarded warning-only value, and successful PowerClip restoration inspects the frame separately; output and deduplication stay unchanged. Compatibility evidence is same-revision wrapper equivalence, not independent base-byte proof. Known-issue 0l is resolved by root-only projections in the versioned `CoralCraftDocData.extra` sidecar (`corel.import.original_vc.v1.<node-id>`), one-per-root legacy reconstruction, normalized shallow semantics with exact encoded-image-byte comparison, recursive current-child conversion, and separate PowerClip frame restoration. The old metadata literal and `Eq` are preserved; sidecar entries are filtered from exported CDR extras. Unchanged native patterns, unknown fills, bounded unsupported payloads, and residuals retain exact originals; edited appearance no longer reverts. PowerClip frame transparency is copied with the other converted frame fields in both restoration paths, and missing current bounds always fail closed, including `(None, None)`. The original metadata literal and `Eq` are preserved because no `Node` is stored in either public struct; public export/write signatures are unchanged. Nested text caches are cleared recursively for bounds comparison. Visibility/lock precedence is: restored outer + changed frame => converted frame; changed outer + matching frame => current outer; both changed => current outer because CDR exposes one container state; no expected metadata => current outer. Original objects are deep-cloned before child replacement, and legacy reconstruction builds discarded temporary metadata; no shell-only/metadata-free optimization is claimed. Later-run styles, colorize, gradient alpha, and other unrepresentable fields remain explicit conversion/fallback limits. The combined mesh/transparency/bitmap/residual matrix and consolidated hostile-input gate remain open, so this task is not checked.
-
-- [ ] **Step 2: Implement only cited format mappings**
-
-Use the public CDR specification and audited adoption record. Unknown chunks remain bounded residuals; malformed input returns structured errors without panic. S2 stays open without libcdr tools and real samples.
-
-- [ ] **Step 3: Verify and commit**
-
-Run the persistence test, `corel-import`, `coralcraft-cdr`, and hostile-input suites. Record exact fallback warnings in `docs/p3-inventory.md`.
-
-Appearance-aware restoration gate: metadata restoration **21/21**, `corel-import` **8 unit + 6 public API + 21 restoration + 2 self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, fmt, focused Clippy, and docs_sync **2/2** pass. Full CI/later serial gates remain for the controller; this focused gate does not check off Task 10.
-
-Spec-review follow-up gate: frame-transparency edit/removal and missing-bounds regressions failed before the fixes. Converted frame transparency is now propagated in both paths, and `(None, None)` no longer restores. Metadata restoration **25/25**, `corel-import` **8 unit + 6 public API + 25 restoration + 2 self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, fmt, focused Clippy, and docs_sync **2/2** pass. Unchanged transparent PowerClips and bounded unchanged objects retain exact restoration; edited mask conversion semantics and warnings are unchanged.
-
-Quality-review gate: nested-cache stored/legacy tests, frame visible/locked tests, the old metadata literal, and sidecar persistence all failed first. Recursive cache normalization, frame-state precedence, versioned extra-map snapshots, and CDR-extra filtering now pass metadata restoration **32/32**, public API **6/6**, `corel-import` **8 unit + 6 public API + 32 restoration + 2 self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, fmt, focused Clippy, and docs_sync **2/2**. The old metadata literal and `Eq` are restored. Snapshot nodes continue to count against the unchanged native `with_node_budget` (4,194,304 desktop / 524,288 wasm32), so near-cap documents can exceed it.
-
-PowerClip precedence re-review gate: outer-only, conflicting both-changed, and metadata-free regressions failed first. Fallback now always uses current outer visibility/lock, while restored-shell frame edits keep converted frame precedence. Metadata restoration **35/35**, public API **6/6**, `corel-import` **8 unit + 6 public API + 35 restoration + 2 self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, fmt, focused Clippy, and docs_sync **2/2** pass. Other frame appearance mappings are unchanged. Deep original-object cloning and discarded legacy temporary metadata are documented as remaining performance costs, not optimizations.
-
-Transparency/bitmap fallback gate: eight public tests failed first on missing categories or huge-allocation capacity overflow, and the engine gradient/mask test failed with no warnings. Gradient stop alpha, enabled masks that fail exact restoration, and visible unsupported bitmap effects now warn; unchanged CDR Fountain restoration stays silent, edited masks export converted `None`, and effect IDs are sorted/deduplicated. Missing blobs and undecodable/empty pixels have separate white-fallback warnings; valid white images do not warn. Both fallback allocation paths use checked `u64` arithmetic and the 64 Mpx/256 MiB budget with structured conversion errors. Public export/warnings **14/14**, metadata restoration **35/35**, `corel-import` **8 unit + 14 public + 35 restoration + 2 self-skip**, persistence **14/14**, complete CorelDRAW integration **75/75**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, fmt, focused Clippy, and docs_sync **2/2** pass. Exact warnings are in `docs/p3-inventory.md` §14. Full CI/later serial gates remain for the controller. Task 10 stays open.
-
-Transparency/bitmap quality-review gate: the stored huge-original control passed while the new legacy reconstruction test panicked with capacity overflow; item-only `effect.apply {item: 0}` export returned no CDR warning. Legacy reconstruction now validates dimensions before conversion and records the structured error. Selected last-visible fill/stroke item effects are scanned after exact restoration fails, preserving object-level dedup and invisible/shadowed controls. Unchanged-Fountain direct/writer warnings are completely empty. Public export/warnings **15/15**, metadata restoration **35/35**, `corel-import` **8 unit + 15 public + 35 restoration + 2 self-skip**, persistence **15/15**, complete CorelDRAW integration **76/76**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, fmt, focused Clippy, and docs_sync **2/2** pass. Full CI/later serial gates remain for the controller. Task 10 stays open.
-
-Nested-bitmap reconstruction gate: deep group and PowerClip legacy tests both failed with capacity overflow before the fix. Iterative preflight now covers the complete original tree—ordinary groups, unsupported-object children, and every `powerclip_children` descendant—before recursive conversion. Stored/root legacy controls and item-effect/Fountain behavior remain green. Public export/warnings **17/17**, metadata restoration **35/35**, `corel-import` **8 unit + 17 public + 35 restoration + 2 self-skip**, persistence **15/15**, complete CorelDRAW integration **76/76**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, fmt, focused Clippy, and docs_sync **2/2** pass. Task 10 stays open.
-
-Transparency/bitmap final gate at `4745ec3f`: full CI passed fmt/Clippy and engine library tests were **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **76/76**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts test/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim; Task 10 stays open.
-
-Mesh-opacity/empty-live focused gate: public mesh warning and engine persistence tests failed on absent warnings, root/nested empty-live tests returned successful exports, and the scoped expansion-status API was initially absent. Dropped original mesh point opacity now warns once only after exact restoration fails; opaque and exactly restored meshes stay silent, and direct models retain tessellated colours/coordinates as opaque ordinary paths. Any empty original-live expansion now returns `CorelImportError::Conversion` through all existing writers, including nested and budget-exhausted cases. Spec review then exposed an ordinary-parent false warning even when a nested mesh restored its original shell; the new control failed with the warning after proving restored opacity 0.37 and non-empty output. Code-quality review reproduced the same false positive under a changed live parent and found the enabled-mask pre-scan leak under an exactly restored owner; both failed with the exact warning, while the fallback-owner positive control warned once. Translucent source mesh IDs are now collected per export and attributed only at each expanded node's own fallback. Mask pre-scans checkpoint and restore only mesh warning/source state, preserving conversion errors and other warnings, and merge only after owner restoration fails. The expansion-status docs now cover both deep-expansion entry points and the existing reentrant guard. Doc 406/406, public export/warnings 26/26, restoration 35/35, persistence 16/16, Corel integration 77/77, placed documents 41/41, appearance 84/84, warnings 33/33, coralcraft-cdr 58 + 2 self-skip, hostile import fuzz 190/190, both 2,000-iteration release probes, fmt, focused Clippy, and docs_sync 2/2 pass. The exact warning/error, status lifecycle, and test-local RAII budget evidence are in `docs/p3-inventory.md` §17. Full CI/later serial gates remain for the controller; this focused slice does not check off Task 10, P3.10, P3, or S2.
-
-### Task 11: Verify shared MCP/CLI automation and regenerate docs
-
-**Files:**
-- Modify: `crates/engine/tests/it/coreldraw_p3_persistence.rs`
-- Modify: `crates/mcp/tests/` only if a new command requires registry coverage
-- Regenerate: `docs/mcp.md`
-
-- [x] **Step 1: Run every new P3 command through `run_command`**
-
-All exercised workflows use the shared `Session::execute` dispatch consumed by MCP. The Task 8 slice added `object.resampleImage` and proves it through real `run_command`, including an invalid-input error; no duplicate MCP tool was added.
-
-- [x] **Step 2: Regenerate and verify the live registry**
-
-Run `CORALCRAFT_BLESS=1 cargo test -p vectorcraft-mcp --test docs_sync`, then run the same test without blessing and require a clean diff. Commit with `feat: expose P3 workflows through shared automation` or `test:` if no surface changed.
-
-### Task 12: Run poster/traced-image acceptance and the P3 gate
-
-**Files:**
-- Create: `crates/engine/tests/it/coreldraw_p3_acceptance.rs`
-- Modify: `crates/engine/tests/it/main.rs`, `docs/p3-inventory.md`, parity/roadmap/memory files
-
-- [x] **Step 1: Write the failing end-to-end scenarios**
-
-Create a poster/traced-image composition with PowerClip, Extrude, Drop Shadow, Blend, live text, and editable expanded trace paths. Save/reopen twice, revise effect parameters/source paint/text, export SVG/PDF, and read them independently with `usvg` and Hayro. Assert the native live models still edit after export and CDR warns about the live Blend fallback.
-
-- [x] **Step 2: Run the full gate and all skipped gates**
-
-Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo xtask ci`. If only known-issue 0b fails, separately run doctests, cleanroom, no-bundled-fonts, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm; record exact counts and failures.
-
-- [x] **Step 3: Update evidence and commit**
-
-Check only P3 rows backed by the scenarios. Leave S2 and every unimplemented D4 behaviour open with exact evidence. Commit with `feat: complete the P3 effects and image workflows` only if the P3 exit criterion is actually met; otherwise commit the tested acceptance slice and leave the queue open.
+- This file holds only open tasks and acceptance conditions; RED/GREEN detail and gates go to
+  `docs/p3-inventory.md`.
+- Before each slice, write the complete positive/negative matrix (in `p3-inventory.md`) to freeze
+  the slice's semantics. Newly found regressions are never ignored; unrelated older issues are
+  filed as follow-ups instead of blocking the slice.
+- The same reviewer re-reviews each slice (spec, then quality); a full gate runs once per slice
+  after both reviews pass — focused tests only during development.
+- No planning agents for already-clear fixes; a design review happens only at a genuine
+  architectural fork.
