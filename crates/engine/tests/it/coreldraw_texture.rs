@@ -47,7 +47,15 @@ fn texture_definitions_are_reusable_and_undo_round_trips() {
     let list = s.execute("texture.list", &json!({})).unwrap();
     assert_eq!(list["textures"].as_array().map(Vec::len), Some(1), "no definition duplicate");
 
+    // P4: the exported tiles carry the definition's colours.
+    let svg_before = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(svg_before.contains("#c02020") && svg_before.contains("#204080"), "both texture colours rendered: {svg_before}");
+
+    // P4: editing the definition reaches every user's rendered tiles.
     s.execute("texture.setProps", &json!({ "name": "Coral Stipple", "foreground": "#20a040" })).unwrap();
+    let svg_after = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!svg_after.contains("#c02020") && svg_after.contains("#20a040"), "the edited colour replaced the old one everywhere: {svg_after}");
+
     // P5: undo/redo of the definition edit and of the paint application.
     s.execute("edit.undo", &json!({})).unwrap();
     let list = s.execute("texture.list", &json!({})).unwrap();
@@ -87,10 +95,7 @@ fn texture_definitions_survive_native_reopen_and_still_edit() {
     assert_eq!(list["textures"][0]["foreground"].as_str(), Some("#20a040"), "the post-reopen edit took");
 }
 
-/// The open T1 remainder, kept as visible anchors: P4 (edit propagation through rendered tiles),
-/// P7 and P8 (independent SVG/PDF tile reads). Run with `--ignored`; they fail until tile
-/// synthesis lands, and T1 is not closed while they do.
-#[ignore = "P3 T1 open: independent SVG/PDF tile synthesis (P4, P7, P8)"]
+/// P7/P8: independent SVG and PDF evidence for the rendered tiles.
 #[test]
 fn texture_tiles_are_independently_readable_in_svg_and_pdf() {
     let mut s = session();
@@ -206,7 +211,7 @@ fn collect(group: &usvg::Group, colors: &mut Vec<String>, geometry: &mut usize) 
     }
 }
 
-#[ignore = "P3 T1 open: independent SVG/PDF tile synthesis (P4, P7, P8)"]
+/// P4: an edit of the definition reaches every user's rendered tiles.
 #[test]
 fn texture_edit_propagates_to_rendered_tiles() {
     let mut s = session();

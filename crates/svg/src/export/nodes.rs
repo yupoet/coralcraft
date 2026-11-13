@@ -158,6 +158,71 @@ impl Writer<'_> {
     /// Paint a shape (`d`) with a node's appearance stack. `paths` is the same shape in document
     /// space, for strokes that aren't plain (it may be empty when all are). `basic` is the shape
     /// as an SVG basic shape element ([`Writer::basic_shape`]) to paint instead of `<path>`.
+    /// CoralCraft (P3 Task T1): a texture-filled path renders as its synthesized tiles — the
+    /// shape itself in the definition's background colour (strokes, effects and opacity kept),
+    /// the foreground cells over it, clipped to the shape. `false` when the fill is no texture
+    /// or names no definition (the ordinary path write handles that).
+    fn texture_tiles(&mut self, n: &Node, path: &PathData, rule: FillRule) -> bool {
+        let Some((name, opacity)) = n.appearance.items.iter().rev().find_map(|item| match item {
+            AppearanceItem::Fill(f) if f.visible && matches!(f.paint, Paint::Texture { .. }) => match &f.paint {
+                Paint::Texture { texture } => Some((texture.clone(), f.opacity)),
+                _ => None,
+            },
+            _ => None,
+        }) else {
+            return false;
+        };
+        let Some(def) = self.doc.texture(&name).cloned() else {
+            return false;
+        };
+        // The shape in the background colour: every texture fill becomes that solid, and the
+        // ordinary shape write keeps the node's strokes, effects and opacity.
+        let d = self.path_d(path, self.xf);
+        let mut base = n.clone();
+        for item in &mut base.appearance.items {
+            if let AppearanceItem::Fill(f) = item
+                && matches!(f.paint, Paint::Texture { .. })
+            {
+                f.paint = Paint::solid(def.background);
+            }
+        }
+        let dashed = base.appearance.items.iter().any(|i| matches!(i, AppearanceItem::Stroke(s) if s.dash.as_ref().is_some_and(|d| d.is_dashed())));
+        let basic = self.basic_shape(path, self.xf, dashed);
+        self.shape(&base, &d, basic, &[path], rule, export_shape_bounds(&base));
+        // The foreground cells over it, clipped to the shape in this output space; the tiles are
+        // in document coordinates, so they carry the same transform the path did.
+        let bounds = base.geometric_bounds().unwrap_or_else(|| Rect::new(0.0, 0.0, 0.0, 0.0));
+        let cid = self.fresh_id("texture-clip");
+        self.def(1, &format!("<clipPath id=\"{cid}\">"));
+        let r = if rule == FillRule::EvenOdd { " clip-rule=\"evenodd\"" } else { "" };
+        self.def(2, &format!("<path d=\"{d}\"{r}/>"));
+        self.def(1, "</clipPath>");
+        let m = self.matrix(self.xf);
+        self.line(&format!("<g clip-path=\"url(#{cid})\">"));
+        self.depth += 1;
+        self.line(&format!("<g transform=\"{m}\">"));
+        self.depth += 1;
+        let fg = def.foreground.to_hex();
+        let opacity = (opacity < 1.0).then(|| format!(" opacity=\"{}\"", fmt_num(f64::from(opacity), 3))).unwrap_or_default();
+        for (rect, color) in def.tiles(bounds) {
+            if color != def.foreground {
+                continue;
+            }
+            self.line(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{fg}\"{opacity}/>",
+                fmt_num(rect.x0, 3),
+                fmt_num(rect.y0, 3),
+                fmt_num(rect.width(), 3),
+                fmt_num(rect.height(), 3)
+            ));
+        }
+        self.depth -= 1;
+        self.line("</g>");
+        self.depth -= 1;
+        self.line("</g>");
+        true
+    }
+
     pub(super) fn shape(&mut self, n: &Node, d: &str, basic: Option<(&str, String)>, paths: &[&PathData], rule: FillRule, bounds: Option<Rect>) {
         let (tag, geom) = basic.unwrap_or_else(|| ("path", format!(" d=\"{d}\"")));
         let id = self.id_attr(n);
@@ -588,6 +653,10 @@ impl Writer<'_> {
             NodeKind::Path { guide: true, .. } => {}
             NodeKind::Path { path, rule, .. } => {
                 if path.is_empty() {
+                    return;
+                }
+                // CoralCraft (P3 Task T1): a texture fill renders as its deterministic tiles.
+                if self.texture_tiles(n, path, *rule) {
                     return;
                 }
                 let d = self.path_d(path, self.xf);

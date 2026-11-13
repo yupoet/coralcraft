@@ -318,6 +318,46 @@ impl Exporter<'_> {
         true
     }
 
+    /// CoralCraft (P3 Task T1): one texture fill's tiles (see [`Self::shape`]). `false` when the
+    /// shape or the transform cannot be drawn, so the caller falls back to its flat colour.
+    #[allow(clippy::too_many_arguments)]
+    fn texture_tiles(
+        &mut self,
+        s: &mut Surface,
+        n: &Node,
+        path: &Path,
+        bp: &BezPath,
+        bounds: Rect,
+        def: &vectorcraft_doc::TextureDef,
+        opacity: f32,
+    ) -> bool {
+        let Some(bg) = self.paint(s, &Paint::solid(def.background), bounds) else { return false };
+        let Some(fg) = self.paint(s, &Paint::solid(def.foreground), bounds) else { return false };
+        let _ = n;
+        // The shape in the background colour; the foreground cells over it, clipped to the shape.
+        // Tiles are document coordinates, like the BezPath the shape itself came from.
+        s.set_stroke(None);
+        s.set_fill(Some(Fill { paint: bg, opacity: norm(opacity), rule: rule(FillRule::NonZero) }));
+        s.draw_path(path);
+        s.push_clip_path(path, &rule(FillRule::NonZero));
+        for (rect, color) in def.tiles(bp.bounding_box()) {
+            if color != def.foreground {
+                continue;
+            }
+            let mut cell = BezPath::new();
+            cell.move_to((rect.x0, rect.y0));
+            cell.line_to((rect.x1, rect.y0));
+            cell.line_to((rect.x1, rect.y1));
+            cell.line_to((rect.x0, rect.y1));
+            cell.close_path();
+            let Some(cell_path) = to_path(s, &cell) else { continue };
+            s.set_fill(Some(Fill { paint: fg.clone(), opacity: norm(opacity), rule: rule(FillRule::NonZero) }));
+            s.draw_path(&cell_path);
+        }
+        s.pop();
+        true
+    }
+
     fn shape(&mut self, s: &mut Surface, n: &Node, bp: &BezPath, r: FillRule, page: Rect) {
         let Some(path) = to_path(s, bp) else { return };
         let bounds = bp.bounding_box();
@@ -325,6 +365,15 @@ impl Exporter<'_> {
             match item {
                 AppearanceItem::Fill(fl) => {
                     if !fl.visible || fl.paint.is_none() {
+                        continue;
+                    }
+                    // CoralCraft (P3 Task T1): a texture fill draws its deterministic tiles — the
+                    // shape in the definition's background colour, the foreground cells over it,
+                    // clipped to the shape.
+                    if let Paint::Texture { texture } = &fl.paint
+                        && let Some(def) = self.doc.texture(texture).cloned()
+                        && self.texture_tiles(s, n, &path, bp, bounds, &def, fl.opacity)
+                    {
                         continue;
                     }
                     self.warn_raster(&fl.effects, || "fills".into());

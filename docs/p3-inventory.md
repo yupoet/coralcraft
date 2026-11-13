@@ -342,3 +342,17 @@ anchors runnable with `--ignored` (P4/P7/P8): independent SVG/PDF tile synthesis
 tiles actually render, edit propagation is asserted through `texture.list`, not the export, and
 T1 stays open. GREEN battery: doc 406, color 149, corel-import 8+30+35+2, engine CorelDRAW
 integration 84, MCP docs_sync 2; fmt and focused Clippy `-D warnings` clean.
+
+## 21. Task T1 closed: the texture tiles render (P4/P7/P8 delivered)
+
+The §20 open remainder landed: a texture-filled path now draws its deterministic tiles in both
+independent exporters — the SVG writer emits the shape in the definition's background colour (its
+strokes, effects and opacity kept) and the foreground cells over it, clipped to the shape
+(`texture_tiles` in `crates/svg/src/export/nodes.rs`); the PDF writer draws the same through
+`push_clip_path` (`texture_tiles` in `crates/pdf/src/export/nodes.rs`). The two former `#[ignore]`
+anchors are un-ignored and green, and P4 lives in the model test again: an edit of the definition
+reaches every user's rendered tiles (the old colour disappears from the SVG, the new one appears),
+undo/redo round-trips, and the reopen test's post-reopen edit propagates through the export.
+`coreldraw_texture` **6/6**; svg **67+7+446** and pdf suites green; fmt and focused Clippy clean.
+Task T1's §19 matrix is fully green — the slice closes subject to the same-reviewer re-review and
+the full gate.
