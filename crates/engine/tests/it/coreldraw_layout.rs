@@ -480,12 +480,13 @@ fn coreldraw_table_edit_preserves_cell_styling_and_edits_after_reopen() {
     s.execute("select.set", &json!({"ids": [group]})).unwrap();
     s.execute("layout.tableEdit", &json!({"id": group, "action": "insertRow", "at": 0})).unwrap();
     let (text_color, border_color) = {
-        let st = s.doc().unwrap();
-        let ids: Vec<u64> = match &st.doc.node(NodeId(group)).unwrap().kind {
-            NodeKind::Group { children, .. } => children.iter().map(|n| n.id.0).collect(),
-            _ => panic!("table is not a group"),
+        let ids: Vec<u64> = {
+            let st = s.doc().unwrap();
+            match &st.doc.node(NodeId(group)).unwrap().kind {
+                NodeKind::Group { children, .. } => children.iter().map(|n| n.id.0).collect(),
+                _ => panic!("table is not a group"),
+            }
         };
-        drop(st);
         let mut text_color = None;
         let mut border_color = None;
         for id in ids {
