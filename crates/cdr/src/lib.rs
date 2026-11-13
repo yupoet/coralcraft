@@ -2433,6 +2433,11 @@ mod stlt_encoding_tests {
 
     /// An stlt with `records` font records (style id, font id, encoding), at CDR7 sizes.
     fn stlt(records: &[(u32, u16, u16)]) -> Vec<u8> {
+        list(b"stlt", &stlt_body(records))
+    }
+
+    /// The stlt LIST body (starting at the `stlt` fourcc) with `records` font records.
+    fn stlt_body(records: &[(u32, u16, u16)]) -> Vec<u8> {
         let mut body = Vec::new();
         body.extend_from_slice(b"stlt");
         body.extend_from_slice(&1u32.to_le_bytes()); // Number of Records (the style records, unread)
@@ -2449,7 +2454,7 @@ mod stlt_encoding_tests {
             body.extend([0u8; 12]); // trailing unknown (V<1000)
         }
         body.extend_from_slice(&0u32.to_le_bytes()); // Align IDs Map12: none
-        list(b"stlt", &body)
+        body
     }
 
     /// A CDR7 RIFF: the doc-level chunks `extra`, then one page holding one text object whose
@@ -2516,6 +2521,55 @@ mod stlt_encoding_tests {
         let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
         let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object") };
         assert_eq!(spec.text, "Text", "no code page was guessed");
+    }
+
+    /// A stlt record's own encoding overrides the font table's entry for its font (libcdr's
+    /// order): font 3 is 1251 in the table, the record says 1250 — "Łódź" decodes, the overridden
+    /// table value does not come back as a disagreement.
+    #[test]
+    fn stlt_own_encoding_overrides_the_font_table() {
+        let font = chunk(b"font", &[3, 0, 0xcc, 0, 0, 0, 0, 0, b'A', b'r', b'i', b'a', b'l', 0, 0, 0, 0, 0]);
+        let bytes = cdr7_with(&[font, stlt(&[(1, 3, 0xee)])], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        assert_eq!(text_of(&bytes), "Łódź");
+    }
+
+    /// A record whose encoding is unknown (Symbol, or inheriting a font the table lacks) blocks
+    /// the document-level decode: the table might hold text in that unknown encoding, so no code
+    /// page is applied and the strict ASCII fallback stays.
+    #[test]
+    fn unknown_recorded_encoding_blocks_decoding() {
+        // Symbol (0x02) beside a 1250 record.
+        let symbol = cdr7_with(&[stlt(&[(1, 0, 0xee), (2, 0, 0x02)])], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        let outcome = parse_document(&symbol).expect("parses");
+        let page = outcome.document.pages.first().expect("a page");
+        let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
+        let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object") };
+        assert_eq!(spec.text, "Text", "an unknown encoding blocks the code page");
+        // A record inheriting a font the table has no entry for.
+        let absent = cdr7_with(&[stlt(&[(1, 7, 0), (2, 0, 0xee)])], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        let outcome = parse_document(&absent).expect("parses");
+        let page = outcome.document.pages.first().expect("a page");
+        let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
+        let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object") };
+        assert_eq!(spec.text, "Text", "an unresolvable inheritance blocks the code page");
+    }
+
+    /// A stlt that declares more font records than it holds bytes for warns and its records are
+    /// not used: the partial parse must not decode text.
+    #[test]
+    fn truncated_stlt_font_records_warn_and_are_not_used() {
+        // Keep the declared count (two) but drop the second record's bytes (one CDR7 record).
+        let body = stlt_body(&[(1, 0, 0xee), (2, 0, 0xcc)]);
+        let cut = body.len().checked_sub(44).expect("two records were built");
+        let (kept, _) = body.split_at(cut);
+        let truncated = list(b"stlt", kept);
+        let bytes = cdr7_with(&[truncated], 0x00, &[0xa3, 0xf3, 0x64, 0x9f]);
+        let outcome = parse_document(&bytes).expect("parses");
+        assert!(outcome.parse_warnings.iter().any(|w| w.contains("W-STLT-FONTS")), "the truncation warns: {:?}", outcome.parse_warnings);
+        let page = outcome.document.pages.first().expect("a page");
+        let object = page.layers.first().expect("a layer").objects.first().expect("the text object");
+        let ObjectKind::ParagraphText(spec) = &object.kind else { panic!("text object") };
+        assert_eq!(spec.text, "Text", "partial records do not decode");
     }
 
     /// Without any font records, 8-bit text is strict ASCII as before: plain ASCII decodes and

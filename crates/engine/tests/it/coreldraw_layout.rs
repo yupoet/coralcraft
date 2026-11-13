@@ -405,3 +405,127 @@ fn coreldraw_table_rows_and_columns_edit_through_the_command() {
     let path = s.execute("path.create", &json!({"d": "M 0 0 L 10 10"})).unwrap()["id"].as_u64().unwrap();
     assert!(s.execute("layout.tableEdit", &json!({"id": path, "action": "insertRow"})).is_err());
 }
+
+// CoralCraft (P2 follow-up review): `layout.tableEdit`'s bounds and cell-name validation refuse
+// instead of panicking, a delete of a middle row keeps the surviving texts, styling survives a
+// structural edit, and the reopened table still edits.
+#[test]
+fn coreldraw_table_edit_rejects_bad_bounds_and_names_without_panicking() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    let table = s
+        .execute("layout.table", &json!({"x": 20, "y": 30, "width": 300, "height": 120, "rows": 2, "columns": 2, "text": [["A", "B"], ["C", "D"]]}))
+        .unwrap();
+    let group = table["id"].as_u64().unwrap();
+    // Deleting at the extent (== rows) is refused as bad input, not a caught panic (Internal).
+    let err = s.execute("layout.tableEdit", &json!({"id": group, "action": "deleteRow", "at": 2})).unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("layout.tableEdit"), "{err}");
+    assert!(!text.contains("Internal"), "a bounds bug must not surface as a caught panic: {err}");
+    assert!(text.contains("does not name one of the table"), "{err}");
+    // A cell renamed to a zero row or column refuses the edit rather than underflowing.
+    let first_cell = {
+        let st = s.doc().unwrap();
+        match &st.doc.node(NodeId(group)).unwrap().kind {
+            NodeKind::Group { children, .. } => children[0].id.0,
+            _ => panic!("table is not a group"),
+        }
+    };
+    s.execute("object.setProps", &json!({"id": first_cell, "name": "Cell 0:1"})).unwrap();
+    let err = s.execute("layout.tableEdit", &json!({"id": group, "action": "insertRow"})).unwrap_err();
+    assert!(!err.to_string().contains("Internal"), "an underflow must not surface as a caught panic: {err}");
+    s.execute("object.setProps", &json!({"id": first_cell, "name": "Cell 1:0"})).unwrap();
+    let err = s.execute("layout.tableEdit", &json!({"id": group, "action": "insertRow"})).unwrap_err();
+    assert!(!err.to_string().contains("Internal"), "an underflow must not surface as a caught panic: {err}");
+    s.execute("object.setProps", &json!({"id": first_cell, "name": "Cell 1:1"})).unwrap();
+    // A middle-row delete keeps the surviving texts in order.
+    s.execute("layout.tableEdit", &json!({"id": group, "action": "deleteRow", "at": 0})).unwrap();
+    let texts = {
+        let st = s.doc().unwrap();
+        match &st.doc.node(NodeId(group)).unwrap().kind {
+            NodeKind::Group { children, .. } => children
+                .iter()
+                .filter_map(|n| match &n.kind {
+                    NodeKind::Text(t) => Some(t.plain_text()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => panic!("table is not a group"),
+        }
+    };
+    assert_eq!(texts, vec!["C", "D"], "the first row is gone, the second stays");
+}
+
+#[test]
+fn coreldraw_table_edit_preserves_cell_styling_and_edits_after_reopen() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 500, "height": 300})).unwrap();
+    let table = s
+        .execute("layout.table", &json!({"x": 20, "y": 30, "width": 300, "height": 120, "rows": 2, "columns": 2, "text": [["A", "B"], ["C", "D"]]}))
+        .unwrap();
+    let group = table["id"].as_u64().unwrap();
+    // Style the second cell's text red and its border green.
+    let (text_id, border_id) = {
+        let st = s.doc().unwrap();
+        match &st.doc.node(NodeId(group)).unwrap().kind {
+            NodeKind::Group { children, .. } => (children[3].id.0, children[2].id.0),
+            _ => panic!("table is not a group"),
+        }
+    };
+    s.execute("select.set", &json!({"ids": [text_id]})).unwrap();
+    s.execute("paint.setFill", &json!({"color": "#c02020"})).unwrap();
+    s.execute("select.set", &json!({"ids": [border_id]})).unwrap();
+    s.execute("paint.setStroke", &json!({"color": "#20a040"})).unwrap();
+    // A structural edit keeps the styled cell's look (new cells take the table's defaults).
+    s.execute("select.set", &json!({"ids": [group]})).unwrap();
+    s.execute("layout.tableEdit", &json!({"id": group, "action": "insertRow", "at": 0})).unwrap();
+    let (text_color, border_color) = {
+        let st = s.doc().unwrap();
+        let ids: Vec<u64> = match &st.doc.node(NodeId(group)).unwrap().kind {
+            NodeKind::Group { children, .. } => children.iter().map(|n| n.id.0).collect(),
+            _ => panic!("table is not a group"),
+        };
+        drop(st);
+        let mut text_color = None;
+        let mut border_color = None;
+        for id in ids {
+            let node = s.execute("document.node", &json!({"id": id, "summary": true})).unwrap();
+            if node["text"].as_str() == Some("B") {
+                text_color = node["fill"].as_str().map(str::to_owned);
+            }
+            if node["name"].as_str() == Some("Cell 2:2") && node["kind"].as_str() == Some("Path") {
+                border_color = node["stroke"].as_str().map(str::to_owned);
+            }
+        }
+        (text_color.unwrap_or_default(), border_color.unwrap_or_default())
+    };
+    assert_eq!(text_color, "#c02020", "the styled cell text keeps its colour");
+    assert_eq!(border_color, "#20a040", "the styled cell border keeps its colour");
+    // Native reopen: the table still edits.
+    let data = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({"dataBase64": data})).unwrap();
+    let reopened = s.execute("document.inspect", &json!({})).unwrap();
+    let _ = reopened;
+    // Find the reopened table by walking the tree for the named group.
+    let table_id = {
+        let st = s.doc().unwrap();
+        let mut found = None;
+        for layer in &st.doc.layers {
+            for child in layer.children().into_iter().flatten() {
+                if child.name.as_deref() == Some("Table") && matches!(child.kind, NodeKind::Group { .. }) {
+                    found = Some(child.id.0);
+                }
+            }
+        }
+        found.expect("the reopened table")
+    };
+    s.execute("layout.tableEdit", &json!({"id": table_id, "action": "insertColumn", "at": 0})).unwrap();
+    let count = {
+        let st = s.doc().unwrap();
+        match &st.doc.node(NodeId(table_id)).unwrap().kind {
+            NodeKind::Group { children, .. } => children.len(),
+            _ => panic!("table is not a group"),
+        }
+    };
+    assert_eq!(count, 18, "three rows of three cells after the reopened edit");
+}

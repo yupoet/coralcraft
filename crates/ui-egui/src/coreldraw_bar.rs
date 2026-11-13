@@ -420,6 +420,16 @@ mod tests {
         let r = app.run("document.node", json!({ "id": table, "summary": true })).unwrap();
         assert_eq!(r["children"].as_array().map(Vec::len), Some(12), "three rows of two cells: {r:?}");
         assert_eq!(app.session.active().unwrap().history.undo.len(), undo + 1, "one undo step");
+        // Delete Row takes the last row back away.
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let b = node_text(&nodes, "Delete Row").unwrap().bounds().expect("the button");
+        let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![press(false)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let r = app.run("document.node", json!({ "id": table, "summary": true })).unwrap();
+        assert_eq!(r["children"].as_array().map(Vec::len), Some(8), "back to two rows of two cells: {r:?}");
         // Outside the CorelDRAW workspace the controls never show.
         crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
         let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);

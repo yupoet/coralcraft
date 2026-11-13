@@ -3122,24 +3122,34 @@ impl ParserCtx {
     /// `libcdr`'s `readStlt` resolves, `CDRParser.cpp`); records that disagree, or none at all,
     /// resolve to nothing and 8-bit text stays strict ASCII.
     pub(crate) fn resolved_text_encoding(&self) -> Option<&'static encoding_rs::Encoding> {
-        // The distinct encodings the records resolve to, as a small set by pointer identity (every
-        // `encoding_rs::Encoding` is a unique static).
+        // Each stlt record resolves exactly once: its own non-zero encoding, else the `font`
+        // table's entry for the font it names (the order `libcdr`'s `readStlt` resolves). The
+        // table's raw values join only when there are no stlt records at all — an overridden one
+        // never re-enters as a disagreement. A record whose encoding is unknown (Symbol, an
+        // unmapped value, a font the table lacks) blocks the decode: the text might be in it, and
+        // a code page is never guessed.
         let mut seen: Vec<&'static encoding_rs::Encoding> = Vec::new();
-        let note = |enc: Option<&'static encoding_rs::Encoding>, seen: &mut Vec<&'static encoding_rs::Encoding>| {
-            let Some(enc) = enc else { return };
-            if !seen.contains(&enc) {
-                seen.push(enc);
+        let mut unknown = false;
+        let note = |charset: u16, seen: &mut Vec<&'static encoding_rs::Encoding>, unknown: &mut bool| match charset_encoding(charset) {
+            Some(enc) => {
+                if !seen.contains(&enc) {
+                    seen.push(enc);
+                }
             }
+            None => *unknown = true,
         };
-        for &(font_id, charset) in self.stlt_fonts.values() {
-            let charset = if charset != 0 { charset } else { self.font_charsets.get(&font_id).copied().unwrap_or(0) };
-            note(charset_encoding(charset), &mut seen);
+        if !self.stlt_fonts.is_empty() {
+            for &(font_id, charset) in self.stlt_fonts.values() {
+                let charset = if charset != 0 { charset } else { self.font_charsets.get(&font_id).copied().unwrap_or(0) };
+                note(charset, &mut seen, &mut unknown);
+            }
+        } else {
+            for &charset in self.font_charsets.values() {
+                note(charset, &mut seen, &mut unknown);
+            }
         }
-        for &charset in self.font_charsets.values() {
-            note(charset_encoding(charset), &mut seen);
-        }
-        // Records that disagree resolve to nothing: a code page is never picked between them.
-        (seen.len() == 1).then_some(*seen.first()?)
+        // Records that disagree (or any unknown) resolve to nothing.
+        (!unknown && seen.len() == 1).then_some(*seen.first()?)
     }
 }
 
@@ -3189,18 +3199,31 @@ fn parse_stlt_font_records(payload: &[u8], endian: Endian, version: u16, ctx: &m
     let coord: usize = if version < 600 { 2 } else { 4 };
     let unknown: usize = if version < 1000 { 12 } else { 20 };
     let record = unknown.saturating_add(unknown).saturating_add(16).saturating_add(coord);
-    for i in 0..nof.min(u32::MAX / 64) as usize {
+    // The whole font section is validated before any record is used: a stlt that declares more
+    // records than it holds warns, and none of its records decode text.
+    let Some(section_end) = usize::try_from(nof).ok().and_then(|nof| nof.checked_mul(record)).map(|bytes| cursor.saturating_add(bytes)) else {
+        warnings.push("W-STLT-FONTS: stlt font-record count overflows; font records not read".into());
+        return;
+    };
+    if section_end > payload.len() {
+        let held = payload.len().saturating_sub(cursor).checked_div(record).unwrap_or(0);
+        warnings.push(format!("W-STLT-FONTS: stlt declares {nof} font records but holds only {held}; font records not read"));
+        return;
+    }
+    let mut records = Vec::with_capacity(usize::try_from(nof).unwrap_or(0));
+    for _ in 0..nof {
         let Some(style_id) = read_u32(endian, payload, cursor) else { break };
         let base = cursor.saturating_add(4).saturating_add(unknown);
-        if let (Some(font_id), Some(charset)) = (read_u16(endian, payload, base), read_u16(endian, payload, base.saturating_add(2))) {
-            ctx.stlt_fonts.insert(style_id, (font_id, charset));
-        }
-        let Some(next) = cursor.checked_add(record) else { break };
-        if next > payload.len() {
-            warnings.push(format!("W-STLT-FONTS: stlt font record {i} runs past the chunk; {} of {} read", ctx.stlt_fonts.len(), nof));
-            break;
-        }
-        cursor = next;
+        let (Some(font_id), Some(charset)) = (read_u16(endian, payload, base), read_u16(endian, payload, base.saturating_add(2))) else { break };
+        records.push((style_id, font_id, charset));
+        cursor = cursor.saturating_add(record);
+    }
+    if records.len() != nof as usize {
+        warnings.push(format!("W-STLT-FONTS: stlt font records ended early; {} of {} read, none used", records.len(), nof));
+        return;
+    }
+    for (style_id, font_id, charset) in records {
+        ctx.stlt_fonts.insert(style_id, (font_id, charset));
     }
 }
 
