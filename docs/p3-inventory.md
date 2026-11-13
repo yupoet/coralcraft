@@ -282,4 +282,4 @@ restoration silence, empty-expansion fail-closed, dedup, all-opaque silence) sta
 battery: corel-import 8 unit + 30 public export/warnings + 35 restoration + 2 oracle self-skip,
 `vectorcraft-doc` 406/406, engine integration 266/266, MCP docs_sync 2/2, fmt, focused Clippy
 `-D warnings`. Full CI/serial gates run after this commit; S2 stays open, and this closes the
-mesh-opacity attribution question without closing Task 10/P3.10 or P3.
+mesh-opacity attribution question without closing Task 10/P3.10 or P3. Gate (`d18ce9f3b`, 2026-11-14): fmt/clippy ok, tests 4,376/1 (known-issue 0b only, verbatim), all serial gates green — not a clean full-CI pass (0b).
