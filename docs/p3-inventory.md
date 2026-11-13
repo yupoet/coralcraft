@@ -283,3 +283,36 @@ battery: corel-import 8 unit + 30 public export/warnings + 35 restoration + 2 or
 `vectorcraft-doc` 406/406, engine integration 266/266, MCP docs_sync 2/2, fmt, focused Clippy
 `-D warnings`. Full CI/serial gates run after this commit; S2 stays open, and this closes the
 mesh-opacity attribution question without closing Task 10/P3.10 or P3. Gate (`d18ce9f3b`, 2026-11-14): fmt/clippy ok, tests 4,376/1 (known-issue 0b only, verbatim), all serial gates green — not a clean full-CI pass (0b).
+
+## 19. Task T1 Texture fill — the reusable model: positive/negative matrix (frozen 2026-11-14)
+
+The texture model mirrors the pattern architecture and is not an ordinary pattern relabelled: a
+document-level reusable `TextureDef` (name, procedural `kind` with parameters, two colours), a
+distinct `Paint::Texture { texture }`, deterministic bounded synthesis for render/export, and
+shared-engine commands. Semantics frozen for this slice:
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `texture.new` creates a named definition (`kind`, parameters, foreground/background) and `texture.list` reports it with those parameters. |
+| P2 | `paint.setTexture` applies the definition to an object; the object's inspected paint is the texture (not a pattern, not a solid). |
+| P3 | A second object painted with the same name reuses the ONE definition (definition count does not grow). |
+| P4 | Editing the definition (`texture.setProps`) propagates to every user's rendered tiles (both objects' exported tile colours change). |
+| P5 | Undo/redo of definition edits and of `paint.setTexture` round-trips exactly. |
+| P6 | Native `.vectorcraft` save/reopen keeps the definition and its users; an edit after reopen still propagates. |
+| P7 | SVG export renders the synthesized tiles; independent `usvg` reads the tiles' actual geometry and both colours. |
+| P8 | PDF export reconstructs the tile art (Hayro-backed read: a page with the tile geometry — structure, not live-PDF claims). |
+| P9 | CDR/CMX export emits exactly one explicit texture fallback warning (the synthesized tiles or the named degradation, never a silent default checkerboard). |
+
+**Negatives (each must pass — no silent fallbacks, no pattern/texture confusion):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `paint.setTexture {texture: "<unknown>"}` errors and changes nothing. |
+| N2 | A texture definition is NOT listed by `pattern.list`, and a pattern name is refused by `paint.setTexture`. |
+| N3 | Texture paint survives no channel that cannot represent it without the P9 warning (no silent flattening into a plain pattern/solid on CDR/CMX paths). |
+| N4 | Invalid definition parameters (unknown kind, out-of-range parameter values) are refused at `texture.new`/`texture.setProps` without document change. |
+
+Out of scope for this slice (follow-ups, not blockers): the Corel foreground/background/kind mapping
+depth (Task T2), merge-mode interactions (Task T3), a texture picker UI.
