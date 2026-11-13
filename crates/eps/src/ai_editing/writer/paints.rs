@@ -151,6 +151,7 @@ impl Writer<'_> {
             Paint::Solid { .. } => true,
             Paint::Gradient(g) => g.geom.is_some() && writable_gradient(&g.gradient),
             Paint::Pattern { pattern, .. } => self.pattern_writable(pattern),
+            Paint::Texture { .. } => false,
             Paint::None => false,
         }
     }

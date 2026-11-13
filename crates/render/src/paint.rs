@@ -17,6 +17,9 @@ pub(crate) fn set_paint(ctx: &mut RenderContext, p: &Paint, bounds: Rect, f: &Fr
             ctx.set_paint(f.ink.color(c, 1.0));
             true
         }
+        // CoralCraft (P3 Task T1): a texture paints flat in its background colour (tile synthesis
+        // is the open T1 remainder).
+        Paint::Texture { .. } => false,
         Paint::Gradient(g) if g.gradient.kind == GradientKind::Freeform => crate::freeform::set_freeform_paint(ctx, g, bounds, f.ink),
         Paint::Gradient(g) => {
             let geom = g.resolve(bounds);

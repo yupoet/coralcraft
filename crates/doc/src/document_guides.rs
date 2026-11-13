@@ -320,6 +320,11 @@ impl Document {
         self.patterns.iter().find(|p| p.name == name)
     }
 
+    /// CoralCraft (P3 Task T1): the texture definition `name`.
+    pub fn texture(&self, name: &str) -> Option<&crate::TextureDef> {
+        self.textures.iter().find(|def| def.name == name)
+    }
+
     pub fn pattern_mut(&mut self, name: &str) -> Option<&mut PatternDef> {
         self.patterns.iter_mut().find(|p| p.name == name)
     }

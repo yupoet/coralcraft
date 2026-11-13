@@ -80,6 +80,8 @@ pub fn open(app: &mut VectorcraftApp, name: &str) -> Result<Value, String> {
             app.ui.dialog = Some(Dialog::new(KIND, fields));
             Ok(Value::Null)
         }
+        // CoralCraft (P3 Task T1): a texture swatch has no options dialog yet.
+        Paint::Texture { .. } => Err(format!("`{name}` has no options")),
         Paint::Pattern { pattern, .. } => {
             app.run("object.pattern.edit", json!({"name": pattern}))?;
             app.ui.open_panel = Some("patternOptions".into());

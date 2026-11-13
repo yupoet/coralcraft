@@ -698,6 +698,9 @@ const MISSING_IMAGE_WARNING: &str =
 const DECODE_IMAGE_WARNING: &str =
     "undecodable or empty image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
 const MESH_OPACITY_WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+// CoralCraft (P3 Task T1)
+const TEXTURE_FILL_WARNING: &str =
+    "texture fill is synthesized to tiles in CDR/CMX; the texture definition and its parameters do not survive the round trip";
 
 #[derive(Default)]
 struct ExportWarningLedger {
@@ -706,6 +709,8 @@ struct ExportWarningLedger {
     gradient_alpha: bool,
     dropped_opacity_mask: bool,
     mesh_point_opacity: bool,
+    /// CoralCraft (P3 Task T1): a texture fill fell back to a solid in CDR/CMX.
+    texture_fill: bool,
     mesh_point_opacity_sources: BTreeSet<u64>,
     unsupported_bitmap_effects: BTreeSet<String>,
     missing_image_pixels: bool,
@@ -730,6 +735,9 @@ impl ExportWarningLedger {
         }
         if self.mesh_point_opacity {
             warnings.push(MESH_OPACITY_WARNING.to_owned());
+        }
+        if self.texture_fill {
+            warnings.push(TEXTURE_FILL_WARNING.to_owned());
         }
         if !self.unsupported_bitmap_effects.is_empty() {
             let ids = self.unsupported_bitmap_effects.into_iter().collect::<Vec<_>>().join(", ");
@@ -1486,6 +1494,11 @@ fn note_gradient_alpha(paint: &Paint, warnings: &mut ExportWarningLedger) {
 
 fn map_vc_paint_to_cdr_color(p: &Paint, warnings: &mut ExportWarningLedger) -> Option<CdrColor> {
     note_gradient_alpha(p, warnings);
+    if matches!(p, Paint::Texture { .. }) {
+        // CoralCraft (P3 Task T1): the texture definition has no CDR/CMX channel — the fallback
+        // warns once and the paint keeps its background colour below.
+        warnings.texture_fill = true;
+    }
     match p {
         Paint::None => None,
         Paint::Solid { swatch: Some(sw), .. } if sw == REGISTRATION => Some(CdrColor::Registration),
@@ -1499,6 +1512,10 @@ fn map_vc_paint_to_cdr_color(p: &Paint, warnings: &mut ExportWarningLedger) -> O
         Paint::Gradient(gp) => gp.gradient.stops.first().map(|s| map_vc_color_to_cdr(&s.color)),
         Paint::Pattern { .. } => {
             warnings.generic_pattern = true;
+            Some(CdrColor::BLACK)
+        }
+        Paint::Texture { .. } => {
+            warnings.texture_fill = true;
             Some(CdrColor::BLACK)
         }
     }
@@ -2963,6 +2980,10 @@ fn convert_vc_appearance_to_cdr<'a>(
 
 fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {
     note_gradient_alpha(paint, warnings);
+    if matches!(paint, Paint::Texture { .. }) {
+        // CoralCraft (P3 Task T1): the texture definition has no CDR/CMX channel.
+        warnings.texture_fill = true;
+    }
     match paint {
         Paint::None => None,
         Paint::Solid { .. } => map_vc_paint_to_cdr_color(paint, warnings).map(FillStyle::uniform),
@@ -2989,6 +3010,16 @@ fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -
         }
         Paint::Pattern { .. } => {
             warnings.generic_pattern = true;
+            Some(FillStyle::TwoColorPattern {
+                kind: PatternKind::Checkerboard,
+                fg_color: CdrColor::BLACK,
+                bg_color: CdrColor::WHITE,
+                tile_size_pt: F64::new(12.0).unwrap_or(F64::ONE),
+            })
+        }
+        // CoralCraft (P3 Task T1): no CDR/CMX texture channel — a named, warned degradation.
+        Paint::Texture { .. } => {
+            warnings.texture_fill = true;
             Some(FillStyle::TwoColorPattern {
                 kind: PatternKind::Checkerboard,
                 fg_color: CdrColor::BLACK,

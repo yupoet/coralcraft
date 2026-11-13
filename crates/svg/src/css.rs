@@ -517,7 +517,7 @@ impl Rules<'_> {
                     Some(css) => art.props.push(("background-image", css)),
                     None => art.unsupported("a freeform gradient"),
                 },
-                Paint::Pattern { .. } => art.unsupported("a pattern"),
+                Paint::Pattern { .. } | Paint::Texture { .. } => art.unsupported("a pattern or texture"),
                 Paint::None => {}
             }
         }
@@ -547,7 +547,7 @@ impl Rules<'_> {
                 }
                 None => art.unsupported("a freeform gradient"),
             },
-            Paint::Pattern { .. } => art.unsupported("a pattern"),
+            Paint::Pattern { .. } | Paint::Texture { .. } => art.unsupported("a pattern or texture"),
             Paint::None => {}
         }
     }

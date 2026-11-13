@@ -198,6 +198,7 @@ fn ungroup_and_sort_by_kind_are_one_undo_step_each() {
         Paint::Solid { .. } => 2,
         Paint::Gradient(_) => 3,
         Paint::Pattern { .. } => 4,
+        Paint::Texture { .. } => 5,
     };
     let ranks: Vec<u8> = doc(&s).swatches.iter().map(rank).collect();
     assert!(ranks.is_sorted(), "{ranks:?}");

@@ -211,6 +211,9 @@ impl Writer<'_> {
             },
             Paint::Solid { color, .. } => color.to_hex(),
             Paint::Gradient(g) => format!("url(#{})", self.gradient_def(g, bounds.unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0)))),
+            // CoralCraft (P3 Task T1): the texture's background colour; the definition stays live
+            // in the native file (independent tile synthesis is the open T1 remainder).
+            Paint::Texture { texture } => self.doc.texture(texture).map_or_else(|| "none".into(), |def| def.background.to_hex()),
         }
     }
 

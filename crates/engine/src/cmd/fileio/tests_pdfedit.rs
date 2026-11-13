@@ -684,6 +684,7 @@ fn paint_outline(doc: &vectorcraft_doc::Document) -> Vec<String> {
             format!("{:?} link {} {stops:?} {at:?}", g.gradient.kind, link(&g.swatch))
         }
         Paint::Pattern { pattern, xf } => format!("pattern {pattern} {:?}", xf.as_coeffs().map(|v| (v * 1000.0).round() / 1000.0)),
+        Paint::Texture { texture } => format!("texture {texture}"),
         Paint::Solid { color, .. } => format!("{:?}", color.to_rgb().map(|v| (v * 100.0).round())),
         Paint::None => "none".into(),
     };

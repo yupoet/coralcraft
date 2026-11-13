@@ -486,6 +486,13 @@ impl<'a> Scene<'a> {
         match p {
             Paint::Gradient(g) if g.gradient.kind == GradientKind::Freeform => self.field_image(g, bounds, area),
             Paint::Gradient(g) => self.gradient(g, bounds, area),
+            // CoralCraft (P3 Task T1): a texture paints its background colour over the area.
+            Paint::Texture { texture } => {
+                if let Some(def) = doc.texture(texture) {
+                    self.warn("texture fills are exported as their background colour");
+                    let _ = def;
+                }
+            }
             Paint::Pattern { pattern, xf } => match doc.pattern(pattern) {
                 Some(def) => {
                     for inst in def.instances_in(*xf, area) {

@@ -552,6 +552,8 @@ pub(crate) fn paint_params(p: &Paint) -> Value {
         Paint::Solid { color, .. } => json!({"color": color_json(color)}),
         Paint::Gradient(g) => json!({"gradient": vectorcraft_tools::params::gradient_params(g)}),
         Paint::Pattern { pattern, .. } => json!({"pattern": pattern}),
+        // CoralCraft (P3 Task T1)
+        Paint::Texture { texture } => json!({"texture": texture}),
     }
 }
 

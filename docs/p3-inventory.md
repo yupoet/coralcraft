@@ -316,3 +316,29 @@ shared-engine commands. Semantics frozen for this slice:
 
 Out of scope for this slice (follow-ups, not blockers): the Corel foreground/background/kind mapping
 depth (Task T2), merge-mode interactions (Task T3), a texture picker UI.
+
+## 20. Task T1 texture-fill model core (delivered) and its open remainder
+
+RED first: all five initial tests failed on `UnknownCommand("texture.new")` (and, after the
+commands landed, on the summary-format and SVG-tile assertions). The delivered model core:
+
+- `vectorcraft-doc`: `TextureDef { name, kind: TextureKind (stipple), density 0..1, foreground,
+  background }` with deterministic bounded cell synthesis (`tiles`/`tile_nodes`), held in
+  `Document.textures`; `Document::texture(name)`.
+- `vectorcraft-color`: a distinct `Paint::Texture { texture }` kind (label `texture <name>`) —
+  never an ordinary pattern in disguise; every exhaustive `Paint` match across the workspace now
+  names it.
+- Commands (`crates/engine/src/cmd/texturecmds.rs`): `texture.new`, `texture.setProps` (one undo
+  step, duplicate names refused), `texture.list`, `paint.setTexture` (unknown names and pattern
+  names refused).
+- Export: CDR/CMX emits exactly one explicit fallback warning (`texture fill is synthesized to
+  tiles in CDR/CMX; …`); SVG/PDF/EPS/metafile/CAD degrade to the definition's background colour
+  with named notes.
+- Native `.vectorcraft` reopen keeps the definition and it still edits after reopen.
+
+Matrix status: P1–P3, P5, P6, P9, N1, N2, N4 green (coreldraw_texture 4 passed; negatives refuse
+unknown/pattern names and invalid kinds/densities). **Open remainder, kept as two `#[ignore]`-named
+anchors runnable with `--ignored` (P4/P7/P8): independent SVG/PDF tile synthesis** — until the
+tiles actually render, edit propagation is asserted through `texture.list`, not the export, and
+T1 stays open. GREEN battery: doc 406, color 149, corel-import 8+30+35+2, engine CorelDRAW
+integration 84, MCP docs_sync 2; fmt and focused Clippy `-D warnings` clean.

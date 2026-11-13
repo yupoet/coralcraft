@@ -334,6 +334,7 @@ pub fn paint_heap_bytes(p: &Paint) -> usize {
                 + g.freeform.as_ref().map_or(0, |f| vec_bytes(&f.points) + vec_bytes(&f.lines) + f.lines.iter().map(vec_bytes).sum::<usize>())
         }
         Paint::Pattern { pattern, .. } => pattern.capacity(),
+        Paint::Texture { texture } => texture.capacity(),
         Paint::None => 0,
     }
 }

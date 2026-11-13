@@ -765,6 +765,15 @@ impl<'a> Writer<'a> {
                 let flat = self.placed(&f.paint, path.to_bezpath().bounding_box());
                 self.path_object(path, rule, Some(&FillLayer { paint: flat, ..f.clone() }), None, xy);
             }
+            // CoralCraft (P3 Task T1): a texture warns and paints its background colour.
+            Paint::Texture { texture } => {
+                self.warn(PATTERNS);
+                let flat = FillLayer {
+                    paint: self.doc.texture(texture).map_or_else(|| Paint::solid(Color::gray(0.5)), |def| Paint::solid(def.background)),
+                    ..f.clone()
+                };
+                self.path_object(path, rule, Some(&flat), None, xy);
+            }
             Paint::Pattern { pattern, xf } => {
                 self.warn(PATTERNS);
                 let doc = self.doc;
@@ -947,6 +956,7 @@ impl<'a> Writer<'a> {
         let (color, swatch, tint) = match p {
             Paint::Solid { color, swatch, tint } => (color, swatch, tint),
             Paint::Pattern { pattern, xf } => return self.pattern_paint(pattern, *xf, stroke),
+            Paint::Texture { .. } => return,
             Paint::Gradient(_) => return,
             Paint::None => return self.plain_color(Color::gray(1.0), stroke),
         };

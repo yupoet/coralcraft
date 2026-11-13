@@ -67,7 +67,7 @@ impl PaletteFormat {
                 PaletteFormat::Css => g.gradient.kind != GradientKind::Freeform,
                 PaletteFormat::Gpl | PaletteFormat::Ase => false,
             },
-            Paint::None | Paint::Pattern { .. } => false,
+            Paint::None | Paint::Pattern { .. } | Paint::Texture { .. } => false,
         }
     }
 }

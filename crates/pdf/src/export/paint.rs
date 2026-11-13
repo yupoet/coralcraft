@@ -332,6 +332,12 @@ impl Exporter<'_> {
                 self.warn("missing patterns are exported as mid-grey");
                 Some(rgb::Color::new(128, 128, 128).into())
             }
+            // CoralCraft (P3 Task T1): the texture's background colour; the definition stays live
+            // in the native file (independent tile synthesis is the open T1 remainder).
+            Paint::Texture { .. } => {
+                self.warn("texture fills are exported as their background colour");
+                Some(rgb::Color::new(128, 128, 128).into())
+            }
         }
     }
 

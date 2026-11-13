@@ -217,6 +217,7 @@ fn decode_paint(v: &Value, at: &str) -> Result<Paint> {
     let mut p: Paint = serde_json::from_value(v.clone()).map_err(|e| out_err(at, e))?;
     match &mut p {
         Paint::None => {}
+        Paint::Texture { .. } => {}
         Paint::Solid { color, tint, .. } => {
             *color = clamp_color(*color);
             *tint = unit(*tint);
@@ -467,7 +468,7 @@ fn unlinked(mut p: Paint) -> Paint {
                 s.tint = 1.0;
             }
         }
-        Paint::None | Paint::Pattern { .. } => {}
+        Paint::None | Paint::Pattern { .. } | Paint::Texture { .. } => {}
     }
     p
 }
