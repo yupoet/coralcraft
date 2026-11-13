@@ -1078,6 +1078,51 @@ pub fn export_document(doc: &VcDocument) -> Result<CdrDocument, CorelImportError
     export_document_with_warnings(doc).map(|(converted, _)| converted)
 }
 
+/// CoralCraft (P3 mesh review): the mesh point opacity this live node's own CDR/CMX fallback
+/// drops. Attribution is expansion provenance, never original node ids alone:
+/// - the node itself, when it is a translucent mesh;
+/// - a Repeat's source art, which lives in its spec where no child conversion ever reaches it;
+/// - the generated copies one live evaluation level makes (blends' intermediate meshes, repeat
+///   copies), recognized by carrying no id of the original tree.
+///
+/// Original child subtrees are deliberately excluded: each child converts on its own in the
+/// fallback and owns its warning, so a restored child never makes its parent proxy-warn.
+fn live_drops_mesh_point_opacity(node: &vectorcraft_doc::Node) -> bool {
+    let translucent = |kind: &vectorcraft_doc::NodeKind| matches!(kind, vectorcraft_doc::NodeKind::Mesh(mesh) if mesh.points.iter().any(|point| point.opacity < 1.0));
+    if translucent(&node.kind) {
+        return true;
+    }
+    let holds_translucent = |n: &vectorcraft_doc::Node| {
+        let mut holds = false;
+        n.walk(&mut |descendant| {
+            if translucent(&descendant.kind) {
+                holds = true;
+            }
+        });
+        holds
+    };
+    if let vectorcraft_doc::NodeKind::Repeat(repeat) = &node.kind {
+        for source in &repeat.source {
+            if holds_translucent(source) {
+                return true;
+            }
+        }
+    }
+    // One live evaluation level: only the generated copies count — art carrying no id of the
+    // original tree (a blend's intermediate meshes have none; its sources keep theirs and convert
+    // on their own).
+    let mut original_ids = std::collections::BTreeSet::new();
+    node.walk(&mut |descendant| {
+        original_ids.insert(descendant.id.0);
+    });
+    for generated in &vectorcraft_doc::live::expand_live(node) {
+        if (generated.id.0 == 0 || !original_ids.contains(&generated.id.0)) && holds_translucent(generated) {
+            return true;
+        }
+    }
+    false
+}
+
 /// [`export_document`], with warnings for the fallbacks actually used during conversion.
 pub fn export_document_with_warnings(doc: &VcDocument) -> Result<(CdrDocument, Vec<String>), CorelImportError> {
     let mut warnings = ExportWarningLedger::default();
@@ -2603,14 +2648,9 @@ fn convert_vc_node_to_cdr_with_expected(
         warnings.mesh_point_opacity_sources = checkpoint.1;
     }
     let expanded;
+    let mut drops_mesh_point_opacity = false;
     let node = if vectorcraft_doc::live::is_live(node) {
-        node.walk(&mut |descendant| {
-            if let NodeKind::Mesh(mesh) = &descendant.kind
-                && mesh.points.iter().any(|point| point.opacity < 1.0)
-            {
-                warnings.mesh_point_opacity_sources.insert(descendant.id.0);
-            }
-        });
+        drops_mesh_point_opacity = live_drops_mesh_point_opacity(node);
         expanded = vectorcraft_doc::live::expand_deep(node, None);
         if vectorcraft_doc::live::live_expansion_failed() {
             record_conversion_error(warnings, "live expansion produced an empty object; refusing to export empty CDR/CMX geometry".to_owned());
@@ -2642,7 +2682,8 @@ fn convert_vc_node_to_cdr_with_expected(
         warnings.mesh_point_opacity_sources.extend(mask_sources);
     }
     warnings.dropped_opacity_mask |= has_enabled_opacity_mask;
-    let drops_mesh_point_opacity = warnings.mesh_point_opacity_sources.contains(&node.id.0);
+    // The live evaluation this node owns (its sources and generated copies included) dropped mesh
+    // point opacity; exactly-restored nodes returned before this point, so they stay silent.
     warnings.mesh_point_opacity |= drops_mesh_point_opacity;
 
     let oid = ObjectId(node.id.0.max(1));

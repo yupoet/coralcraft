@@ -253,3 +253,33 @@ Spec-review RED follow-up: an ordinary parent with a changed name failed restora
 Code-quality RED follow-ups: a changed live parent failed restoration while its nested translucent mesh restored original opacity 0.37 and non-empty output, yet the ancestor's aggregate boolean emitted the mesh warning. An exactly restored owner with enabled translucent-mesh mask art also emitted the warning from the discarded mask pre-scan. Both negative controls failed with the exact warning array; the fallback-owner positive control already emitted one mesh warning and one dropped-mask warning. Source meshes now contribute their unique IDs to a private per-export set, and the category is committed after a node's own exact-restoration early return only when that expanded node's ID is in the set. Live ancestors no longer proxy nested mesh results. Mask pre-scans checkpoint and restore only mesh-opacity warning/source state; conversion errors and all other warning categories remain untouched, and the mask contribution merges only after owner restoration fails. The `live_expansion_failed` API documentation now names both `expand_deep` and `expand_deep_hooks` and the existing reentrant live-evaluation guard without adding another nesting mechanism.
 
 GREEN: `vectorcraft-doc` **406/406**, public export/warnings **26/26**, metadata restoration **35/35**, `corel-import` **8 unit + 26 public + 35 restoration + 2 oracle self-skip**, persistence **16/16**, complete CorelDRAW integration **77/77**, placed documents **41/41**, appearance **84/84**, warning-filtered engine tests **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, formatting, focused doc/corel-import/engine Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Current stats: **2,048 files, 885,298 lines, 14,772 test attributes, 66 proptest blocks**. Full CI and later serial gates remain for the controller. Self-skipping oracle/sample checks are not independent certification; CDR/CMX reopen proves only ordinary non-empty vector paths without live mesh metadata, not live-mesh restoration. The combined matrix remains open, and this slice does not close Task 10/P3.10, P3, or S2.
+
+## 18. Mesh-opacity attribution closed on expansion provenance (P3 mesh review)
+
+The review of the mesh slice found the original-id attribution blind to generated art: a Repeat
+holds its source meshes in its spec (no child conversion ever reaches them), and a Repeat's copies
+and a Blend's intermediates carry `NodeId(0)` or cloned ids, so `mesh_point_opacity_sources
+.contains(top id)` could only fire when the top node itself was the mesh. A translucent-mesh Repeat
+therefore exported silently.
+
+Attribution is now expansion provenance (`live_drops_mesh_point_opacity` in `corel-import`), never
+original node ids alone, and generated node ids stay untouched:
+
+- the node itself, when it is a translucent mesh;
+- a Repeat's spec-held source art, scanned recursively (nested Repeats included);
+- the generated copies of one live evaluation level (`live::expand_live`), recognized by carrying
+  no id of the original tree — a Blend's intermediate meshes qualify, while its sources keep their
+  ids and convert on their own;
+- original child subtrees are deliberately excluded: each child owns its own warning in its own
+  fallback, so a restored child never proxy-warns its parent.
+
+New regressions, each observed failing before the fix (the plain Repeat case) and green after:
+translucent-mesh Repeat warns exactly once over its expanded opaque copies; the review's exact
+Blend scenario — the two source objects restore exactly from the stored original while the
+generated intermediates fall back — warns exactly once; a plain group over a translucent mesh
+still yields exactly the single child warning; and every existing control (exact/nested/mask
+restoration silence, empty-expansion fail-closed, dedup, all-opaque silence) stays green. GREEN
+battery: corel-import 8 unit + 30 public export/warnings + 35 restoration + 2 oracle self-skip,
+`vectorcraft-doc` 406/406, engine integration 266/266, MCP docs_sync 2/2, fmt, focused Clippy
+`-D warnings`. Full CI/serial gates run after this commit; S2 stays open, and this closes the
+mesh-opacity attribution question without closing Task 10/P3.10 or P3.

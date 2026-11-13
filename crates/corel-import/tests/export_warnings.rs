@@ -863,3 +863,119 @@ fn fallback_owner_with_translucent_mesh_mask_warns_once() {
     assert_eq!(warnings.iter().filter(|warning| warning.as_str() == MESH_OPACITY_WARNING).count(), 1, "{warnings:?}");
     assert_eq!(warning_count(&warnings, DROPPED_MASK_CATEGORY), 1, "{warnings:?}");
 }
+
+// CoralCraft (P3 mesh review): generated meshes — the copies a Repeat makes and the intermediates
+// a multi-source Blend lerps — carry their point opacity into the CDR/CMX fallback too, and the
+// node whose expansion generated them owns the warning. Attribution comes from the live tree and
+// the expansion outcome together, never from generated node ids alone.
+fn translucent_mesh_node(id: u64) -> Node {
+    let mut mesh =
+        vectorcraft_doc::GradientMesh::from_surface(1, 1, &|u, v| vectorcraft_geom::Point::new(10.0 + 100.0 * u, 20.0 + 60.0 * v), &|_, _| {
+            vectorcraft_color::Color::rgb8(40, 170, 90)
+        });
+    mesh.points[2].opacity = 0.25;
+    Node::new(NodeId(id), NodeKind::Mesh(mesh))
+}
+
+fn mesh_warning_count(warnings: &[String]) -> usize {
+    warnings.iter().filter(|warning| warning.as_str() == MESH_OPACITY_WARNING).count()
+}
+
+/// A Repeat of a translucent mesh: every generated copy tessellates opaque, so the Repeat's own
+/// fallback warns exactly once (the generated copies carry `NodeId(0)`, so original-id attribution
+/// alone can never see them).
+#[test]
+fn translucent_mesh_repeat_warns_exactly_once() {
+    let mut doc = Document::new(400.0, 200.0);
+    let id = doc.alloc_id();
+    let mesh_id = doc.alloc_id().0;
+    let repeat = vectorcraft_doc::RepeatSpec::mirror(vec![std::sync::Arc::new(translucent_mesh_node(mesh_id))], 90.0, 20.0);
+    doc.insert(doc.default_layer(), 0, Node::new(id, NodeKind::Repeat(repeat))).unwrap();
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(mesh_warning_count(&warnings), 1, "{warnings:?}");
+    // The exported art is the expanded, opaque tessellation of the mirrored copies.
+    let root = only_object(&converted);
+    assert_eq!(root.opacity.get(), 1.0);
+    let ObjectKind::Group { children } = &root.kind else { panic!("expanded repeat group") };
+    assert!(children.len() > 1, "the mirrored copies exported: {}", children.len());
+}
+
+/// A multi-source Blend of two meshes with lerped translucent intermediates: the blend's fallback
+/// warns exactly once even though neither source id is the blend's own.
+#[test]
+fn multi_source_blend_with_translucent_intermediates_warns_once() {
+    let mut doc = Document::new(400.0, 200.0);
+    let id = doc.alloc_id();
+    let a = translucent_mesh_node(doc.alloc_id().0);
+    let mut b_node = translucent_mesh_node(doc.alloc_id().0);
+    if let NodeKind::Mesh(mesh) = &mut b_node.kind {
+        for point in mesh.points.iter_mut() {
+            point.p.x += 160.0;
+        }
+    }
+    doc.insert(
+        doc.default_layer(),
+        0,
+        Node::new(id, NodeKind::Blend { children: vec![std::sync::Arc::new(a), std::sync::Arc::new(b_node)], spec: Default::default() }),
+    )
+    .unwrap();
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(mesh_warning_count(&warnings), 1, "{warnings:?}");
+    let root = only_object(&converted);
+    let ObjectKind::Group { children } = &root.kind else { panic!("expanded blend group") };
+    assert!(!children.is_empty());
+}
+
+/// A plain group around a translucent mesh adds no warning of its own: the child's own conversion
+/// owns the single warning (the control that keeps per-node attribution from regressing into
+/// parent proxy warnings).
+#[test]
+fn plain_group_over_translucent_mesh_leaves_the_single_child_warning() {
+    let mut doc = Document::new(200.0, 200.0);
+    let group = doc.alloc_id();
+    let mesh_id = doc.alloc_id();
+    doc.insert(
+        doc.default_layer(),
+        0,
+        Node::new(group, NodeKind::Group { children: vec![std::sync::Arc::new(translucent_mesh_node(mesh_id.0))], clip: false }),
+    )
+    .unwrap();
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(mesh_warning_count(&warnings), 1, "{warnings:?}");
+    assert!(matches!(&only_object(&converted).kind, ObjectKind::Group { .. }), "the group exported");
+}
+
+/// CoralCraft (P3 mesh review): the review's exact Blend scenario — the two source objects
+/// restore exactly (their own conversions stay silent), while the generated intermediate meshes
+/// have no original to restore, fall back, and the blend's own evaluation warns exactly once.
+#[test]
+fn blend_with_restored_sources_still_warns_for_generated_intermediates() {
+    let mut doc = Document::new(400.0, 200.0);
+    let blend_id = doc.alloc_id();
+    let a_id = doc.alloc_id().0;
+    let b_id = doc.alloc_id().0;
+    let a = translucent_mesh_node(a_id);
+    let mut b_node = translucent_mesh_node(b_id);
+    if let NodeKind::Mesh(mesh) = &mut b_node.kind {
+        for point in mesh.points.iter_mut() {
+            point.p.x += 160.0;
+        }
+    }
+    let blend =
+        Node::new(blend_id, NodeKind::Blend { children: vec![std::sync::Arc::new(a), std::sync::Arc::new(b_node)], spec: Default::default() });
+    doc.insert(doc.default_layer(), 0, blend).unwrap();
+    // Store the current expansion as the expected original, exactly as an imported document
+    // would: the sources' ids match, so they restore; the generated intermediates have none.
+    let projection = vectorcraft_doc::live::expand_deep(doc.node(blend_id).unwrap(), None);
+    let key = format!("corel.import.original_vc.v1.{}", blend_id.0);
+    let mut value = doc.unknown.get(corel_import::CORALCRAFT_UNKNOWN_KEY).cloned().unwrap_or_else(|| serde_json::json!({}));
+    value["extra"] = serde_json::json!({});
+    value["extra"].as_object_mut().unwrap().insert(key, serde_json::to_value(projection).unwrap());
+    doc.unknown.insert(corel_import::CORALCRAFT_UNKNOWN_KEY.to_owned(), value);
+
+    let (converted, warnings) = corel_import::export_document_with_warnings(&doc).unwrap();
+    assert_eq!(mesh_warning_count(&warnings), 1, "the generated intermediates fell back and dropped opacity: {warnings:?}");
+    let root = only_object(&converted);
+    let ObjectKind::Group { children } = &root.kind else { panic!("expanded blend group") };
+    assert!(!children.is_empty(), "the blend exported its art");
+}
