@@ -1,13 +1,13 @@
 //! Creating art: shapes, paths, text.
 
 use serde_json::{Value, json};
-use vectorcraft_doc::{Appearance, CharStyle, LiveShape, Node, NodeKind, TextObject};
+use vectorcraft_doc::{Appearance, CharStyle, Document, LiveShape, Node, NodeKind, TextObject};
 use vectorcraft_geom::{Affine, Anchor, AnchorKind, FillRule, PathData, Point, Rect, SubPath, shapes};
 
 use super::newart::NewArt;
 use super::{
-    CommandSpec, NodeId, Result, Session, bad, bool_or, check_numbers, check_switches, cmd, color_value, f64_or, f64_req, finite_numbers, has_doc,
-    number_or, str_param, switch_or,
+    CommandSpec, EngineError, NodeId, Result, Session, bad, bool_or, check_numbers, check_switches, checked_id, cmd, color_value, f64_or, f64_req,
+    finite_numbers, has_doc, number_or, str_param, switch_or,
 };
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -106,6 +106,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "{x, y, width, height, rows, columns, text?: [[cell…]…]} create one group of editable cell paths and live text, at most 1000 cells → {id, rows, columns}",
             has_doc,
             table
+        ),
+        // CoralCraft (P2.TABLE-UI): the structural table edits.
+        cmd!(
+            "layout.tableEdit",
+            "Edit Table",
+            ["Layout", "Table"],
+            None,
+            "{id, action: insertRow|deleteRow|insertColumn|deleteColumn, at?: row or column index (insert: within the table or its end; delete: an existing one; default: the last)} rebuild the layout.table group with the row or column inserted (new cells take the first cell's look) or deleted — every cell keeps its text, character and paragraph style and border look in its shifted place, and the cell node ids change — as one undo step → {id, rows, columns}",
+            has_doc,
+            table_edit
         ),
     ]
 }
@@ -766,33 +776,219 @@ fn table(s: &mut Session, p: &Value) -> Result<Value> {
     let style = new_type_style(s, p);
     let parent = s.doc()?.target_parent()?;
     let id = s.edit("Table", |d, sel| {
-        let (cell_width, cell_height) = (width / columns as f64, height / rows as f64);
-        let mut children = Vec::with_capacity(cell_count * 2);
-        for (row, row_text) in text.iter().enumerate() {
-            for (column, value) in row_text.iter().enumerate() {
-                let left = x + column as f64 * cell_width;
-                let top = y + row as f64 * cell_height;
-                let name = Some(format!("Cell {}:{}", row + 1, column + 1));
-                let mut border = Node::path(
-                    d.alloc_id(),
-                    shapes::rectangle(Rect::new(left, top, left + cell_width, top + cell_height)),
-                    Appearance::basic(vectorcraft_color::Paint::None, vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), 1.0),
-                );
-                border.name = name.clone();
-                children.push(std::sync::Arc::new(border));
-                let baseline = top + (cell_height + style.size) * 0.5;
-                let mut text = TextObject::point(Point::new(left + 4.0, baseline), value, style.clone());
-                text.para = new_type_para();
-                super::typecmd::refresh_bounds(&mut text);
-                let mut cell = Node::new(d.alloc_id(), NodeKind::Text(Box::new(text)));
-                cell.name = name;
-                children.push(std::sync::Arc::new(cell));
-            }
-        }
+        let cells = text.into_iter().map(|row| row.into_iter().map(|value| default_cell(value, style.clone())).collect()).collect::<Vec<_>>();
+        let children = build_table_children(d, x, y, width, height, &cells);
         let id = d.alloc_id();
         let mut group = Node::group(id, children);
         group.name = Some("Table".into());
         d.insert(parent, usize::MAX, group)?;
+        sel.set([id]);
+        Ok(id)
+    })?;
+    Ok(json!({"id": id.0, "rows": rows, "columns": columns}))
+}
+
+/// CoralCraft (P2.TABLE-UI): one table cell's look, kept through `layout.tableEdit`'s rebuild —
+/// the text with its character and paragraph style, and the border's appearance. New cells take
+/// the first cell's look.
+#[derive(Clone)]
+struct TableCell {
+    text: String,
+    style: CharStyle,
+    para: vectorcraft_doc::ParaStyle,
+    border: Appearance,
+}
+
+/// A fresh cell with the given text and the table's default look (black 1 pt borders).
+fn default_cell(text: String, style: CharStyle) -> TableCell {
+    TableCell {
+        text,
+        para: new_type_para(),
+        border: Appearance::basic(vectorcraft_color::Paint::None, vectorcraft_color::Paint::solid(vectorcraft_color::Color::BLACK), 1.0),
+        style,
+    }
+}
+
+/// CoralCraft (P2.TABLE-UI): one table's children — per cell a bordered path and a live text node
+/// (the shared shape of `layout.table` and `layout.tableEdit`'s rebuild, each cell keeping its own
+/// look).
+fn build_table_children(d: &mut Document, x: f64, y: f64, width: f64, height: f64, cells: &[Vec<TableCell>]) -> Vec<std::sync::Arc<Node>> {
+    let (rows, columns) = (cells.len(), cells.first().map_or(1, Vec::len));
+    let (cell_width, cell_height) = (width / columns as f64, height / rows.max(1) as f64);
+    let mut children = Vec::with_capacity(rows.saturating_mul(columns).saturating_mul(2));
+    for (row, row_cells) in cells.iter().enumerate() {
+        for (column, cell) in row_cells.iter().enumerate() {
+            let left = x + column as f64 * cell_width;
+            let top = y + row as f64 * cell_height;
+            let name = Some(format!("Cell {}:{}", row + 1, column + 1));
+            let mut border =
+                Node::path(d.alloc_id(), shapes::rectangle(Rect::new(left, top, left + cell_width, top + cell_height)), cell.border.clone());
+            border.name = name.clone();
+            children.push(std::sync::Arc::new(border));
+            let baseline = top + (cell_height + cell.style.size) * 0.5;
+            let mut cell_text = TextObject::point(Point::new(left + 4.0, baseline), &cell.text, cell.style.clone());
+            cell_text.para = cell.para.clone();
+            super::typecmd::refresh_bounds(&mut cell_text);
+            let mut text_node = Node::new(d.alloc_id(), NodeKind::Text(Box::new(cell_text)));
+            text_node.name = name;
+            children.push(std::sync::Arc::new(text_node));
+        }
+    }
+    children
+}
+
+/// CoralCraft (P2.TABLE-UI, the P2 follow-up in docs/gaps.md): insert or delete a row or column of
+/// a `layout.table` group, keeping every cell's text in its shifted place, as one undo step. The
+/// rebuild keeps the table's bounds; new cells start empty. A table always keeps at least one row
+/// and one column, and invalid input changes nothing.
+fn table_edit(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "layout.tableEdit";
+    const MAX_CELLS: usize = 1000;
+    let id = checked_id(s, p.get("id").ok_or_else(|| bad(C, "missing id"))?, C)?;
+    let action = str_param(p, "action").ok_or_else(|| bad(C, "missing action"))?;
+    let (insert, row) = match action {
+        "insertRow" => (true, true),
+        "deleteRow" => (false, true),
+        "insertColumn" => (true, false),
+        "deleteColumn" => (false, false),
+        other => return Err(bad(C, format!("unknown action {other:?} (insertRow, deleteRow, insertColumn, deleteColumn)"))),
+    };
+    // Read the table back: the group's children pair border paths with live texts, named by cell
+    // from 1 (`Cell R:C`); a name outside 1..=1000 makes the object not read back as a table.
+    let (x, y, width, height, mut rows, mut columns, mut cells) = {
+        let st = s.doc()?;
+        let node = st.doc.node(id).ok_or(EngineError::NoNode(id))?;
+        let NodeKind::Group { children, .. } = &node.kind else {
+            return Err(bad(C, "the object is not a table (layout.table makes a group)"));
+        };
+        let symbols = st.doc.symbol_boxes();
+        let mut cells: Vec<Vec<Option<TableCell>>> = Vec::new();
+        let mut first_rect = None;
+        // Every child must map to a slot: a renamed or out-of-range cell name leaves children
+        // over, and the object does not read back as a table.
+        let mut matched = 0usize;
+        for child in children.iter() {
+            // Both children of a cell carry its `Cell R:C` name: the border path sets the slot's
+            // look, the live text its content. A row or column outside 1..=1000 leaves the slot
+            // empty, and the completeness check below refuses the object.
+            let Some((row, column)) = child
+                .name
+                .as_deref()
+                .unwrap_or_default()
+                .strip_prefix("Cell ")
+                .and_then(|rest| rest.split_once(':'))
+                .and_then(|(r, c)| Some((r.parse::<usize>().ok()?, c.parse::<usize>().ok()?)))
+            else {
+                continue;
+            };
+            if row == 0 || column == 0 || row > MAX_CELLS || column > MAX_CELLS {
+                continue;
+            }
+            matched += 1;
+            while cells.len() < row {
+                cells.push(Vec::new());
+            }
+            let index = column - 1;
+            while cells[row - 1].len() < column {
+                cells[row - 1].push(None);
+            }
+            let slot = cells[row - 1][index].get_or_insert_with(|| TableCell {
+                text: String::new(),
+                style: CharStyle::default(),
+                para: new_type_para(),
+                border: Appearance::default(),
+            });
+            match &child.kind {
+                NodeKind::Path { .. } => {
+                    if first_rect.is_none() {
+                        first_rect = child.geometric_bounds_with(&symbols);
+                    }
+                    slot.border = (*child.appearance).clone();
+                }
+                NodeKind::Text(cell_text) => {
+                    slot.text = cell_text.plain_text().to_owned();
+                    slot.style = cell_text.first_style();
+                    slot.para = cell_text.para.clone();
+                }
+                _ => {}
+            }
+        }
+        let cells: Option<Vec<Vec<TableCell>>> = cells.into_iter().map(|row| row.into_iter().collect()).collect();
+        let cells = cells.ok_or_else(|| bad(C, "the object is not a layout table (its cells did not read back)"))?;
+        if cells.iter().any(|row| row.is_empty()) {
+            return Err(bad(C, "the object is not a layout table (its cells did not read back)"));
+        }
+        let rows = cells.len();
+        let columns = cells.first().map_or(0, Vec::len);
+        if rows == 0 || columns == 0 || children.len() != rows * columns * 2 || matched != children.len() {
+            return Err(bad(C, "the object is not a layout table (its cells did not read back)"));
+        }
+        let rect = first_rect.ok_or_else(|| bad(C, "the object is not a layout table (its cells did not read back)"))?;
+        let (cell_w, cell_h) = (rect.width().max(0.0), rect.height().max(0.0));
+        let (width, height) = (cell_w * columns as f64, cell_h * rows as f64);
+        (rect.x0, rect.y0, width, height, rows, columns, cells)
+    };
+    let at = p
+        .get("at")
+        .map(|value| value.as_u64().and_then(|value| usize::try_from(value).ok()).ok_or_else(|| bad(C, "`at` must be a non-negative whole number")))
+        .transpose()?
+        .unwrap_or(if row { rows } else { columns }.saturating_sub(usize::from(!insert)));
+    let extent = if row { rows } else { columns };
+    // Insert takes an index within the table or its end; delete must name an existing row or
+    // column (0..extent-1) — `at == extent` would index past the cells.
+    if insert && at > extent {
+        return Err(bad(C, format!("`at` {at} is past the table's {} {}", if row { "rows" } else { "columns" }, extent)));
+    }
+    if !insert && at >= extent {
+        return Err(bad(
+            C,
+            format!(
+                "`at` {at} does not name one of the table's {} {} (0..{})",
+                if row { "rows" } else { "columns" },
+                extent,
+                extent.saturating_sub(1)
+            ),
+        ));
+    }
+    // New cells take the first cell's look.
+    let template = cells.first().and_then(|row| row.first()).cloned().unwrap_or_else(|| default_cell(String::new(), CharStyle::default()));
+    let mut template = template;
+    template.text = String::new();
+    // Apply the edit to the cells: insert a row or column of empty cells at `at`, or remove one.
+    if insert {
+        if row {
+            cells.insert(at, vec![template; columns]);
+            rows += 1;
+        } else {
+            for row_cells in &mut cells {
+                row_cells.insert(at, template.clone());
+            }
+            columns += 1;
+        }
+    } else if row {
+        cells.remove(at);
+        rows -= 1;
+    } else {
+        for row_cells in &mut cells {
+            row_cells.remove(at);
+        }
+        columns -= 1;
+    }
+    if rows == 0 || columns == 0 {
+        return Err(bad(C, "a table keeps at least one row and one column"));
+    }
+    let cell_count = rows.checked_mul(columns).ok_or_else(|| bad(C, "too many table cells"))?;
+    if cell_count > MAX_CELLS {
+        return Err(bad(C, format!("a table may have at most {MAX_CELLS} cells")));
+    }
+    // Rebuild the group in place: same id, same slot, fresh children (the cell node ids change).
+    s.edit("Table", |d, sel| {
+        let children = build_table_children(d, x, y, width, height, &cells);
+        let (parent, index, _) = d.position(id).ok_or(EngineError::NoNode(id))?;
+        d.remove(id)?;
+        let mut rebuilt = Node::group(id, children);
+        rebuilt.name = Some("Table".into());
+        d.insert(parent, index, rebuilt)?;
         sel.set([id]);
         Ok(id)
     })?;

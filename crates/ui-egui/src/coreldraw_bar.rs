@@ -114,6 +114,37 @@ pub fn transform_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.separator();
 }
 
+/// The CorelDRAW table controls of the Property Bar (P2.TABLE-UI): with one `layout.table` group
+/// selected, Insert Row / Insert Column append a row or column (empty cells) and Delete Row /
+/// Delete Column take the last one away, each one `layout.tableEdit` undo step. Cell-level
+/// picking and drag-resizing stay with the Shape tool's group editing.
+pub fn table_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
+    let Some(table) = app.session.active().and_then(|st| match st.selection.objects[..] {
+        [id] => st.doc.node(id).filter(|n| match &n.kind {
+            vectorcraft_doc::NodeKind::Group { children, .. } => {
+                n.name.as_deref() == Some("Table") && children.iter().any(|c| c.name.as_deref().is_some_and(|name| name.starts_with("Cell ")))
+            }
+            _ => false,
+        }),
+        _ => None,
+    }) else {
+        return;
+    };
+    if !active(app) {
+        return;
+    }
+    let table = table.id.0;
+    for (label, action) in
+        [("Insert Row", "insertRow"), ("Delete Row", "deleteRow"), ("Insert Column", "insertColumn"), ("Delete Column", "deleteColumn")]
+    {
+        if widgets::flat_button(ui, tl!(label), 64.0).clicked() {
+            app.run("layout.tableEdit", json!({ "id": table, "action": action })).ok();
+        }
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
 /// The CorelDRAW shaping buttons of the Property Bar (P1 Task 4), in the public user guide's
 /// order, shown with two or more objects selected in the CorelDRAW workspace alone. Each runs the
 /// shared Pathfinder command it maps onto; Simplify and Trim share `object.pathfinder.trim`
@@ -355,6 +386,54 @@ mod tests {
         crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
         let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
         assert!(node_text(&nodes, "Mirror Horizontal").is_none(), "the upstream bar keeps its behaviour");
+    }
+
+    /// The table controls show with a `layout.table` group selected in the CorelDRAW workspace
+    /// alone, and Insert Row grows the table through `layout.tableEdit` (one undo step).
+    #[test]
+    fn table_buttons_show_and_insert_a_row() {
+        let mut app = app();
+        corel(&mut app);
+        let ctx = ctx();
+        // A plain rectangle: no table controls.
+        let rect = app.run("shape.rectangle", json!({ "x": 10, "y": 10, "width": 40, "height": 30 })).unwrap()["id"].clone();
+        app.run("select.set", json!({ "ids": [rect] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Insert Row").is_none(), "a rectangle is not a table");
+        // A table: the four controls show, and Insert Row appends a row.
+        let table = app
+            .run("layout.table", json!({ "x": 40, "y": 40, "width": 200, "height": 60, "rows": 2, "columns": 2, "text": [["A", "B"], ["C", "D"]] }))
+            .unwrap()["id"]
+            .clone();
+        app.run("select.set", json!({ "ids": [table] })).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        for label in ["Insert Row", "Delete Row", "Insert Column", "Delete Column"] {
+            assert!(node_text(&nodes, label).is_some(), "{label} shows");
+        }
+        let b = node_text(&nodes, "Insert Row").unwrap().bounds().expect("the button");
+        let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let undo = app.session.active().unwrap().history.undo.len();
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![press(false)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let r = app.run("document.node", json!({ "id": table, "summary": true })).unwrap();
+        assert_eq!(r["children"].as_array().map(Vec::len), Some(12), "three rows of two cells: {r:?}");
+        assert_eq!(app.session.active().unwrap().history.undo.len(), undo + 1, "one undo step");
+        // Delete Row takes the last row back away.
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let b = node_text(&nodes, "Delete Row").unwrap().bounds().expect("the button");
+        let at = egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![egui::Event::PointerMoved(at), press(true)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![press(false)]);
+        control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        let r = app.run("document.node", json!({ "id": table, "summary": true })).unwrap();
+        assert_eq!(r["children"].as_array().map(Vec::len), Some(8), "back to two rows of two cells: {r:?}");
+        // Outside the CorelDRAW workspace the controls never show.
+        crate::workspaces::switch(&mut app.ui, crate::workspaces::ESSENTIALS).unwrap();
+        let nodes = control_bar_nodes(&ctx, &mut app, 1440.0, vec![]);
+        assert!(node_text(&nodes, "Insert Row").is_none(), "the upstream bar keeps its behaviour");
     }
 
     /// An English context for headless Control bar frames, with AccessKit on to find its controls

@@ -158,5 +158,19 @@ All clean-room format discoveries for `.cdr`, `.cmx`, and `.cpl` are documented 
      - `ixmr`: `master_id = 1`, `size = 64`, `record_count: u16`, followed by `(type_id: u16, offset: u32)` entries for `ixpg (3)`, `rclr (6)`, `rott (15)`, `rpen (16)`, and `rotl (17)`.
 - **Implementation Impact**:
   - Implemented in [`crates/cdr/src/parse.rs`](../crates/cdr/src/parse.rs) (`write_cmx1`, `parse_cmx_page_chunk`, `parse_cmx_rclr_chunk`, `parse_cmx_rpen_chunk`, `parse_cmx_rotl_chunk`).
-
+## REV-0011: `LIST stlt` Font Records and `font` Chunks — Explicit Text Encodings for 8-bit `txtd`
+- **Date**: 2026-11-12
+- **Status**: Verified (synthetic)
+- **Public Sources**:
+  - Photopea CDR specification `## LIST stlt` and `## font` tables (`https://github.com/photopea/CDR-specification`)
+  - `libcdr` `CDRParser.cpp` `readStlt` (record layout, stlt→font resolution order) and `libcdr_utils.cpp` `appendCharacters` (charset→code-page table), read as MPL-2.0 semantics references
+- **Evidence / Synthetic Test**:
+  - `crates/cdr/src/lib.rs` `stlt_encoding_tests` (minimal synthetic CDR7 RIFF fixtures)
+- **Structural Findings**:
+  - `LIST stlt` body: `"stlt"` fourcc, u32 Number of Records, Fill `Map12` (12 bytes/entry, +48 when V>=1300), Outline `Map12`, u32 Number of Fonts, then per font record: u32 Font Style ID, unknown 12 (V<1000) / 20 bytes, u16 Font ID, u16 Font Encoding, 8 unknown bytes, coordinate font size (2 bytes V<600, else 4), trailing unknown 12/20 bytes. Total per record: 44 (V in 600..1000) / 42 (V<600) / 60 (V>=1000).
+  - `font` chunk: u16 Font ID, u16 Encoding ID, 14 unknown bytes, NUL-terminated name.
+  - Charset values: 0x80→windows-932, 0x81→windows-949, 0x86→windows-936, 0x88→windows-950, 0xa1→1253, 0xa2→1254, 0xa3→1258, 0xb1→1255, 0xb2→1256, 0xba→1257, 0xcc→1251, 0xde→windows-874, 0xee→windows-1250; 0 (unset) and 0x02 (Symbol) carry no encoding.
+  - Resolution: a stlt record's own non-zero Font Encoding wins; zero inherits the `font` table's entry for the Font ID it names (libcdr's order). A document whose records disagree names no encoding.
+- **Implementation Impact**:
+  - `crates/cdr/src/parse.rs`: `parse_stlt_font_records`, `parse_font_chunk`, `charset_encoding`, `ParserCtx::resolved_text_encoding`; `decode_txtd_chunk` decodes tag-0x00 8-bit text with the resolved encoding (`text::decode_legacy`), else strict ASCII — a code page is never guessed from the bytes.
 

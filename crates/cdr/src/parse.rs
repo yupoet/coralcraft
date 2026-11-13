@@ -207,6 +207,8 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParseOutcome, ProbeError> {
                         default_page_size: default_a4_page(1).size,
                         fills: BTreeMap::new(),
                         outlines: BTreeMap::new(),
+                        font_charsets: BTreeMap::new(),
+                        stlt_fonts: BTreeMap::new(),
                         next_id: 100,
                         chunks_seen: 0,
                         decompress_budget: MAX_FILE_DECOMPRESSED_BYTES,
@@ -270,6 +272,11 @@ struct ParserCtx {
     default_page_size: Size,
     fills: BTreeMap<u32, FillStyle>,
     outlines: BTreeMap<u32, OutlineStyle>,
+    /// CoralCraft (P2.CDR-TEXT): explicit font-encoding records, never guessed from text bytes —
+    /// `font` chunks' Font ID → Encoding ID and `LIST stlt` font records' Font Style ID →
+    /// (Font ID, Encoding ID), as the public spec's `## font` and `## LIST stlt` tables lay out.
+    font_charsets: BTreeMap<u16, u16>,
+    stlt_fonts: BTreeMap<u32, (u16, u16)>,
     next_id: u64,
     chunks_seen: usize,
     /// Remaining shared decompression budget for this file.
@@ -313,6 +320,8 @@ fn parse_riff_stream_with_budget(
         default_page_size: default_a4_page(1).size,
         fills: BTreeMap::new(),
         outlines: BTreeMap::new(),
+        font_charsets: BTreeMap::new(),
+        stlt_fonts: BTreeMap::new(),
         next_id: 100,
         chunks_seen: 0,
         decompress_budget,
@@ -479,6 +488,12 @@ fn process_doc_level_chunks(chunks: &[ParsedChunk], ctx: &mut ParserCtx, doc: &m
             process_doc_level_chunks(&ch.children, ctx, doc, warnings);
         } else if &ch.fourcc == b"dmta" {
             decode_dmta(&ch.payload, ctx.endian, doc);
+        } else if &ch.fourcc == b"font" {
+            // CoralCraft (P2.CDR-TEXT): a font chunk's Encoding ID feeds the text-encoding table.
+            parse_font_chunk(&ch.payload, ctx.endian, ctx);
+        } else if &ch.fourcc == b"LIST" && ch.list_type == Some(*b"stlt") {
+            // CoralCraft (P2.CDR-TEXT): the stlt font records' Font Encoding feeds the same table.
+            parse_stlt_font_records(&ch.payload, ctx.endian, ctx.version, ctx, warnings);
         } else if &ch.fourcc == b"plte" {
             if let Ok(pal) = coralcraft_color::load_palette_bytes(&ch.payload) {
                 doc.palette = pal;
@@ -1887,7 +1902,7 @@ fn parse_object_chunk(obj_chunk: &ParsedChunk, ctx: &mut ParserCtx, page_size: S
     } else if let Some((payload, tag)) = loda_payload {
         decode_loda_geometry(payload, tag, ctx.endian, ctx.version, page_size, bbox_rect, warnings)
     } else if let Some(txtd) = txtd_payload {
-        let (kind, raw) = decode_txtd_chunk(txtd, bbox_rect, warnings);
+        let (kind, raw) = decode_txtd_chunk(txtd, ctx.resolved_text_encoding(), bbox_rect, warnings);
         if let Some(raw) = raw {
             residual.chunks.push(raw);
         }
@@ -3077,11 +3092,157 @@ fn decode_loda_paragraph_text(slice: &[u8], endian: Endian, version: u16, page_s
     Some(ObjectKind::ParagraphText(Box::new(spec)))
 }
 
-fn decode_txtd_chunk(payload: &[u8], bbox_rect: Option<Rect>, warnings: &mut Vec<String>) -> (ObjectKind, Option<RawChunk>) {
+/// CoralCraft (P2.CDR-TEXT): the encoding a recorded CorelDRAW charset value names — the table
+/// `libcdr`'s `appendCharacters` evidences for the single-byte code pages (`windows-932` for
+/// 0x80 Shift-JIS through `windows-1250` for 0xee Central European). Unset (0), Symbol (0x02) and
+/// values without public evidence resolve to nothing: a code page is never guessed from the bytes.
+fn charset_encoding(charset: u16) -> Option<&'static encoding_rs::Encoding> {
+    Some(match charset {
+        0x80 => encoding_rs::SHIFT_JIS,
+        0x81 => encoding_rs::EUC_KR,
+        0x86 => encoding_rs::GBK,
+        0x88 => encoding_rs::BIG5,
+        0xa1 => encoding_rs::WINDOWS_1253,
+        0xa2 => encoding_rs::WINDOWS_1254,
+        0xa3 => encoding_rs::WINDOWS_1258,
+        0xb1 => encoding_rs::WINDOWS_1255,
+        0xb2 => encoding_rs::WINDOWS_1256,
+        0xba => encoding_rs::WINDOWS_1257,
+        0xcc => encoding_rs::WINDOWS_1251,
+        0xde => encoding_rs::WINDOWS_874,
+        0xee => encoding_rs::WINDOWS_1250,
+        _ => return None,
+    })
+}
+
+impl ParserCtx {
+    /// CoralCraft (P2.CDR-TEXT): the one encoding the document's font records declare for its
+    /// text, when they all agree. `LIST stlt` font records carry an encoding of their own, and a
+    /// record with none inherits the `font` table's entry for the font it names (the order
+    /// `libcdr`'s `readStlt` resolves, `CDRParser.cpp`); records that disagree, or none at all,
+    /// resolve to nothing and 8-bit text stays strict ASCII.
+    pub(crate) fn resolved_text_encoding(&self) -> Option<&'static encoding_rs::Encoding> {
+        // Each stlt record resolves exactly once: its own non-zero encoding, else the `font`
+        // table's entry for the font it names (the order `libcdr`'s `readStlt` resolves). The
+        // table's raw values join only when there are no stlt records at all — an overridden one
+        // never re-enters as a disagreement. A record whose encoding is unknown (Symbol, an
+        // unmapped value, a font the table lacks) blocks the decode: the text might be in it, and
+        // a code page is never guessed.
+        let mut seen: Vec<&'static encoding_rs::Encoding> = Vec::new();
+        let mut unknown = false;
+        let note = |charset: u16, seen: &mut Vec<&'static encoding_rs::Encoding>, unknown: &mut bool| match charset_encoding(charset) {
+            Some(enc) => {
+                if !seen.contains(&enc) {
+                    seen.push(enc);
+                }
+            }
+            None => *unknown = true,
+        };
+        if !self.stlt_fonts.is_empty() {
+            for &(font_id, charset) in self.stlt_fonts.values() {
+                let charset = if charset != 0 { charset } else { self.font_charsets.get(&font_id).copied().unwrap_or(0) };
+                note(charset, &mut seen, &mut unknown);
+            }
+        } else {
+            for &charset in self.font_charsets.values() {
+                note(charset, &mut seen, &mut unknown);
+            }
+        }
+        // Records that disagree (or any unknown) resolve to nothing.
+        (!unknown && seen.len() == 1).then_some(*seen.first()?)
+    }
+}
+
+/// CoralCraft (P2.CDR-TEXT): read a `font` chunk's Font ID and Encoding ID (the public spec's
+/// `## font` table: uint2 Font ID, uint2 Encoding ID, 14 unknown bytes, the font name).
+fn parse_font_chunk(payload: &[u8], endian: Endian, ctx: &mut ParserCtx) {
+    if let (Some(id), Some(charset)) = (read_u16(endian, payload, 0), read_u16(endian, payload, 2)) {
+        ctx.font_charsets.insert(id, charset);
+    }
+}
+
+/// CoralCraft (P2.CDR-TEXT): read a `LIST stlt`'s font records (the public spec's `## LIST stlt`
+/// table): Number of Records, the Fill and Outline `Map12`s, then Number of Fonts and each font
+/// record — Font Style ID, unknown bytes (12 when V<1000, else 20), Font ID, Font Encoding, 8
+/// unknown bytes, the coordinate font size, and the trailing unknown bytes. Only the font records
+/// are read; the later sections are left for a residual-preserving future need. Malformed records
+/// warn and stop rather than reading past the chunk.
+fn parse_stlt_font_records(payload: &[u8], endian: Endian, version: u16, ctx: &mut ParserCtx, warnings: &mut Vec<String>) {
+    if payload.get(0..4) != Some(b"stlt") {
+        warnings.push("W-STLT-FONTS: stlt payload does not start with its type; font records not read".into());
+        return;
+    }
+    let mut cursor = 4usize;
+    let u32_at = |payload: &[u8], cursor: &mut usize| -> Option<u32> {
+        let v = read_u32(endian, payload, *cursor);
+        *cursor = cursor.saturating_add(4);
+        v
+    };
+    // Number of Records (the style records at the chunk's end, not needed here).
+    let _nor = u32_at(payload, &mut cursor);
+    // A `Map12`: a u32 count, then count x (ID, unknown, Value) — and for the Fill IDs, 48 more
+    // unknown bytes each when V>=1300.
+    let skip_map12 = |payload: &[u8], cursor: &mut usize, fill: bool| -> Option<()> {
+        let nov = u32_at(payload, cursor)?;
+        let entry = if fill && version >= 1300 { 60 } else { 12 };
+        *cursor = usize::try_from(nov).ok().and_then(|nov| nov.checked_mul(entry)).and_then(|bytes| cursor.checked_add(bytes))?;
+        Some(())
+    };
+    if skip_map12(payload, &mut cursor, true).is_none() || skip_map12(payload, &mut cursor, false).is_none() {
+        warnings.push("W-STLT-FONTS: stlt fill/outline maps run past the chunk; font records not read".into());
+        return;
+    }
+    let Some(nof) = u32_at(payload, &mut cursor) else {
+        warnings.push("W-STLT-FONTS: stlt has no Number of Fonts; font records not read".into());
+        return;
+    };
+    let coord: usize = if version < 600 { 2 } else { 4 };
+    let unknown: usize = if version < 1000 { 12 } else { 20 };
+    let record = unknown.saturating_add(unknown).saturating_add(16).saturating_add(coord);
+    // The whole font section is validated before any record is used: a stlt that declares more
+    // records than it holds warns, and none of its records decode text.
+    let Some(section_end) = usize::try_from(nof).ok().and_then(|nof| nof.checked_mul(record)).map(|bytes| cursor.saturating_add(bytes)) else {
+        warnings.push("W-STLT-FONTS: stlt font-record count overflows; font records not read".into());
+        return;
+    };
+    if section_end > payload.len() {
+        let held = payload.len().saturating_sub(cursor).checked_div(record).unwrap_or(0);
+        warnings.push(format!("W-STLT-FONTS: stlt declares {nof} font records but holds only {held}; font records not read"));
+        return;
+    }
+    let mut records = Vec::with_capacity(usize::try_from(nof).unwrap_or(0));
+    for _ in 0..nof {
+        let Some(style_id) = read_u32(endian, payload, cursor) else { break };
+        let base = cursor.saturating_add(4).saturating_add(unknown);
+        let (Some(font_id), Some(charset)) = (read_u16(endian, payload, base), read_u16(endian, payload, base.saturating_add(2))) else { break };
+        records.push((style_id, font_id, charset));
+        cursor = cursor.saturating_add(record);
+    }
+    if records.len() != nof as usize {
+        warnings.push(format!("W-STLT-FONTS: stlt font records ended early; {} of {} read, none used", records.len(), nof));
+        return;
+    }
+    for (style_id, font_id, charset) in records {
+        ctx.stlt_fonts.insert(style_id, (font_id, charset));
+    }
+}
+
+fn decode_txtd_chunk(
+    payload: &[u8],
+    font_encoding: Option<&'static encoding_rs::Encoding>,
+    bbox_rect: Option<Rect>,
+    warnings: &mut Vec<String>,
+) -> (ObjectKind, Option<RawChunk>) {
     // Byte 0 is text encoding tag (`0x00` = ASCII, `0x01` = UTF-8, `0x02` = UTF-16LE) per Photopea CDR spec (`https://github.com/photopea/cdr-spec`, §Text)
     let before = warnings.len();
     let decoded = match payload.first() {
-        Some(0) => crate::text::decode_ascii(payload.get(1..).unwrap_or_default()),
+        // CoralCraft (P2.CDR-TEXT): 8-bit text decodes in the encoding the document's font records
+        // declare when they all agree; with none (or disagreeing records) it stays strict ASCII —
+        // a code page is never guessed from the bytes.
+        Some(0) => match font_encoding {
+            Some(encoding) => crate::text::decode_legacy(payload.get(1..).unwrap_or_default(), encoding),
+            None => crate::text::decode_ascii(payload.get(1..).unwrap_or_default()),
+        },
         Some(1) => crate::text::decode_utf8(payload.get(1..).unwrap_or_default()),
         Some(2) => crate::text::decode_utf16le(payload.get(1..).unwrap_or_default()),
         Some(tag) => {
@@ -5490,7 +5651,7 @@ mod budget_tests {
     fn txtd_malformed_or_unknown_encodings_warn_and_keep_the_raw_chunk() {
         for payload in [&[0x7f, b'A'][..], &[1, b'c', 0xff][..], &[2, 0x41][..]] {
             let mut warnings = Vec::new();
-            let (kind, residual) = decode_txtd_chunk(payload, None, &mut warnings);
+            let (kind, residual) = decode_txtd_chunk(payload, None, None, &mut warnings);
             assert_eq!(warnings.len(), 1, "payload {payload:?} must warn");
             assert!(
                 residual.is_some_and(|chunk| chunk.tag == ChunkTag(*b"txtd") && chunk.payload.0 == payload),
@@ -5500,7 +5661,7 @@ mod budget_tests {
             assert_eq!(text.text, "Text", "unknown text must not be silently decoded as UTF-8");
         }
         let mut warnings = Vec::new();
-        let (kind, residual) = decode_txtd_chunk(b"\0A\0", None, &mut warnings);
+        let (kind, residual) = decode_txtd_chunk(b"\0A\0", None, None, &mut warnings);
         assert!(warnings.is_empty() && residual.is_none());
         let ObjectKind::ParagraphText(text) = kind else { panic!("expected text") };
         assert_eq!(text.text, "A");
