@@ -909,6 +909,7 @@ mod tests {
         let src_a = ThumbSource { uid: 1, revision: 1, doc: &a, busy: false };
         for n in &a_rows {
             assert!(thumbs.texture(&ctx, &src_a, n, 24).is_none());
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert_eq!(thumbs.pending.len(), 3, "document 1's rows wait on the worker");
         // Document 2 shows before the worker gets to them.
@@ -927,10 +928,18 @@ mod tests {
             assert!(thumbs.texture(&ctx, &src_b, n, 24).is_some(), "the shown document's thumbnails are shown");
         }
         // Shown again, document 1's rows are asked for again and come back.
+        // CoralCraft: hold the worker for this loop as the test did for the first one: without it,
+        // the worker can finish a row's job between two `texture` calls, and the next call's poll
+        // collects that job and takes its row out of `pending`, failing the count below (seen on
+        // the FreeBSD runners, whose scheduling is slow enough to lose that race).
+        let release = hold(&thumbs);
         for n in &a_rows {
             assert!(thumbs.texture(&ctx, &src_a, n, 24).is_none());
         }
         assert_eq!(thumbs.pending.keys().filter(|k| k.0 == 1).count(), 3);
+        release.send(()).expect("the held job is waiting");
+        let held = thumbs.worker.as_ref().and_then(ThumbWorker::wait).expect("the held job finishes");
+        assert_eq!(held.key.0, (0, NodeId(0)));
         for _ in &a_rows {
             receive_checked(&ctx, &mut thumbs, 1, &a, &a_rows);
         }
