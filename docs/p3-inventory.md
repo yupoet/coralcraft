@@ -524,3 +524,23 @@ P3 persistence **16/16**, corel-import **35 + 2**, SVG **337**, PDF, and MCP `do
 (`-D warnings`) over `vectorcraft-doc`, `vectorcraft-engine`, and `corel-import` pass.
 GitNexus `detect-changes --scope all`: 5 files, 43 symbols, one affected flow (a const-reposition
 attribution), risk medium, result complete.
+
+### 22b. Task T2 full gate (2026-11-17, tree `792b445ba`)
+
+`cargo xtask ci` exited 1: formatting and workspace Clippy passed; the workspace run stopped at the
+engine library's sole failure, recorded verbatim:
+
+```text
+failures:
+    tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars
+
+test result: FAILED. 4376 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 32.74s
+```
+
+That is known-issue 0b (the documented x86_64 macOS libm platform difference, green on every CI
+platform); this is **not** a clean full-CI pass. Every skipped later gate then ran serially and
+passed: doctests; cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both feature-tree pairs
+(bundled fonts present only in the default-feature trees); no-default-features UI Clippy
+(`-D warnings`); install_fonts (**2/2**); pdf-deps; assets; brands; cursors; i18n-report; layers;
+and wasm. T2 is complete on this evidence; **T3 merge-mode matrix and combined transparency is
+next**. T3, P3.3, P3, S2, and P0.1 remain open; no independent CDR/CMX certification is claimed.
