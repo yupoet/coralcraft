@@ -1,8 +1,10 @@
 # 03 — Current Milestone Status, Active Tasks & Next Steps
 
-> Last updated: 2026-11-12
+> Last updated: 2026-11-14
 
 ## 1. Current Stage Status
+
+- **P3 T1 REVIEW FIXES (2026-11-14, working tree):** same-reviewer findings are fixed test-first: real nearest-sampled raster texture with object opacity, ordinary SVG patterns and PDF tiling patterns through the shared appearance pipelines, even-odd compounds, a 250,000-cell/finite-bounds budget, and the `texture.new` name result. Six new engine regressions and two document budget regressions were observed red before implementation; the strengthened matrix is now `coreldraw_texture` 12/12 and document texture 2/2 green. SVG 67+7+337, PDF 446+1+1+1, render 537+38, real CLI raster/SVG/PDF assertions and focused Clippy are also green; only the full gate remains before T1 closes and T2 starts. Details: `docs/p3-inventory.md` §21.
 
 - **P2 FINAL CLOSE-OUT GATE (2026-11-14, after `a88b9c391` fixed the table test's dangling document borrow).** `cargo xtask ci`: fmt ok, clippy ok (`-D warnings`), workspace tests 4,375 passed / 1 failed — only the documented platform-flake known-issue 0b (recorded verbatim). Every skipped gate then run serially and green: doctests, cleanroom (2,634 files), no-bundled-fonts, assets (309), brands, layers (30 crates), cursors, i18n-report, pdf-deps, wasm. Not a clean full-CI pass (0b). Main pushed; the P2 fixes are integrated into the P3 branch by merging main (no cherry-picks, the mesh commits untouched).
 

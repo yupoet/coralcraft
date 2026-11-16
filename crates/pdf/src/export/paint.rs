@@ -332,10 +332,9 @@ impl Exporter<'_> {
                 self.warn("missing patterns are exported as mid-grey");
                 Some(rgb::Color::new(128, 128, 128).into())
             }
-            // CoralCraft (P3 Task T1): the texture's background colour; the definition stays live
-            // in the native file (independent tile synthesis is the open T1 remainder).
+            // Valid textures paint through [`Self::area`]: only a missing one gets here.
             Paint::Texture { .. } => {
-                self.warn("texture fills are exported as their background colour");
+                self.warn("missing textures are exported as mid-grey");
                 Some(rgb::Color::new(128, 128, 128).into())
             }
         }
@@ -376,6 +375,33 @@ impl Exporter<'_> {
         }
         cs.finish();
         Some(krilla::paint::Pattern { stream: sb.finish(), transform: xf(at), width: pw as f32, height: ph as f32 }.into())
+    }
+
+    /// CoralCraft (P3 Task T1): a texture's deterministic two-by-two-cell period as a PDF tiling
+    /// pattern, so the caller's ordinary fill rule, opacity, blend mode, overprint and appearance
+    /// order apply to the target.
+    pub(super) fn texture_tiling(&mut self, s: &mut Surface, name: &str) -> Option<krilla::paint::Paint> {
+        let def = self.doc.texture(name)?.clone();
+        let (pw, ph) = def.period();
+        if self.pattern_depth >= MAX_PATTERN_DEPTH || !in_range(&[pw, ph]) {
+            return None;
+        }
+        let cell = Rect::new(0.0, 0.0, pw, ph);
+        let tiles = def.tile_nodes(cell);
+        if tiles.len() != 4 {
+            return None;
+        }
+        let mut sb = s.stream_builder();
+        let mut cs = sb.surface();
+        let knockout = std::mem::take(&mut self.knockout);
+        self.pattern_depth += 1;
+        for tile in &tiles {
+            self.node(&mut cs, tile, cell, true);
+        }
+        self.pattern_depth -= 1;
+        self.knockout = knockout;
+        cs.finish();
+        Some(krilla::paint::Pattern { stream: sb.finish(), transform: xf(Affine::IDENTITY), width: pw as f32, height: ph as f32 }.into())
     }
 
     /// Is stop `s` paper white ([`paper`]), unlinked or linked to a swatch that isn't a spot color

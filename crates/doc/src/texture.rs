@@ -46,6 +46,9 @@ pub struct TextureDef {
 /// The cell edge of the stipple synthesis, in points.
 const CELL: f64 = 12.0;
 
+/// Most cells one bounded synthesis may make, matching the pattern instance budget.
+const MAX_TILES: i64 = 250_000;
+
 /// A cell (i, j) holds the foreground when this says so — a pure function of the definition and
 /// the cell coordinates, so every renderer synthesizes byte-identical tiles.
 fn holds_foreground(def: &TextureDef, i: i64, j: i64) -> bool {
@@ -60,19 +63,27 @@ fn holds_foreground(def: &TextureDef, i: i64, j: i64) -> bool {
 }
 
 impl TextureDef {
-    /// The definition's tiles over `bounds`: one rectangle per cell, in its colour. Deterministic
-    /// and bounded (the cell grid covers at most the bounds), so independent readers see the same
-    /// geometry every export.
+    /// The definition's tiles over `bounds`: one rectangle per cell, in its colour. Non-finite,
+    /// inverted or integer-unrepresentable bounds, and grids over [`MAX_TILES`], produce none.
     pub fn tiles(&self, bounds: Rect) -> Vec<(Rect, Color)> {
-        let x0 = (bounds.x0 / CELL).floor() as i64;
-        let x1 = (bounds.x1 / CELL).ceil() as i64;
-        let y0 = (bounds.y0 / CELL).floor() as i64;
-        let y1 = (bounds.y1 / CELL).ceil() as i64;
-        let mut out = Vec::new();
+        let index = |v: f64| (v.abs() < 9.0e18).then_some(v as i64);
+        let (Some(x0), Some(x1), Some(y0), Some(y1)) = (
+            index((bounds.x0 / CELL).floor()),
+            index((bounds.x1 / CELL).ceil()),
+            index((bounds.y0 / CELL).floor()),
+            index((bounds.y1 / CELL).ceil()),
+        ) else {
+            return vec![];
+        };
+        let (nx, ny) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
+        if nx < 1 || ny < 1 || nx.saturating_mul(ny) > MAX_TILES {
+            return vec![];
+        }
+        let mut out = Vec::with_capacity((nx * ny) as usize);
         for i in x0..x1 {
             for j in y0..y1 {
-                let left = f64::from(i as i32) * CELL;
-                let top = f64::from(j as i32) * CELL;
+                let left = i as f64 * CELL;
+                let top = j as f64 * CELL;
                 let rect = Rect::new(left, top, left + CELL, top + CELL);
                 let color = if holds_foreground(self, i, j) { self.foreground } else { self.background };
                 out.push((rect, color));
@@ -100,5 +111,32 @@ impl TextureDef {
     /// with the pattern model).
     pub fn period(&self) -> (f64, f64) {
         (CELL * 2.0, CELL * 2.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn definition() -> TextureDef {
+        TextureDef {
+            name: "Coral Stipple".into(),
+            kind: TextureKind::Stipple,
+            density: 0.4,
+            foreground: Color::rgb8(0xc0, 0x20, 0x20),
+            background: Color::rgb8(0x20, 0x40, 0x80),
+        }
+    }
+
+    #[test]
+    fn tile_synthesis_refuses_more_than_the_instance_budget() {
+        let bounds = Rect::new(0.0, 0.0, CELL * 501.0, CELL * 500.0);
+        assert!(definition().tiles(bounds).is_empty());
+    }
+
+    #[test]
+    fn tile_synthesis_refuses_non_finite_bounds() {
+        let bounds = Rect::new(f64::NAN, 0.0, CELL, CELL);
+        assert!(definition().tiles(bounds).is_empty());
     }
 }

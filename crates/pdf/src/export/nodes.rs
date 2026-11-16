@@ -318,46 +318,6 @@ impl Exporter<'_> {
         true
     }
 
-    /// CoralCraft (P3 Task T1): one texture fill's tiles (see [`Self::shape`]). `false` when the
-    /// shape or the transform cannot be drawn, so the caller falls back to its flat colour.
-    #[allow(clippy::too_many_arguments)]
-    fn texture_tiles(
-        &mut self,
-        s: &mut Surface,
-        n: &Node,
-        path: &Path,
-        bp: &BezPath,
-        bounds: Rect,
-        def: &vectorcraft_doc::TextureDef,
-        opacity: f32,
-    ) -> bool {
-        let Some(bg) = self.paint(s, &Paint::solid(def.background), bounds) else { return false };
-        let Some(fg) = self.paint(s, &Paint::solid(def.foreground), bounds) else { return false };
-        let _ = n;
-        // The shape in the background colour; the foreground cells over it, clipped to the shape.
-        // Tiles are document coordinates, like the BezPath the shape itself came from.
-        s.set_stroke(None);
-        s.set_fill(Some(Fill { paint: bg, opacity: norm(opacity), rule: rule(FillRule::NonZero) }));
-        s.draw_path(path);
-        s.push_clip_path(path, &rule(FillRule::NonZero));
-        for (rect, color) in def.tiles(bp.bounding_box()) {
-            if color != def.foreground {
-                continue;
-            }
-            let mut cell = BezPath::new();
-            cell.move_to((rect.x0, rect.y0));
-            cell.line_to((rect.x1, rect.y0));
-            cell.line_to((rect.x1, rect.y1));
-            cell.line_to((rect.x0, rect.y1));
-            cell.close_path();
-            let Some(cell_path) = to_path(s, &cell) else { continue };
-            s.set_fill(Some(Fill { paint: fg.clone(), opacity: norm(opacity), rule: rule(FillRule::NonZero) }));
-            s.draw_path(&cell_path);
-        }
-        s.pop();
-        true
-    }
-
     fn shape(&mut self, s: &mut Surface, n: &Node, bp: &BezPath, r: FillRule, page: Rect) {
         let Some(path) = to_path(s, bp) else { return };
         let bounds = bp.bounding_box();
@@ -365,15 +325,6 @@ impl Exporter<'_> {
             match item {
                 AppearanceItem::Fill(fl) => {
                     if !fl.visible || fl.paint.is_none() {
-                        continue;
-                    }
-                    // CoralCraft (P3 Task T1): a texture fill draws its deterministic tiles — the
-                    // shape in the definition's background colour, the foreground cells over it,
-                    // clipped to the shape.
-                    if let Paint::Texture { texture } = &fl.paint
-                        && let Some(def) = self.doc.texture(texture).cloned()
-                        && self.texture_tiles(s, n, &path, bp, bounds, &def, fl.opacity)
-                    {
                         continue;
                     }
                     self.warn_raster(&fl.effects, || "fills".into());
@@ -421,12 +372,14 @@ impl Exporter<'_> {
     }
 
     /// Is `p` a paint PDF has no paint for when it paints a fill (`fill`) or a stroke, which
-    /// [`Self::area`] draws as art: a pattern swatch or a gradient drawn as pixels
-    /// ([`vectorcraft_color::GradientPaint::draws_as_pixels`]), but not a Perceptual one of spot
-    /// inks ([`Self::perceptual_spot`])?
+    /// [`Self::area`] draws as art: a pattern swatch, a texture period or a gradient drawn as
+    /// pixels ([`vectorcraft_color::GradientPaint::draws_as_pixels`]), but not a Perceptual one of
+    /// spot inks ([`Self::perceptual_spot`])?
     pub(super) fn area_paint(&self, p: &Paint, fill: bool) -> bool {
         match p {
             Paint::Pattern { pattern, .. } => self.doc.pattern(pattern).is_some(),
+            // CoralCraft: texture periods use the same area-paint pipeline as pattern swatches.
+            Paint::Texture { texture } => self.doc.texture(texture).is_some(),
             Paint::Gradient(g) => g.draws_as_pixels(fill) && !self.perceptual_spot(g, fill),
             _ => false,
         }
@@ -434,9 +387,9 @@ impl Exporter<'_> {
 
     /// Paint the area `clip` (filled by `rule`; bounds `area`) with `p` at `transparency` (opacity,
     /// blend mode) when it is an [area paint](Self::area_paint) of a fill (`fill`) or a stroke: a
-    /// pattern's [tiling pattern](Self::tiling) (else its tile instances covering it), or an image
-    /// of a gradient drawn as pixels placed on `bounds` (the painted object's box, as on the
-    /// canvas), clipped to it. False (nothing drawn) for other paints.
+    /// pattern or texture's tiling (else bounded tile instances covering it), or an image of a
+    /// gradient drawn as pixels placed on `bounds` (the painted object's box, as on the canvas),
+    /// clipped to it. False (nothing drawn) for other paints.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn area(
         &mut self,
@@ -455,6 +408,7 @@ impl Exporter<'_> {
         let (opacity, mode) = transparency;
         let tiling = match p {
             Paint::Pattern { pattern, xf } => self.tiling(s, pattern, *xf),
+            Paint::Texture { texture } => self.texture_tiling(s, texture),
             _ => None,
         };
         let mut pushes = 0;
@@ -480,6 +434,14 @@ impl Exporter<'_> {
                     if let Some(def) = doc.pattern(pattern) {
                         self.warn("pattern fills nested more than 4 patterns deep, or with tiles too large for PDF, are written as their tiles");
                         for inst in def.instances_in(*xf, area) {
+                            self.node(s, &inst, area, true);
+                        }
+                    }
+                }
+                Paint::Texture { texture } => {
+                    if let Some(def) = doc.texture(texture) {
+                        self.warn("texture fills that cannot be written as a PDF tiling pattern use bounded tiles; an over-budget area is left out");
+                        for inst in def.tile_nodes(area) {
                             self.node(s, &inst, area, true);
                         }
                     }

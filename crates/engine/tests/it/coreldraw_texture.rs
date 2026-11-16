@@ -16,7 +16,7 @@ fn session() -> Session {
     s
 }
 
-/// P1–P3, P5: create, apply, reuse, undo. (P4 propagation needs the open tile synthesis below.)
+/// P1–P5: create, apply, reuse, edit propagation and undo.
 #[test]
 fn texture_definitions_are_reusable_and_undo_round_trips() {
     let mut s = session();
@@ -89,7 +89,7 @@ fn texture_definitions_survive_native_reopen_and_still_edit() {
     s.execute("document.open", &json!({ "dataBase64": data })).unwrap();
     let list = s.execute("texture.list", &json!({})).unwrap();
     assert_eq!(list["textures"].as_array().map(Vec::len), Some(1), "the definition reopened");
-    // The definition still edits after reopen (tile rendering is the open remainder).
+    // The definition still edits after reopen; the export propagation regression is below.
     s.execute("texture.setProps", &json!({ "name": "Coral Stipple", "foreground": "#20a040" })).unwrap();
     let list = s.execute("texture.list", &json!({})).unwrap();
     assert_eq!(list["textures"][0]["foreground"].as_str(), Some("#20a040"), "the post-reopen edit took");
@@ -107,28 +107,30 @@ fn texture_tiles_are_independently_readable_in_svg_and_pdf() {
     .unwrap();
     s.execute("select.set", &json!({ "ids": [a] })).unwrap();
     s.execute("paint.setTexture", &json!({ "texture": "Coral Stipple" })).unwrap();
-    // Independent usvg read: the tiles' geometry and BOTH colours are in the SVG.
-    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    // Independent usvg read: the connected pattern contains actual vector tiles in BOTH colours.
+    let svg = exported_svg(&mut s);
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
-    let mut colors = Vec::new();
-    let mut geometry = 0usize;
-    collect(tree.root(), &mut colors, &mut geometry);
-    assert!(geometry > 1, "more than one tile shape: {geometry}");
-    assert!(colors.iter().any(|c| c == "#c02020") && colors.iter().any(|c| c == "#204080"), "both texture colours render: {colors:?}");
-    // Independent Hayro-backed PDF read: a page with the tile geometry (structure only).
-    let pdf =
-        vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({ "format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
-            .unwrap();
-    let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF read");
-    let mut paths = 0usize;
-    for layer in &imported.layers {
-        layer.walk(&mut |node| {
-            if matches!(node.kind, vectorcraft_doc::NodeKind::Path { .. }) {
-                paths += 1;
-            }
-        });
+    let mut patterns = vec![];
+    pattern_paints(tree.root(), &mut patterns);
+    let [pattern] = patterns.as_slice() else { panic!("one actual texture pattern: {svg}") };
+    let tile = pattern.rect();
+    assert_eq!((tile.x(), tile.y(), tile.width(), tile.height()), (0.0, 0.0, 24.0, 24.0), "the actual texture period");
+    for rgb in [[192, 32, 32], [32, 64, 128]] {
+        assert!(has_solid_vector(pattern.root(), rgb), "the pattern contains non-empty {rgb:?} vector tiles: {svg}");
     }
-    assert!(paths > 1, "the PDF reconstructs the tile art: {paths}");
+    // Independent Hayro-backed PDF read: the reconstructed definition and its target stay connected.
+    let imported = imported_pdf(&mut s);
+    let definition = imported
+        .patterns
+        .iter()
+        .find(|definition| art_has_colours(&definition.art, &["#c02020", "#204080"]))
+        .expect("Hayro reconstructs the two-colour texture definition");
+    assert!((definition.tile.width() - 24.0).abs() < 1e-4 && (definition.tile.height() - 24.0).abs() < 1e-4, "{:?}", definition.tile);
+    let mut connected = false;
+    imported.walk(|node| {
+        connected |= matches!(node.appearance.fill_paint(), vectorcraft_color::Paint::Pattern { pattern, .. } if *pattern == definition.name);
+    });
+    assert!(connected, "the reconstructed target references the reconstructed tile art");
 }
 
 /// P9/N3: CDR/CMX export carries exactly one explicit texture fallback warning.
@@ -194,23 +196,6 @@ fn texture_negatives_refuse_instead_of_falling_back() {
     );
 }
 
-fn collect(group: &usvg::Group, colors: &mut Vec<String>, geometry: &mut usize) {
-    for node in group.children() {
-        match node {
-            usvg::Node::Group(child) => collect(child, colors, geometry),
-            usvg::Node::Path(path) => {
-                *geometry += 1;
-                if let Some(fill) = path.fill()
-                    && let usvg::Paint::Color(color) = fill.paint()
-                {
-                    colors.push(format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue));
-                }
-            }
-            usvg::Node::Image(_) | usvg::Node::Text(_) => {}
-        }
-    }
-}
-
 /// P4: an edit of the definition reaches every user's rendered tiles.
 #[test]
 fn texture_edit_propagates_to_rendered_tiles() {
@@ -231,4 +216,236 @@ fn texture_edit_propagates_to_rendered_tiles() {
     let after = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
     assert!(before.contains("#c02020") && !before.contains("#20a040"), "the old colour was rendered: {before}");
     assert!(after.contains("#20a040"), "the edited colour reaches every tile: {after}");
+}
+
+fn pattern_paints(group: &usvg::Group, out: &mut Vec<std::sync::Arc<usvg::Pattern>>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => pattern_paints(child, out),
+            usvg::Node::Path(path) if !path.data().is_empty() => {
+                if let Some(fill) = path.fill()
+                    && let usvg::Paint::Pattern(pattern) = fill.paint()
+                {
+                    out.push(pattern.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn has_solid_vector(group: &usvg::Group, rgb: [u8; 3]) -> bool {
+    group.children().iter().any(|node| match node {
+        usvg::Node::Group(child) => has_solid_vector(child, rgb),
+        usvg::Node::Path(path) if !path.data().is_empty() => {
+            path.fill().is_some_and(|fill| matches!(fill.paint(), usvg::Paint::Color(color) if [color.red, color.green, color.blue] == rgb))
+        }
+        _ => false,
+    })
+}
+
+fn art_has_colours(art: &[std::sync::Arc<vectorcraft_doc::Node>], expected: &[&str]) -> bool {
+    expected.iter().all(|expected_color| {
+        art.iter().any(|node| {
+            let mut found = false;
+            node.walk(&mut |child| {
+                if child.path_data().is_some_and(|path| !path.is_empty())
+                    && child.appearance.fill_paint().color().is_some_and(|color| color.to_hex().as_str() == *expected_color)
+                {
+                    found = true;
+                }
+            });
+            found
+        })
+    })
+}
+
+fn create_texture(s: &mut Session, density: f64) {
+    s.execute(
+        "texture.new",
+        &json!({ "name": "Coral Stipple", "kind": "stipple", "density": density, "foreground": "#c02020", "background": "#204080" }),
+    )
+    .unwrap();
+}
+
+fn apply_texture(s: &mut Session, id: u64) {
+    s.execute("select.set", &json!({ "ids": [id] })).unwrap();
+    s.execute("paint.setStroke", &json!({ "none": true })).unwrap();
+    s.execute("paint.setTexture", &json!({ "texture": "Coral Stipple" })).unwrap();
+}
+
+fn exported_svg(s: &mut Session) -> String {
+    s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string()
+}
+
+fn imported_pdf(s: &mut Session) -> vectorcraft_doc::Document {
+    let bytes =
+        vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({ "format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
+            .unwrap();
+    vectorcraft_pdf::import(&bytes).expect("independent Hayro-backed PDF read")
+}
+
+#[test]
+fn texture_new_returns_the_definition_name() {
+    let mut s = session();
+    let created = s
+        .execute(
+            "texture.new",
+            &json!({ "name": "Coral Stipple", "kind": "stipple", "density": 0.4, "foreground": "#c02020", "background": "#204080" }),
+        )
+        .unwrap();
+    assert_eq!(created["name"].as_str(), Some("Coral Stipple"));
+}
+
+#[test]
+fn texture_rasterizes_with_the_objects_opacity() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 120, "height": 80 })).unwrap()["id"].as_u64().unwrap();
+    create_texture(&mut s, 1.0);
+    s.execute("select.set", &json!({ "ids": [a] })).unwrap();
+    s.execute("transparency.set", &json!({ "opacity": 50 })).unwrap();
+    apply_texture(&mut s, a);
+    let image = vectorcraft_render::Renderer::new().render(
+        &s.doc().unwrap().doc,
+        400,
+        300,
+        vectorcraft_geom::Affine::IDENTITY,
+        &vectorcraft_render::RenderOptions::default(),
+    );
+    let pixel = image.pixel(50, 50);
+    assert!((120..=136).contains(&pixel[3]), "the texture respects 50% object opacity: {pixel:?}");
+    assert!(pixel[0] > 180 && pixel[1] < 50 && pixel[2] < 50, "the foreground tile actually rasterizes: {pixel:?}");
+}
+
+#[test]
+fn texture_edit_reaches_both_users_in_independent_exports() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("shape.rectangle", &json!({ "x": 200, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    create_texture(&mut s, 0.4);
+    for id in [a, b] {
+        apply_texture(&mut s, id);
+    }
+    s.execute("texture.setProps", &json!({ "name": "Coral Stipple", "foreground": "#20a040" })).unwrap();
+
+    let svg = exported_svg(&mut s);
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+    let mut patterns = vec![];
+    pattern_paints(tree.root(), &mut patterns);
+    assert_eq!(patterns.len(), 2, "both users reference the rendered texture: {svg}");
+    assert!(std::sync::Arc::ptr_eq(&patterns[0], &patterns[1]), "both users share one definition");
+    assert!(has_solid_vector(patterns[0].root(), [32, 160, 64]) && has_solid_vector(patterns[0].root(), [32, 64, 128]), "{svg}");
+    assert!(!has_solid_vector(patterns[0].root(), [192, 32, 32]), "the old colour is gone: {svg}");
+
+    let imported = imported_pdf(&mut s);
+    let definition = imported
+        .patterns
+        .iter()
+        .find(|definition| art_has_colours(&definition.art, &["#20a040", "#204080"]))
+        .expect("Hayro reconstructs the edited two-colour texture definition");
+    let mut users = 0;
+    imported.walk(|node| {
+        users +=
+            usize::from(matches!(node.appearance.fill_paint(), vectorcraft_color::Paint::Pattern { pattern, .. } if *pattern == definition.name));
+    });
+    assert_eq!(users, 2, "both reconstructed targets reference the texture definition");
+}
+
+#[test]
+fn texture_reopen_edit_reaches_the_independent_export() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    create_texture(&mut s, 0.4);
+    apply_texture(&mut s, a);
+    let data = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({ "dataBase64": data })).unwrap();
+    s.execute("texture.setProps", &json!({ "name": "Coral Stipple", "foreground": "#20a040" })).unwrap();
+
+    let svg = exported_svg(&mut s);
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse after native reopen");
+    let mut patterns = vec![];
+    pattern_paints(tree.root(), &mut patterns);
+    let [pattern] = patterns.as_slice() else { panic!("one reopened texture user: {svg}") };
+    assert!(has_solid_vector(pattern.root(), [32, 160, 64]) && !has_solid_vector(pattern.root(), [192, 32, 32]), "{svg}");
+}
+
+#[test]
+fn texture_compound_preserves_even_odd_and_exports_tiles() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({ "width": 100, "height": 100 })).unwrap();
+    let outer = s.execute("shape.rectangle", &json!({ "x": 10, "y": 10, "width": 80, "height": 80 })).unwrap()["id"].as_u64().unwrap();
+    let inner = s.execute("shape.rectangle", &json!({ "x": 30, "y": 30, "width": 40, "height": 40 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({ "ids": [inner, outer] })).unwrap();
+    let compound = s.execute("object.compoundPath.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({ "ids": [inner] })).unwrap();
+    s.execute("path.reverse", &json!({})).unwrap();
+    s.execute("select.set", &json!({ "ids": [compound] })).unwrap();
+    s.execute("path.setFillRule", &json!({ "rule": "evenOdd" })).unwrap();
+    create_texture(&mut s, 1.0);
+    apply_texture(&mut s, compound);
+
+    let svg = exported_svg(&mut s);
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg compound parse");
+    let mut patterns = vec![];
+    pattern_paints(tree.root(), &mut patterns);
+    let [pattern] = patterns.as_slice() else { panic!("the compound has a texture pattern: {svg}") };
+    assert!(has_solid_vector(pattern.root(), [192, 32, 32]), "{svg}");
+    fn has_even_odd_pattern(group: &usvg::Group) -> bool {
+        group.children().iter().any(|node| match node {
+            usvg::Node::Group(child) => has_even_odd_pattern(child),
+            usvg::Node::Path(path) => {
+                path.fill().is_some_and(|fill| fill.rule() == usvg::FillRule::EvenOdd && matches!(fill.paint(), usvg::Paint::Pattern(_)))
+            }
+            _ => false,
+        })
+    }
+    assert!(has_even_odd_pattern(tree.root()), "the SVG compound stays even-odd: {svg}");
+
+    let imported = imported_pdf(&mut s);
+    let definition = imported
+        .patterns
+        .iter()
+        .find(|definition| art_has_colours(&definition.art, &["#c02020"]))
+        .expect("Hayro reconstructs the compound texture definition");
+    let mut even_odd = false;
+    imported.walk(|node| {
+        let rule = match &node.kind {
+            vectorcraft_doc::NodeKind::Path { rule, .. } | vectorcraft_doc::NodeKind::Compound { rule, .. } => Some(*rule),
+            _ => None,
+        };
+        even_odd |= rule == Some(vectorcraft_geom::FillRule::EvenOdd)
+            && matches!(node.appearance.fill_paint(), vectorcraft_color::Paint::Pattern { pattern, .. } if *pattern == definition.name);
+    });
+    assert!(even_odd, "the reconstructed PDF compound stays even-odd");
+}
+
+#[test]
+fn texture_svg_pattern_keeps_the_targets_opacity() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 120, "height": 80 })).unwrap()["id"].as_u64().unwrap();
+    create_texture(&mut s, 1.0);
+    s.execute("select.set", &json!({ "ids": [a] })).unwrap();
+    s.execute("transparency.set", &json!({ "opacity": 50 })).unwrap();
+    apply_texture(&mut s, a);
+    let svg = exported_svg(&mut s);
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg opacity parse");
+    fn opacities(group: &usvg::Group, inherited: f32, out: &mut Vec<f32>) {
+        let inherited = inherited * group.opacity().get();
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => opacities(child, inherited, out),
+                usvg::Node::Path(path) => {
+                    if let Some(fill) = path.fill()
+                        && matches!(fill.paint(), usvg::Paint::Pattern(_))
+                    {
+                        out.push(inherited * fill.opacity().get());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut found = vec![];
+    opacities(tree.root(), 1.0, &mut found);
+    assert_eq!(found, vec![0.5], "the whole textured target is half opaque: {svg}");
 }

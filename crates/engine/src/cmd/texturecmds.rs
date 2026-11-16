@@ -77,14 +77,15 @@ fn texture_params(_s: &Session, p: &Value, existing: Option<&TextureDef>) -> Res
 fn texture_new(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "texture.new";
     let (name, kind, density, foreground, background) = texture_params(s, p, None)?;
-    let name = s.edit("New Texture", move |d, _| {
+    let reply = name.clone();
+    s.edit("New Texture", move |d, _| {
         if d.texture(&name).is_some() {
             return Err(EngineError::Other(format!("{C}: a texture named {name:?} already exists")));
         }
         d.textures.push(TextureDef { name: name.clone(), kind, density, foreground, background });
         Ok(())
     })?;
-    Ok(json!({"name": name}))
+    Ok(json!({"name": reply}))
 }
 
 fn texture_set_props(s: &mut Session, p: &Value) -> Result<Value> {
