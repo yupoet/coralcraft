@@ -374,4 +374,60 @@ Real CLI exports return the correct texture name; the half-opacity raster centre
 128)`, the compound raster/PDF outer is red and its centre is transparent/white, and both SVGs use
 real patterns (the compound keeps `fill-rule="evenodd"`). The first CLI assertion script wrongly
 required background cells at density 1; its corrected assertions pass without changing the output.
-The full gate is running; T1 stays open pending its result.
+Full gate on the integrated T1 tree (`e3737fb4c`, 2026-11-16): `cargo xtask ci` exited 1.
+Formatting and workspace Clippy passed. The workspace run stopped at the engine library's sole
+failure, recorded verbatim:
+
+```text
+failures:
+    tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars
+
+test result: FAILED. 4376 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 34.91s
+
+error: test failed, to rerun pass `-p vectorcraft-engine --lib`
+
+CI summary:
+  ok    fmt
+  ok    clippy
+  FAIL  test: cargo test --workspace --lib --bins --tests: exited with exit status: 101
+  skip  doctests
+  skip  cleanroom
+  skip  no-bundled-fonts
+  skip  pdf-deps
+  skip  assets
+  skip  brands
+  skip  cursors
+  skip  i18n-report
+  skip  layers
+  skip  wasm
+error: ci failed at `test`
+```
+
+This is known-issue 0b on x86_64 macOS, not a clean full-CI pass, and no failure was hidden or
+silenced. Because it was the sole failure, every skipped later gate then ran serially and exited
+0, in this order:
+
+1. `cargo test --workspace --doc`.
+2. `cargo xtask cleanroom` (**2,643 files**).
+3. `cargo test -p vectorcraft-text --no-default-features --test without_bundled_fonts` (**1/1**).
+4. `cargo tree -p vectorcraft-ui-egui --target all -e features,normal -i vectorcraft-text`.
+5. `cargo tree -p vectorcraft-ui-egui --no-default-features --target all -e features,normal -i vectorcraft-text`.
+6. `cargo tree -p vectorcraft-mcp --target all -e features,normal -i vectorcraft-text`.
+7. `cargo tree -p vectorcraft-mcp --no-default-features --target all -e features,normal -i vectorcraft-text`.
+8. `cargo clippy -p vectorcraft-ui-egui --no-default-features --all-targets -- -D warnings`.
+9. `cargo test -p vectorcraft-ui-egui --no-default-features --test install_fonts` (**2/2**).
+10. `cargo xtask pdf-deps`.
+11. `cargo xtask assets` (**309 files**).
+12. `cargo xtask brands`.
+13. `cargo xtask cursors`.
+14. `cargo xtask i18n-report`.
+15. `cargo xtask layers` (**30 crates**).
+16. `cargo xtask wasm` (**25 crates**).
+
+Both default-feature trees contain `vectorcraft-text feature "bundled-fonts"`; both
+no-default-feature trees do not. Wasm emitted the same four existing UI warnings and no errors.
+
+The focused matrix and all eligible closure gates therefore support closing **T1**. **T2 Corel
+Pattern parameters is next.** T3, P3.3, P3, S2, and P0.1 remain open. CDR/CMX evidence remains
+limited to the explicit synthesized-tile fallback warning; no independent format certification is
+claimed.

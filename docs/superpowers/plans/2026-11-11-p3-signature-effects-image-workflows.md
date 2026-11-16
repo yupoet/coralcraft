@@ -41,33 +41,15 @@
 
 Tasks 1, 2, 4, 5, 7, 8, 9, 11 complete; Task 3 Step 2 (transparency/masks) complete; Task 10's
 mesh-opacity/empty-live slices and the mesh expansion-provenance closure (`d18ce9f3b`) complete;
-Task 12's historical acceptance recorded. The open work is the task list below, in order.
+Task 12's historical acceptance recorded. **Task T1 texture fill is complete** (`44591c46b`, main
+integrated at `e3737fb4c`); its focused evidence and honest known-issue-0b gate are in
+[`docs/p3-inventory.md` §21](../../p3-inventory.md). The open work is the task list below, in order.
 
 ---
 
 ## Open tasks
 
-### Task T1: Texture fill — the reusable model (P3.3, slice 1 of 3) — CURRENT
-
-Mirror the pattern architecture (`Paint::Pattern` + document `patterns`) with a texture model that
-is **not** an ordinary pattern relabelled: a document-level reusable `TextureDef` (name, procedural
-`kind` with parameters, two colours), a distinct `Paint::Texture` referencing it, deterministic
-bounded synthesis for render/export, and shared-engine commands.
-
-**Positive/negative matrix:** [`docs/p3-inventory.md` §19](../../p3-inventory.md) freezes this
-slice's semantics; write the matrix there before implementation and keep it in sync.
-
-**Acceptance (all required; nothing substitutes):**
-- Real editing through commands: create/edit a definition, apply to objects, edit propagates to
-  every user; undo/redo of each step.
-- Native reopen keeps the definition and its users editable (edit-after-reopen proven).
-- Independent evidence: `usvg` reads the synthesized tiles' actual geometry/colours in SVG; the
-  Hayro-backed PDF reader reconstructs the tile art (structure, not live-PDF claims).
-- CDR/CMX export carries an explicit texture fallback warning (never a silent checkerboard).
-- Negatives: applying an unknown texture errors; the texture is not listed by pattern queries and
-  a pattern is not accepted where a texture is required.
-
-### Task T2: Corel Pattern parameters (P3.3, slice 2 of 3)
+### Task T2: Corel Pattern parameters (P3.3, slice 2 of 3) — CURRENT
 
 Map the CorelDRAW pattern model's foreground/background/kind parameters onto the synced pattern
 architecture, or degrade with a precise warning naming exactly what is lost. Generic `PatternDef.art`
