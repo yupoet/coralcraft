@@ -458,3 +458,69 @@ feature-tree assertions with bundled fonts present only in the default-feature t
 Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
 (**30 crates**); and wasm (**25 crates**). Wasm emitted the same four existing UI warnings and no
 errors. T1 remains complete and **T2 is next**; T3, P3.3, P3, S2, and P0.1 remain open.
+
+## 22. Task T2 Corel Pattern parameters — positive/negative matrix (frozen 2026-11-17)
+
+The CorelDRAW two-colour pattern fill maps **onto the synced pattern architecture**: a document-level
+reusable `PatternDef` carrying an optional `two_color` source (geometric `kind`, `fg`, `bg`), the
+tile size on the tile rectangle, art synthesized deterministically from the source, and the ordinary
+`Paint::Pattern` naming it. Generic `PatternDef.art` workflows stay as they are and do not count for
+this slice; a texture is not a pattern and vice versa.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `pattern.twoColor` creates a named definition (kind, fg, bg, tile size) for each of the five kinds, and `pattern.list` reports the source parameters. |
+| P2 | `paint.setPattern` fills the selection with the named pattern; the inspected paint is `pattern <name>` (not a texture, not a solid). |
+| P3 | A second object painted with the same name reuses the ONE definition (definition count does not grow). |
+| P4 | Each parameter edits through `pattern.setTwoColorProps` and reaches every user's exported tiles: **kind** (the tile art's geometry changes), **fg**, **bg** (the exported colours change), **tileSize** (the exported pattern period changes); each edit is one undo step and undo/redo round-trips exactly. |
+| P5 | Native `.vectorcraft` save/reopen keeps the definition, its parameters and its users; each parameter still edits after reopen. |
+| P6 | SVG export renders the synthesized tiles; independent `usvg` reads the connected pattern's tile rect and both colours, and kind-specific geometry (a polka-dot tile holds an ellipse where a checkerboard tile holds quadrant rectangles). |
+| P7 | PDF export reconstructs the tile art and a connected pattern definition (Hayro-backed read: structure, not live-PDF claims). |
+| P8 | CDR/CMX **import** maps `FillStyle::TwoColorPattern {kind, fg, bg, tile_size}` to a definition with exactly those parameters and a `Paint::Pattern` naming it (no solid-lerp substitution). |
+| P9 | CDR/CMX **export** of a two-colour pattern writes `FillStyle::TwoColorPattern` with exactly the definition's kind, colours and tile size, with **no** generic-pattern warning; a generic art pattern still emits exactly one named generic-pattern warning. |
+
+**Negatives (each must pass — no silent fallbacks, no pattern/texture confusion):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `pattern.twoColor`/`pattern.setTwoColorProps` refuse an unknown kind id, a non-colour fg/bg, and a non-finite or ≤ 0 tile size, without document change. |
+| N2 | `pattern.setTwoColorProps` on a definition without a two-colour source is refused with an error that names it an art pattern (pattern.options owns it). |
+| N3 | `paint.setPattern` with an unknown name or a texture name errors and changes nothing. |
+| N4 | A two-colour pattern is NOT listed by `texture.list`, and `paint.setTexture` refuses its name. |
+| N5 | CDR import of `PatternKind::Unknown` degrades to the solid blend **with a named warning** (never a silent checkerboard or silent solid). |
+
+Out of scope for this slice (follow-ups, not blockers): full-colour and bitmap pattern fill kinds,
+the Corel pattern transform parameters (mirror/rotate/skew/row-column offset), a pattern picker UI,
+and merge-mode interactions (Task T3).
+
+### 22a. Task T2 delivered: the parameter mapping (2026-11-17)
+
+RED first: all eight `coreldraw_pattern_params` engine tests failed (`UnknownCommand("pattern.twoColor")`
+and the import/export assertions) on the pre-change tree. The delivered mapping:
+
+- `vectorcraft-doc` (`pattern.rs`): `TwoColorKind` (the five geometric kinds, ids `checkerboard` …
+  `diagonalCrosshatch`), `TwoColorSource { kind, foreground, background }` with deterministic
+  bounded `tile_art` (background rectangle + the kind's foreground pieces; the polka dot is a real
+  ellipse, the crosshatch two diagonal parallelograms), and `PatternDef.two_color: Option<…>`
+  (serde-defaulted, so old documents load) with `PatternDef::two_color` / `set_two_color`
+  (regenerates the art; refuses an art pattern).
+- Commands (`patterncmds.rs`): `pattern.twoColor` (named definition from kind/colours/tile size,
+  blank names numbered), `pattern.setTwoColorProps` (one undo step, art patterns refused by name),
+  `paint.setPattern` (unknown and texture names refused), and `pattern.list` reporting the
+  `twoColor` source.
+- `corel-import`: CDR/CMX import maps `FillStyle::TwoColorPattern {kind, fg, bg, tile_size}` to a
+  definition with exactly those parameters (one per unique parameter set, "Two-Color <Kind>" named)
+  and a `Paint::Pattern` naming it; the forward-compatible `PatternKind::Unknown` keeps the solid
+  blend **with the named warning** `unknown Corel pattern kinds import as a solid blend …`. Export
+  writes the exact `FillStyle::TwoColorPattern` parameters back (kind, both colours, tile size,
+  no generic warning); generic art patterns keep exactly one named checkerboard warning.
+
+GREEN: `coreldraw_pattern_params` **8/8** (P1–P9, N1–N5), document pattern suite **30/30**
+(411 doc-crate tests in all), texture T1 regression **13/13**, fills/transparency **8/8**,
+P3 persistence **16/16**, corel-import **35 + 2**, SVG **337**, PDF, and MCP `docs_sync` **2/2**
+(unblessed; the command-level MCP doc refresh belongs to Task 13). Formatting and focused Clippy
+(`-D warnings`) over `vectorcraft-doc`, `vectorcraft-engine`, and `corel-import` pass.
+GitNexus `detect-changes --scope all`: 5 files, 43 symbols, one affected flow (a const-reposition
+attribution), risk medium, result complete.

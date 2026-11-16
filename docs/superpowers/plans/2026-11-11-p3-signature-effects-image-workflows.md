@@ -49,7 +49,7 @@ integrated at `e3737fb4c`); its focused evidence and honest known-issue-0b gate 
 
 ## Open tasks
 
-### Task T2: Corel Pattern parameters (P3.3, slice 2 of 3) — CURRENT
+### Task T2: Corel Pattern parameters (P3.3, slice 2 of 3) — COMPLETE (2026-11-17, §22/§22a)
 
 Map the CorelDRAW pattern model's foreground/background/kind parameters onto the synced pattern
 architecture, or degrade with a precise warning naming exactly what is lost. Generic `PatternDef.art`
@@ -60,7 +60,7 @@ reopen), or per-parameter fallback warnings; independent SVG/PDF evidence; CDR/C
 explicitly (today's default checkerboard substitution becomes a named, warned degradation or a real
 mapping).
 
-### Task T3: Merge-mode matrix and combined transparency (P3.3, slice 3 of 3)
+### Task T3: Merge-mode matrix and combined transparency (P3.3, slice 3 of 3) — CURRENT
 
 **Acceptance:** the merge-mode matrix (each supported mode: edit, undo/redo, native reopen,
 independent SVG/PDF read); combined scenarios of mesh + gradient + opacity mask with their CDR/CMX

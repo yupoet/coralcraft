@@ -27,6 +27,7 @@ use vectorcraft_doc::{
     Appearance, AppearanceItem, AreaOptions, Arrowhead, Artboard, CharStyle, ColorMode, Dash, Document as VcDocument, Effect, FillLayer, ImageBlob,
     ImageObject, Justify, LayerColor, LineCap as VcLineCap, LineJoin as VcLineJoin, LiveShape, Node, NodeId, NodeKind, OpacityMask, ParaStyle,
     Scaling, Selection, StrokeLayer, TextKind, TextObject, TextRun, Unit as VcUnit,
+    pattern::{PatternDef as VcPatternDef, TwoColorKind as VcTwoColorKind, TwoColorSource as VcTwoColorSource},
 };
 use vectorcraft_geom::{
     Affine, BezPath, FillRule as VcFillRule, PathData, PathEl, Point as VcPoint, Rect as VcRect, Vec2,
@@ -689,6 +690,56 @@ pub fn import_legacy_coralcraft_bytes(bytes: &[u8]) -> Result<(VcDocument, Vec<S
 }
 
 const GENERIC_PATTERN_WARNING: &str = "generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable";
+// CoralCraft (P3 Task T2): a Corel pattern kind with no mapping of our own (the legacy model's
+// forward-compatible Unknown) is not silently drawn as anything.
+const UNKNOWN_PATTERN_KIND_WARNING: &str =
+    "unknown Corel pattern kinds import as a solid blend of their two colours; the original fill stays in the residual";
+
+/// CoralCraft (P3 Task T2): the two-colour kind a legacy Corel pattern kind maps to (None: the
+/// forward-compatible `Unknown`, which has no tile geometry of our own).
+fn map_cdr_pattern_kind(kind: PatternKind) -> Option<VcTwoColorKind> {
+    match kind {
+        PatternKind::Checkerboard => Some(VcTwoColorKind::Checkerboard),
+        PatternKind::PolkaDot => Some(VcTwoColorKind::PolkaDot),
+        PatternKind::HorizontalStripe => Some(VcTwoColorKind::HorizontalStripe),
+        PatternKind::VerticalStripe => Some(VcTwoColorKind::VerticalStripe),
+        PatternKind::DiagonalCrosshatch => Some(VcTwoColorKind::DiagonalCrosshatch),
+        PatternKind::Unknown => None,
+    }
+}
+
+/// CoralCraft (P3 Task T2): the exported tile size of the two-colour pattern `name` (its tile's
+/// width, at least a point and finite).
+fn source_tile_size(doc: &VcDocument, name: &str) -> f64 {
+    doc.patterns.iter().find(|d| d.name == name).map(|d| d.tile.width().max(d.tile.height())).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
+}
+
+/// CoralCraft (P3 Task T2): the legacy Corel pattern kind a two-colour kind maps back to.
+fn map_vc_two_color_kind(kind: VcTwoColorKind) -> PatternKind {
+    match kind {
+        VcTwoColorKind::Checkerboard => PatternKind::Checkerboard,
+        VcTwoColorKind::PolkaDot => PatternKind::PolkaDot,
+        VcTwoColorKind::HorizontalStripe => PatternKind::HorizontalStripe,
+        VcTwoColorKind::VerticalStripe => PatternKind::VerticalStripe,
+        VcTwoColorKind::DiagonalCrosshatch => PatternKind::DiagonalCrosshatch,
+    }
+}
+
+/// CoralCraft (P3 Task T2): the paint of the document's two-colour pattern of `kind`, `fg`, `bg`
+/// and `tile` pt, reusing the definition the import already made for the same parameters (or
+/// making one, named "Two-Color <Kind>" and numbered when the name is taken).
+fn two_color_pattern_paint(doc: &mut VcDocument, kind: VcTwoColorKind, fg: VcColor, bg: VcColor, tile: f64) -> Paint {
+    if let Some(def) = doc.patterns.iter().find(|d| {
+        d.two_color.as_ref().is_some_and(|s| s.kind == kind && s.foreground == fg && s.background == bg) && (d.tile.width() - tile).abs() < 1e-9
+    }) {
+        return Paint::Pattern { pattern: def.name.clone(), xf: Affine::IDENTITY };
+    }
+    let base = format!("Two-Color {}", kind.id());
+    let taken = |name: &str| doc.patterns.iter().any(|d| d.name == name) || doc.swatches.iter().any(|s| s.name == name);
+    let name = std::iter::once(base.clone()).chain((2..).map(|i| format!("{base} {i}"))).find(|name| !taken(name)).unwrap_or(base);
+    doc.patterns.push(VcPatternDef::two_color(&name, VcTwoColorSource { kind, foreground: fg, background: bg }, tile));
+    Paint::Pattern { pattern: name, xf: Affine::IDENTITY }
+}
 const LIVE_TRACE_WARNING: &str =
     "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
 const GRADIENT_ALPHA_WARNING: &str = "gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable";
@@ -1649,7 +1700,7 @@ fn map_vc_path_to_cdr(path: &PathData, rule: VcFillRule, offset: Vec2) -> CdrPat
     cpath
 }
 
-fn map_cdr_fill_to_paint(fill: &FillStyle, bounds: Option<VcRect>) -> Paint {
+fn map_cdr_fill_to_paint(fill: &FillStyle, bounds: Option<VcRect>, doc: &mut VcDocument, warnings: &mut Vec<String>) -> Paint {
     match fill {
         FillStyle::Uniform { color } => map_cdr_color_to_paint(color),
         FillStyle::Fountain { geometry, stops, .. } => {
@@ -1689,11 +1740,29 @@ fn map_cdr_fill_to_paint(fill: &FillStyle, bounds: Option<VcRect>) -> Paint {
             gp.geom = geom;
             Paint::Gradient(Box::new(gp))
         }
-        FillStyle::TwoColorPattern { fg_color, bg_color, .. } => {
-            // Represent two-color pattern as a 2-stop gradient or solid blend for visual fidelity;
-            // exact TwoColorPattern is preserved in CoralCraftObjectMeta.
-            let c = map_cdr_color_to_vc(fg_color).lerp(&map_cdr_color_to_vc(bg_color), 0.25);
-            Paint::solid(c)
+        FillStyle::TwoColorPattern { kind, fg_color, bg_color, tile_size_pt } => {
+            // CoralCraft (P3 Task T2): a known kind maps onto a real two-colour pattern
+            // definition; the forward-compatible Unknown keeps the solid blend, now with a named
+            // warning (the exact fill stays in the object's residual either way).
+            match map_cdr_pattern_kind(*kind) {
+                Some(kind) => {
+                    let tile = tile_size_pt.get();
+                    two_color_pattern_paint(
+                        doc,
+                        kind,
+                        map_cdr_color_to_vc(fg_color),
+                        map_cdr_color_to_vc(bg_color),
+                        if tile.is_finite() && tile > 0.0 { tile } else { 12.0 },
+                    )
+                }
+                None => {
+                    if !warnings.iter().any(|w| w == UNKNOWN_PATTERN_KIND_WARNING) {
+                        warnings.push(UNKNOWN_PATTERN_KIND_WARNING.to_owned());
+                    }
+                    let c = map_cdr_color_to_vc(fg_color).lerp(&map_cdr_color_to_vc(bg_color), 0.25);
+                    Paint::solid(c)
+                }
+            }
         }
         FillStyle::Unknown { .. } => Paint::solid(VcColor::gray(0.5)),
     }
@@ -1743,9 +1812,16 @@ fn map_vc_arrow_to_cdr(a: Option<Arrowhead>) -> ArrowheadKind {
     }
 }
 
-fn build_appearance(fill: Option<&FillStyle>, outline: Option<&OutlineStyle>, effects: &[VectorEffect], bounds: Option<VcRect>) -> Appearance {
+fn build_appearance(
+    fill: Option<&FillStyle>,
+    outline: Option<&OutlineStyle>,
+    effects: &[VectorEffect],
+    bounds: Option<VcRect>,
+    doc: &mut VcDocument,
+    warnings: &mut Vec<String>,
+) -> Appearance {
     let mut items = Vec::with_capacity(2);
-    let fill_item = fill.map(|f| AppearanceItem::Fill(FillLayer::new(map_cdr_fill_to_paint(f, bounds))));
+    let fill_item = fill.map(|f| AppearanceItem::Fill(FillLayer::new(map_cdr_fill_to_paint(f, bounds, doc, warnings))));
     let stroke_item = outline.map(|o| AppearanceItem::Stroke(map_cdr_outline_to_stroke(o)));
     let behind_fill = outline.is_some_and(|o| o.behind_fill);
 
@@ -1834,11 +1910,18 @@ fn build_appearance(fill: Option<&FillStyle>, outline: Option<&OutlineStyle>, ef
     Appearance { items, effects: vc_effects, contents_index: None }
 }
 
-fn build_fountain_opacity_mask(mask_id: NodeId, bounds: VcRect, geometry: FountainGeometry, stops: &[FountainStop]) -> OpacityMask {
+fn build_fountain_opacity_mask(
+    mask_id: NodeId,
+    bounds: VcRect,
+    geometry: FountainGeometry,
+    stops: &[FountainStop],
+    doc: &mut VcDocument,
+    warnings: &mut Vec<String>,
+) -> OpacityMask {
     let rect = if bounds.width() > 0.0 && bounds.height() > 0.0 { bounds } else { VcRect::new(0.0, 0.0, 100.0, 100.0) };
     let path = shapes::rectangle(rect);
     let fill = FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops: stops.to_vec() };
-    let paint = map_cdr_fill_to_paint(&fill, Some(rect));
+    let paint = map_cdr_fill_to_paint(&fill, Some(rect), doc, warnings);
     let ap = Appearance { items: vec![AppearanceItem::Fill(FillLayer::new(paint))], effects: vec![], contents_index: None };
     let mask_node = Node::path(mask_id, path, ap);
     OpacityMask::new(mask_node, false)
@@ -1890,7 +1973,7 @@ fn convert_cdr_node_to_vc(
         xf.transform_rect_bbox(vr)
     });
 
-    let appearance = build_appearance(cdr_node.fill.as_ref(), cdr_node.outline.as_ref(), &cdr_node.effects, local_bounds);
+    let appearance = build_appearance(cdr_node.fill.as_ref(), cdr_node.outline.as_ref(), &cdr_node.effects, local_bounds, doc, warnings);
 
     let mut base_node = match &cdr_node.kind {
         ObjectKind::Rect(rspec) => {
@@ -1974,7 +2057,7 @@ fn convert_cdr_node_to_vc(
             let mut style = CharStyle {
                 font_family: font_family.clone(),
                 size: size_pt.get().max(0.5),
-                fill: cdr_node.fill.as_ref().map_or_else(|| Paint::solid(VcColor::BLACK), |f| map_cdr_fill_to_paint(f, local_bounds)),
+                fill: cdr_node.fill.as_ref().map_or_else(|| Paint::solid(VcColor::BLACK), |f| map_cdr_fill_to_paint(f, local_bounds, doc, warnings)),
                 stroke: cdr_node.outline.as_ref().map_or(Paint::None, |o| map_cdr_color_to_paint(&o.color)),
                 stroke_width: cdr_node.outline.as_ref().map_or(0.0, |o| o.width_pt.get()),
                 ..CharStyle::default()
@@ -2004,7 +2087,7 @@ fn convert_cdr_node_to_vc(
                 font_family: pspec.font_family.clone(),
                 size: pspec.font_size_pt.get().max(0.5),
                 leading: Some(pspec.font_size_pt.get().max(0.5) * pspec.line_spacing_multiplier.get().max(0.5)),
-                fill: cdr_node.fill.as_ref().map_or_else(|| Paint::solid(VcColor::BLACK), |f| map_cdr_fill_to_paint(f, local_bounds)),
+                fill: cdr_node.fill.as_ref().map_or_else(|| Paint::solid(VcColor::BLACK), |f| map_cdr_fill_to_paint(f, local_bounds, doc, warnings)),
                 stroke: cdr_node.outline.as_ref().map_or(Paint::None, |o| map_cdr_color_to_paint(&o.color)),
                 stroke_width: cdr_node.outline.as_ref().map_or(0.0, |o| o.width_pt.get()),
                 ..CharStyle::default()
@@ -2149,7 +2232,7 @@ fn convert_cdr_node_to_vc(
                     }
                 };
                 let b = base_node.geometric_bounds().unwrap_or_else(|| VcRect::new(0.0, 0.0, 100.0, 100.0));
-                let mask = build_fountain_opacity_mask(mask_id, b, *geometry, stops);
+                let mask = build_fountain_opacity_mask(mask_id, b, *geometry, stops, doc, warnings);
                 base_node.extras_mut().mask = Some(Box::new(mask));
             }
             TransparencyStyle::Lens { .. } | TransparencyStyle::Unknown => {}
@@ -2676,7 +2759,7 @@ fn convert_vc_node_to_cdr_with_expected(
     } else {
         node
     };
-    let (fill, outline, item_effects) = convert_vc_appearance_to_cdr(&node.appearance, warnings);
+    let (fill, outline, item_effects) = convert_vc_appearance_to_cdr(&node.appearance, doc, warnings);
     if let NodeKind::Text(tobj) = &node.kind {
         for run in &tobj.runs {
             let _ = map_vc_paint_to_cdr_color(&run.style.fill, warnings);
@@ -2941,6 +3024,7 @@ fn convert_vc_node_to_cdr_with_expected(
 
 fn convert_vc_appearance_to_cdr<'a>(
     ap: &'a Appearance,
+    doc: &VcDocument,
     warnings: &mut ExportWarningLedger,
 ) -> (Option<FillStyle>, Option<OutlineStyle>, Vec<&'a [Effect]>) {
     let mut fill_paint = None;
@@ -2966,7 +3050,7 @@ fn convert_vc_appearance_to_cdr<'a>(
         }
     }
 
-    let fill = fill_paint.and_then(|paint| convert_vc_paint_to_fill(paint, warnings));
+    let fill = fill_paint.and_then(|paint| convert_vc_paint_to_fill(paint, doc, warnings));
     let mut outline = stroke_paint.and_then(|stroke| convert_vc_stroke_to_outline(stroke, warnings));
     if let (Some(s_idx), Some(f_idx), Some(outl)) = (first_stroke_idx, first_fill_idx, outline.as_mut())
         && s_idx < f_idx
@@ -2978,7 +3062,7 @@ fn convert_vc_appearance_to_cdr<'a>(
     (fill, outline, item_effects)
 }
 
-fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {
+fn convert_vc_paint_to_fill(paint: &Paint, doc: &VcDocument, warnings: &mut ExportWarningLedger) -> Option<FillStyle> {
     note_gradient_alpha(paint, warnings);
     if matches!(paint, Paint::Texture { .. }) {
         // CoralCraft (P3 Task T1): the texture definition has no CDR/CMX channel.
@@ -3008,14 +3092,31 @@ fn convert_vc_paint_to_fill(paint: &Paint, warnings: &mut ExportWarningLedger) -
             };
             Some(FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops })
         }
-        Paint::Pattern { .. } => {
-            warnings.generic_pattern = true;
-            Some(FillStyle::TwoColorPattern {
-                kind: PatternKind::Checkerboard,
-                fg_color: CdrColor::BLACK,
-                bg_color: CdrColor::WHITE,
-                tile_size_pt: F64::new(12.0).unwrap_or(F64::ONE),
-            })
+        // CoralCraft (P3 Task T2): a pattern with a two-colour source maps back onto the exact
+        // Corel parameters (kind, both colours, tile size); art patterns keep the named
+        // checkerboard substitution.
+        Paint::Pattern { pattern, .. } => {
+            let source = doc.patterns.iter().find(|d| &d.name == pattern).and_then(|d| d.two_color.as_ref());
+            match source {
+                Some(source) => {
+                    let size = source_tile_size(doc, pattern);
+                    Some(FillStyle::TwoColorPattern {
+                        kind: map_vc_two_color_kind(source.kind),
+                        fg_color: map_vc_color_to_cdr(&source.foreground),
+                        bg_color: map_vc_color_to_cdr(&source.background),
+                        tile_size_pt: F64::new(size).unwrap_or(F64::ONE),
+                    })
+                }
+                None => {
+                    warnings.generic_pattern = true;
+                    Some(FillStyle::TwoColorPattern {
+                        kind: PatternKind::Checkerboard,
+                        fg_color: CdrColor::BLACK,
+                        bg_color: CdrColor::WHITE,
+                        tile_size_pt: F64::new(12.0).unwrap_or(F64::ONE),
+                    })
+                }
+            }
         }
         // CoralCraft (P3 Task T1): no CDR/CMX texture channel — a named, warned degradation.
         Paint::Texture { .. } => {

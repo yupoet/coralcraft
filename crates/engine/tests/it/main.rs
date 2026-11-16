@@ -37,6 +37,8 @@ mod coreldraw_p2_acceptance;
 // CoralCraft: P3 native/CDR/CMX persistence and fallbacks (P3 Task 10).
 mod coreldraw_p3_persistence;
 mod coreldraw_texture;
+// CoralCraft: the Corel two-colour pattern parameters (P3 Task T2).
+mod coreldraw_pattern_params;
 // CoralCraft: the P3 poster and traced-image acceptance scenario (P3 Task 12).
 mod coreldraw_p3_acceptance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).
