@@ -431,3 +431,30 @@ The focused matrix and all eligible closure gates therefore support closing **T1
 Pattern parameters is next.** T3, P3.3, P3, S2, and P0.1 remain open. CDR/CMX evidence remains
 limited to the explicit synthesized-tile fallback warning; no independent format certification is
 claimed.
+
+### Final-review addendum: pattern/texture cache separation (2026-11-17)
+
+Final review found that the SVG writer's shared `HashMap<String, String>` allowed a valid pattern
+named `texture|Coral Stipple` and a texture named `Coral Stipple` with matching transforms to
+produce the same cache key. The new `texture_and_pattern_cache_keys_do_not_collide` regression uses
+both definitions on separate targets and reads the export through independent `usvg`, including
+target positions and definition art. A zero-origin setup initially did not reproduce the collision
+because signed-zero transform coefficients made the strings differ; the final non-zero-origin setup
+makes the transforms match. Against the pre-fix code, the test failed at the distinct-definition
+assertion: the actual SVG emitted only `pattern-1`, connected both targets to it, and contained only
+the pattern's `#336699` art rather than the texture tiles.
+
+`Writer` now has separate pattern and texture caches. Existing key construction within each kind,
+name validity, definition reuse, and deterministic ID allocation are unchanged. Focused GREEN:
+`coreldraw_texture` **13/13**, SVG **67 + 7 + 337**, rustfmt, SVG/engine Clippy with `-D warnings`,
+and MCP docs_sync **2/2** all pass.
+
+The renewed `cargo xtask ci` passed formatting and workspace Clippy, then exited 1 solely at
+known-issue 0b: engine library **4,376 passed / 1 failed / 2 ignored**, failing
+`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`. This is
+not a clean full-CI pass. Every skipped later gate then reran serially in the exact 16-command order
+above and exited 0: doctests; cleanroom (**2,643 files**); no-bundled-fonts (**1/1**); all four
+feature-tree assertions with bundled fonts present only in the default-feature trees; no-default UI
+Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
+(**30 crates**); and wasm (**25 crates**). Wasm emitted the same four existing UI warnings and no
+errors. T1 remains complete and **T2 is next**; T3, P3.3, P3, S2, and P0.1 remain open.

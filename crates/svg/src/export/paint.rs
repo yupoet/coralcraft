@@ -225,7 +225,7 @@ impl Writer<'_> {
         let def = self.doc.texture(name)?.clone();
         let m = self.xf;
         let key = format!("texture|{name}|{:?}", m.as_coeffs());
-        if let Some(id) = self.patterns.get(&key) {
+        if let Some(id) = self.textures.get(&key) {
             return Some(id.clone());
         }
         let (pw, ph) = def.period();
@@ -234,7 +234,7 @@ impl Writer<'_> {
             return None;
         }
         let id = self.fresh_id("texture");
-        self.patterns.insert(key, id.clone());
+        self.textures.insert(key, id.clone());
         let (saved_body, saved_depth) = (std::mem::take(&mut self.body), self.depth);
         self.depth = 3;
         for (rect, color) in tiles {

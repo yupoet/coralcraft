@@ -449,3 +449,49 @@ fn texture_svg_pattern_keeps_the_targets_opacity() {
     opacities(tree.root(), 1.0, &mut found);
     assert_eq!(found, vec![0.5], "the whole textured target is half opaque: {svg}");
 }
+
+#[test]
+fn texture_and_pattern_cache_keys_do_not_collide() {
+    let mut s = session();
+    s.execute("artboard.setProps", &json!({ "index": 0, "x": 100, "y": 100 })).unwrap();
+    let tile = s.execute("shape.rectangle", &json!({ "x": 320, "y": 20, "width": 20, "height": 20 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("paint.setFill", &json!({ "id": tile, "color": "#336699" })).unwrap();
+    s.execute("paint.setStroke", &json!({ "id": tile, "none": true })).unwrap();
+    s.execute("object.pattern.make", &json!({ "id": tile, "name": "texture|Coral Stipple", "edit": false })).unwrap();
+    let pattern_target = s.execute("shape.rectangle", &json!({ "x": 200, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("paint.setFill", &json!({ "id": pattern_target, "swatch": "texture|Coral Stipple" })).unwrap();
+    s.execute("paint.setStroke", &json!({ "id": pattern_target, "none": true })).unwrap();
+    let texture_target = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    create_texture(&mut s, 0.4);
+    apply_texture(&mut s, texture_target);
+
+    let svg = exported_svg(&mut s);
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg collision parse");
+    fn positioned_patterns(group: &usvg::Group, out: &mut Vec<(f32, std::sync::Arc<usvg::Pattern>)>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => positioned_patterns(child, out),
+                usvg::Node::Path(path) => {
+                    if let Some(fill) = path.fill()
+                        && let usvg::Paint::Pattern(pattern) = fill.paint()
+                    {
+                        out.push((path.abs_bounding_box().left(), pattern.clone()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut paints = vec![];
+    positioned_patterns(tree.root(), &mut paints);
+    paints.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let [(texture_x, texture), (pattern_x, pattern)] = paints.as_slice() else { panic!("two connected paint definitions: {svg}") };
+    assert_eq!((*texture_x, *pattern_x), (-80.0, 100.0), "the targets retain their own positions: {svg}");
+    assert!(!std::sync::Arc::ptr_eq(texture, pattern), "texture and pattern targets must use distinct definitions: {svg}");
+    assert!(
+        has_solid_vector(texture.root(), [192, 32, 32]) && has_solid_vector(texture.root(), [32, 64, 128]),
+        "the texture target keeps its own tile colours: {svg}"
+    );
+    assert!(!has_solid_vector(texture.root(), [51, 102, 153]), "the pattern art does not replace the texture: {svg}");
+    assert!(has_solid_vector(pattern.root(), [51, 102, 153]), "the pattern target keeps its pattern art: {svg}");
+}

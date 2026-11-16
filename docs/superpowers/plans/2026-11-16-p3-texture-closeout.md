@@ -191,3 +191,12 @@ Expected: one documentation commit with the actual gate evidence and T2 handoff.
 This plan is complete when T1 is committed, main is integrated, the full-gate result is recorded honestly, and T2 is the current item in the existing P3 plan.
 
 Continue with `docs/superpowers/plans/2026-11-11-p3-signature-effects-image-workflows.md`: T2 Corel Pattern parameters, T3 merge-mode/combined-transparency matrix, E1–E6 remaining effects/interactions, M combined persistence/warning matrix, then Task 13 final P3 acceptance. Each slice keeps its own failing-test-first, independent-reader, review, and full-gate requirements.
+
+## Final-review addendum: SVG cache keys (2026-11-17)
+
+- [x] Reproduced the valid `texture|Coral Stipple` pattern / `Coral Stipple` texture collision with an independent-`usvg` regression. RED output emitted only `pattern-1`, shared it between both targets, and omitted the texture's own tile art. A zero-origin test setup was corrected after signed-zero transform coefficients prevented the intended key match.
+- [x] Added a separate texture-definition cache to the SVG `Writer`, leaving pattern keys, valid names, cache reuse, and deterministic ID allocation unchanged. GitNexus impact for both definition builders found one direct caller each (`Writer::paint`), no affected processes, and low risk.
+- [x] Focused verification passed: texture integration **13/13**, SVG **67 + 7 + 337**, formatting, SVG/engine Clippy with `-D warnings`, and MCP docs_sync **2/2**.
+- [x] Renewed `cargo xtask ci`: formatting and workspace Clippy passed; the sole failure remained known-issue 0b with engine library **4,376 passed / 1 failed / 2 ignored**. This is not a clean full-CI pass. All 16 skipped later commands in Task 3 Step 2 reran serially and exited 0, with cleanroom **2,643 files**, no-bundled-fonts **1/1**, install_fonts **2/2**, assets **309**, layers **30 crates**, and wasm **25 crates**; both default/no-default feature-tree pairs had the expected bundled-fonts distinction and wasm retained only its four existing UI warnings.
+
+T1 remains complete and T2 Corel Pattern parameters remains next. T3, P3.3, P3, S2, and P0.1 remain open. No independent CDR/CMX certification is claimed.
