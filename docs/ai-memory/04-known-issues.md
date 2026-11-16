@@ -1,5 +1,21 @@
 # 04 — Known Issues, Pitfalls & Workarounds
 
+## 0h. [Resolved 2026-11-16] FreeBSD CI flake: `the_shown_documents_thumbnails_are_made_before_the_queued_ones_of_another`
+
+- **Symptom**: on the FreeBSD CI runners (runs #46 2026-11-11 and #50 2026-11-15, plus rerun-passed
+  failures during the sync week) `panels::layers::thumbs::tests::the_shown_documents_thumbnails_are_made_before_the_queued_ones_of_another`
+  panicked at `crates/ui-egui/src/panels/layers/thumbs.rs:933` with `left: 1, right: 3`. Green on
+  every other platform and on fast machines.
+- **Root cause**: a test race, not a product bug. The test's last loop re-queues document 1's rows
+  without holding the worker: `Thumbs::texture` polls finished jobs at the top of every call and
+  `receive` removes a matching key from `pending`, so a worker that finishes row *i*'s job between
+  two `texture` calls takes it back out of `pending`. With all three rows lost that way the count
+  is exactly 1. Reproduced deterministically on macOS by sleeping 50 ms between the loop's calls.
+- **Fix**: the loop now holds the worker (`hold`) like the test's first loop and releases it after
+  the count assertion, making the sequence deterministic (verified green with the sleep kept in).
+  Marked `// CoralCraft:`; logged in `docs/upstream-divergences.tsv` (upstream `36ef34df` has the
+  same race and no fix to port).
+
 ## 0g. P2 text/layout boundaries (2026-11-11)
 
 - Dynamic page numbers are dedicated text objects marked by `NodeExtras::page_number`; their stored text is `#`, with evaluation only at canvas/SVG/PDF output. Arbitrary inline fields in longer text runs are not implemented.

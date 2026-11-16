@@ -134,6 +134,7 @@ crates/ui-egui/src/native_menu.rs	coralcraft-adaptation	app identity strings and
 crates/ui-egui/src/panel_docking.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/panels/layers.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/panels/layers/rows.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
+crates/ui-egui/src/panels/layers/thumbs.rs	coralcraft-adaptation	test determinism: the worker is held while the re-shown document's rows queue (FreeBSD CI flake, poll draining pending between calls)
 crates/ui-egui/src/panels/paragraph/tests.rs	coralcraft-adaptation	control_bar_node matches by label before value: accesskit node order differs on 32-bit targets and a TextRun shadows the control
 crates/ui-egui/src/prefs_dialog.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
 crates/ui-egui/src/prefs_dialog/tests.rs	coralcraft-adaptation	app identity strings and the CorelDRAW UI surfaces (page navigator, palette bar, shortcuts, layer roles)
