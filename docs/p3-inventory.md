@@ -642,3 +642,12 @@ cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both feature-tree pairs
 Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
 (**30 crates**); wasm (its four existing UI warnings only). T2 closes on this evidence; T3's
 slice shares this gate run (its RED was observed on the same tree), and Task 13 reruns everything.
+
+### 23b. P3.3 closed (2026-11-17)
+
+With T1 (§19–§21), T2 (§22, review fix §22c/§22d), and T3 (§23/§23a) complete, the advanced
+fills/transparency slice P3.3 closes: fountain, generic and Corel two-colour patterns, texture
+fills, meshes, opacity masks, and the full 16-mode merge matrix all have native
+edit/undo/redo/reopen evidence, independent SVG/PDF reads, and named deduplicated CDR/CMX
+degradations. The remaining P3 work (E1–E6, M, Task 13) stays under P3, which remains open; S2
+and P0.1 are untouched.
