@@ -248,6 +248,13 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "ids": [gid.0], "index": 0, "item": null, "grouped": true }));
     }
     let item = item_target(s, p, C)?;
+    // CoralCraft (P3 Task E2): Block Shadow validates its target and parameters.
+    if id == effects::addons::block_shadow::BLOCK_SHADOW {
+        for target in appearance_targets(s, p)? {
+            let n = s.doc()?.doc.node(target).ok_or(EngineError::NoNode(target))?;
+            effects::addons::block_shadow::validate(n, &effect.params).map_err(|e| bad(C, e))?;
+        }
+    }
     if effects::is_three_d(id) {
         for target in appearance_targets(s, p)? {
             let n = s.doc()?.doc.node(target).ok_or(EngineError::NoNode(target))?;

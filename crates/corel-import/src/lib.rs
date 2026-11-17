@@ -3192,6 +3192,15 @@ fn convert_vc_effects_to_cdr(effects: &[Effect], warnings: &mut ExportWarningLed
                     out.push(VectorEffect::Extrude { depth_pt, angle_deg });
                 }
             }
+            // CoralCraft (P3 Task T2 review/E2): the swept silhouette is the CDR/CMX Extrude
+            // effect's geometry, at the sweep's depth and angle.
+            "stylize.blockShadow" => {
+                let ox = eff.params.get("x").and_then(serde_json::Value::as_f64).unwrap_or(7.0);
+                let oy = eff.params.get("y").and_then(serde_json::Value::as_f64).unwrap_or(7.0);
+                if let (Ok(depth_pt), Ok(angle_deg)) = (F64::new(ox.hypot(oy)), F64::new(oy.atan2(ox).to_degrees())) {
+                    out.push(VectorEffect::Extrude { depth_pt, angle_deg });
+                }
+            }
             "distort.puckerBloat" => {
                 let amt = eff.params.get("amount").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
                 if let Ok(amplitude) = F64::new(amt) {

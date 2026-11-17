@@ -712,3 +712,55 @@ commands **143**, formatting and focused Clippy (`-D warnings`) over the three c
 GitNexus `detect-changes`: complete, 9 files, 16 symbols, 2 affected processes (the repeat
 arrangement evaluation), risk medium. The slice's full gate rides the next full-gate pass
 (Task 13 reruns everything).
+
+## 25. Task E2 Block Shadow — positive/negative matrix (frozen 2026-11-17)
+
+Block Shadow is a live vector effect on the shared appearance stack: `stylize.blockShadow`
+{x: pt, y: pt, color} sweeps the object's silhouette along (x, y) — the union of the outline, its
+translation, and the side walls — painted solid behind the object. Paths and compound paths only
+(the validation names the limit); CDR/CMX carries the geometry as its Extrude vector effect.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `effect.apply` puts the effect on the object's stack with its parameters; `effect.list` reports them. |
+| P2 | The rendered/exported art holds the swept block: independent `usvg` reads a shadow path with the effect's colour at the offset behind the object, and the Hayro-backed PDF read returns both paths. |
+| P3 | `effect.setParams` edits x/y/colour (one undo step each); undo/redo round-trips; the shadow's exported position/colour follows. |
+| P4 | Native reopen keeps the effect; it still edits after reopen. |
+| P5 | The shared effect dialog opens for the effect (`effect.dialog`) with its fields on the CorelDRAW workspace. |
+| P6 | CDR/CMX export maps the effect to the Extrude vector effect with exactly `hypot(x, y)` depth and `atan2` angle. |
+| P7 | `effect.remove` takes it off (the export no longer carries the shadow). |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | Non-finite x/y, a non-colour colour, or applying to a non-path (a group) is refused without document change. |
+
+Out of scope: the on-canvas direction-drag editing handle, shadows of type/images (the validation
+names the path limit), and CDR/CMX native Block Shadow (the Extrude mapping is the stated channel).
+
+### 25a. Task E2 delivered: the Block Shadow effect (2026-11-17)
+
+RED first: `block_shadow_sweeps_edits_and_exports` failed on `unknown effect "stylize.blockShadow"`.
+The delivered effect:
+
+- `vectorcraft-effects` (`addons/block_shadow.rs`, a CoralCraft module beside Vector Halftone):
+  the `stylize.blockShadow` catalogue entry ({x, y, color}), validation (finite numbers, a real
+  colour, paths/compound paths only — the error names the limit), and the art: the silhouette
+  swept along (x, y) as one united path (outline ∪ translation ∪ the side walls, pathops
+  `unite_all`, a 10 000-point outline budget), painted the effect's colour behind the unchanged
+  object. Wired beside Vector Halftone at every art site: `needs_bake`, `bake_node`, the
+  renderer's art chain, and the cull bounds (the shadow reaches past the object), with
+  `is_geometry` excluding it like the other art effects.
+- CDR/CMX: the sweep maps onto the legacy Extrude vector effect with exactly `hypot(x, y)` depth
+  and `atan2(y, x)` angle (a real parameter mapping, no warning).
+- UI: the shared effect dialog opens for it (`effect.dialog`, catalog-driven fields).
+
+GREEN: `block_shadow_sweeps_edits_and_exports` (apply/list, usvg shadow colour read, Hayro PDF
+two-path read, colour edit + one-step undo/redo, native reopen + post-reopen edit, the exact
+Extrude mapping, remove taking the shadow out of the export) and `block_shadow_refusals`
+(a group, a non-number x, a non-colour colour — all without document change), the dialog UI test,
+live effects **8/8**, effects crate **380**, render fx **81**, formatting and focused Clippy
+(`-D warnings`) over the four changed crates. GitNexus `detect-changes`: complete, low risk.

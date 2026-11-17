@@ -567,3 +567,18 @@ fn coreldraw_symmetry_menu_and_property_bar_drive_the_live_symmetry() {
     assert!(!texts.iter().any(|(text, _)| text.contains("Lines:")), "a grid has no Lines field: {texts:?}");
     let _ = RepeatKind::Mirror { angle: 90.0, center: Default::default() };
 }
+
+/// P3 Task E2: the Block Shadow dialog opens on the shared effect stack (CorelDRAW workspace).
+#[test]
+fn coreldraw_block_shadow_dialog_opens_on_the_shared_effect_stack() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    run(&mut app, "effect.apply", json!({"id": shape.0, "effect": "stylize.blockShadow", "params": {"x": 12.0, "y": 8.0, "color": "#204080"}}));
+    crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": "stylize.blockShadow"}));
+    let dialog = app.ui.dialog.as_ref().expect("the effect dialog opens");
+    assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("stylize.blockShadow"));
+    app.ui.dialog = None;
+    let effects = &app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects;
+    assert!(effects.iter().any(|e| e.id == "stylize.blockShadow"), "the effect is on the stack");
+}

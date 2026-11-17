@@ -9,6 +9,7 @@
 //! - [`path`]: Path Precision Tools' live Path Effects, geometry effects built on the add-on's path
 //!   kernels.
 
+pub mod block_shadow;
 pub mod color;
 pub mod duotone;
 pub mod halftone;

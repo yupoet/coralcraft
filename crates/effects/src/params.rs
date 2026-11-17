@@ -131,6 +131,8 @@ pub fn is_geometry(id: &str) -> bool {
         && !is_adjustment(id)
         && id != CROP_MARKS
         && id != crate::addons::halftone::HALFTONE
+        // CoralCraft (P3 Task E2): the sweep adds its own art.
+        && id != crate::addons::block_shadow::BLOCK_SHADOW
         && !is_three_d(id)
         && (catalog_index().contains_key(id) || vectorcraft_plugins::effect::plugin_id(id).is_some())
 }

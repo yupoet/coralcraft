@@ -85,6 +85,8 @@ fn lengths_of(id: &str) -> Lengths {
         "stylize.roundCorners" | "stylize.feather" | "blur.gaussian" | "blur.smart" | "sharpen.unsharpMask" => always(&["radius"]),
         "stylize.scribble" => always(&["overlap", "overlapVariation", "strokeWidth", "spacing", "spacingVariation"]),
         "stylize.dropShadow" => always(&["x", "y", "blur"]),
+        // CoralCraft (P3 Task E2)
+        "stylize.blockShadow" => always(&["x", "y"]),
         "stylize.innerGlow" | "stylize.outerGlow" => always(&["blur"]),
         "stylize.glowingEdges" => always(&["edgeWidth", "smoothness"]),
         "brushStrokes.accentedEdges" => always(&["edgeWidth"]),
@@ -810,6 +812,8 @@ pub fn effect_catalog() -> Vec<EffectInfo> {
     }
     v.extend(crate::addons::color::catalog());
     v.extend(crate::addons::halftone::catalog());
+    // CoralCraft (P3 Task E2)
+    v.extend(crate::addons::block_shadow::catalog());
     v.extend(crate::addons::path::catalog());
     v.push(g(TRAP, "Trap…", PATHFINDER, trap::EFFECT_PARAMS_DOC, trap::effect_defaults()));
     v.push(g(

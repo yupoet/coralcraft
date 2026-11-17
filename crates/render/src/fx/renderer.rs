@@ -461,6 +461,8 @@ impl Renderer {
         let container = is_container(a);
         let art = match effects::crop_marks_art(a)
             .or_else(|| crate::addons::halftone::art(doc, a))
+            // CoralCraft (P3 Task E2): the swept silhouette and the object.
+            .or_else(|| effects::addons::block_shadow::block_shadow_art(a))
             .or_else(|| effects::revolve_art(a))
             .or_else(|| effects::solid_art(a))
             .or_else(|| effects::reshape(Some(doc), a, symbol.as_ref()))
