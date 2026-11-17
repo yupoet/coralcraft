@@ -67,7 +67,7 @@ independent SVG/PDF read); combined scenarios of mesh + gradient + opacity mask 
 channel warnings deduplicated; per-mode or per-combination degradation warnings where CDR/CMX
 cannot retain the semantics.
 
-### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split) — E1–E4 COMPLETE, E5 CURRENT
+### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split) — COMPLETE (2026-11-18)
 
 Each is its own task with the same acceptance shape; none substitutes for another:
 **E1 Symmetry · E2 Block Shadow · E3 Perspective · E4 Lens · E5 Push/Pull and Zipper dedicated
@@ -78,7 +78,7 @@ fix; native edit and reopen; the real rendered control (synthetic input/AccessKi
 invocation); independent SVG/PDF reading; an explicit CDR/CMX degradation. A catalog effect id
 existing is not completion.
 
-### Task M: P3.10 combined matrix (old Task 10 closure)
+### Task M: P3.10 combined matrix (old Task 10 closure) — CURRENT
 
 Replace the generic "combined matrix" wording with explicit fixtures: nested PowerClip; translucent
 mesh inside Repeat/Blend; gradient + opacity mask; bitmap + trace; metadata residual and
