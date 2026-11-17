@@ -41,6 +41,8 @@ mod coreldraw_texture;
 mod coreldraw_pattern_params;
 // CoralCraft: CorelDRAW Symmetry over the Repeat architecture (P3 Task E1).
 mod coreldraw_symmetry;
+// CoralCraft: the colour lenses (P3 Task E4).
+mod coreldraw_lens;
 // CoralCraft: the P3 poster and traced-image acceptance scenario (P3 Task 12).
 mod coreldraw_p3_acceptance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).

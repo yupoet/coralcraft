@@ -784,3 +784,56 @@ with undo/redo, native reopen + post-reopen edit, Hayro PDF read-back, the named
 CDR and CMX, remove restoring the plain rectangle) and the refusal negative, the dialog/menu UI
 test, live effects **10/10**, effects crate **380**, formatting and focused Clippy (`-D warnings`).
 GitNexus `detect-changes`: complete, medium risk (the geometry dispatch).
+
+## 27. Task E4 Lens — positive/negative matrix (frozen 2026-11-17)
+
+CorelDRAW's colour lenses map onto the shared paint + merge-mode architecture: a lens is a filled
+shape over the backdrop whose fill, blend mode and opacity carry the kind — **invert** = white
+fill with Difference, **brighten** = white with Lighten, **darken** = black with Darken,
+**lighten** = white with Screen, **tintedGrayscale** = the tint colour with Color — each at the
+lens's `amount` (opacity share). The backdrop-distorting lenses (Magnify, Fish Eye, Heat Map,
+Posterize, Find Edges) have no channel in the formats we write and are refused with a message
+naming exactly that (never a silent substitution).
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.lens` converts the selected shape into each colour lens: the inspected fill, blend and opacity are the kind's mapping (invert: white + Difference; tintedGrayscale: the tint + Color; …). |
+| P2 | The lens renders against what is under it: independent `usvg` reads the lens shape's `mix-blend-mode` and opacity; the Hayro-backed PDF read returns the blend on the imported node. |
+| P3 | Re-applying with another kind or amount edits in place, one undo step; undo/redo round-trips exactly. |
+| P4 | Native reopen keeps the lens (an ordinary paint object, editable as one). |
+| P5 | The Lens docker shows in the CorelDRAW workspace (kind list, amount, tint, Apply) and its Apply runs `object.lens` on the selection. |
+| P6 | CDR/CMX export of a lens emits the named merge-mode warning once (T3's channel); the shape and its colour survive as ordinary paint. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | A backdrop-distorting kind (magnify, fishEye, heatMap, posterize, findEdges), an unknown kind, a non-finite amount, or a target without a fill is refused without document change. |
+
+Out of scope: rendered backdrop distortion (Magnify/Fish Eye — refused, named), frozen/painted
+lens snapshots, and a CDR/CMX native lens channel (the merge-mode warning is the degradation).
+
+### 27a. Task E4 delivered: the colour lenses (2026-11-17)
+
+RED first: both behaviour tests failed on `UnknownCommand("object.lens")`. The delivered mapping:
+
+- `object.lens` (`lenscmds.rs`): the five colour lenses as fills whose paint, blend and opacity
+  carry the kind — invert (white + Difference), brighten (white + Lighten), darken (black +
+  Darken), lighten (white + Screen), tintedGrayscale (the tint + Color) — at the amount's opacity
+  share, one undo step through the shared item-editing plumbing. The backdrop-distorting kinds
+  (magnify, fishEye, heatMap, posterize, findEdges) are refused with a message that names exactly
+  what has no channel, as are unknown kinds, non-number amounts and non-colours.
+- The Lens docker (`panels/lens.rs`, Window > Lens): kind list, Amount, Tint and Apply running
+  `object.lens` on the selection (the tint belongs to tinted grayscale alone).
+
+GREEN: `coreldraw_lens` **3/3** (every kind's mapping with one-step edits, undo/redo and native
+reopen; usvg blend read + Hayro PDF blend read-back; the named T3 merge-mode degradation once in
+CDR and CMX; refusals changing nothing), the docker UI test (labels + a synthetic Apply click
+making an invert lens), live effects unchanged, formatting and focused Clippy (`-D warnings`).
+GitNexus `detect-changes` (compare `HEAD~1`): complete, **high risk** — 9 files, 6 symbols, 11
+affected processes, all through the two registration hubs the slice extends additively
+(`command_specs`, which every command lists through, and `show_icon_panel`, which routes every
+panel); the lens logic itself is a new leaf module, and the engine/UI batteries above cover both
+hubs' flows.

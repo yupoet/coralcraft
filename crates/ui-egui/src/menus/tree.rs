@@ -651,6 +651,8 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 panel("Asset Export", crate::panels::asset_export::ID),
                 panel("Attributes", "attributes"),
                 panel("Blend", crate::panels::blend::ID),
+                // CoralCraft (P3 Task E4): the Lens docker.
+                panel("Lens", crate::panels::lens::ID),
                 panel("Brushes", "brushes"),
                 panel("Color", "color"),
                 panel("Color Guide", "colorGuide"),

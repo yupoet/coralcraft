@@ -25,6 +25,7 @@ pub mod history;
 pub mod image_trace;
 pub mod info;
 pub mod layers;
+pub mod lens;
 pub mod libraries;
 pub mod library_panel;
 pub mod links;
@@ -150,6 +151,7 @@ pub fn show_icon_panel(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
         "align" => align::show(app, ui),
         "pathfinder" => pathfinder::show(app, ui),
         blend::ID => blend::show(app, ui),
+        lens::ID => lens::show(app, ui),
         "transform" => transform::show(app, ui),
         "history" => history::show(app, ui),
         "actions" => actions::show(app, ui),

@@ -613,3 +613,28 @@ fn coreldraw_perspective_dialog_opens_on_the_shared_effect_stack() {
     assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("distort.perspective"));
     let _ = dialog;
 }
+
+/// P3 Task E4: the Lens docker shows in the CorelDRAW workspace and its Apply runs the lens.
+#[test]
+fn coreldraw_lens_docker_applies_the_colour_lens() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let docker = |app: &mut crate::VectorcraftApp, ui: &mut egui::Ui| crate::panels::lens::show(app, ui);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], docker);
+    for label in ["Lens Type:", "Amount:", "Apply"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+    // The Apply click runs object.lens on the selection (invert is the list's first kind).
+    let at = texts.iter().find(|(text, _)| text.contains("Apply")).map(|(_, rect)| rect.center()).expect("the Apply button");
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![egui::Event::PointerMoved(at), press(true)], docker);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![press(false)], docker);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![], docker);
+    let node = app.session.active().unwrap().doc.node(shape).unwrap();
+    let fill = node.appearance.fill().expect("the lens fill");
+    assert_eq!(fill.paint.color().map(|c| c.to_hex()).as_deref(), Some("#ffffff"), "invert is white");
+    assert_eq!(fill.blend, vectorcraft_color::BlendMode::Difference);
+}
