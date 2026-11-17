@@ -885,3 +885,55 @@ Push/Pull +25 pt → amount 50), the engine evidence (handle-set values survive 
 still edit; usvg reads the re-distorted anchors; the Hayro PDF read returns the path; CDR/CMX
 carries the exact Zipper Distortion with amplitude 26 and frequency 7), tools **853**, canvas
 suite **273**, live effects **11/11**, formatting and focused Clippy (`-D warnings`).
+
+## 29. Task E6 PowerClip Lock Contents to Frame — positive/negative matrix (frozen 2026-11-18)
+
+CorelDRAW's Lock Contents to PowerClip: while **on** (the default) a clip group's contents move
+with its frame; while **off** a transform of the clip group moves the frame alone — the contents
+stay where the page put them, the frame reveals a different part of them. The flag is the clip
+group's own (`contents_unlocked`), toggled by command or the CorelDRAW Property Bar button.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.clippingMask.setContentsLocked {lock: false}` (true) sets (clears) the flag on the selected clip groups, one undo step; undo/redo round-trips. |
+| P2 | Locked (the default): moving the clip group moves the frame and the contents together (today's behaviour, kept). |
+| P3 | Unlocked: moving (or scaling) the clip group moves the frame alone — the contents' coordinates are untouched, one undo step. |
+| P4 | Native reopen keeps the flag; it still toggles after reopen, and the behaviour follows. |
+| P5 | The CorelDRAW Property Bar shows Lock Contents to Frame with a clip group selected (its label the current state) and its synthetic click toggles the flag; no button without a clip group selected. |
+| P6 | CDR/CMX export of an unlocked clip group emits the named relock warning exactly once; a locked one emits none, and the clip itself still exports. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | The toggle on an ordinary object errors and changes nothing; a missing/non-bool `lock` errors. |
+
+Out of scope: Frame Type options, contents auto-centering on unlock (Corel's "Auto-center"
+preference), and a CDR/CMX native channel for the lock state (the named warning is the stated
+degradation).
+
+### 29a. Task E6 delivered: Lock Contents to PowerClip (2026-11-18)
+
+RED first: the battery failed on `UnknownCommand("object.clippingMask.setContentsLocked")`. The
+delivered behaviour:
+
+- Model (`vectorcraft-doc`, a `// CoralCraft:` flag wired through `NodeWire`): a clip group's
+  `contents_unlocked` — while false (the default, Corel's lock on) frame and contents transform
+  together; while true a transform of the clip group moves the clip path alone, the contents
+  staying where the page put them. Native documents round-trip the flag.
+- Command: `object.clippingMask.setContentsLocked {lock}` (one undo step; an ordinary target and
+  a non-bool lock are refused by name), hooked into the shared transform's per-target loop.
+- CDR/CMX: an unlocked clip group warns once by name
+  (`unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents
+  keep the flag`); a locked one stays silent and the clip itself still exports.
+- UI: the CorelDRAW Property Bar's Lock Contents to Frame button with a clip group selected —
+  its label the current state, a click toggling it; no button without a clip group.
+
+GREEN: `coreldraw_powerclip` **4/4** (the default-locked move kept, the unlocked move leaving the
+contents untouched with exact undo/redo of move and toggle, native reopen keeping and re-toggling
+the flag with the behaviour following, the named relock warning once and only while unlocked, the
+refusals), the button UI test (synthetic clicks both ways, label flips, no button for ordinary
+objects), document crate **413** (the wire round-trip included), engine transform suite **76**,
+formatting and focused Clippy (`-D warnings`).

@@ -464,6 +464,15 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
                 "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
             );
         }
+        // CoralCraft (P3 Task E6): the lock-contents state is native-only.
+        let has_unlocked_clips = doc.layers.iter().any(|layer| {
+            let mut found = false;
+            layer.walk(&mut |node: &vectorcraft_doc::Node| found |= node.extras().contents_unlocked);
+            found
+        });
+        if has_unlocked_clips {
+            enc.warnings.push("unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents keep the flag".into());
+        }
         let mut live_kinds = std::collections::BTreeSet::new();
         for layer in &doc.layers {
             layer.walk(&mut |node| {

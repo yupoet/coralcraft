@@ -1,7 +1,7 @@
 use super::align::{align, can_distribute, distribute, distribute_spacing};
 use super::arrange::{Arrange, arrange, exit_isolation, group, hide, isolate, lock, send_to_current_layer, show_all, ungroup, unlock_all};
 use super::bounds::set_bounds;
-use super::compound::{clip_edit, clip_make, clip_release, compound_make, compound_release};
+use super::compound::{clip_edit, clip_make, clip_release, clip_set_contents_locked, compound_make, compound_release};
 use super::props::set_props;
 use super::shape::{expand_shape, set_live_shape};
 use super::transform::{move_cmd, nudge, reflect, rotate, scale, shear, transform, transform_again};
@@ -234,6 +234,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} select the clipping paths of the selected clip groups → {count}",
             has_selection,
             |s, _| clip_edit(s, true)
+        ),
+        cmd!(
+            // CoralCraft (P3 Task E6): CorelDRAW's Lock Contents to PowerClip.
+            "object.clippingMask.setContentsLocked",
+            "Lock Contents to Frame",
+            ["Object", "Clipping Mask"],
+            None,
+            "{ids?: [id…] (selected first; default: the selection), lock: bool} whether a clip group's contents move with its frame: locked (true) they follow its transforms, unlocked (false, CorelDRAW's Lock Contents to PowerClip off) the frame alone moves and the contents stay on the page; one undo step → {ids}",
+            has_selection,
+            clip_set_contents_locked
         ),
         cmd!(
             "object.isolate",

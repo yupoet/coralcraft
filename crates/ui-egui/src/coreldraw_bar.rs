@@ -145,6 +145,33 @@ pub fn table_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.separator();
 }
 
+/// The CorelDRAW PowerClip Lock-Contents control of the Property Bar (P3 Task E6): with one clip
+/// group selected, a button showing the current state (Lock Contents to Frame while its contents
+/// follow the frame, Unlock Contents from Frame while they stay) that toggles it, running
+/// `object.clippingMask.setContentsLocked` as one undo step.
+pub fn lock_contents_button(app: &mut VectorcraftApp, ui: &mut Ui) {
+    let Some(id) = app.session.active().and_then(|st| match st.selection.objects[..] {
+        [id] => st
+            .doc
+            .node(id)
+            .filter(|n| n.clips() && matches!(n.kind, vectorcraft_doc::NodeKind::Group { clip: true, .. }))
+            .map(|n| (n.id, n.extras().contents_unlocked)),
+        _ => None,
+    }) else {
+        return;
+    };
+    if !active(app) {
+        return;
+    }
+    let (_, unlocked) = id;
+    let label = if unlocked { "Unlock Contents from Frame" } else { "Lock Contents to Frame" };
+    if widgets::flat_button(ui, tl!(label), 150.0).clicked() {
+        app.run("object.clippingMask.setContentsLocked", json!({ "lock": unlocked })).ok();
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
 /// The CorelDRAW Symmetry controls of the Property Bar (P3 Task E1): with one symmetry (live
 /// Repeat) object selected, a radial symmetry's Lines and a line/radial symmetry's Angle edit the
 /// arrangement (`object.symmetry.setProps`, one undo step each) and Break Symmetry dissolves it.

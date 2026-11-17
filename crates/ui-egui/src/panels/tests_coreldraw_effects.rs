@@ -638,3 +638,42 @@ fn coreldraw_lens_docker_applies_the_colour_lens() {
     assert_eq!(fill.paint.color().map(|c| c.to_hex()).as_deref(), Some("#ffffff"), "invert is white");
     assert_eq!(fill.blend, vectorcraft_color::BlendMode::Difference);
 }
+
+/// P3 Task E6: the Property Bar's Lock Contents to Frame button toggles the clip group's flag
+/// through a synthetic click, and never shows without a clip group selected.
+#[test]
+fn coreldraw_lock_contents_button_toggles_through_a_click() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let contents = app.session.active().unwrap().selection.objects[0];
+    let frame = NodeId(run(&mut app, "shape.ellipse", json!({"x": 10, "y": 10, "width": 40, "height": 30}))["id"].as_u64().unwrap());
+    run(&mut app, "select.set", json!({ "ids": [contents.0, frame.0] }));
+    run(&mut app, "object.clippingMask.make", json!({}));
+    let clip = app.session.active().unwrap().selection.objects[0];
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let bar = |app: &mut crate::VectorcraftApp, ui: &mut egui::Ui| crate::coreldraw_bar::lock_contents_button(app, ui);
+    // An ordinary object shows no button; the clip group shows the locked label.
+    run(&mut app, "select.set", json!({ "ids": [contents.0] }));
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    assert!(texts.is_empty(), "an ordinary object shows no lock button: {texts:?}");
+    run(&mut app, "select.set", json!({ "ids": [clip.0] }));
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    assert!(texts.iter().any(|(t, _)| t.contains("Lock Contents to Frame")), "the locked label: {texts:?}");
+    // A synthetic click unlocks; the label flips; another click relocks.
+    let at = texts.iter().find(|(t, _)| t.contains("Lock Contents to Frame")).map(|(_, r)| r.center()).unwrap();
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![egui::Event::PointerMoved(at), press(true)], bar);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![press(false)], bar);
+    let node = app.session.active().unwrap().doc.node(clip).unwrap();
+    assert!(node.extras().contents_unlocked, "the click unlocked the contents");
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    assert!(texts.iter().any(|(t, _)| t.contains("Unlock Contents from Frame")), "the unlocked label: {texts:?}");
+    let at = texts.iter().find(|(t, _)| t.contains("Unlock Contents from Frame")).map(|(_, r)| r.center()).unwrap();
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![egui::Event::PointerMoved(at), press(true)], bar);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![press(false)], bar);
+    let node = app.session.active().unwrap().doc.node(clip).unwrap();
+    assert!(!node.extras().contents_unlocked, "the second click relocked");
+}

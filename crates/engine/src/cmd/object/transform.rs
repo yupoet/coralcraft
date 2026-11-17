@@ -165,7 +165,17 @@ fn apply_transform_moving_guides(
                 if let Some(n) = paths.get(id).and_then(|p| d.node_mut_at(p))
                     && !(objects && areas && resize_type_area(n, xf))
                 {
-                    transform_node(n, xf, sc, objects);
+                    // CoralCraft (P3 Task E6): an unlocked clip group's transform moves its frame
+                    // alone — the contents stay where the page put them.
+                    if n.extras_if_any().is_some_and(|e| e.contents_unlocked)
+                        && matches!(n.kind, vectorcraft_doc::NodeKind::Group { clip: true, .. })
+                        && let Some(children) = n.children_mut()
+                        && let Some(frame) = children.first_mut()
+                    {
+                        transform_node(std::sync::Arc::make_mut(frame), xf, sc, objects);
+                    } else {
+                        transform_node(n, xf, sc, objects);
+                    }
                 }
             }
             if with_guides && (delta.x != 0.0 || delta.y != 0.0) {

@@ -1,5 +1,5 @@
 use super::{
-    Appearance, Arc, Document, EngineError, FillRule, Node, NodeId, NodeKind, Paint, PathData, Result, Session, Value, json, ok, selected_roots,
+    Appearance, Arc, Document, EngineError, FillRule, Node, NodeId, NodeKind, Paint, PathData, Result, Session, Value, bad, json, ok, selected_roots,
 };
 
 /// A closed contour smaller than this (in square document units) has no usable winding direction,
@@ -193,6 +193,40 @@ pub(super) fn clip_release(s: &mut Session, _: &Value) -> Result<Value> {
         Ok(())
     })?;
     ok()
+}
+
+/// CoralCraft (P3 Task E6): CorelDRAW's Lock Contents to PowerClip — set whether each selected
+/// (or ancestor) clip group's contents move with its frame.
+pub(super) fn clip_set_contents_locked(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "object.clippingMask.setContentsLocked";
+    let lock = p.get("lock").and_then(Value::as_bool).ok_or_else(|| bad(C, "lock must be true or false"))?;
+    let st = s.doc()?;
+    let mut ids = vec![];
+    for id in st.selection.objects.iter().copied() {
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if st.doc.node(c).is_some_and(|n| n.clips() && matches!(n.kind, NodeKind::Group { clip: true, .. })) {
+                if !ids.contains(&c) {
+                    ids.push(c);
+                }
+                break;
+            }
+            cur = st.doc.position(c).and_then(|(par, _, _)| par);
+        }
+    }
+    if ids.is_empty() {
+        return Err(bad(C, "select a clip group (a PowerClip frame and its contents)"));
+    }
+    let reply: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    s.edit(if lock { "Lock Contents to Frame" } else { "Unlock Contents from Frame" }, move |d, _| {
+        for id in &ids {
+            if let Some(n) = d.node_mut(*id) {
+                n.extras_mut().contents_unlocked = !lock;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "ids": reply }))
 }
 
 /// Selects the clipping path (`mask`) or the clipped contents of every selected clip group (or of the
