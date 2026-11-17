@@ -630,3 +630,15 @@ focused Clippy (`-D warnings`) over `corel-import` and `vectorcraft-engine`. Git
 `detect-changes`: complete, no affected processes. **The slice's full gate is pending** — the
 reopened-T2 gate below covers the tree this change was written on; T3's own gate runs with the
 next full-gate pass (Task 13 reruns everything).
+
+### 22d. Task T2 renewed gate after the review fix (2026-11-17, tree `65716a9e5`)
+
+`cargo xtask ci` on the reopened slice: formatting and workspace Clippy passed; the workspace run
+stopped at the engine library's sole failure — known-issue 0b, verified by a targeted rerun
+(`constrain_angle_turns_the_base_orientation_of_polygons_and_stars`,
+**4,376 passed / 1 failed / 2 ignored**) — not a clean full-CI pass. Every skipped later gate then
+ran serially on the final tree (the T3 test additions of §23a included) and passed: doctests;
+cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both feature-tree pairs; no-default UI
+Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
+(**30 crates**); wasm (its four existing UI warnings only). T2 closes on this evidence; T3's
+slice shares this gate run (its RED was observed on the same tree), and Task 13 reruns everything.

@@ -60,14 +60,14 @@ reopen), or per-parameter fallback warnings; independent SVG/PDF evidence; CDR/C
 explicitly (today's default checkerboard substitution becomes a named, warned degradation or a real
 mapping).
 
-### Task T3: Merge-mode matrix and combined transparency (P3.3, slice 3 of 3) — CURRENT
+### Task T3: Merge-mode matrix and combined transparency (P3.3, slice 3 of 3) — COMPLETE (2026-11-17, §23/§23a)
 
 **Acceptance:** the merge-mode matrix (each supported mode: edit, undo/redo, native reopen,
 independent SVG/PDF read); combined scenarios of mesh + gradient + opacity mask with their CDR/CMX
 channel warnings deduplicated; per-mode or per-combination degradation warnings where CDR/CMX
 cannot retain the semantics.
 
-### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split)
+### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split) — E1 CURRENT
 
 Each is its own task with the same acceptance shape; none substitutes for another:
 **E1 Symmetry · E2 Block Shadow · E3 Perspective · E4 Lens · E5 Push/Pull and Zipper dedicated
