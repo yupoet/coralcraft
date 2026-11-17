@@ -764,3 +764,23 @@ Extrude mapping, remove taking the shadow out of the export) and `block_shadow_r
 (a group, a non-number x, a non-colour colour — all without document change), the dialog UI test,
 live effects **8/8**, effects crate **380**, render fx **81**, formatting and focused Clippy
 (`-D warnings`) over the four changed crates. GitNexus `detect-changes`: complete, low risk.
+
+### 26a. Task E3 delivered: Add Perspective as a true projective effect (2026-11-17)
+
+RED first: the battery failed on `unknown effect "distort.perspective"`. The delivered effect:
+
+- `vectorcraft-effects` (`distort.rs`, `// CoralCraft:`): `distort.perspective` — the bounding box
+  mapped **projectively** onto four new corners (Heckbert's closed-form square-to-quad homography,
+  anchors past the horizon keeping their place, the same curve-splitting budget as Free Distort,
+  which stays bilinear). Catalogued beside Free Distort under Effect > Distort & Transform; the
+  corners dialog (drag handles, arrow keys, Reset) is shared with it; `effect.apply`/`setParams`/
+  `remove` and native persistence come from the shared stack, with apply-time validation (four
+  finite [x, y] pairs, refused without document change).
+- CDR/CMX: the named unsupported-effect warning carries `distort.perspective` exactly once
+  (the geometry itself exports evaluated; the live parameters are the stated loss).
+
+GREEN: `perspective_is_projective_edits_and_exports` (corner-exact usvg anchors, one-step edits
+with undo/redo, native reopen + post-reopen edit, Hayro PDF read-back, the named degradation in
+CDR and CMX, remove restoring the plain rectangle) and the refusal negative, the dialog/menu UI
+test, live effects **10/10**, effects crate **380**, formatting and focused Clippy (`-D warnings`).
+GitNexus `detect-changes`: complete, medium risk (the geometry dispatch).

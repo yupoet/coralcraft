@@ -38,6 +38,60 @@ pub fn free_distort(path: &PathData, b: Rect, p: &Value, max: usize) -> PathData
     map_nonlinear_within(path, diag(b) / 16.0, max, f)
 }
 
+/// CoralCraft (P3 Task E3): Add Perspective — a true projective map of the bounding box onto four
+/// new corners (unit box coordinates), where [`free_distort`] is bilinear. The homography is the
+/// closed-form square-to-quad solution; anchors past the horizon keep their place.
+pub fn perspective(path: &PathData, b: Rect, p: &Value, max: usize) -> PathData {
+    let mut c = [Point::new(0.0, 0.0), Point::new(1.0, 0.0), Point::new(1.0, 1.0), Point::new(0.0, 1.0)];
+    if let Some(arr) = p.get("corners").and_then(Value::as_array) {
+        for (i, v) in arr.iter().take(4).enumerate() {
+            if let Some(a) = v.as_array()
+                && let (Some(x), Some(y)) = (a.first().and_then(Value::as_f64), a.get(1).and_then(Value::as_f64))
+                && x.is_finite()
+                && y.is_finite()
+            {
+                c[i] = Point::new(x, y);
+            }
+        }
+    }
+    let (w, h) = (b.width().max(1e-9), b.height().max(1e-9));
+    let to_doc = |q: Point| Point::new(b.x0 + q.x * w, b.y0 + q.y * h);
+    let f = |q: Point| {
+        let u = Point::new((q.x - b.x0) / w, (q.y - b.y0) / h);
+        apply_h(u, c).map(to_doc).unwrap_or(q)
+    };
+    map_nonlinear_within(path, diag(b) / 16.0, max, f)
+}
+
+/// The image of unit point `q` under the square-to-quad homography onto `c` (TL, TR, BR, BL).
+fn apply_h(q: Point, c: [Point; 4]) -> Option<Point> {
+    let (x0, y0) = (c[0].x, c[0].y);
+    let (x1, y1) = (c[1].x, c[1].y);
+    let (x2, y2) = (c[2].x, c[2].y);
+    let (x3, y3) = (c[3].x, c[3].y);
+    let (dx1, dy1) = (x1 - x2, y1 - y2);
+    let (dx2, dy2) = (x3 - x2, y3 - y2);
+    let (sx, sy) = (x0 - x1 + x2 - x3, y0 - y1 + y2 - y3);
+    let den = dx1 * dy2 - dx2 * dy1;
+    if (sx == 0.0 && sy == 0.0) || den.abs() < 1e-12 {
+        // Parallelogram: bilinear and projective agree.
+        let top = c[0].lerp(c[1], q.x);
+        let bot = c[3].lerp(c[2], q.x);
+        return Some(top.lerp(bot, q.y));
+    }
+    let g = (sx * dy2 - dx2 * sy) / den;
+    let h = (dx1 * sy - sx * dy1) / den;
+    let a = x1 - x0 + g * x1;
+    let b = x3 - x0 + h * x3;
+    let d = y1 - y0 + g * y1;
+    let e = y3 - y0 + h * y3;
+    let w = g * q.x + h * q.y + 1.0;
+    if w.abs() < 1e-12 {
+        return None;
+    }
+    Some(Point::new((a * q.x + b * q.y + x0) / w, (d * q.x + e * q.y + y0) / w))
+}
+
 /// Pucker & Bloat: anchors move toward (bloat) or away from (pucker) the centre, handles the
 /// opposite way.
 pub fn pucker_bloat(path: &PathData, b: Rect, amount: f64) -> PathData {

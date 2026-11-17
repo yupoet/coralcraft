@@ -228,6 +228,14 @@ pub fn effect_catalog() -> Vec<EffectInfo> {
             "{corners: [[x,y]×4] (new positions of the bounding-box corners TL, TR, BR, BL in unit box coordinates; identity [[0,0],[1,0],[1,1],[0,1]])}",
             json!({"corners": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]}),
         ),
+        // CoralCraft (P3 Task E3): CorelDRAW's Add Perspective, a true projective map.
+        g(
+            "distort.perspective",
+            "Perspective…",
+            DT,
+            "{corners: [[x,y]×4] (new positions of the bounding-box corners TL, TR, BR, BL in unit box coordinates; identity [[0,0],[1,0],[1,1],[0,1]])} maps the box projectively onto the four corners (a perspective transform, where Free Distort's is bilinear), as CorelDRAW's Add Perspective does",
+            json!({"corners": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]}),
+        ),
         g("distort.puckerBloat", "Pucker & Bloat…", DT, "{amount: % (-200 pucker … 200 bloat, default 0)}", json!({"amount": 0.0})),
         g(
             "distort.roughen",

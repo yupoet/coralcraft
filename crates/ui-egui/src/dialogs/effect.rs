@@ -191,7 +191,7 @@ fn body(app: &mut VectorcraftApp, ui: &mut egui::Ui, d: &mut Dialog) -> bool {
         None if id == TWEAK => tweak_fields(ui, d, app.session.general_unit()),
         None if id == DROP_SHADOW => drop_shadow_fields(ui, d, app.session.general_unit()),
         None if id == "artistic.filmGrain" => film_grain_fields(ui, d),
-        None if id == free_distort::FREE_DISTORT => {
+        None if id == free_distort::FREE_DISTORT || id == free_distort::PERSPECTIVE => {
             free_distort::fields(app, ui, d);
             values_changed(d)
         }

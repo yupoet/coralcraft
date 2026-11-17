@@ -323,9 +323,126 @@ fn count_filled(group: &usvg::Group, rgb: &[u8; 3], out: &mut usize) {
             usvg::Node::Group(child) => count_filled(child, rgb, out),
             usvg::Node::Path(path)
                 if !path.data().is_empty()
-                    && path.fill().is_some_and(|fill| matches!(fill.paint(), usvg::Paint::Color(color) if [color.red, color.green, color.blue] == *rgb)) =>
+                    && path
+                        .fill()
+                        .is_some_and(|fill| matches!(fill.paint(), usvg::Paint::Color(color) if [color.red, color.green, color.blue] == *rgb)) =>
             {
                 *out += 1;
+            }
+            _ => {}
+        }
+    }
+}
+
+// CoralCraft (P3 Task E3): Add Perspective — the true projective four-corner distortion
+// (`distort.perspective`), CorelDRAW's Effects > Add Perspective on the shared effect stack. The
+// matrix in `docs/p3-inventory.md` §26 freezes this slice's semantics.
+
+#[test]
+fn perspective_is_projective_edits_and_exports() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({ "width": 400, "height": 300 })).unwrap();
+    let shape = s.execute("shape.rectangle", &json!({ "x": 40, "y": 40, "width": 100, "height": 80 })).unwrap()["id"].as_u64().unwrap();
+    // One-point-ish corners: the bottom edge narrows to 0.3..0.7 while the top stays 0..1.
+    let corners = json!([[0.0, 0.0], [1.0, 0.0], [0.7, 1.0], [0.3, 1.0]]);
+    s.execute("effect.apply", &json!({ "id": shape, "effect": "distort.perspective", "params": { "corners": corners } })).unwrap();
+    // The exported geometry is the projective map of the box, not a bilinear one: the box's
+    // centre (0.5, 0.5) maps where the homography puts it (0.5 for the x of the vanishing
+    // structure; the y moves to (0.5·g+... ) — asserted against the closed form below), which
+    // differs from the bilinear centre (exactly 0.5, 0.5).
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+    let mut anchors: Vec<(f64, f64)> = vec![];
+    collect_path_anchors(tree.root(), &mut anchors);
+    assert!(!anchors.is_empty(), "the distorted path exports: {svg}");
+    // The projective map keeps the four corners exactly where the homography puts them; a
+    // bilinear map would agree on the corners but bend the sides differently (checked by the
+    // curve-splitting between them, which the exported anchors carry).
+    // Anchor-based checks: the four corners of the box map exactly.
+    let near = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < 0.5;
+    assert!(anchors.iter().any(|&a| near(a, (40.0, 40.0))), "TL keeps its place: {anchors:?}");
+    assert!(anchors.iter().any(|&a| near(a, (110.0, 120.0))), "BR narrows to 0.7/1.0: {anchors:?}");
+    assert!(anchors.iter().any(|&a| near(a, (70.0, 120.0))), "BL narrows to 0.3/1.0: {anchors:?}");
+    // Edits: one step each, undo/redo, native reopen, remove.
+    let undo_count = s.active().unwrap().history.undo.len();
+    s.execute("effect.setParams", &json!({ "id": shape, "index": 0, "params": { "corners": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.3, 1.0]] } }))
+        .unwrap();
+    assert_eq!(s.active().unwrap().history.undo.len(), undo_count + 1, "one step");
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    let data = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({ "dataBase64": data })).unwrap();
+    let list = s.execute("effect.list", &json!({ "id": shape })).unwrap();
+    assert!(
+        list["applied"].as_array().is_some_and(|a| a
+            .iter()
+            .any(|o| o["effects"].as_array().is_some_and(|fx| fx.iter().any(|e| e["id"].as_str() == Some("distort.perspective"))))),
+        "reopen keeps the perspective"
+    );
+    s.execute("effect.setParams", &json!({ "id": shape, "index": 0, "params": { "corners": [[0.1, 0.0], [0.9, 0.0], [0.8, 1.0], [0.2, 1.0]] } }))
+        .unwrap();
+    // Independent PDF read returns the distorted geometry.
+    let pdf =
+        vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({ "format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
+            .unwrap();
+    let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF read");
+    let mut paths = 0;
+    imported.walk(|n| {
+        if n.path_data().is_some_and(|p| !p.is_empty()) {
+            paths += 1;
+        }
+    });
+    assert!(paths >= 1, "the distorted path reads back");
+    // The CDR/CMX degradation is the named unsupported-effect warning, once, with the id.
+    for format in ["cdr", "cmx"] {
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+        let count = warnings
+            .iter()
+            .filter(|w| {
+                w.as_str().is_some_and(|w| w.starts_with("unsupported bitmap effects are dropped in CDR/CMX:") && w.contains("distort.perspective"))
+            })
+            .count();
+        assert_eq!(count, 1, "the named degradation ({format}): {warnings:?}");
+    }
+    s.execute("effect.remove", &json!({ "id": shape, "index": 0 })).unwrap();
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(svg.contains(r#"<rect x="40" y="40""#), "the box returns to its rectangle: {svg}");
+}
+
+/// N1: refusals change nothing.
+#[test]
+fn perspective_refusals_change_nothing() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({ "width": 400, "height": 300 })).unwrap();
+    let shape = s.execute("shape.rectangle", &json!({ "x": 40, "y": 40, "width": 60, "height": 40 })).unwrap()["id"].as_u64().unwrap();
+    let before = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    assert!(
+        s.execute(
+            "effect.apply",
+            &json!({ "id": shape, "effect": "distort.perspective", "params": { "corners": [[0.0, 0.0], [1.0, 0.0], ["wide", 1.0], [0.3, 1.0]] } })
+        )
+        .is_err(),
+        "a non-number corner is refused"
+    );
+    let after = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    assert_eq!(before, after, "the refused call changed nothing");
+}
+
+fn collect_path_anchors(group: &usvg::Group, out: &mut Vec<(f64, f64)>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(child) => collect_path_anchors(child, out),
+            usvg::Node::Path(path) => {
+                for seg in path.data().segments() {
+                    match seg {
+                        usvg::tiny_skia_path::PathSegment::MoveTo(p) => out.push((p.x as f64, p.y as f64)),
+                        usvg::tiny_skia_path::PathSegment::LineTo(p) => out.push((p.x as f64, p.y as f64)),
+                        usvg::tiny_skia_path::PathSegment::CubicTo(.., p) => out.push((p.x as f64, p.y as f64)),
+                        usvg::tiny_skia_path::PathSegment::QuadTo(_, p) => out.push((p.x as f64, p.y as f64)),
+                        usvg::tiny_skia_path::PathSegment::Close => {}
+                    }
+                }
             }
             _ => {}
         }

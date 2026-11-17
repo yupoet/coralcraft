@@ -248,6 +248,20 @@ pub(crate) fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "ids": [gid.0], "index": 0, "item": null, "grouped": true }));
     }
     let item = item_target(s, p, C)?;
+    // CoralCraft (P3 Task E3): Perspective's corners validate up front (four finite pairs).
+    if id == "distort.perspective"
+        && let Some(corners) = params.get("corners")
+    {
+        let ok = corners.as_array().is_some_and(|list| {
+            list.len() == 4
+                && list
+                    .iter()
+                    .all(|v| v.as_array().is_some_and(|pair| pair.len() == 2 && pair.iter().all(|n| n.as_f64().is_some_and(f64::is_finite))))
+        });
+        if !ok {
+            return Err(bad(C, "Perspective's corners must be four [x, y] number pairs"));
+        }
+    }
     // CoralCraft (P3 Task E2): Block Shadow validates its target and parameters.
     if id == effects::addons::block_shadow::BLOCK_SHADOW {
         for target in appearance_targets(s, p)? {

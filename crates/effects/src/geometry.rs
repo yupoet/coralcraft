@@ -228,6 +228,8 @@ fn apply_unchecked(id: &str, p: &Value, path: &PathData, b: Rect, ctx: &GeomCont
     }
     match id {
         "distort.freeDistort" => distort::free_distort(path, b, p, max),
+        // CoralCraft (P3 Task E3)
+        "distort.perspective" => distort::perspective(path, b, p, max),
         "distort.puckerBloat" => distort::pucker_bloat(path, b, num(p, "amount", 0.0)),
         "distort.roughen" => distort::roughen(path, b, p, max),
         "distort.transform" => distort::transform_within(path, b, p, ctx.seed, max),

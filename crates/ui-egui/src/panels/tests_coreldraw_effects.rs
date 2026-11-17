@@ -582,3 +582,34 @@ fn coreldraw_block_shadow_dialog_opens_on_the_shared_effect_stack() {
     let effects = &app.session.active().unwrap().doc.node(shape).unwrap().appearance.effects;
     assert!(effects.iter().any(|e| e.id == "stylize.blockShadow"), "the effect is on the stack");
 }
+
+/// P3 Task E3: the Add Perspective dialog opens with the corners UI on the shared stack.
+#[test]
+fn coreldraw_perspective_dialog_opens_on_the_shared_effect_stack() {
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let shape = app.session.active().unwrap().selection.objects[0];
+    run(
+        &mut app,
+        "effect.apply",
+        json!({"id": shape.0, "effect": "distort.perspective", "params": {"corners": [[0.0, 0.0], [1.0, 0.0], [0.7, 1.0], [0.3, 1.0]]}}),
+    );
+    // The effect sits on the shared Effect > Distort & Transform menu.
+    let tree = crate::menus::menu_tree();
+    let effect = tree.iter().find(|(title, _)| *title == "Effect").map(|(_, items)| items).unwrap();
+    let dt = effect
+        .iter()
+        .find_map(|item| match item {
+            crate::menus::Item::Sub("Distort & Transform", items) => Some(items),
+            _ => None,
+        })
+        .expect("the Distort & Transform submenu");
+    assert!(
+        dt.iter().any(|item| matches!(item, crate::menus::Item::Cmd("Perspective…", id, p) if *id == "effect.dialog" && p.get("effect").and_then(serde_json::Value::as_str) == Some("distort.perspective"))),
+        "the Perspective entry"
+    );
+    crate::menus::invoke(&mut app, "effect.dialog", json!({"effect": "distort.perspective"}));
+    let dialog = app.ui.dialog.as_ref().expect("the effect dialog opens");
+    assert_eq!(dialog.fields.get("__effect").and_then(serde_json::Value::as_str), Some("distort.perspective"));
+    let _ = dialog;
+}
