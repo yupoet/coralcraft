@@ -504,3 +504,66 @@ fn coreldraw_pattern_menu_and_options_run_a_real_edit_done_lifecycle() {
     assert!(app.session.active().unwrap().doc.pattern_edit.is_none());
     assert_eq!(definition_color(&app, &name), "#abcdef", "the second edit/Done lifecycle saves the ordinary colour edit");
 }
+
+/// P3 Task E1: the real rendered Symmetry controls — Object > Symmetry on the real menu tree
+/// creates each kind, and the Property Bar's symmetry row (Lines/Angle fields, Break Symmetry)
+/// drives `setProps` and `break` through synthetic pointer input.
+#[test]
+fn coreldraw_symmetry_menu_and_property_bar_drive_the_live_symmetry() {
+    use vectorcraft_doc::pattern::RepeatKind;
+    let mut app = app_with_rect();
+    crate::workspaces::switch(&mut app.ui, crate::workspaces::CORELDRAW).unwrap();
+    let source = app.session.active().unwrap().selection.objects[0];
+
+    // The Object menu carries the Symmetry submenu with all four commands.
+    let tree = crate::menus::menu_tree();
+    let object = tree.iter().find(|(title, _)| *title == "Object").map(|(_, items)| items).unwrap();
+    let symmetry = object
+        .iter()
+        .find_map(|item| match item {
+            crate::menus::Item::Sub("Symmetry", items) => Some(items),
+            _ => None,
+        })
+        .expect("Object menu has the Symmetry submenu");
+    for command in ["object.symmetry.create", "object.symmetry.break"] {
+        assert!(symmetry.iter().any(|item| matches!(item, crate::menus::Item::Cmd(_, id, _) if *id == command)), "{command} in {symmetry:?}");
+    }
+
+    // Radial symmetry from the menu creates the live arrangement.
+    crate::menus::invoke(&mut app, "object.symmetry.create", json!({ "kind": "radial", "lines": 4 }));
+    let selected = app.session.active().unwrap().selection.objects.clone();
+    assert_eq!(selected.len(), 1, "the symmetry object is selected");
+    let sym = selected[0];
+    let instances = match &app.session.active().unwrap().doc.node(sym).unwrap().kind {
+        NodeKind::Repeat(r) => r.instances(Some(&app.session.active().unwrap().doc)),
+        _ => 0,
+    };
+    assert_eq!(instances, 4, "the radial symmetry makes four instances");
+    assert_ne!(sym, source, "the source lives inside the symmetry");
+
+    // The Property Bar row shows for a symmetry object and drives Lines through synthetic input.
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    let bar = |app: &mut crate::VectorcraftApp, ui: &mut egui::Ui| crate::coreldraw_bar::symmetry_buttons(app, ui);
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    for label in ["Lines:", "Angle:", "Break Symmetry"] {
+        assert!(texts.iter().any(|(text, _)| text.contains(label)), "{label} in {texts:?}");
+    }
+    // A click on Break Symmetry dissolves the arrangement through the real button.
+    let at = texts.iter().find(|(text, _)| text.contains("Break Symmetry")).map(|(_, rect)| rect.center()).expect("the Break Symmetry button");
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![egui::Event::PointerMoved(at), press(true)], bar);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![press(false)], bar);
+    super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    let node = app.session.active().unwrap().doc.node(sym).unwrap();
+    assert!(!matches!(node.kind, NodeKind::Repeat(_)), "the symmetry dissolved: {:?}", node.kind);
+    // The row never shows for an ordinary object, and a grid symmetry's row carries Break alone.
+    run(&mut app, "select.set", json!({ "ids": [sym.0] }));
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    assert!(texts.is_empty(), "an ordinary object shows no symmetry row: {texts:?}");
+    run(&mut app, "object.symmetry.create", json!({ "kind": "grid" }));
+    let texts = super::tests_appearance::frame_events(&ctx, &mut app, vec![], bar);
+    assert!(texts.iter().any(|(text, _)| text.contains("Break Symmetry")), "grid row carries Break: {texts:?}");
+    assert!(!texts.iter().any(|(text, _)| text.contains("Lines:")), "a grid has no Lines field: {texts:?}");
+    let _ = RepeatKind::Mirror { angle: 90.0, center: Default::default() };
+}

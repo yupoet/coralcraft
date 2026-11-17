@@ -145,6 +145,60 @@ pub fn table_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
     ui.separator();
 }
 
+/// The CorelDRAW Symmetry controls of the Property Bar (P3 Task E1): with one symmetry (live
+/// Repeat) object selected, a radial symmetry's Lines and a line/radial symmetry's Angle edit the
+/// arrangement (`object.symmetry.setProps`, one undo step each) and Break Symmetry dissolves it.
+/// A grid symmetry edits through the Repeat panel (`object.repeat.options`), as its message says.
+pub fn symmetry_buttons(app: &mut VectorcraftApp, ui: &mut Ui) {
+    let Some((id, kind)) = app.session.active().and_then(|st| match st.selection.objects[..] {
+        [id] => st.doc.node(id).and_then(|n| match &n.kind {
+            vectorcraft_doc::NodeKind::Repeat(spec) => Some((n.id, spec.kind.clone())),
+            _ => None,
+        }),
+        _ => None,
+    }) else {
+        return;
+    };
+    if !active(app) {
+        return;
+    }
+    let mut run = None;
+    match &kind {
+        vectorcraft_doc::pattern::RepeatKind::Radial { instances, start_angle, mirror: true, .. } => {
+            widgets::field_label(ui, label(&Tokens::get(ui.ctx()), "Lines:"));
+            if let Some(v) = widgets::plain_field(ui, "cb-corel-symmetry-lines", *instances as f64, "", 2, 48.0).map(|n| n.round().clamp(2.0, 1000.0))
+            {
+                run = Some(json!({ "id": id.0, "lines": v as u64 }));
+            }
+            widgets::field_label(ui, label(&Tokens::get(ui.ctx()), "Angle:"));
+            if let Some(v) = widgets::plain_field(ui, "cb-corel-symmetry-angle", *start_angle, "°", 1, 48.0) {
+                run = Some(json!({ "id": id.0, "angle": v }));
+            }
+        }
+        vectorcraft_doc::pattern::RepeatKind::Mirror { angle, .. } => {
+            widgets::field_label(ui, label(&Tokens::get(ui.ctx()), "Angle:"));
+            if let Some(v) = widgets::plain_field(ui, "cb-corel-symmetry-angle", *angle, "°", 1, 48.0) {
+                run = Some(json!({ "id": id.0, "angle": v }));
+            }
+        }
+        vectorcraft_doc::pattern::RepeatKind::Radial { start_angle, .. } => {
+            widgets::field_label(ui, label(&Tokens::get(ui.ctx()), "Angle:"));
+            if let Some(v) = widgets::plain_field(ui, "cb-corel-symmetry-angle", *start_angle, "°", 1, 48.0) {
+                run = Some(json!({ "id": id.0, "angle": v }));
+            }
+        }
+        vectorcraft_doc::pattern::RepeatKind::Grid { .. } => {}
+    }
+    if let Some(p) = run {
+        app.run("object.symmetry.setProps", p).ok();
+    }
+    if widgets::flat_button(ui, tl!("Break Symmetry"), 96.0).clicked() {
+        app.run("object.symmetry.break", json!({ "id": id.0 })).ok();
+    }
+    ui.add_space(4.0);
+    ui.separator();
+}
+
 /// The CorelDRAW shaping buttons of the Property Bar (P1 Task 4), in the public user guide's
 /// order, shown with two or more objects selected in the CorelDRAW workspace alone. Each runs the
 /// shared Pathfinder command it maps onto; Simplify and Trim share `object.pathfinder.trim`

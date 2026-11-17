@@ -651,3 +651,64 @@ fills, meshes, opacity masks, and the full 16-mode merge matrix all have native
 edit/undo/redo/reopen evidence, independent SVG/PDF reads, and named deduplicated CDR/CMX
 degradations. The remaining P3 work (E1–E6, M, Task 13) stays under P3, which remains open; S2
 and P0.1 are untouched.
+
+## 24. Task E1 Symmetry — positive/negative matrix (frozen 2026-11-17)
+
+CorelDRAW Symmetry maps onto the synced **Repeat** architecture: a symmetry object is a live
+`NodeKind::Repeat` whose arrangement is Corel's kind — **line** = `Mirror` (one mirror line),
+**grid** = `Grid` 2×2 with both flips (mirrored quadrants), **radial** = `Radial` with the new
+`mirror` flag (N instances at 2π/N, alternating chirality: the kaleidoscope sectors Corel shows
+for N lines). The source stays editable; Break dissolves to plain copies. No second model.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.symmetry.create` makes each kind from the selection: the node is a live Repeat with the mapped arrangement (line: 2 instances; grid: 4 mirrored; radial: N), and `object.symmetry.info` reports the kind and parameters. |
+| P2 | Radial instances alternate chirality (an asymmetric source's odd instances are mirrored) — real kaleidoscope semantics, not plain rotation. |
+| P3 | `object.symmetry.setProps` edits angle/center/lines in place, one undo step each; undo/redo round-trips exactly. |
+| P4 | Native reopen keeps the symmetry and its parameters; it still edits after reopen (source art too). |
+| P5 | The source art stays editable and every instance follows (an edit reaches all N instances). |
+| P6 | `object.symmetry.break` dissolves to exactly the instance count as plain editable copies (no Repeat left). |
+| P7 | Independent `usvg` reads the exported copies (N instances' geometry); the Hayro-backed PDF read returns them as objects. |
+| P8 | The real rendered controls work: Object > Symmetry menu items invoke create/break on the real menu tree, and the CorelDRAW Property Bar's symmetry row (Lines field, Angle field, Break button), shown with a symmetry object selected, drives `setProps`/`break` through synthetic input. |
+| P9 | CDR/CMX export emits the existing named live-Repeat expansion warning exactly once (arrangement parameters named as expanded). |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | An unknown kind, radial `lines` outside 2..1000, a non-finite angle/center, or setProps on a non-Repeat errors without document change. |
+| N2 | `object.symmetry.break`/`setProps` on an ordinary object errors and changes nothing. |
+
+Out of scope: a live symmetry *drawing mode* (edits mirroring as you draw), adding lines
+interactively on canvas, and CDR/CMX native symmetry preservation (the named expansion warning is
+the stated degradation).
+
+### 24a. Task E1 delivered: Symmetry over the Repeat architecture (2026-11-17)
+
+RED first: all four `coreldraw_symmetry` behaviour tests failed on `UnknownCommand("object.symmetry.create")`
+(the refusal negative passed vacuously). The delivered mapping:
+
+- `vectorcraft-doc` (`pattern.rs`): `RepeatKind::Radial` gains the serde-defaulted `mirror` flag
+  (a `// CoralCraft:` extension, ledger-rowed): odd instances compose the reflection across the
+  radial line at `start_angle` — alternating chirality, the kaleidoscope sectors Corel's N lines
+  show; plain radials serialize unchanged and load without the flag.
+- Commands (`symmetrycmds.rs`): `object.symmetry.create` (line → `Mirror`, grid → mirrored 2×2
+  `Grid`, radial → mirrored `Radial` with N lines; explicit angle/centre), `object.symmetry.setProps`
+  (angle/centre/lines, one undo step; grid pointed at `object.repeat.options`), `object.symmetry.break`
+  (the repeat expander), and the `object.symmetry.info` query mapping the kinds back.
+- UI: Object > Symmetry (Create Line/Grid/Radial, Break) on the real menu tree, and the
+  CorelDRAW Property Bar's symmetry row (Lines and Angle fields for the kinds that have them,
+  Break Symmetry always; grid carries Break alone) — wired into the control bar next to the
+  table row.
+
+GREEN: `coreldraw_symmetry` **5/5** (each kind's arrangement, chirality by winding flip, edits +
+undo/redo, native reopen + post-reopen edit, the source driving every instance, break's plain
+copies, usvg/Hayro instance reads, the named live-Repeat expansion warning once in CDR and CMX,
+refusals changing nothing), the UI control test (menu tree, real row, synthetic Break click,
+grid/plain rows), document pattern suite **32/32**, live effects **6/6**, engine pattern
+commands **143**, formatting and focused Clippy (`-D warnings`) over the three changed crates.
+GitNexus `detect-changes`: complete, 9 files, 16 symbols, 2 affected processes (the repeat
+arrangement evaluation), risk medium. The slice's full gate rides the next full-gate pass
+(Task 13 reruns everything).

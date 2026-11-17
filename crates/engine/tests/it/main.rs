@@ -39,6 +39,8 @@ mod coreldraw_p3_persistence;
 mod coreldraw_texture;
 // CoralCraft: the Corel two-colour pattern parameters (P3 Task T2).
 mod coreldraw_pattern_params;
+// CoralCraft: CorelDRAW Symmetry over the Repeat architecture (P3 Task E1).
+mod coreldraw_symmetry;
 // CoralCraft: the P3 poster and traced-image acceptance scenario (P3 Task 12).
 mod coreldraw_p3_acceptance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).

@@ -219,7 +219,7 @@ fn has_selection_or_ids(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)
 }
 
-fn selected_repeats(s: &Session) -> Vec<NodeId> {
+pub(crate) fn selected_repeats(s: &Session) -> Vec<NodeId> {
     let Some(st) = s.active() else { return vec![] };
     let mut out = vec![];
     for id in &st.selection.objects {
@@ -246,7 +246,7 @@ fn ids_json(ids: &[NodeId]) -> Value {
     json!({ "ids": ids.iter().map(|i| i.0).collect::<Vec<_>>() })
 }
 
-fn roots(s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+pub(crate) fn roots(s: &Session, p: &Value) -> Result<Vec<NodeId>> {
     match ids_param(p, "ids") {
         Some(ids) => {
             let st = s.doc()?;
@@ -811,7 +811,7 @@ fn pattern_transform(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- Repeat ----------
 
 /// Make a repeat from the selection, or switch the selected repeat's kind.
-fn make_repeat(s: &mut Session, p: &Value, label: &str, make: impl Fn(Vec<Arc<Node>>) -> RepeatSpec) -> Result<Value> {
+pub(crate) fn make_repeat(s: &mut Session, p: &Value, label: &str, make: impl Fn(Vec<Arc<Node>>) -> RepeatSpec) -> Result<Value> {
     let existing = selected_repeats(s);
     if ids_param(p, "ids").is_none()
         && let [r] = existing.as_slice()
@@ -912,7 +912,7 @@ fn repeat_expand(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// Repeat `r` replaced by a group of its instances, keeping its id and place; every generated
 /// instance node gets a fresh id.
-fn expand_repeat(d: &mut Document, r: NodeId) -> Result<()> {
+pub(crate) fn expand_repeat(d: &mut Document, r: NodeId) -> Result<()> {
     let Some(n) = d.node(r).cloned() else { return Ok(()) };
     let hooks = vectorcraft_doc::live::Hooks { symbols: Some(d), ..Default::default() };
     let mut g = vectorcraft_doc::live::expanded_group_hooks(&n, hooks);
@@ -963,7 +963,7 @@ fn repeat_options(s: &mut Session, p: &Value) -> Result<Value> {
         for r in &reps {
             let Some(NodeKind::Repeat(spec)) = d.node_mut(*r).map(|n| &mut n.kind) else { continue };
             match &mut spec.kind {
-                RepeatKind::Radial { instances, radius, center: c, reverse_overlap, start_angle, end_angle } => {
+                RepeatKind::Radial { instances, radius, center: c, reverse_overlap, start_angle, end_angle, .. } => {
                     if let Some(v) = num("instances") {
                         *instances = v as u32;
                     }

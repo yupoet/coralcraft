@@ -667,6 +667,11 @@ pub enum RepeatKind {
         start_angle: f64,
         #[serde(default = "full_turn")]
         end_angle: f64,
+        /// CoralCraft (P3 Task E1): CorelDRAW radial symmetry — odd instances are mirrored across
+        /// the radial line through `start_angle` (alternating chirality, the kaleidoscope sectors
+        /// N lines show), where the plain kind only rotates.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mirror: bool,
     },
     /// Copies on a grid (tile = source bounds + spacing), optionally brick/hex offset and with
     /// alternate rows/columns flipped.
@@ -805,7 +810,7 @@ pub fn reflect_about(c: Point, deg: f64) -> Affine {
 pub fn repeat_transforms(kind: &RepeatKind, source_bounds: Option<Rect>) -> Vec<Affine> {
     let b = source_bounds.unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0));
     match kind {
-        RepeatKind::Radial { instances, radius, center, reverse_overlap, start_angle, end_angle } => {
+        RepeatKind::Radial { instances, radius, center, reverse_overlap, start_angle, end_angle, mirror } => {
             let n = (*instances).clamp(1, 1000);
             let c0 = b.center();
             let mut d = c0 - *center;
@@ -816,10 +821,15 @@ pub fn repeat_transforms(kind: &RepeatKind, source_bounds: Option<Rect>) -> Vec<
             let sweep = end_angle - start_angle;
             let full = (sweep.abs() - 360.0).abs() < 1e-9;
             let step = if full || n == 1 { sweep / n as f64 } else { sweep / (n - 1) as f64 };
+            let reflect = *mirror && n > 1;
             let mut v: Vec<Affine> = (0..n)
                 .map(|k| {
                     let a = (start_angle + step * k as f64).to_radians();
-                    Affine::translate(center.to_vec2()) * Affine::rotate(a) * Affine::translate(-center.to_vec2()) * pre
+                    let spin = Affine::translate(center.to_vec2()) * Affine::rotate(a) * Affine::translate(-center.to_vec2());
+                    // Odd instances are reflected across the radial line at `start_angle` before
+                    // their rotation (CorelDRAW radial symmetry's alternating chirality).
+                    let base = if reflect && k % 2 == 1 { spin * reflect_about(*center, *start_angle) } else { spin };
+                    base * pre
                 })
                 .collect();
             if *reverse_overlap {
@@ -944,7 +954,10 @@ impl RepeatSpec {
         let b = crate::live::nodes_bounds(&source).unwrap_or(Rect::new(0.0, 0.0, 10.0, 10.0));
         let r = radius.unwrap_or((b.height().max(b.width()) * 1.2).max(10.0));
         let center = b.center() + Vec2::new(0.0, r);
-        Self { kind: RepeatKind::Radial { instances, radius: r, center, reverse_overlap: false, start_angle: 0.0, end_angle: 360.0 }, source }
+        Self {
+            kind: RepeatKind::Radial { instances, radius: r, center, reverse_overlap: false, start_angle: 0.0, end_angle: 360.0, mirror: false },
+            source,
+        }
     }
     pub fn grid(source: Vec<Arc<Node>>, h_spacing: f64, v_spacing: f64) -> Self {
         Self {
@@ -1131,6 +1144,33 @@ mod tests {
         assert_eq!(def.preview_offsets().len(), 24);
         def.copies = 3;
         assert_eq!(def.preview_offsets().len(), 8);
+    }
+
+    // CoralCraft (P3 Task E1): radial symmetry alternates chirality.
+    #[test]
+    fn mirrored_radial_repeats_alternate_chirality() {
+        let mut r = RepeatSpec::radial(vec![sq(-5.0, -105.0, 10.0)], 5, Some(100.0));
+        if let RepeatKind::Radial { mirror, .. } = &mut r.kind {
+            *mirror = true;
+        }
+        let t = r.transforms(None);
+        assert_eq!(t.len(), 5);
+        // The winding of the source's rectangle flips on the mirrored (odd) instances.
+        let rect = Rect::new(-5.0, -105.0, 5.0, -95.0);
+        let corners = [rect.origin(), (rect.x1, rect.y0).into(), (rect.x1, rect.y1).into(), (rect.x0, rect.y1).into()];
+        let signed = |pts: [Point; 4]| pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>();
+        for (k, m) in t.iter().enumerate() {
+            let wound = signed(corners.map(|p| *m * p));
+            assert_eq!(wound.signum() >= 0.0, (k % 2 == 0) == (signed(corners) >= 0.0), "instance {k}");
+        }
+        // The flag round-trips (old documents default it off).
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"mirror\":true"), "{s}");
+        let back: RepeatSpec = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, r);
+        let plain = RepeatSpec::radial(vec![sq(0.0, 0.0, 10.0)], 4, None);
+        let s = serde_json::to_string(&plain).unwrap();
+        assert!(!s.contains("mirror"), "plain radials stay as they were: {s}");
     }
 
     #[test]
