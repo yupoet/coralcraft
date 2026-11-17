@@ -491,6 +491,12 @@ pub(crate) fn set_color_mode(d: &mut vectorcraft_doc::Document, mode: ColorMode,
     {
         map_art_colors(Arc::make_mut(a), &mut count);
     }
+    // CoralCraft (P3 Task T2 review): a converted two-colour pattern's art keeps matching its
+    // source only with the converted colours — re-recognize it (a structural mismatch would end
+    // the source, as everywhere else).
+    for p in d.patterns.iter_mut().chain(d.pattern_edit.iter_mut().filter_map(|e| e.original.as_mut())) {
+        p.two_color = vectorcraft_doc::pattern::TwoColorSource::recognized(&p.art, p.tile);
+    }
     // The reply counts the colors of the document's art only, not those of the graphic styles and brushes.
     let in_art = changed.get();
     for g in &mut d.graphic_styles {

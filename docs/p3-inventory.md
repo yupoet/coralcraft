@@ -544,3 +544,34 @@ passed: doctests; cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both 
 (`-D warnings`); install_fonts (**2/2**); pdf-deps; assets; brands; cursors; i18n-report; layers;
 and wasm. T2 is complete on this evidence; **T3 merge-mode matrix and combined transparency is
 next**. T3, P3.3, P3, S2, and P0.1 remain open; no independent CDR/CMX certification is claimed.
+
+### 22c. Task T2 review fix: the source stays honest with the art (2026-11-17)
+
+The slice re-review found a blocking hole: `object.pattern.done` stored the edited tile art but
+kept the old two-colour source, and the CDR export trusted the source blindly — so a real
+CLI edit (recolour the tile to `#123456`, done) exported **no** warning and a CDR reopen
+silently restored the old `#c02020`/`#204080`. The blank-name behaviour also contradicted its
+own spec (the doc said blank names number themselves; the code refused them).
+
+RED first: three new regressions reproduced all of it (`editing_the_tile_art_resyncs_the_source_or_degrades_loudly`,
+`save_copy_and_tile_options_keep_the_two_color_source_honest`, `a_blank_two_color_name_is_numbered`).
+
+The invariant now: **a definition's source describes its art, or does not exist.**
+`TwoColorSource::recognized` recognizes a kind's synthesis back from real art (exact geometry per
+piece, plain solid fills, the background first, one foreground colour). Every art mutation
+re-derives it: `object.pattern.done` (a pure recolour re-syncs the source — the exact CDR mapping
+follows the edit; a structural edit ends the source), `object.pattern.saveCopy` (the copy carries
+the art it saves), `pattern.options` (a tile change ends the source; `pattern.setTwoColorProps`
+owns the tile size), and the colour-management conversion re-recognizes converted art. The CDR
+export no longer reads the stored source at all — it maps exactly what the **art** spells out and
+otherwise takes the named generic checkerboard degradation, so no future mutation path can export
+stale parameters silently. Audited paths that only re-id, rename, or render-bake pattern art
+(`colorcmds`, `library`, `expand`'s Cow bakes, text/symbol visitors) cannot desynchronize it.
+Blank names now number themselves (`Two-Color polkaDot`, `… 2`) like an omitted name, matching
+`object.pattern.make`.
+
+GREEN: `coreldraw_pattern_params` **11/11** (three review regressions plus the eight original),
+document pattern suite **31/31** (412 doc-crate tests), engine pattern commands **143**, texture
+**13/13**, fills/transparency **8/8**, P3 persistence **16/16**, corel-import **35 + 2**,
+formatting and focused Clippy (`-D warnings`) over the three changed crates. GitNexus
+`detect-changes --scope all`: 5 files, 8 symbols, no affected processes, risk low, complete.

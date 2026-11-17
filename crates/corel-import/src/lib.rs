@@ -708,12 +708,6 @@ fn map_cdr_pattern_kind(kind: PatternKind) -> Option<VcTwoColorKind> {
     }
 }
 
-/// CoralCraft (P3 Task T2): the exported tile size of the two-colour pattern `name` (its tile's
-/// width, at least a point and finite).
-fn source_tile_size(doc: &VcDocument, name: &str) -> f64 {
-    doc.patterns.iter().find(|d| d.name == name).map(|d| d.tile.width().max(d.tile.height())).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(12.0)
-}
-
 /// CoralCraft (P3 Task T2): the legacy Corel pattern kind a two-colour kind maps back to.
 fn map_vc_two_color_kind(kind: VcTwoColorKind) -> PatternKind {
     match kind {
@@ -3092,21 +3086,23 @@ fn convert_vc_paint_to_fill(paint: &Paint, doc: &VcDocument, warnings: &mut Expo
             };
             Some(FillStyle::Fountain { geometry, blend_mode: FountainBlendMode::Direct, stops })
         }
-        // CoralCraft (P3 Task T2): a pattern with a two-colour source maps back onto the exact
-        // Corel parameters (kind, both colours, tile size); art patterns keep the named
+        // CoralCraft (P3 Task T2): a pattern whose art IS a two-colour synthesis maps back onto
+        // the exact Corel parameters (kind, both colours, tile size). The art is the ground
+        // truth — a stale `two_color` field (art edited past it) must never export the old
+        // parameters silently, so anything the art does not spell out takes the named
         // checkerboard substitution.
         Paint::Pattern { pattern, .. } => {
-            let source = doc.patterns.iter().find(|d| &d.name == pattern).and_then(|d| d.two_color.as_ref());
+            let source = doc.patterns.iter().find(|d| &d.name == pattern).and_then(|d| {
+                let source = VcTwoColorSource::recognized(&d.art, d.tile)?;
+                Some((source, d.tile.width().max(d.tile.height())))
+            });
             match source {
-                Some(source) => {
-                    let size = source_tile_size(doc, pattern);
-                    Some(FillStyle::TwoColorPattern {
-                        kind: map_vc_two_color_kind(source.kind),
-                        fg_color: map_vc_color_to_cdr(&source.foreground),
-                        bg_color: map_vc_color_to_cdr(&source.background),
-                        tile_size_pt: F64::new(size).unwrap_or(F64::ONE),
-                    })
-                }
+                Some((source, size)) => Some(FillStyle::TwoColorPattern {
+                    kind: map_vc_two_color_kind(source.kind),
+                    fg_color: map_vc_color_to_cdr(&source.foreground),
+                    bg_color: map_vc_color_to_cdr(&source.background),
+                    tile_size_pt: F64::new(size).unwrap_or(F64::ONE),
+                }),
                 None => {
                     warnings.generic_pattern = true;
                     Some(FillStyle::TwoColorPattern {

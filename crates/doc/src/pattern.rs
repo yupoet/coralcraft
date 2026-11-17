@@ -268,6 +268,63 @@ impl TwoColorSource {
         }
         art
     }
+
+    /// CoralCraft (P3 Task T2 review): the source whose synthesized tile art `art` for `tile`
+    /// is, if it is one — every piece's geometry must match a kind's shapes exactly (paths, not
+    /// ids), every piece a plain solid fill (a fill alone, no effects; a no-paint stroke at
+    /// most), the background first and one colour on every foreground piece. Art edited past
+    /// that — a piece moved, added or deleted, another fill kind, an effect — is no pattern's
+    /// synthesis.
+    pub fn recognized(art: &[Arc<Node>], tile: Rect) -> Option<TwoColorSource> {
+        for kind in [
+            TwoColorKind::Checkerboard,
+            TwoColorKind::PolkaDot,
+            TwoColorKind::HorizontalStripe,
+            TwoColorKind::VerticalStripe,
+            TwoColorKind::DiagonalCrosshatch,
+        ] {
+            let probe =
+                TwoColorSource { kind, foreground: vectorcraft_color::Color::rgb8(1, 2, 3), background: vectorcraft_color::Color::rgb8(4, 5, 6) }
+                    .tile_art(tile);
+            if art.len() != probe.len() {
+                continue;
+            }
+            let colours: Option<Vec<vectorcraft_color::Color>> = art
+                .iter()
+                .zip(&probe)
+                .map(|(piece, expected)| (piece.path_data() == expected.path_data()).then(|| plain_fill(piece)).flatten())
+                .collect();
+            let Some(colours) = colours else { continue };
+            let (background, foreground) = (colours[0], colours[1]);
+            if colours[1..].iter().all(|c| *c == foreground) {
+                return Some(TwoColorSource { kind, foreground, background });
+            }
+        }
+        None
+    }
+}
+
+/// CoralCraft (P3 Task T2 review): `n`'s fill when it is a plain solid one — one fill of a solid
+/// colour without effects (a no-paint stroke beside it is fine, as the synthesized tiles draw).
+fn plain_fill(n: &Node) -> Option<vectorcraft_color::Color> {
+    let mut fill = None;
+    for item in &n.appearance.items {
+        match item {
+            AppearanceItem::Fill(f)
+                if fill.is_none()
+                    && f.opacity == 1.0
+                    && f.blend == vectorcraft_color::BlendMode::Normal
+                    && f.visible
+                    && f.effects.is_empty()
+                    && !f.overprint =>
+            {
+                fill = f.paint.color();
+            }
+            AppearanceItem::Stroke(s) if s.paint.is_none() => {}
+            _ => return None,
+        }
+    }
+    fill
 }
 
 /// A pattern swatch definition.
@@ -1269,6 +1326,70 @@ mod tests {
         // A non-finite or empty tile synthesizes nothing.
         assert!(source(TwoColorKind::Checkerboard).tile_art(Rect::new(f64::NAN, 0.0, 12.0, 12.0)).is_empty());
         assert!(source(TwoColorKind::Checkerboard).tile_art(Rect::new(0.0, 0.0, 0.0, 12.0)).is_empty());
+    }
+
+    #[test]
+    fn two_color_art_is_recognized_back_and_edits_are_told_apart() {
+        let tile = Rect::new(0.0, 0.0, 12.0, 12.0);
+        let src = source(TwoColorKind::Checkerboard);
+        let art = src.tile_art(tile);
+        assert_eq!(TwoColorSource::recognized(&art, tile).as_ref(), Some(&src), "a synthesis is recognized");
+        // A recolour of the foreground pieces is recognized with the new colour.
+        let recolored: Vec<Arc<Node>> = art
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let mut n = (**n).clone();
+                if i > 0
+                    && let Some(fill) = n.appearance.fill_mut()
+                {
+                    fill.paint = vectorcraft_color::Paint::solid(Color::rgb8(0x20, 0xa0, 0x40));
+                }
+                Arc::new(n)
+            })
+            .collect();
+        let recognized = TwoColorSource::recognized(&recolored, tile).expect("a recolour is recognized");
+        assert_eq!(recognized.foreground, Color::rgb8(0x20, 0xa0, 0x40));
+        assert_eq!(recognized.background, src.background);
+        // Structural edits are not: a piece dropped, moved, given a gradient fill or a stroke.
+        assert_eq!(TwoColorSource::recognized(&art[..2], tile), None, "a piece dropped");
+        let moved: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                n.transform(Affine::translate((3.0, 0.0)), false);
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&moved, tile), None, "a piece moved");
+        let gradient: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                if let Some(fill) = n.appearance.fill_mut() {
+                    fill.paint =
+                        vectorcraft_color::Paint::Gradient(Box::new(vectorcraft_color::GradientPaint::new(vectorcraft_color::Gradient::default())));
+                }
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&gradient, tile), None, "a gradient fill");
+        let stroked: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                if let Some(stroke) = n.appearance.stroke_mut() {
+                    stroke.paint = vectorcraft_color::Paint::solid(Color::BLACK);
+                }
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&stroked, tile), None, "a visible stroke");
+        // Two pieces of another kind's shapes are not mistaken for it.
+        assert_eq!(
+            TwoColorSource::recognized(&source(TwoColorKind::PolkaDot).tile_art(tile), tile).as_ref().map(|s| s.kind),
+            Some(TwoColorKind::PolkaDot)
+        );
     }
 
     #[test]

@@ -71,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pattern Options",
             ["Window", "Pattern Options"],
             None,
-            "{name? (default: the pattern being edited), newName? (trimmed; blank: the name is kept), tileType?, brickOffset?, width?, height?, hSpacing?, vSpacing?, sizeTileToArt?: bool, overlap?: {h: left|right, v: top|bottom}, copies?: 3|5|7|9, dimCopies?: %, showTileEdge?: bool, showSwatchBounds?: bool (outline the part of the tiling the swatch repeats, dashed)}",
+            "{name? (default: the pattern being edited), newName? (trimmed; blank: the name is kept), tileType?, brickOffset?, width?, height?, hSpacing?, vSpacing?, sizeTileToArt?: bool, overlap?: {h: left|right, v: top|bottom}, copies?: 3|5|7|9, dimCopies?: %, showTileEdge?: bool, showSwatchBounds?: bool (outline the part of the tiling the swatch repeats, dashed)} (a two-colour pattern whose tile changes here becomes plain art: pattern.setTwoColorProps owns its tile size)",
             has_doc,
             pattern_options
         ),
@@ -414,6 +414,11 @@ pub(crate) fn pattern_done(s: &mut Session, _: &Value) -> Result<Value> {
             if def.size_tile_to_art {
                 def.fit_tile_to_art();
             }
+            // CoralCraft (P3 Task T2 review): the source must describe the stored art. A pure
+            // recolour re-syncs it (the exact CDR mapping follows the edit); anything structural
+            // ends it, so the CDR export takes the named generic degradation instead of the old
+            // parameters.
+            def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         }
         Ok(pe.pattern)
     })?;
@@ -453,6 +458,9 @@ fn pattern_save_copy(s: &mut Session, p: &Value) -> Result<Value> {
         if def.size_tile_to_art {
             def.fit_tile_to_art();
         }
+        // CoralCraft (P3 Task T2 review): the copy's source is whatever the art it saves is, not
+        // the original's.
+        def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         add_pattern(d, def);
         Ok(name)
     })?;
@@ -528,6 +536,9 @@ fn pattern_options(s: &mut Session, p: &Value) -> Result<Value> {
             let c = def.tile.center();
             def.tile = Rect::from_center_size(c, (num("width").unwrap_or(def.tile.width()), num("height").unwrap_or(def.tile.height())));
         }
+        // CoralCraft (P3 Task T2 review): a changed tile invalidates a two-colour source (its
+        // art was synthesized for the old one); pattern.setTwoColorProps owns the tile size.
+        def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         if let Some(nn) = &new_name {
             def.name = nn.clone();
             rename_pattern_uses(d, &name, nn);
@@ -606,12 +617,6 @@ fn two_color_params(
         Some(v) => Some(v.as_str().unwrap_or_default().trim().to_string()),
         None => existing.map(|d| d.name.clone()),
     };
-    if let Some(name) = &name
-        && name.is_empty()
-        && existing.is_none()
-    {
-        return Err(bad(C, "the name must not be blank"));
-    }
     let kind = match p.get("kind") {
         Some(v) => v.as_str().and_then(TwoColorKind::of_id).ok_or_else(|| {
             bad(C, format!("unknown two-colour pattern kind {:?} ({})", v.as_str().unwrap_or_default(), TwoColorKind::IDS.join("|")))

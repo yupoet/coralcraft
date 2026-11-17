@@ -370,7 +370,6 @@ fn two_color_negatives_refuse_instead_of_falling_back() {
         json!({ "name": "Bad Colour", "kind": "polkaDot", "foreground": "nope" }),
         json!({ "name": "Bad Tile", "kind": "polkaDot", "tileSize": 0.0 }),
         json!({ "name": "Bad Tile 2", "kind": "polkaDot", "tileSize": -3.0 }),
-        json!({ "name": "", "kind": "polkaDot" }),
     ] {
         assert!(s.execute("pattern.twoColor", &bad).is_err(), "invalid definition accepted: {bad}");
     }
@@ -473,4 +472,124 @@ fn imported_pdf(s: &mut Session) -> vectorcraft_doc::Document {
         vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({ "format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
             .unwrap();
     vectorcraft_pdf::import(&bytes).expect("independent Hayro-backed PDF read")
+}
+
+/// Review fix (2026-11-17): editing a two-colour pattern's art keeps its source honest. A pure
+/// recolour re-syncs the source (the CDR export follows the edited colours); a structural edit
+/// turns the pattern into plain art whose CDR export says so with the generic warning — never a
+/// silent revert to the parameters the art no longer matches.
+#[test]
+fn editing_the_tile_art_resyncs_the_source_or_degrades_loudly() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    s.execute(
+        "pattern.twoColor",
+        &json!({ "name": "Coral Checks", "kind": "checkerboard", "foreground": "#c02020", "background": "#204080", "tileSize": 12.0 }),
+    )
+    .unwrap();
+    s.execute("select.set", &json!({ "ids": [a] })).unwrap();
+    s.execute("paint.setPattern", &json!({ "pattern": "Coral Checks" })).unwrap();
+    let listed = |s: &mut Session| {
+        let list = s.execute("pattern.list", &json!({})).unwrap();
+        list["patterns"].as_array().unwrap().iter().find(|d| d["name"].as_str() == Some("Coral Checks")).cloned().unwrap()
+    };
+    // A pure recolour of every synthesized piece: the source follows the edit.
+    s.execute("object.pattern.edit", &json!({ "name": "Coral Checks" })).unwrap();
+    let editing = s.doc().unwrap().selection.objects.clone();
+    assert_eq!(editing.len(), 3, "the synthesized pieces are editable");
+    for id in &editing {
+        s.execute("paint.setFill", &json!({ "id": id.0, "color": "#123456" })).unwrap();
+    }
+    s.execute("object.pattern.done", &json!({})).unwrap();
+    let def = listed(&mut s);
+    assert_eq!(def["twoColor"]["foreground"].as_str(), Some("#123456"), "the source follows the recolour: {def:?}");
+    assert_eq!(def["twoColor"]["background"].as_str(), Some("#123456"));
+    let (cdr_doc, warnings) = {
+        let st = s.doc().unwrap();
+        corel_import::export_document_with_warnings(&st.doc).expect("export")
+    };
+    assert!(!warnings.iter().any(|w| w == GENERIC_PATTERN_WARNING), "the re-synced source maps exactly, no generic warning: {warnings:?}");
+    let mut exported: Vec<String> = vec![];
+    for page in &cdr_doc.pages {
+        for layer in &page.layers {
+            for object in &layer.objects {
+                if let Some(corel_import::coralcraft_doc::FillStyle::TwoColorPattern { fg_color, bg_color, .. }) = &object.fill {
+                    exported.push(format!("{}/{}", fg_color.to_hex(), bg_color.to_hex()));
+                }
+            }
+        }
+    }
+    assert_eq!(exported, ["#123456/#123456"], "the CDR fill carries the edited colours: {exported:?}");
+    // A structural edit (a piece deleted) makes the art no pattern's synthesis: the source is
+    // dropped and the CDR export degrades with the named generic warning while the native
+    // document keeps the edited art.
+    s.execute("object.pattern.edit", &json!({ "name": "Coral Checks" })).unwrap();
+    let editing = s.doc().unwrap().selection.objects.clone();
+    s.execute("select.set", &json!({ "ids": [editing[1].0] })).unwrap();
+    s.execute("edit.clear", &json!({})).unwrap();
+    s.execute("object.pattern.done", &json!({})).unwrap();
+    let def = listed(&mut s);
+    assert!(def["twoColor"].is_null(), "a structural edit ends the two-colour source: {def:?}");
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(svg.contains("#123456"), "the native art keeps the edited colours: {svg}");
+    let out = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
+    let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+    let count = warnings.iter().filter(|w| w.as_str() == Some(GENERIC_PATTERN_WARNING)).count();
+    assert_eq!(count, 1, "exactly one named generic warning for the degraded pattern: {warnings:?}");
+}
+
+/// Review fix (2026-11-17): a copy saved while editing carries the source of the art it saves,
+/// and `pattern.options` never leaves a stale source behind (a tile change turns a two-colour
+/// pattern into plain art; `pattern.setTwoColorProps` owns its tile size).
+#[test]
+fn save_copy_and_tile_options_keep_the_two_color_source_honest() {
+    let mut s = session();
+    let a = s.execute("shape.rectangle", &json!({ "x": 20, "y": 20, "width": 90, "height": 60 })).unwrap()["id"].as_u64().unwrap();
+    s.execute(
+        "pattern.twoColor",
+        &json!({ "name": "Coral Dots", "kind": "polkaDot", "foreground": "#c02020", "background": "#204080", "tileSize": 12.0 }),
+    )
+    .unwrap();
+    s.execute("select.set", &json!({ "ids": [a] })).unwrap();
+    s.execute("paint.setPattern", &json!({ "pattern": "Coral Dots" })).unwrap();
+    let listed = |s: &mut Session, name: &str| {
+        let list = s.execute("pattern.list", &json!({})).unwrap();
+        list["patterns"].as_array().unwrap().iter().find(|d| d["name"].as_str() == Some(name)).cloned().unwrap()
+    };
+    // Save a Copy while editing a recoloured pattern: the copy's source is the edited art's.
+    s.execute("object.pattern.edit", &json!({ "name": "Coral Dots" })).unwrap();
+    let editing = s.doc().unwrap().selection.objects.clone();
+    s.execute("paint.setFill", &json!({ "id": editing[1].0, "color": "#20a040" })).unwrap();
+    s.execute("object.pattern.saveCopy", &json!({})).unwrap();
+    s.execute("object.pattern.done", &json!({})).unwrap();
+    let copy = listed(&mut s, "Coral Dots copy");
+    assert_eq!(copy["twoColor"]["foreground"].as_str(), Some("#20a040"), "the copy carries the edited source: {copy:?}");
+    assert_eq!(listed(&mut s, "Coral Dots")["twoColor"]["foreground"].as_str(), Some("#20a040"), "done re-syncs the original too");
+    // A tile-size change through pattern.options turns the pattern into plain art (the sanctioned
+    // parameter path is pattern.setTwoColorProps, which re-synthesizes).
+    s.execute("pattern.options", &json!({ "name": "Coral Dots copy", "width": 30.0, "height": 30.0 })).unwrap();
+    let def = listed(&mut s, "Coral Dots copy");
+    assert!(def["twoColor"].is_null(), "a tile change through pattern.options ends the source: {def:?}");
+    s.execute("select.set", &json!({ "ids": [a] })).unwrap();
+    s.execute("paint.setPattern", &json!({ "pattern": "Coral Dots copy" })).unwrap();
+    let out = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
+    let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(warnings.iter().any(|w| w.as_str() == Some(GENERIC_PATTERN_WARNING)), "the degraded pattern warns: {warnings:?}");
+    // setTwoColorProps keeps owning the tile size: the art is re-synthesized, source intact.
+    s.execute("pattern.setTwoColorProps", &json!({ "name": "Coral Dots", "tileSize": 30.0 })).unwrap();
+    let def = listed(&mut s, "Coral Dots");
+    assert_eq!(def["twoColor"]["tileSize"].as_f64(), Some(30.0));
+    assert_eq!(def["width"].as_f64(), Some(30.0), "the tile follows the parameter");
+    assert_eq!(def["artCount"].as_u64(), Some(2), "the art is re-synthesized at the new size");
+}
+
+/// Review fix (2026-11-17): a blank name numbers itself like an omitted name does.
+#[test]
+fn a_blank_two_color_name_is_numbered() {
+    let mut s = session();
+    let created =
+        s.execute("pattern.twoColor", &json!({ "name": "  ", "kind": "polkaDot", "foreground": "#c02020", "background": "#204080" })).unwrap();
+    assert_eq!(created["name"].as_str(), Some("Two-Color polkaDot"), "a blank name numbers itself: {created:?}");
+    let again = s.execute("pattern.twoColor", &json!({ "name": "", "kind": "polkaDot", "foreground": "#c02020", "background": "#204080" })).unwrap();
+    assert_eq!(again["name"].as_str(), Some("Two-Color polkaDot 2"), "the second blank name numbers on: {again:?}");
 }
