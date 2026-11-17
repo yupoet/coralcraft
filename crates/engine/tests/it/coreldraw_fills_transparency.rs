@@ -553,3 +553,175 @@ fn bitmap_generic_pattern_art_replacement_survives_undo_reopen_and_independent_e
     });
     assert!(connected, "the reconstructed target paint references the bitmap tile; this is not live PDF editing evidence");
 }
+
+// CoralCraft (P3 Task T3): the merge-mode matrix and combined transparency. The matrix in
+// `docs/p3-inventory.md` §23 freezes this slice's semantics.
+
+const BLEND_MODE_WARNING: &str = "merge modes other than Normal are dropped in CDR/CMX; native blend modes remain editable";
+const LIVE_TRACE_FALLBACK: &str =
+    "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
+const LIVE_MESH_FALLBACK: &str =
+    "live Mesh objects are expanded to plain vector groups in CDR/CMX; the native document keeps the editable live sources";
+const GRADIENT_ALPHA_WARNING: &str = "gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable";
+const DROPPED_MASK_WARNING: &str = "enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable";
+const MESH_OPACITY_WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+/// The panel labels, the CSS names `transparency.set` also accepts, and the `usvg` mode each
+/// exports as.
+#[test]
+fn every_merge_mode_edits_undoes_reopens_and_reads_back_independently() {
+    let modes: &[(&str, &str)] = &[
+        ("Normal", "normal"),
+        ("Darken", "darken"),
+        ("Multiply", "multiply"),
+        ("Color Burn", "color-burn"),
+        ("Lighten", "lighten"),
+        ("Screen", "screen"),
+        ("Color Dodge", "color-dodge"),
+        ("Overlay", "overlay"),
+        ("Soft Light", "soft-light"),
+        ("Hard Light", "hard-light"),
+        ("Difference", "difference"),
+        ("Exclusion", "exclusion"),
+        ("Hue", "hue"),
+        ("Saturation", "saturation"),
+        ("Color", "color"),
+        ("Luminosity", "luminosity"),
+    ];
+    for (label, css) in modes {
+        let mut s = session();
+        let shape = rectangle(&mut s);
+        // P1: the panel label edits the object's mode…
+        s.execute("transparency.set", &json!({"id": shape, "blend": label})).unwrap();
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!(node.blend.label(), *label, "the panel label edits the mode");
+        // …and the CSS name does too (usvg's spelling of the same mode).
+        s.execute("transparency.set", &json!({"id": shape, "blend": css})).unwrap();
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!(node.blend.label(), *label, "the CSS name edits the same mode");
+        // P2: the opacity edit undoes and redoes beside the mode.
+        s.execute("transparency.set", &json!({"id": shape, "opacity": 60})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!((node.blend.label(), node.opacity), (*label, 1.0), "undo restores the opacity, not the mode ({label})");
+        s.execute("edit.redo", &json!({})).unwrap();
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!((node.blend.label(), node.opacity), (*label, 0.6), "redo restores the opacity ({label})");
+        s.execute("transparency.set", &json!({"id": shape, "blend": "difference"})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().doc.node(NodeId(shape)).unwrap().blend.label(), *label, "undo restores the mode itself ({label})");
+        // P3: native reopen keeps the mode, and it still edits after.
+        native_reopen(&mut s);
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!(node.blend.label(), *label, "reopen keeps {label}");
+        s.execute("transparency.set", &json!({"id": shape, "opacity": 80})).unwrap();
+        let node = s.doc().unwrap().doc.node(NodeId(shape)).unwrap();
+        assert_eq!((node.blend.label(), node.opacity), (*label, 0.8), "still edits after reopen ({label})");
+        // P4: independent usvg reads this mode's own CSS name off the exported group.
+        let svg = s.execute("document.serialize", &json!({"format": "svg"})).unwrap()["text"].as_str().unwrap().to_string();
+        if *css != "normal" {
+            let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+            let mut found = vec![];
+            blend_names(tree.root(), &mut found);
+            assert!(found.contains(css), "{label} exports its own mix-blend-mode ({css}): {found:?}");
+        }
+        // P5: the Hayro-backed PDF read returns the mode on the imported node.
+        let pdf =
+            vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({"format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
+                .unwrap();
+        let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF read");
+        let mut read = BlendMode::Normal;
+        imported.walk(|n| {
+            if n.blend != BlendMode::Normal {
+                read = n.blend;
+            }
+        });
+        assert_eq!(read.label(), *label, "the PDF read returns {label}");
+    }
+}
+
+/// P6 + N2 + N3: the combined mesh + gradient + mask + blend scenario warns once per channel in
+/// CDR/CMX, a Normal document warns about nothing, and the warning list holds the named ones only.
+#[test]
+fn combined_transparency_channels_warn_once_each_and_normal_warns_nothing() {
+    let mut s = session();
+    let shape = rectangle(&mut s);
+    s.execute("object.mesh.create", &json!({"id": shape, "rows": 1, "cols": 1})).unwrap();
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 3, "color": "#00ff00", "opacity": 0.5})).unwrap();
+    let other = s.execute("shape.rectangle", &json!({"x": 40, "y": 40, "width": 60, "height": 40})).unwrap()["id"].as_u64().unwrap();
+    s.execute(
+        "paint.setFill",
+        &json!({"id": other, "gradient": {"stops": [{"offset": 0.0, "color": "#ff0000", "opacity": 0.5}, {"offset": 1.0, "color": "#0000ff"}]}}),
+    )
+    .unwrap();
+    s.execute("select.set", &json!({"ids": [shape]})).unwrap();
+    s.execute("transparency.makeOpacityMask", &json!({})).unwrap();
+    s.execute("transparency.set", &json!({"id": other, "blend": "screen", "opacity": 70})).unwrap();
+    for format in ["cdr", "cmx"] {
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+        let mut texts: Vec<&str> = warnings.iter().filter_map(|w| w.as_str()).collect();
+        for warning in [BLEND_MODE_WARNING, GRADIENT_ALPHA_WARNING, DROPPED_MASK_WARNING, MESH_OPACITY_WARNING] {
+            assert_eq!(texts.iter().filter(|w| **w == warning).count(), 1, "{format} warns once: {warning}: {texts:?}");
+        }
+        for known in [BLEND_MODE_WARNING, GRADIENT_ALPHA_WARNING, DROPPED_MASK_WARNING, MESH_OPACITY_WARNING, LIVE_TRACE_FALLBACK, LIVE_MESH_FALLBACK]
+        {
+            texts.retain(|w| *w != known);
+        }
+        assert!(texts.is_empty(), "{format} carries no unexplained warnings: {texts:?}");
+    }
+    // N2: an all-Normal document warns about none of the four.
+    let mut plain = session();
+    let shape = rectangle(&mut plain);
+    plain.execute("transparency.set", &json!({"id": shape, "opacity": 50})).unwrap();
+    let out = plain.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
+    let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| matches!(w.as_str(), Some(BLEND_MODE_WARNING | GRADIENT_ALPHA_WARNING | DROPPED_MASK_WARNING | MESH_OPACITY_WARNING))),
+        "a Normal document warns about none of the channels: {warnings:?}"
+    );
+}
+
+/// N1: an unknown merge-mode name is refused without change.
+#[test]
+fn an_unknown_merge_mode_name_is_refused() {
+    let mut s = session();
+    let shape = rectangle(&mut s);
+    let before = s.doc().unwrap().doc.node(NodeId(shape)).unwrap().clone();
+    assert!(s.execute("transparency.set", &json!({"id": shape, "blend": "vivid-light"})).is_err());
+    let after = s.doc().unwrap().doc.node(NodeId(shape)).unwrap().clone();
+    assert_eq!(before, after, "the refused edit changed nothing");
+}
+
+/// The `mix-blend-mode` values of the groups of `group` (independent usvg read).
+fn blend_names(group: &usvg::Group, out: &mut Vec<&'static str>) {
+    use usvg::BlendMode as U;
+    let name = |b: U| match b {
+        U::Normal => "normal",
+        U::Multiply => "multiply",
+        U::Screen => "screen",
+        U::Overlay => "overlay",
+        U::Darken => "darken",
+        U::Lighten => "lighten",
+        U::ColorDodge => "color-dodge",
+        U::ColorBurn => "color-burn",
+        U::HardLight => "hard-light",
+        U::SoftLight => "soft-light",
+        U::Difference => "difference",
+        U::Exclusion => "exclusion",
+        U::Hue => "hue",
+        U::Saturation => "saturation",
+        U::Color => "color",
+        U::Luminosity => "luminosity",
+    };
+    if group.blend_mode() != U::Normal {
+        out.push(name(group.blend_mode()));
+    }
+    for node in group.children() {
+        if let usvg::Node::Group(child) = node {
+            blend_names(child, out);
+        }
+    }
+}

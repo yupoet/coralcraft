@@ -575,3 +575,58 @@ document pattern suite **31/31** (412 doc-crate tests), engine pattern commands 
 **13/13**, fills/transparency **8/8**, P3 persistence **16/16**, corel-import **35 + 2**,
 formatting and focused Clippy (`-D warnings`) over the three changed crates. GitNexus
 `detect-changes --scope all`: 5 files, 8 symbols, no affected processes, risk low, complete.
+
+## 23. Task T3 Merge-mode matrix and combined transparency — positive/negative matrix (frozen 2026-11-17)
+
+The merge modes are the 16 `BlendMode`s of the shared Transparency panel (PDF's own set). Each
+mode is an object-level merge mode through `transparency.set` (item-level blends ride the same
+model); the matrix proves them on the shared engine with independent readers, and the combined
+scenario proves the CDR/CMX channel warnings once each.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | Every one of the 16 modes edits through `transparency.set {blend}` (panel label or CSS name) onto the object; the inspected node carries it. |
+| P2 | Each mode's edit undoes and redoes exactly (blend and opacity round-trip). |
+| P3 | Each mode survives a native `.vectorcraft` reopen and still edits after it. |
+| P4 | Independent `usvg` reads each mode's own `mix-blend-mode` value off the exported group (16 distinct CSS names, not just "some blend"). |
+| P5 | The Hayro-backed PDF read returns the mode (PDF names the exporter writes, proven per-mode at crate level; the engine check reads the mode back on the imported node). |
+| P6 | A combined object — translucent mesh fill + gradient with alpha + enabled opacity mask + a non-Normal blend — renders and exports, and the CDR/CMX export lists each channel warning **exactly once** (gradient alpha, opacity mask, mesh point opacity, blend mode). |
+| P7 | CDR/CMX export of any non-Normal merge mode emits the named blend-mode degradation warning (deduplicated); Normal emits none. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `transparency.set {blend: "<unknown>"}` errors and changes nothing. |
+| N2 | The CDR/CMX blend-mode warning appears zero times when every blend is Normal (no noise warnings). |
+| N3 | The combined scenario's warnings are the four named ones only — no generic/unexplained warnings appear. |
+
+Out of scope for this slice (follow-ups, not blockers): a CorelDRAW Transparency-panel docker UI
+for the mode list (the panel evidence of Task 3 Step 2 stands), Fountain blend-mode import
+mapping, and live PDF editing claims (reads are structural).
+
+### 23a. Task T3 delivered: the merge-mode matrix and the blend-mode warning (2026-11-17)
+
+RED first: `combined_transparency_channels_warn_once_each_and_normal_warns_nothing` failed exactly
+on the missing blend-mode degradation (count 0); the 16-mode matrix and the unknown-name negative
+were written against the existing shared model and passed as evidence-only (no production change
+was needed for them).
+
+The delivered production change is one honest channel: the CDR/CMX writers carry no object or
+item merge mode, so `convert_vc_node_to_cdr_with_expected` (object blends) and
+`convert_vc_appearance_to_cdr` (fill/stroke item blends) now note any non-Normal mode and the
+export emits the named, deduplicated warning `merge modes other than Normal are dropped in
+CDR/CMX; native blend modes remain editable` once per export.
+
+GREEN: `coreldraw_fills_transparency` **11/11** — the 16-mode matrix (panel label and CSS name
+edit, opacity edit undo/redo beside the mode, mode-edit undo, native reopen, post-reopen edit,
+per-mode `usvg` `mix-blend-mode` read, per-mode Hayro PDF read on the imported node), the combined
+mesh + gradient-alpha + enabled-mask + Screen scenario (each of the four channel warnings exactly
+once in CDR and CMX, live-trace and live-Mesh aside, nothing unexplained), Normal-warning silence,
+and the unknown-name refusal. Regressions: corel-import **8 + 30 + 35 + 2**, formatting and
+focused Clippy (`-D warnings`) over `corel-import` and `vectorcraft-engine`. GitNexus
+`detect-changes`: complete, no affected processes. **The slice's full gate is pending** — the
+reopened-T2 gate below covers the tree this change was written on; T3's own gate runs with the
+next full-gate pass (Task 13 reruns everything).

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 use vectorcraft_color::{
-    Color as VcColor, Gradient, GradientGeom, GradientKind, GradientMethod, GradientPaint, GradientStop, Paint, Swatch, default_swatches,
+    BlendMode, Color as VcColor, Gradient, GradientGeom, GradientKind, GradientMethod, GradientPaint, GradientStop, Paint, Swatch, default_swatches,
     swatch::REGISTRATION,
 };
 use vectorcraft_doc::{
@@ -737,6 +737,8 @@ fn two_color_pattern_paint(doc: &mut VcDocument, kind: VcTwoColorKind, fg: VcCol
 const LIVE_TRACE_WARNING: &str =
     "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects";
 const GRADIENT_ALPHA_WARNING: &str = "gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable";
+// CoralCraft (P3 Task T3): the CDR/CMX writers carry no object or item merge mode.
+const BLEND_MODE_WARNING: &str = "merge modes other than Normal are dropped in CDR/CMX; native blend modes remain editable";
 const DROPPED_MASK_WARNING: &str = "enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable";
 const MISSING_IMAGE_WARNING: &str =
     "missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
@@ -756,6 +758,8 @@ struct ExportWarningLedger {
     mesh_point_opacity: bool,
     /// CoralCraft (P3 Task T1): a texture fill fell back to a solid in CDR/CMX.
     texture_fill: bool,
+    /// CoralCraft (P3 Task T3): a merge mode other than Normal was dropped.
+    blend_mode: bool,
     mesh_point_opacity_sources: BTreeSet<u64>,
     unsupported_bitmap_effects: BTreeSet<String>,
     missing_image_pixels: bool,
@@ -780,6 +784,9 @@ impl ExportWarningLedger {
         }
         if self.mesh_point_opacity {
             warnings.push(MESH_OPACITY_WARNING.to_owned());
+        }
+        if self.blend_mode {
+            warnings.push(BLEND_MODE_WARNING.to_owned());
         }
         if self.texture_fill {
             warnings.push(TEXTURE_FILL_WARNING.to_owned());
@@ -2732,6 +2739,8 @@ fn convert_vc_node_to_cdr_with_expected(
 ) -> ConvertedObject {
     // CoralCraft: CDR/CMX export evaluates live objects instead of falling through to empty paths.
     warnings.live_trace |= node.extras().trace.is_some();
+    // CoralCraft (P3 Task T3): the writers carry no object-level merge mode.
+    warnings.blend_mode |= node.blend != BlendMode::Normal;
     let has_enabled_opacity_mask = node.extras().mask.as_deref().is_some_and(|mask| !mask.disabled);
     let mut mask_mesh_point_opacity = None;
     if let Some(mask) = node.extras().mask.as_deref().filter(|mask| !mask.disabled) {
@@ -3032,11 +3041,13 @@ fn convert_vc_appearance_to_cdr<'a>(
         match item {
             AppearanceItem::Fill(fl) if fl.visible && !fl.paint.is_none() => {
                 first_fill_idx.get_or_insert(idx);
+                warnings.blend_mode |= fl.blend != BlendMode::Normal;
                 fill_paint = Some(&fl.paint);
                 fill_effects = Some(fl.effects.as_slice());
             }
             AppearanceItem::Stroke(sl) if sl.visible && !sl.paint.is_none() => {
                 first_stroke_idx.get_or_insert(idx);
+                warnings.blend_mode |= sl.blend != BlendMode::Normal;
                 stroke_paint = Some(sl);
                 stroke_effects = Some(sl.effects.as_slice());
             }
