@@ -448,3 +448,47 @@ fn collect_path_anchors(group: &usvg::Group, out: &mut Vec<(f64, f64)>) {
         }
     }
 }
+
+// CoralCraft (P3 Task E5): the handle-set values carry through the shared machinery.
+#[test]
+fn handle_set_distortions_reopen_read_back_and_map_exactly_to_cdr() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({ "width": 400, "height": 300 })).unwrap();
+    let shape = s.execute("shape.rectangle", &json!({ "x": 40, "y": 40, "width": 120, "height": 80 })).unwrap()["id"].as_u64().unwrap();
+    // The values the dedicated handles commit (E5's canvas test drags these same commands).
+    s.execute("effect.apply", &json!({ "id": shape, "effect": "distort.zigZag", "params": { "size": 6.0, "ridges": 4 } })).unwrap();
+    s.execute("effect.setParams", &json!({ "id": shape, "index": 0, "params": { "size": 26.0, "ridges": 7 } })).unwrap();
+    // P4: native reopen keeps them, and they still edit after.
+    let data = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
+    s.execute("document.open", &json!({ "dataBase64": data })).unwrap();
+    let fx = s.doc().unwrap().doc.node(vectorcraft_doc::NodeId(shape)).unwrap().appearance.effects[0].params.clone();
+    assert_eq!((fx["size"].as_f64(), fx["ridges"].as_u64()), (Some(26.0), Some(7)), "reopen keeps the handle-set values");
+    // P5: the re-distorted geometry reads back independently.
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_string();
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+    let mut anchors = vec![];
+    collect_path_anchors(tree.root(), &mut anchors);
+    assert!(anchors.len() > 8, "the zigzag's anchors read back: {}", anchors.len());
+    let pdf =
+        vectorcraft_format::base64_decode(s.execute("document.serialize", &json!({ "format": "pdf" })).unwrap()["dataBase64"].as_str().unwrap())
+            .unwrap();
+    let imported = vectorcraft_pdf::import(&pdf).expect("independent Hayro-backed PDF read");
+    let mut paths = 0;
+    imported.walk(|n| {
+        if n.path_data().is_some_and(|p| !p.is_empty()) {
+            paths += 1;
+        }
+    });
+    assert!(paths >= 1, "the distorted path reads back");
+    // P6: CDR/CMX carries the exact Distortion with the handle-set values.
+    let (cdr_doc, _) = {
+        let st = s.doc().unwrap();
+        corel_import::export_document_with_warnings(&st.doc).expect("export")
+    };
+    let object = cdr_doc.pages[0].layers[0].objects.iter().find(|o| o.id.0 == shape).unwrap();
+    let mapped = object
+        .effects
+        .iter()
+        .any(|e| matches!(e, corel_import::coralcraft_doc::VectorEffect::Distortion { kind: corel_import::coralcraft_geom::DistortionKind::Zipper, amplitude, frequency } if (amplitude.get() - 26.0).abs() < 1e-9 && (frequency.get() - 7.0).abs() < 1e-9));
+    assert!(mapped, "the Zipper Distortion carries the handle-set values: {:?}", object.effects);
+}

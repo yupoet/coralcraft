@@ -837,3 +837,51 @@ affected processes, all through the two registration hubs the slice extends addi
 (`command_specs`, which every command lists through, and `show_icon_panel`, which routes every
 panel); the lens logic itself is a new leaf module, and the engine/UI batteries above cover both
 hubs' flows.
+
+## 28. Task E5 Push/Pull and Zipper dedicated handles — positive/negative matrix (frozen 2026-11-17)
+
+The shared `distort.zigZag` (Zipper: size + ridges) and `distort.puckerBloat` (Push/Pull: amount)
+effects and their CDR Distortion mappings exist; the slice is the **dedicated on-canvas handles**
+CorelDRAW's Distort tool drags, on the shared Selection tool like the grid-repeat handles.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | With the Selection tool and one object carrying a visible Zipper (Push/Pull) effect selected, its dedicated handles show on the canvas: Zipper an amplitude handle above the top edge and a frequency handle right of the right edge; Push/Pull one amount handle above the top edge. |
+| P2 | Dragging the amplitude handle vertically changes `size` (up grows), the frequency handle horizontally changes `ridges` (right grows, whole 1..100), and the amount handle horizontally changes `amount` (right bloats, left puckers, −200..200) — each drag previews `effect.setParams` and commits as one undo step. |
+| P3 | A drag that ends where it began leaves no undo step; Escape cancels the drag. |
+| P4 | The handle-set parameters survive native reopen and still edit (the shared effect stack). |
+| P5 | Independent `usvg` reads the re-distorted geometry after a handle-set value; the Hayro-backed PDF read returns the distorted path. |
+| P6 | CDR/CMX carries the exact Distortion vector effect — Zipper with the handle-set amplitude and frequency, Push/Pull with the handle-set amplitude. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | No handle shows for a selection without such an effect, with several objects, or with Cmd/Ctrl/Alt held. |
+
+Out of scope: the standalone Corel Distort tool's mode switching UI, and per-ridge handle editing.
+
+### 28a. Task E5 delivered: the Push/Pull and Zipper dedicated handles (2026-11-18)
+
+RED first: the canvas regression failed on the missing `vectorcraft_tools::distort_handles`
+module. The delivered handles:
+
+- `vectorcraft-tools` (`distort_handles.rs`, a CoralCraft module mirroring the grid-repeat
+  handles): with the Selection tool and one object carrying a visible `distort.zigZag`
+  (Zipper) or `distort.puckerBloat` (Push/Pull), dedicated handles show — Zipper an amplitude
+  handle above the top edge (drag up grows `size`) and a frequency handle right of the right edge
+  (drag right grows `ridges`, ten points each, whole 1..100); Push/Pull one amount handle above
+  the top edge (drag right bloats, left puckers, two percent a point, −200..200). A drag previews
+  the existing `effect.setParams` and commits as one undo step; a no-move drag leaves no step;
+  Escape cancels; Cmd/Ctrl/Alt pass the press through; no handle without the effect or with
+  several objects selected. Wired into the Selection tool beside the grid-repeat drag and drawn
+  as circles by a canvas overlay.
+
+GREEN: the canvas regression (synthetic pointer drags on the real handles: amplitude +20 pt →
+size 6→26, one undo step, undo/redo exact; frequency +30 pt → ridges 4→7; the no-move drag;
+Push/Pull +25 pt → amount 50), the engine evidence (handle-set values survive native reopen and
+still edit; usvg reads the re-distorted anchors; the Hayro PDF read returns the path; CDR/CMX
+carries the exact Zipper Distortion with amplitude 26 and frequency 7), tools **853**, canvas
+suite **273**, live effects **11/11**, formatting and focused Clippy (`-D warnings`).

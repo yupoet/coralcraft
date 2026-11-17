@@ -9304,3 +9304,95 @@ fn direct_selection_shows_the_bounding_box_while_cmd_is_held() {
     assert!(!handle_drawn(&mut app, egui::Modifiers::NONE), "gone once Cmd is released");
     assert!(app.ui.view.bounding_box, "View › Show Bounding Box is unchanged");
 }
+
+// CoralCraft (P3 Task E5): the Push/Pull and Zipper dedicated handles. The matrix in
+// `docs/p3-inventory.md` §28 freezes this slice's semantics.
+#[test]
+fn zipper_and_push_pull_handles_edit_their_effects_in_one_undo_step_each() {
+    use vectorcraft_tools::distort_handles::DistortHandles;
+    let mut app = VectorcraftApp::new(Session::new(), Default::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    let shape = app.run("shape.rectangle", json!({"x": 60, "y": 60, "width": 120, "height": 80})).unwrap()["id"].as_u64().unwrap();
+    app.run("effect.apply", json!({"id": shape, "effect": "distort.zigZag", "params": {"size": 6.0, "ridges": 4}})).unwrap();
+    app.run("select.set", json!({"ids": [shape]})).unwrap();
+    app.ui.task_bar = false;
+    app.ui.view.rulers = false;
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, vec![]);
+    app.view_mut().unwrap().zoom = 1.5;
+    frame(&mut app, &ctx, vec![]);
+    let params = |app: &VectorcraftApp| {
+        let st = app.session.active().unwrap();
+        let n = st.doc.node(vectorcraft_doc::NodeId(shape)).unwrap();
+        n.appearance.effects.iter().find(|e| e.id == "distort.zigZag").unwrap().params.clone()
+    };
+    let handles = |app: &mut VectorcraftApp| {
+        let frame = app.selection_box();
+        let st = app.session.active().unwrap();
+        DistortHandles::of(&st.doc, &st.selection, frame, app.view().unwrap().zoom).unwrap()
+    };
+    let before = params(&app);
+    let undo_before = app.session.active().unwrap().history.undo.len();
+    // Drag the amplitude handle up 20 pt: the size grows by 20.
+    let at = handles(&mut app).amplitude;
+    let (from, to) = (distort_at(&app, at), distort_at(&app, vectorcraft_geom::Point::new(at.x, at.y - 20.0)));
+    distort_drag(&mut app, &ctx, from, to);
+    let after = params(&app);
+    assert!(
+        (after["size"].as_f64().unwrap() - (before["size"].as_f64().unwrap() + 20.0)).abs() < 1e-6,
+        "the amplitude drag grows the size: {after:?}"
+    );
+    assert_eq!(app.session.active().unwrap().history.undo.len(), undo_before + 1, "one undo step");
+    // Undo restores the size.
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(params(&app)["size"].as_f64().unwrap(), before["size"].as_f64().unwrap(), "undo restores the size");
+    // Drag the frequency handle right 30 pt: the ridges grow by 3 (10 pt each).
+    app.run("edit.redo", json!({})).unwrap();
+    let at = handles(&mut app).frequency.expect("the frequency handle");
+    let (from, to) = (distort_at(&app, at), distort_at(&app, vectorcraft_geom::Point::new(at.x + 30.0, at.y)));
+    distort_drag(&mut app, &ctx, from, to);
+    let after = params(&app);
+    assert_eq!(after["ridges"].as_u64(), Some(before["ridges"].as_u64().unwrap() + 3), "the frequency drag grows the ridges: {after:?}");
+    // A drag that ends where it began leaves no undo step.
+    let undo_now = app.session.active().unwrap().history.undo.len();
+    let at = handles(&mut app).amplitude;
+    let from = distort_at(&app, at);
+    distort_drag(&mut app, &ctx, from, from);
+    assert_eq!(app.session.active().unwrap().history.undo.len(), undo_now, "a no-move drag leaves no step");
+    // Push/Pull: one amount handle; right bloats, left puckers.
+    let shape2 = app.run("shape.ellipse", json!({"x": 240, "y": 60, "width": 80, "height": 80})).unwrap()["id"].as_u64().unwrap();
+    app.run("effect.apply", json!({"id": shape2, "effect": "distort.puckerBloat", "params": {"amount": 0.0}})).unwrap();
+    app.run("select.set", json!({"ids": [shape2]})).unwrap();
+    let at = handles(&mut app).amount.expect("the amount handle");
+    let (from, to) = (distort_at(&app, at), distort_at(&app, vectorcraft_geom::Point::new(at.x + 25.0, at.y)));
+    distort_drag(&mut app, &ctx, from, to);
+    let st = app.session.active().unwrap();
+    let amount = st
+        .doc
+        .node(vectorcraft_doc::NodeId(shape2))
+        .unwrap()
+        .appearance
+        .effects
+        .iter()
+        .find(|e| e.id == "distort.puckerBloat")
+        .unwrap()
+        .params["amount"]
+        .as_f64()
+        .unwrap();
+    assert!((amount - 50.0).abs() < 1e-6, "the amount drag bloats by 2 per point: {amount}");
+}
+
+/// The canvas point of the document point `p`, at the test's own view.
+fn distort_at(app: &VectorcraftApp, p: vectorcraft_geom::Point) -> egui::Pos2 {
+    let xf = Xf::new(app.canvas_rect.unwrap(), app.view().unwrap());
+    xf.to_screen(p)
+}
+
+/// A synthetic handle drag between two canvas points.
+fn distort_drag(app: &mut VectorcraftApp, ctx: &egui::Context, from: egui::Pos2, to: egui::Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    frame(app, ctx, vec![egui::Event::PointerMoved(from), button(from, true)]);
+    frame(app, ctx, vec![egui::Event::PointerMoved((from.to_vec2() + to.to_vec2()).to_pos2() / 2.0)]);
+    frame(app, ctx, vec![egui::Event::PointerMoved(to)]);
+    frame(app, ctx, vec![button(to, false)]);
+}
