@@ -67,7 +67,7 @@ independent SVG/PDF read); combined scenarios of mesh + gradient + opacity mask 
 channel warnings deduplicated; per-mode or per-combination degradation warnings where CDR/CMX
 cannot retain the semantics.
 
-### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split) — E1 CURRENT
+### Tasks E1–E6: remaining D4 effects and interactions (old Task 6, split) — E1–E4 COMPLETE, E5 CURRENT
 
 Each is its own task with the same acceptance shape; none substitutes for another:
 **E1 Symmetry · E2 Block Shadow · E3 Perspective · E4 Lens · E5 Push/Pull and Zipper dedicated
