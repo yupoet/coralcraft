@@ -937,3 +937,16 @@ the flag with the behaviour following, the named relock warning once and only wh
 refusals), the button UI test (synthetic clicks both ways, label flips, no button for ordinary
 objects), document crate **413** (the wire round-trip included), engine transform suite **76**,
 formatting and focused Clippy (`-D warnings`).
+
+### 29b. Task E6 review fix: explicit ids name their own clip groups (2026-11-18)
+
+The re-review found `object.clippingMask.setContentsLocked` accepting `ids` in its schema but
+reading only the selection — an automation call naming clip 4 while clip 7 was selected would
+toggle 7. The fix resolves explicit ids through the same idiom the transform commands use
+(`ids_param`: the named ids' own clip groups, an inner id finding its group), with the selection
+driving it only without ids. The dual-clip regression proves the named clip alone changes (and
+the reply names it), the selection still works without ids, an inner id resolves to its group,
+and a plain object with explicit ids errors rather than falling back.
+GREEN: `coreldraw_powerclip` **5/5**, the CorelDRAW integration battery **123/123**, effects UI
+**33/33**, MCP docs_sync **2/2**, formatting and focused Clippy (`-D warnings`). GitNexus
+`detect-changes`: complete, low risk.

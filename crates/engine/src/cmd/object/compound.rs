@@ -1,5 +1,6 @@
 use super::{
-    Appearance, Arc, Document, EngineError, FillRule, Node, NodeId, NodeKind, Paint, PathData, Result, Session, Value, bad, json, ok, selected_roots,
+    Appearance, Arc, Document, EngineError, FillRule, Node, NodeId, NodeKind, Paint, PathData, Result, Session, Value, bad, ids_param, json, ok,
+    selected_roots,
 };
 
 /// A closed contour smaller than this (in square document units) has no usable winding direction,
@@ -201,8 +202,14 @@ pub(super) fn clip_set_contents_locked(s: &mut Session, p: &Value) -> Result<Val
     const C: &str = "object.clippingMask.setContentsLocked";
     let lock = p.get("lock").and_then(Value::as_bool).ok_or_else(|| bad(C, "lock must be true or false"))?;
     let st = s.doc()?;
+    // Explicit ids name their own clip groups (an id inside one finds it); without them, the
+    // selection's do.
+    let starts: Vec<NodeId> = match ids_param(p, "ids") {
+        Some(v) => v,
+        None => st.selection.objects.clone(),
+    };
     let mut ids = vec![];
-    for id in st.selection.objects.iter().copied() {
+    for id in starts {
         let mut cur = Some(id);
         while let Some(c) = cur {
             if st.doc.node(c).is_some_and(|n| n.clips() && matches!(n.kind, NodeKind::Group { clip: true, .. })) {

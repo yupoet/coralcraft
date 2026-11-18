@@ -169,3 +169,34 @@ fn lock_contents_refusals_change_nothing() {
     let after = s.execute("document.serialize", &json!({ "format": "vectorcraft" })).unwrap()["dataBase64"].as_str().unwrap().to_string();
     assert_eq!(before, after, "the refused calls changed nothing");
 }
+
+/// Review fix (2026-11-18): explicit `ids` name their own clip groups — the current selection
+/// never overrides them.
+#[test]
+fn set_contents_locked_targets_explicit_ids_not_the_selection() {
+    let mut s = session();
+    let a_contents = rectangle(&mut s, 0.0, 0.0, 50.0, 40.0);
+    let a_frame = rectangle(&mut s, 5.0, 5.0, 40.0, 30.0);
+    let a = make_clip(&mut s, a_contents, a_frame);
+    let b_contents = rectangle(&mut s, 100.0, 0.0, 50.0, 40.0);
+    let b_frame = rectangle(&mut s, 105.0, 5.0, 40.0, 30.0);
+    let b = make_clip(&mut s, b_contents, b_frame);
+    // The selection holds b; the command names a.
+    s.execute("select.set", &json!({ "ids": [b] })).unwrap();
+    let reply = s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [a], "lock": false })).unwrap();
+    assert_eq!(reply["ids"].as_array().and_then(|v| v.first()).and_then(|v| v.as_u64()), Some(a), "the reply names the requested clip: {reply:?}");
+    assert!(s.doc().unwrap().doc.node(NodeId(a)).unwrap().extras().contents_unlocked, "a is unlocked");
+    assert!(!s.doc().unwrap().doc.node(NodeId(b)).unwrap().extras().contents_unlocked, "the selected b is untouched");
+    // Without ids, the selection still drives it.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "lock": false })).unwrap();
+    assert!(s.doc().unwrap().doc.node(NodeId(b)).unwrap().extras().contents_unlocked, "without ids the selection drives it");
+    // An id inside a clip group resolves to its group; a plain object is an error, never a
+    // silent fall-back to the selection.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [b_contents], "lock": true })).unwrap();
+    assert!(!s.doc().unwrap().doc.node(NodeId(b)).unwrap().extras().contents_unlocked, "an inner id resolves to its clip group");
+    let plain = rectangle(&mut s, 200.0, 0.0, 30.0, 30.0);
+    assert!(
+        s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [plain], "lock": true })).is_err(),
+        "a plain object with explicit ids errors"
+    );
+}
