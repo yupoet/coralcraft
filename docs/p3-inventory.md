@@ -950,3 +950,24 @@ and a plain object with explicit ids errors rather than falling back.
 GREEN: `coreldraw_powerclip` **5/5**, the CorelDRAW integration battery **123/123**, effects UI
 **33/33**, MCP docs_sync **2/2**, formatting and focused Clippy (`-D warnings`). GitNexus
 `detect-changes`: complete, low risk.
+
+## 30. Task M combined persistence matrix (frozen 2026-11-18; anchors recorded, closure in progress)
+
+Evidence consolidation over the existing suites — each row names native editability, direct CDR
+model assertions, CDR/CMX non-empty-vector evidence, exact warning counts, and negative controls.
+Existing anchors may satisfy a row; only a real gap adds a regression.
+
+| # | Fixture | Native evidence (anchor) | CDR/CMX + negative evidence (anchor) |
+|---|---|---|---|
+| M1 | Nested PowerClip with an unlocked inner clip | Reopen keeps both clip trees and the unlock flag; frame/content edits still work (`coreldraw_powerclip` nesting + §29a reopen; the nested-unlock combination is a gap to cover) | Model keeps nested clips, non-empty paths; the relock warning once per export (never per nested node); locked stays silent (§29a warns once; the nested double-count is a gap to cover) |
+| M2 | Translucent mesh inside Repeat and Blend | Reopen keeps editable mesh sources and Repeat/Blend parameters (`coreldraw_p3_persistence` mesh rows + live suites) | Expanded fallbacks carry non-empty opaque tessellations; the mesh-opacity warning once per real fallback category, never proxy-warning for restored sources or plain groups (mesh attribution slice §18) |
+| M3 | Gradient + enabled opacity mask | Reopen keeps stops and editable mask art; a further edit works (fills/transparency §Task 3 Step 2 rows) | Gradient-alpha and enabled-mask warnings each exactly once; exactly-restored Fountain masks and disabled masks silent (§5/§14 rows) |
+| M4 | Bitmap + live trace + expanded trace | Reopen keeps source pixels, live parameters, separately editable expanded paths (`coreldraw_p3_persistence` trace rows) | Live-trace warning once; ordinary non-empty vectors + ordinary source image; expanded traces emit no live warning (§5 rows) |
+| M5 | Residuals and restoration failure | Imported residuals and current edits preserved without stale originals (metadata_restoration suite) | Exact restoration only for unchanged semantics; edited appearance/container/bounds use current conversion; missing bounds fail closed (§7–§17 rows) |
+| M6 | Abnormal input and generation budget | Rejected commands leave no mutation or history (per-command negatives through §22–§29) | Empty live expansion and budget exhaustion give structured conversion errors through CDR7/CDRX/CMX1; hostile imports error, never panic (import fuzz + conversion-error rows) |
+
+**Anchor status at freeze (2026-11-18):** `coreldraw_p3_persistence` **16/16**, corel-import
+**75** (all suites), the E6 ids regression and battery of §29b green. **Open cells:** the M1
+nested-unlock combination (native + warning dedup across two nested unlocked clips) and the M6
+fuzz-gate rerun (`CORALCRAFT_FUZZ_ITERS=2000` probe/parse_cdr) — both are the next slice's first
+steps, before the Task 3 acceptance additions.
