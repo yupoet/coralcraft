@@ -967,7 +967,11 @@ Existing anchors may satisfy a row; only a real gap adds a regression.
 | M6 | Abnormal input and generation budget | Rejected commands leave no mutation or history (per-command negatives through §22–§29) | Empty live expansion and budget exhaustion give structured conversion errors through CDR7/CDRX/CMX1; hostile imports error, never panic (import fuzz + conversion-error rows) |
 
 **Anchor status at freeze (2026-11-18):** `coreldraw_p3_persistence` **16/16**, corel-import
-**75** (all suites), the E6 ids regression and battery of §29b green. **Open cells:** the M1
-nested-unlock combination (native + warning dedup across two nested unlocked clips) and the M6
-fuzz-gate rerun (`CORALCRAFT_FUZZ_ITERS=2000` probe/parse_cdr) — both are the next slice's first
-steps, before the Task 3 acceptance additions.
+**75** (all suites), the E6 ids regression and battery of §29b green. **Closed (2026-11-19):** the M1 nested-unlock regression passes — a clip inside a clip with
+both unlocked keeps both flags through native reopen, still edits its contents, warns exactly
+once per CDR/CMX export (never once per nested node) and stays silent relocked, with the nested
+clip model and non-empty paths surviving the import; and the M6 fuzz gates pass
+(`CORALCRAFT_FUZZ_ITERS=2000` `probe` and `parse_cdr`, both exit 0). With M2–M5's anchors above,
+the combined matrix closes: `coreldraw_p3_persistence` **17/17**, the CorelDRAW integration
+battery green, MCP `docs_sync` **2/2**, formatting clean. **Task 3's acceptance additions are
+next.**

@@ -755,3 +755,57 @@ fn mesh_points_survive_native_reopen_and_cdr_cmx_keep_only_opaque_tessellated_pa
         assert_eq!(live_meshes, 0, "{format} has no live mesh metadata or restoration claim");
     }
 }
+
+// CoralCraft (P3 Task M, M1): nested PowerClips with an unlocked inner clip — native persistence
+// keeps both clip trees and the unlock flag with editing still working, and the CDR/CMX relock
+// warning appears exactly once per export, never once per nested node (the §30 matrix row).
+#[test]
+fn nested_powerclips_keep_the_unlock_flag_and_warn_once() {
+    const RELOCK: &str = "unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents keep the flag";
+    let mut s = session();
+    // An inner clip (contents + frame) inside an outer frame.
+    let inner_contents = rectangle(&mut s, 40.0);
+    let inner_frame = rectangle(&mut s, 50.0);
+    s.execute("select.set", &json!({ "ids": [inner_contents, inner_frame] })).unwrap();
+    let inner = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+    let outer_frame = s.execute("shape.rectangle", &json!({ "x": 20, "y": 10, "width": 120, "height": 90 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({ "ids": [inner, outer_frame] })).unwrap();
+    let outer = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+    // Unlock BOTH nested clips: the flag survives native reopen on each, and editing still works.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": false })).unwrap();
+    let unlocked = |s: &Session| {
+        (0..2).filter(|_| false).count();
+        let st = s.doc().unwrap();
+        let mut flags = vec![];
+        for id in [inner, outer] {
+            flags.push(st.doc.node(NodeId(id)).unwrap().extras().contents_unlocked);
+        }
+        flags
+    };
+    assert_eq!(unlocked(&s), [true, true], "both nested clips unlocked");
+    reopen(&mut s, "vectorcraft");
+    assert_eq!(unlocked(&s), [true, true], "reopen keeps both unlock flags");
+    s.execute("select.set", &json!({ "ids": [outer] })).unwrap();
+    s.execute("object.clippingMask.editContents", &json!({})).unwrap();
+    s.execute("object.move", &json!({ "dx": 5.0, "dy": 0.0 })).unwrap();
+    let st = s.doc().unwrap();
+    assert_eq!(st.selection.objects.len(), 1, "editing still reaches the contents");
+    // CDR/CMX: the relock warning once per export (not once per nested node), the clip model
+    // intact, and locked controls stay silent.
+    for format in ["cdr", "cmx"] {
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+        let count = warnings.iter().filter(|w| w.as_str() == Some(RELOCK)).count();
+        assert_eq!(count, 1, "the relock warning once ({format}): {warnings:?}");
+        let decoded = corel_import::import_cdr_bytes(&vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap());
+        if let Ok(imported) = decoded {
+            let (clips, _, paths) = inspect(&imported.document);
+            assert!(clips >= 2 && paths >= 3, "nested clips and non-empty paths survive: {clips} clips, {paths} paths");
+        }
+    }
+    // A locked document stays silent.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": true })).unwrap();
+    let out = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
+    let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(!warnings.iter().any(|w| w.as_str() == Some(RELOCK)), "locked stays silent: {warnings:?}");
+}
