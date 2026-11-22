@@ -266,3 +266,53 @@ fn the_control_channel_fills_and_confirms_the_dialog() {
     assert_eq!(app.session.active().unwrap().doc.print_setup.as_ref().unwrap()["copies"], 5);
     assert_eq!(jobs.borrow().len(), 1);
 }
+
+// CoralCraft (P4 Task 4): the desktop print path with a chosen preset and changed
+// scaling/marks — the preview reflects them before Print sends the print-ready PDF through the
+// host print service.
+#[test]
+fn a_preset_with_changed_scaling_and_marks_prints_what_the_preview_showed() {
+    let (mut app, jobs) = app();
+    // A saved preset the dialog offers.
+    app.run("print.setup", json!({"settings": {"media": "a4", "marks": {"trim": true}}})).unwrap();
+    app.run("print.presets.save", json!({"name": "A4 Trimmed", "settings": {"media": "a4", "marks": {"trim": true}}})).unwrap();
+    app.run("file.print", json!({})).unwrap();
+    set(&mut app, "preset", json!("A4 Trimmed"));
+    frame(&mut app);
+    let d = dialog(&mut app);
+    assert_eq!((d.fields["media"].clone(), d.fields["marks"]["trim"].clone()), (json!("a4"), json!(true)), "the preset filled the dialog");
+    // Change scaling and marks over the preset.
+    set(&mut app, "scaling", json!("fit"));
+    set(&mut app, "marks", json!({"trim": true, "registration": true}));
+    frame(&mut app);
+    // The dialog's preview (print.preview) reflects the changed layout.
+    let settings = super::print::settings(dialog(&mut app));
+    let preview = app.session.execute("print.preview", &json!({"settings": settings})).unwrap();
+    let sheet = &preview["sheets"][0];
+    let (w, h) = (sheet["width"].as_f64().unwrap(), sheet["height"].as_f64().unwrap());
+    assert!((w.max(h) - 841.89).abs() < 0.01 && (w.min(h) - 595.28).abs() < 0.01, "the preset's A4 paper (auto-rotated to the art): {w}×{h}");
+    assert!(
+        sheet["scale"][0].as_f64().unwrap() == sheet["scale"][1].as_f64().unwrap() && sheet["scale"][0].as_f64().unwrap() > 600.0,
+        "fit scaling applies uniformly (the 120 pt art fills the A4 sheet): {}",
+        sheet["scale"]
+    );
+    // Print through the host service; the PDF carries the previewed layout.
+    let undo = app.session.active().unwrap().history.undo.len();
+    let r = super::confirm(&mut app).unwrap();
+    assert_eq!(r["pages"], 3, "three artboards");
+    let jobs = jobs.borrow();
+    assert_eq!(jobs.len(), 1);
+    let sizes: Vec<(f64, f64)> = vectorcraft_pdf::info(&jobs[0].2, None).unwrap().pages.iter().map(|p| (p.width, p.height)).collect();
+    assert_eq!(sizes.len(), 3);
+    assert!(
+        (sizes[0].0.max(sizes[0].1) - 841.89).abs() < 0.01 && (sizes[0].0.min(sizes[0].1) - 595.28).abs() < 0.01,
+        "the print-ready PDF is the previewed A4 job"
+    );
+    let saved = app.session.active().unwrap().doc.print_setup.as_ref().unwrap();
+    assert_eq!(
+        (saved["media"].clone(), saved["scaling"].clone(), saved["marks"]["registration"].clone()),
+        (json!("a4"), json!("fit"), json!(true)),
+        "one undo step kept the settings: {} steps",
+        app.session.active().unwrap().history.undo.len() - undo
+    );
+}

@@ -309,3 +309,141 @@ fn pdfx_matrix_over_the_live_document_reads_back_independently() {
         );
     }
 }
+
+/// A letter sheet's points.
+const LETTER: (f64, f64) = (612.0, 792.0);
+
+/// The print-layout matrix over mixed-size artboards with document bleed: orientation,
+/// auto-rotation, transverse, scaling, margins, blank skipping, copies and reverse — the
+/// preview's exact geometry, cross-checked against the printed PDF's pages.
+#[test]
+fn print_layout_matrix_places_mixed_artboards_exactly() {
+    let mut s = production_document();
+    s.execute("artboard.new", &json!({"width": 300, "height": 100})).unwrap();
+    s.execute("document.setup", &json!({"bleed": 9.0})).unwrap();
+    let preview = |s: &mut Session, settings: Value| s.execute("print.preview", &json!({"settings": settings})).unwrap();
+
+    // Default: auto-rotation turns the paper to each artboard — both print landscape, centred.
+    let r = preview(&mut s, json!({}));
+    assert_eq!(r["pages"].as_u64(), Some(2), "one page per artboard");
+    let [a, b] = [0, 1].map(|i| r["sheets"][i].clone()) else { panic!("two sheets") };
+    for (sheet, trim_w, trim_h) in [(&a, 200.0, 150.0), (&b, 300.0, 100.0)] {
+        assert_eq!((sheet["width"].as_f64(), sheet["height"].as_f64()), (Some(LETTER.1), Some(LETTER.0)), "landscape: {sheet}");
+        assert_eq!(sheet["scale"].as_array().unwrap(), &vec![json!(100.0), json!(100.0)]);
+        let trim = sheet["trim"].as_array().unwrap();
+        let (x0, y0, x1, y1) = (trim[0].as_f64().unwrap(), trim[1].as_f64().unwrap(), trim[2].as_f64().unwrap(), trim[3].as_f64().unwrap());
+        assert_eq!(x1 - x0, trim_w, "trim width");
+        assert_eq!(y1 - y0, trim_h, "trim height");
+        assert_eq!(((x0 + x1) / 2.0 - LETTER.1 / 2.0).abs() < 0.01 && ((y0 + y1) / 2.0 - LETTER.0 / 2.0).abs() < 0.01, true, "centred: {trim:?}");
+    }
+
+    // Forced portrait keeps the paper upright; transverse turns the page a quarter turn.
+    let r = preview(&mut s, json!({"autoRotate": false}));
+    assert_eq!((r["sheets"][0]["width"].as_f64(), r["sheets"][0]["height"].as_f64()), (Some(LETTER.0), Some(LETTER.1)), "portrait");
+    let r = preview(&mut s, json!({"autoRotate": false, "transverse": true}));
+    assert_eq!((r["sheets"][0]["width"].as_f64(), r["sheets"][0]["height"].as_f64()), (Some(LETTER.1), Some(LETTER.0)), "transverse");
+
+    // Fit scaling shrinks art larger than the paper onto the sheet.
+    let mut big = Session::new();
+    big.execute("file.new", &json!({"width": 700, "height": 700})).unwrap();
+    let r = big.execute("print.preview", &json!({"settings": {"autoRotate": false, "scaling": "fit"}})).unwrap();
+    let scale = r["sheets"][0]["scale"].as_array().unwrap();
+    assert!(scale[0].as_f64().unwrap() < 100.0 && scale[1].as_f64().unwrap() < 100.0, "the 700 pt artboard fits the 612 pt paper: {scale:?}");
+    // A margin shrinks the imageable area the art centres in.
+    let r = preview(&mut s, json!({"autoRotate": false, "margin": 36}));
+    let trim = r["sheets"][0]["trim"].as_array().unwrap();
+    assert!(trim[0].as_f64().unwrap() >= 36.0 && trim[1].as_f64().unwrap() >= 36.0, "inside the unprintable margin: {trim:?}");
+    // Blank artboards drop out when asked.
+    let r = preview(&mut s, json!({"skipBlank": true}));
+    let printed: Vec<u64> = r["sheets"].as_array().unwrap().iter().map(|sh| sh["artboard"].as_u64().unwrap()).collect();
+    assert_eq!(printed.len(), 1, "the art-less artboard is skipped: {printed:?}");
+    // Copies multiply the pages (the sheet list stays one copy in order).
+    assert_eq!(preview(&mut s, json!({"copies": 2}))["pages"].as_u64(), Some(4));
+    let r = preview(&mut s, json!({"reverse": true}));
+    assert_eq!(r["pages"].as_u64(), Some(2), "reverse prints the same pages back to front: {}", r["pages"]);
+
+    // The printed PDF matches the preview: two landscape letter pages.
+    let printed = s.execute("file.print", &json!({"settings": {}})).unwrap();
+    let pdf = vectorcraft_format::base64_decode(printed["dataBase64"].as_str().unwrap()).unwrap();
+    let info = vectorcraft_pdf::info(&pdf, None).unwrap();
+    assert_eq!(info.pages.len(), 2);
+    assert_eq!((info.pages[0].width, info.pages[0].height), (LETTER.1, LETTER.0), "the sheet size reaches the file");
+}
+
+/// Printer's marks reach the printed file: the paper keeps its size with the marks drawn on it
+/// in the room around the art, the TrimBox stays the artboard, and the mark geometry imports as
+/// real vector paths.
+#[test]
+fn print_marks_draw_on_the_paper_and_import_as_paths() {
+    let mut s = production_document();
+    let plain = s.execute("file.print", &json!({"settings": {"autoRotate": false}})).unwrap();
+    let marked = s
+        .execute(
+            "file.print",
+            &json!({"settings": {"autoRotate": false, "marks": {"trim": true, "registration": true, "colorBars": true, "pageInfo": true}}}),
+        )
+        .unwrap();
+    let plain_pdf = vectorcraft_format::base64_decode(plain["dataBase64"].as_str().unwrap()).unwrap();
+    let marked_pdf = vectorcraft_format::base64_decode(marked["dataBase64"].as_str().unwrap()).unwrap();
+    let (plain_info, marked_info) = (vectorcraft_pdf::info(&plain_pdf, None).unwrap(), vectorcraft_pdf::info(&marked_pdf, None).unwrap());
+    for info in [&plain_info, &marked_info] {
+        assert_eq!((info.pages[0].width, info.pages[0].height), (LETTER.0, LETTER.1), "the paper is the letter sheet");
+    }
+    let count = |pdf: &[u8]| {
+        let read = vectorcraft_pdf::import(pdf).unwrap();
+        let mut paths = 0;
+        for layer in &read.layers {
+            layer.walk(&mut |node| paths += usize::from(node.path_data().is_some_and(|p| !p.subpaths.is_empty())));
+        }
+        paths
+    };
+    assert!(count(&marked_pdf) > count(&plain_pdf), "the marks import as painted paths");
+    let text = String::from_utf8_lossy(&marked_pdf).into_owned();
+    assert!(text.contains("/TrimBox"), "the artboard stays the TrimBox");
+    let at = text.find("/TrimBox").unwrap();
+    let box_text = &text[at..at + 40];
+    assert!(box_text.contains("[206 326.6 406 476.6]"), "the centred 200×150 artboard on the letter sheet: {box_text}");
+}
+
+/// Print tiling imposes the art: tile counts and ranges, overlap, and every printed tile
+/// non-empty in the independently read file.
+#[test]
+fn print_tiling_imposes_tiles_that_all_print() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 1000, "height": 800})).unwrap();
+    // Art across the whole sheet, so every tile prints something.
+    s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 1000, "height": 800})).unwrap();
+    s.execute("paint.setFill", &json!({"color": {"c": 0, "m": 0, "y": 0, "k": 10}})).unwrap();
+    let settings =
+        |overlap: f64, range: &str| json!({"media": "a4", "autoRotate": false, "scaling": "tileFull", "overlap": overlap, "tileRange": range});
+
+    let r = s.execute("print.preview", &json!({"settings": settings(0.0, "")})).unwrap();
+    let tiles = &r["tiles"][0];
+    assert_eq!((tiles["columns"].as_u64(), tiles["rows"].as_u64()), (Some(2), Some(1)), "1000×800 pt on A4 portrait: {:?}", tiles);
+    assert_eq!(r["sheets"].as_array().unwrap().len(), 2, "one sheet per tile");
+    let tile_rects: Vec<Vec<f64>> =
+        tiles["tiles"].as_array().unwrap().iter().map(|t| t.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect();
+    assert_eq!(tile_rects.len(), 2);
+    assert!(tile_rects[0][2] <= 1000.0 && tile_rects[1][0] < 1000.0 && tile_rects[1][2] >= 995.0, "the tiles cover the art: {tile_rects:?}");
+
+    // Overlap makes neighbouring tiles share `overlap` pt of art.
+    let r = s.execute("print.preview", &json!({"settings": settings(24.0, "")})).unwrap();
+    let tiles = &r["tiles"][0];
+    let rects: Vec<Vec<f64>> =
+        tiles["tiles"].as_array().unwrap().iter().map(|t| t.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()).collect();
+    assert!((rects[1][0] - (rects[0][2] - 24.0)).abs() < 0.01, "24 pt of shared art: {rects:?}");
+
+    // A tile range prints just those tiles, and every printed tile is non-empty.
+    let r = s.execute("print.preview", &json!({"settings": settings(0.0, "1")})).unwrap();
+    assert_eq!(r["sheets"].as_array().unwrap().len(), 1, "tileRange 1");
+    let printed = s.execute("file.print", &json!({"settings": settings(0.0, "")})).unwrap();
+    assert_eq!(printed["pages"].as_u64(), Some(2));
+    let pdf = vectorcraft_format::base64_decode(printed["dataBase64"].as_str().unwrap()).unwrap();
+    assert_eq!(vectorcraft_pdf::info(&pdf, None).unwrap().pages.len(), 2);
+    let read = vectorcraft_pdf::import(&pdf).unwrap();
+    let mut paths = 0;
+    for layer in &read.layers {
+        layer.walk(&mut |node| paths += usize::from(node.path_data().is_some_and(|p| !p.subpaths.is_empty())));
+    }
+    assert!(paths >= 2, "the imposed art reads back: {paths} paths");
+}
