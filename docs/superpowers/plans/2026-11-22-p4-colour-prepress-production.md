@@ -35,7 +35,7 @@
 - Create: `docs/p4-inventory.md`
 - Review only: all files in the file map
 
-- [ ] **Step 1: Verify the P3 prerequisite and current branch**
+- [ ] **Step 1: Verify the P3 prerequisite and current branch** (2026-11-22: verified — **blocked**; 11 unchecked steps remain in the P3 final-acceptance plan and P3 is still "In progress" in `ROADMAP.md`, so the blocker is recorded in `docs/p4-inventory.md` §1 and work stops after the inventory)
 
 Run:
 
@@ -47,7 +47,7 @@ test -f docs/superpowers/plans/2026-11-19-p3-final-acceptance.md
 
 Expected: the P3 final-acceptance work is committed and P3 is marked complete in `ROADMAP.md`. If not, record the blocker and stop after the inventory.
 
-- [ ] **Step 2: Measure the reusable base instead of estimating percentages**
+- [ ] **Step 2: Measure the reusable base instead of estimating percentages** (2026-11-22: all six commands run, exit 0, counts in `docs/p4-inventory.md` §2)
 
 Run:
 
@@ -62,7 +62,7 @@ cargo xtask stats
 
 Record actual counts, existing commands, independent readers, missing end-to-end links, and whether each row starts at evidence level 1–4. Do not add a feature from a legacy crate merely because it exists there; current VectorCraft print tiling is the default imposition base.
 
-- [ ] **Step 3: Freeze the P4 matrix**
+- [ ] **Step 3: Freeze the P4 matrix** (2026-11-22: 16-row matrix frozen in `docs/p4-inventory.md` §4, file-map corrections §5, evidence boundaries §6)
 
 Create `docs/p4-inventory.md` with one row per item: ICC/proof, spot plates, overprint, PDF/X-1a, X-3, X-4, media/trim/bleed boxes, fonts, marks, print preview, imposition, data merge, batch export, presets, MCP/CLI, and final production scenario. Each row names positive assertions, refusal/atomicity cases, native persistence, independent evidence, and CDR/CMX warning expectations. Commit only after the matrix is complete with `docs: inventory the P4 production capabilities`.
 
