@@ -113,3 +113,37 @@ machine in one session; the harness's pre-existing budgets (§3–§4) are the o
 cited. Task 2 may set class regression budgets only after repeated stable baselines with their
 variance recorded, and every later claim must name its document class, machine, profile, and
 runs.
+
+## 8. Task 2 optimization record (2026-11-23)
+
+**Candidate selection (measured, not guessed).** The zoom-render budget overrun was profiled
+first (`perf --bench zoom`, 29.17 ms median): the samples sit inside `vello_cpu`
+(`rasterize_region`, `vectorize_avx2`) — an external rasterization dependency, outside the
+crates this plan may touch, so it is recorded and skipped. The largest bottleneck in our own
+code was then measured: the **engine's native save of the brochure class**, 924.43 ms median
+(1,073/1,117 in later probes) against 149.87 ms for the format layer alone — a ~775 ms
+difference owned by `crates/engine`+`crates/corel-import`.
+
+**Root cause (measured composition of the 31.6 MB `coralcraft` extension block):**
+`object_meta` 15,796,815 chars + `master_layers` 15,748,085 chars = 99.8% of the block, while
+the two entries `sync_coralcraft_extension` actually rewrites (`units`, `pages`) total **759
+chars**. The old sync cloned the whole block's `Value`, parsed it all
+(`from_value`), and re-serialized it all (`to_value`) on **every** native save (and on every
+page-edit caller).
+
+**The change** (`perf:` commit): `sync_coralcraft_extension` now splices only the `units` and
+`pages` entries into the existing `Value` in place; the megabyte residuals are never parsed.
+Guard tests: a new equivalence regression asserts the spliced block is string-identical to the
+whole-block round trip (and that a rename through the engine path keeps page residuals and the
+palette), the V2.2 lossless-extension test and the full Corel integration battery (137/137)
+pass, and the brochure's saved length is unchanged (31,648,787 bytes).
+
+**Measured result (same benchmark, median of 3 runs each):**
+
+| | before | after | |
+|---|---:|---:|---|
+| `document.serialize vectorcraft`, brochure | 924.43 ms (924–1,117 across runs) | **343.43 ms** (340.12/343.43/349.57) | 2.7× |
+| `save_file` (format layer, control) | 129–150 ms | 127–129 ms | unchanged |
+
+The improvement (~580 ms per save, ~2.7×) is far beyond the observed run-to-run noise (±25 ms).
+Every CDR-origin document benefits on every save and every page-affecting edit.

@@ -402,6 +402,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--deep" => want_deep = true,
+            "--bench" => {
+                let which = it.next().cloned().ok_or("--bench needs zoom")?;
+                let ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(3000);
+                return match which.as_str() {
+                    "zoom" => bench_zoom(ms),
+                    "save" => bench_save(ms),
+                    other => Err(format!("unknown bench `{other}` (zoom|save)")),
+                };
+            }
             "--class" => {
                 let which = it.next().cloned().ok_or("--class needs illustration|brochure|poster")?;
                 return class_report(&which);
@@ -807,6 +816,77 @@ fn class_report(which: &str) -> Result<(), String> {
     if let Some((m, peak)) = rss_mb() {
         outln!("{}", memory_row("now", m, peak));
     }
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2): a deterministic, sampleable benchmark for the measured hot path — the
+// zoomed render of a 50,000-path document (the deep run's exceeded 16 ms budget; baseline
+// 28.70 ms median). Runs the zoomed viewport for ~`ms` milliseconds and reports the median, so a
+// profiler can be attached to exactly this loop. The output pixels are hashed: an optimization
+// must leave them unchanged (the first frame's bytes, FNV-1a, printed every run).
+fn bench_zoom(ms: u64) -> Result<(), String> {
+    let n = 50_000usize;
+    let doc = synthetic(n)?;
+    let opts = RenderOptions::default();
+    let mut r = Renderer::new();
+    let fit = Affine::scale(1.6);
+    r.render(&doc, 2880, 1800, fit, &opts);
+    let zoom = Affine::scale(6.4) * Affine::translate((-600.0, -400.0));
+    let first = r.render(&doc, 2880, 1800, zoom, &opts);
+    let mut fnv: u64 = 0xcbf29ce484222325;
+    for b in &first.pixels {
+        fnv = (fnv ^ u64::from(*b)).wrapping_mul(0x100000001b3);
+    }
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(r.render(&doc, 2880, 1800, zoom, &opts));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("zoom render, 50,000 paths, 2880×1800: {per:.2} ms median over {runs} runs ({ms} ms loop); pixels fnv1a {fnv:016x}");
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2): the same shape of benchmark for the other measured hot path — saving
+// the image-heavy brochure class natively (baseline ~900 ms median; the deep run's exceeded open
+// budget is the same format layer). The saved bytes' length is printed every run: an
+// optimization must not change the file.
+fn bench_save(ms: u64) -> Result<(), String> {
+    let s = class_session("brochure")?;
+    let doc = s.doc().map_err(|e| e.to_string())?.doc.clone();
+    let bytes = vectorcraft_format::save_file(&doc);
+    outln!("brochure saved bytes: {}", bytes.len());
+    if let Some(ext) = doc.unknown.get("coralcraft") {
+        outln!("  coralcraft block: {} chars of JSON Value", serde_json::to_string(ext).map(|s| s.len()).unwrap_or_default());
+        if let Some(obj) = ext.as_object() {
+            let mut keys: Vec<(&String, usize)> =
+                obj.iter().map(|(k, v)| (k, serde_json::to_string(v).map(|s| s.len()).unwrap_or_default())).collect();
+            keys.sort_by_key(|&(_, len)| std::cmp::Reverse(len));
+            for (k, len) in keys.iter().take(6) {
+                outln!("    {k}: {len} chars");
+            }
+        }
+    }
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(vectorcraft_format::save_file(&doc));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("save .vectorcraft (format layer), brochure class: {per:.2} ms median over {runs} runs ({ms} ms loop)");
+    // The engine's document.serialize over the same document (what the app saves with).
+    let mut s2 = vectorcraft_engine::Session::new();
+    s2.add_document((*doc).clone(), None);
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(s2.execute("document.serialize", &json!({"format": "vectorcraft"})));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("document.serialize vectorcraft (engine), brochure class: {per:.2} ms median over {runs} runs ({ms} ms loop)");
     Ok(())
 }
 

@@ -243,13 +243,20 @@ pub fn write_coralcraft_data(doc: &mut VcDocument, data: &CoralCraftDocData) -> 
 /// while preserving CorelDRAW-only data (per-page bleed/background/residuals, master layers,
 /// object/layer/document residuals, and palette). Does nothing if `doc.unknown["coralcraft"]`
 /// is absent so pure VectorCraft documents remain untouched.
+///
+/// CoralCraft (P5 Task 2): only the `units` and `pages` entries change, so they are spliced into
+/// the extension `Value` in place — the block's multi-megabyte residuals (`object_meta`,
+/// `master_layers`) are never parsed or re-serialized on a save (the brochure class's engine
+/// save dropped from ~924 ms to the format layer's cost). The spliced `pages` value is produced
+/// by the same `Serialize` implementation the whole-block path used, so the written file is
+/// byte-identical for every block this code wrote, and unknown keys in older blocks are now
+/// preserved rather than dropped by a full parse/serialize round trip.
 pub fn sync_coralcraft_extension(doc: &mut VcDocument) -> Result<(), CorelImportError> {
-    let Some(mut data) = read_coralcraft_data(doc) else {
+    let Some(block) = doc.unknown.get_mut(CORALCRAFT_UNKNOWN_KEY).and_then(serde_json::Value::as_object_mut) else {
         return Ok(());
     };
-    data.units = map_unit_to_cdr(doc.units);
     let default_bleed = F64::new(doc.setup.bleed.first().copied().unwrap_or(0.0).max(0.0)).unwrap_or(F64::ZERO);
-    let old_pages = std::mem::take(&mut data.pages);
+    let old_pages: Vec<CoralCraftPageMeta> = block.get("pages").cloned().and_then(|p| serde_json::from_value(p).ok()).unwrap_or_default();
     let mut new_pages = Vec::with_capacity(doc.artboards.len());
     for (idx, ab) in doc.artboards.iter().enumerate() {
         let w = ab.rect.width().max(1.0);
@@ -278,8 +285,16 @@ pub fn sync_coralcraft_extension(doc: &mut VcDocument) -> Result<(), CorelImport
             });
         }
     }
-    data.pages = new_pages;
-    write_coralcraft_data(doc, &data)
+    let units = serde_json::to_value(map_unit_to_cdr(doc.units)).map_err(|e| CorelImportError::Conversion(e.to_string()))?;
+    block.insert("units".into(), units);
+    if new_pages.is_empty() {
+        // The whole-block writer skips an empty `pages` (`skip_serializing_if`); match it.
+        block.remove("pages");
+    } else {
+        let pages = serde_json::to_value(new_pages).map_err(|e| CorelImportError::Conversion(e.to_string()))?;
+        block.insert("pages".into(), pages);
+    }
+    Ok(())
 }
 
 /// Returns the horizontal gap in points between consecutive artboards in `doc`.
@@ -3242,6 +3257,81 @@ fn convert_vc_effects_to_cdr(effects: &[Effect], warnings: &mut ExportWarningLed
 mod tests {
     use super::*;
     use coralcraft_doc::{ChunkTag, LensKind, RawChunk, RawPayload, UnsupportedObject};
+
+    // CoralCraft (P5 Task 2): the in-place splice writes exactly the `units` and `pages` the
+    // whole-block parse/serialize round trip wrote, and preserves every other key — an
+    // equivalence guard for the optimized `sync_coralcraft_extension`.
+    #[test]
+    fn sync_splices_units_and_pages_identically_to_the_whole_block_round_trip() {
+        let mut cdr_doc = coralcraft_doc::Document::new_a4_portrait();
+        cdr_doc.pages[0].residual.chunks.push(RawChunk {
+            tag: ChunkTag(*b"cpag"),
+            flags: 0,
+            slot: 0,
+            payload: RawPayload(vec![1, 2, 3]),
+            src_offset: 0,
+        });
+        cdr_doc.palette.swatches.push(PaletteSwatch { name: "Coral Red".to_owned(), color: CdrColor::rgb8(230, 50, 40) });
+        let (mut vdoc, _) = import_document(&cdr_doc).unwrap();
+        assert!(vdoc.unknown.contains_key(CORALCRAFT_UNKNOWN_KEY));
+
+        // The optimized sync.
+        sync_coralcraft_extension(&mut vdoc).unwrap();
+        let spliced = serde_json::to_string(vdoc.unknown.get(CORALCRAFT_UNKNOWN_KEY).unwrap()).unwrap();
+
+        // The old whole-block algorithm over a fresh import, computed inline.
+        let (mut old_doc, _) = import_document(&cdr_doc).unwrap();
+        let mut data = read_coralcraft_data(&old_doc).unwrap();
+        data.units = map_unit_to_cdr(old_doc.units);
+        let default_bleed = F64::new(old_doc.setup.bleed.first().copied().unwrap_or(0.0).max(0.0)).unwrap_or(F64::ZERO);
+        let old_pages = std::mem::take(&mut data.pages);
+        let mut new_pages = Vec::with_capacity(old_doc.artboards.len());
+        for (idx, ab) in old_doc.artboards.iter().enumerate() {
+            let w = ab.rect.width().max(1.0);
+            let h = ab.rect.height().max(1.0);
+            let size = CdrSize::new(w, h).unwrap_or_default();
+            if let Some(prev) = old_pages.get(idx) {
+                let p_size = if (prev.size.width.get() - w).abs() < 1e-6 && (prev.size.height.get() - h).abs() < 1e-6 { prev.size } else { size };
+                new_pages.push(CoralCraftPageMeta {
+                    id: prev.id,
+                    name: ab.name.clone(),
+                    size: p_size,
+                    bleed: prev.bleed,
+                    background: prev.background.clone(),
+                    residual: prev.residual.clone(),
+                    extra: prev.extra.clone(),
+                });
+            } else {
+                new_pages.push(CoralCraftPageMeta {
+                    id: PageId(u64::from(ab.id.max(1))),
+                    name: ab.name.clone(),
+                    size,
+                    bleed: default_bleed,
+                    background: Some(FillStyle::uniform(CdrColor::WHITE)),
+                    residual: Residual::default(),
+                    extra: BTreeMap::new(),
+                });
+            }
+        }
+        data.pages = new_pages;
+        write_coralcraft_data(&mut old_doc, &data).unwrap();
+        let whole = serde_json::to_string(old_doc.unknown.get(CORALCRAFT_UNKNOWN_KEY).unwrap()).unwrap();
+
+        assert_eq!(spliced, whole, "the splice matches the whole-block round trip");
+        // A page rename through the engine path (the layer.rs caller) keeps the page's residual:
+        // renaming the first artboard changes only that page's name in the spliced block.
+        let mut renamed = vdoc;
+        renamed.artboards[0].name = "Renamed".to_owned();
+        sync_coralcraft_extension(&mut renamed).unwrap();
+        let data = read_coralcraft_data(&renamed).unwrap();
+        assert_eq!(data.pages[0].name, "Renamed");
+        assert_eq!(data.pages[0].residual.chunks.len(), 1, "the page's CDR residual survives the rename");
+        assert!(
+            data.palette.swatches.iter().any(|s| s.name == "Coral Red"),
+            "the palette survives untouched: {} swatches",
+            data.palette.swatches.len()
+        );
+    }
 
     #[test]
     fn multipage_cdr_document_maps_pages_to_artboards_and_layers_to_layer_nodes() {
