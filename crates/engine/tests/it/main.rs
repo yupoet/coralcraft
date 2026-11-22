@@ -38,6 +38,8 @@ mod coreldraw_p2_acceptance;
 mod coreldraw_p4_production;
 // CoralCraft: the P4 complete production-job acceptance (P4 Task 6).
 mod coreldraw_p4_acceptance;
+// CoralCraft: P5 sustained editing and bounded resources (P5 Task 3).
+mod coreldraw_p5_hardening;
 // CoralCraft: P3 native/CDR/CMX persistence and fallbacks (P3 Task 10).
 mod coreldraw_p3_persistence;
 mod coreldraw_texture;
