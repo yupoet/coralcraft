@@ -975,3 +975,16 @@ clip model and non-empty paths surviving the import; and the M6 fuzz gates pass
 the combined matrix closes: `coreldraw_p3_persistence` **17/17**, the CorelDRAW integration
 battery green, MCP `docs_sync` **2/2**, formatting clean. **Task 3's acceptance additions are
 next.**
+
+**Final-acceptance hardening (2026-11-22, final-acceptance plan Task 1):** M1's import check can
+no longer hide an error — the `if let Ok` block and its no-op line are gone, so any CDR/CMX
+import `Err` fails the test. M2's combined native evidence is real now: a radial Symmetry keeps
+its translucent mesh source editable through native reopen (repeat parameters and every point's
+colour/opacity/position/handles intact; a post-reopen mesh edit is one undo step), a Blend
+between two translucent meshes stays live with `Steps(4)` and editable keys, and editing a
+source after the reopen changes the evaluated Repeat/Blend output read through independent
+`usvg` fill fingerprints — with the §18 anchors retained (the mesh-opacity warning once per
+export, non-empty ordinary vectors, no live mesh/repeat/blend in the reimported CDR/CMX).
+Evidence-only: no production change was needed. `coreldraw_p3_persistence` **20/20**; battery:
+CorelDRAW integration **127/127**, corel-import **75/75**, MCP `docs_sync` **2/2**, formatting
+clean.

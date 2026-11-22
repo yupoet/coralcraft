@@ -4,7 +4,7 @@ use corel_import::coralcraft_color::Color as CdrColor;
 use corel_import::coralcraft_doc::{FillStyle, PatternKind};
 use serde_json::json;
 use vectorcraft_color::{Color, Paint};
-use vectorcraft_doc::{AppearanceItem, Document, Node, NodeId, NodeKind, TextRun};
+use vectorcraft_doc::{AppearanceItem, BlendSpacing, Document, Node, NodeId, NodeKind, TextRun};
 use vectorcraft_engine::Session;
 
 fn session() -> Session {
@@ -774,7 +774,6 @@ fn nested_powerclips_keep_the_unlock_flag_and_warn_once() {
     // Unlock BOTH nested clips: the flag survives native reopen on each, and editing still works.
     s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": false })).unwrap();
     let unlocked = |s: &Session| {
-        (0..2).filter(|_| false).count();
         let st = s.doc().unwrap();
         let mut flags = vec![];
         for id in [inner, outer] {
@@ -797,15 +796,179 @@ fn nested_powerclips_keep_the_unlock_flag_and_warn_once() {
         let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
         let count = warnings.iter().filter(|w| w.as_str() == Some(RELOCK)).count();
         assert_eq!(count, 1, "the relock warning once ({format}): {warnings:?}");
-        let decoded = corel_import::import_cdr_bytes(&vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap());
-        if let Ok(imported) = decoded {
-            let (clips, _, paths) = inspect(&imported.document);
-            assert!(clips >= 2 && paths >= 3, "nested clips and non-empty paths survive: {clips} clips, {paths} paths");
-        }
+        let bytes = vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap();
+        let imported = corel_import::import_cdr_bytes(&bytes).unwrap_or_else(|error| panic!("{format} import failed: {error}"));
+        let (clips, _, paths) = inspect(&imported.document);
+        assert!(clips >= 2 && paths >= 3, "{format}: nested clips and non-empty paths survive: {clips} clips, {paths} paths");
     }
     // A locked document stays silent.
     s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": true })).unwrap();
     let out = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
     let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
     assert!(!warnings.iter().any(|w| w.as_str() == Some(RELOCK)), "locked stays silent: {warnings:?}");
+}
+
+// CoralCraft (P3 Task M, M2 — final-acceptance hardening): a translucent mesh inside Repeat and
+// Blend stays live and editable through native reopen, and editing the source changes the
+// evaluated output (the §30 matrix rows the standalone mesh and live suites only covered apart).
+
+/// A 2×2 mesh at `x` with point 4 at half opacity and a moved point, as the §18 mesh anchors use.
+fn translucent_mesh(s: &mut Session, x: f64, colour: &str) -> u64 {
+    let shape = rectangle(s, x);
+    s.execute("object.mesh.create", &json!({"id": shape, "rows": 2, "cols": 2})).unwrap();
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 4, "color": colour, "opacity": 0.5})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": x + 45.0, "y": 60.0})).unwrap();
+    shape
+}
+
+/// The mesh at `id` as a cloned point list (positions, colours, opacities, handles).
+fn mesh_points(doc: &Document, id: u64) -> Vec<vectorcraft_doc::MeshPoint> {
+    let NodeKind::Mesh(mesh) = &doc.node(NodeId(id)).unwrap().kind else { panic!("mesh at {id}") };
+    mesh.points.clone()
+}
+
+fn assert_same_points(actual: &[vectorcraft_doc::MeshPoint], expected: &[vectorcraft_doc::MeshPoint]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (a, e)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(a.p, e.p, "point {index} position");
+        assert_eq!(a.color, e.color, "point {index} colour");
+        assert_eq!(a.opacity, e.opacity, "point {index} opacity");
+        assert_eq!(a.handles, e.handles, "point {index} handles");
+    }
+}
+
+#[test]
+fn radial_symmetry_keeps_its_translucent_mesh_source_editable_through_reopen() {
+    let mut s = session();
+    let mesh = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    s.execute("select.set", &json!({ "ids": [mesh] })).unwrap();
+    let symmetry = s.execute("object.symmetry.create", &json!({ "kind": "radial", "lines": 5, "angle": 30.0 })).unwrap()["id"].as_u64().unwrap();
+    let (kind, expected) = {
+        let NodeKind::Repeat(r) = &s.doc().unwrap().doc.node(NodeId(symmetry)).unwrap().kind else { panic!("live symmetry") };
+        assert!(matches!(r.kind, vectorcraft_doc::RepeatKind::Radial { instances: 5, .. }), "radial 5: {:?}", r.kind);
+        (serde_json::to_value(&r.kind).unwrap(), mesh_points(&s.doc().unwrap().doc, mesh))
+    };
+
+    reopen(&mut s, "vectorcraft");
+    {
+        let st = s.doc().unwrap();
+        let NodeKind::Repeat(r) = &st.doc.node(NodeId(symmetry)).unwrap().kind else { panic!("reopen keeps the live symmetry") };
+        assert_eq!(serde_json::to_value(&r.kind).unwrap(), kind, "repeat parameters survive the reopen");
+        let [source] = r.source.as_slice() else { panic!("one mesh source: {}", r.source.len()) };
+        let NodeKind::Mesh(m) = &source.kind else { panic!("the source stays an editable mesh") };
+        assert_eq!((m.rows, m.cols), (2, 2));
+        assert_same_points(&m.points, &expected);
+    }
+
+    // The source is still editable through the repeat, as one undo step.
+    let undo_before = s.active().unwrap().history.undo.len();
+    s.execute("object.mesh.setPointColor", &json!({"id": mesh, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    assert_eq!(s.active().unwrap().history.undo.len(), undo_before + 1, "one undo step");
+    let NodeKind::Mesh(edited) = &s.doc().unwrap().doc.node(NodeId(mesh)).unwrap().kind else { panic!("edited mesh") };
+    assert_eq!(edited.points[0].color.to_hex(), "#ff0000");
+    assert_eq!(edited.points[0].opacity, 0.75);
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(symmetry)).unwrap().kind, NodeKind::Repeat(_)), "the repeat stays live");
+}
+
+#[test]
+fn blend_keeps_its_translucent_mesh_keys_live_through_reopen() {
+    let mut s = session();
+    let a = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    let b = translucent_mesh(&mut s, 180.0, "#aa2855");
+    let blend = s.execute("object.blend.make", &json!({ "ids": [a, b], "steps": 4 })).unwrap()["id"].as_u64().unwrap();
+    let (expected_a, expected_b) = (mesh_points(&s.doc().unwrap().doc, a), mesh_points(&s.doc().unwrap().doc, b));
+
+    reopen(&mut s, "vectorcraft");
+    {
+        let st = s.doc().unwrap();
+        let NodeKind::Blend { children, spec } = &st.doc.node(NodeId(blend)).unwrap().kind else { panic!("live blend") };
+        assert_eq!(children.len(), 2, "both mesh keys");
+        assert!(matches!(spec.spacing, BlendSpacing::Steps(4)), "steps unchanged: {:?}", spec.spacing);
+        for (key, expected) in [&children[0], &children[1]].into_iter().zip([&expected_a, &expected_b]) {
+            let NodeKind::Mesh(m) = &key.kind else { panic!("mesh key stays editable") };
+            assert_same_points(&m.points, expected);
+        }
+    }
+
+    // Editing a key through the blend keeps the blend live.
+    s.execute("object.mesh.movePoint", &json!({"id": b, "index": 1, "x": 230.0, "y": 45.0})).unwrap();
+    let NodeKind::Blend { children, .. } = &s.doc().unwrap().doc.node(NodeId(blend)).unwrap().kind else { panic!("blend stays live") };
+    let NodeKind::Mesh(m) = &children[1].kind else { panic!("second key") };
+    assert_eq!(m.points[1].p, vectorcraft_geom::Point::new(230.0, 45.0));
+}
+
+/// The sorted set of solid fill paints of the evaluated SVG, read through independent `usvg`
+/// parsing (a structural fingerprint: editing a mesh point colour changes the tessellation).
+fn svg_fill_fingerprint(s: &mut Session) -> Vec<String> {
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_owned();
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+    let mut fills = vec![];
+    fn walk(group: &usvg::Group, fills: &mut Vec<String>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => walk(child, fills),
+                usvg::Node::Path(path) if !path.data().is_empty() => {
+                    if let Some(fill) = path.fill() {
+                        fills.push(format!("{:?}", fill.paint()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(tree.root(), &mut fills);
+    fills.sort();
+    fills
+}
+
+#[test]
+fn mesh_edits_change_the_evaluated_repeat_and_blend_output() {
+    const MESH_OPACITY: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+    // Repeat: editing the mesh source after a reopen changes the evaluated symmetry output.
+    let mut s = session();
+    let mesh = translucent_mesh(&mut s, 30.0, "#28aa5a");
+    s.execute("select.set", &json!({ "ids": [mesh] })).unwrap();
+    s.execute("object.symmetry.create", &json!({ "kind": "radial", "lines": 4 })).unwrap();
+    reopen(&mut s, "vectorcraft");
+    let repeat_before = svg_fill_fingerprint(&mut s);
+    s.execute("object.mesh.setPointColor", &json!({"id": mesh, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    let repeat_after = svg_fill_fingerprint(&mut s);
+    assert_ne!(repeat_before, repeat_after, "editing the source changes the evaluated repeat");
+
+    // Blend: the same proof on a blend between two translucent meshes.
+    let mut s = session();
+    let a = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    let b = translucent_mesh(&mut s, 180.0, "#aa2855");
+    s.execute("object.blend.make", &json!({ "ids": [a, b], "steps": 3 })).unwrap();
+    reopen(&mut s, "vectorcraft");
+    let blend_before = svg_fill_fingerprint(&mut s);
+    s.execute("object.mesh.setPointColor", &json!({"id": b, "index": 4, "color": "#fff200", "opacity": 0.5})).unwrap();
+    let blend_after = svg_fill_fingerprint(&mut s);
+    assert_ne!(blend_before, blend_after, "editing a key changes the evaluated blend");
+
+    // §18 CDR/CMX anchors: the mesh-opacity warning once per export, non-empty ordinary vectors
+    // after the reopen, and no live mesh/repeat/blend in the reimported document. Each leg
+    // reopens the native document first: a reimported CDR/CMX is already flattened.
+    let native = native_bytes(&mut s);
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().unwrap();
+        assert_eq!(warnings.iter().filter(|w| w.as_str() == Some(MESH_OPACITY)).count(), 1, "{format}: {warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.as_str().is_some_and(|text| text.contains("live") && text.contains("objects are expanded"))),
+            "{format} names the live expansion: {warnings:?}"
+        );
+        s.execute("document.open", &json!({"name": format!("m2.{format}"), "dataBase64": out["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        assert!(!ordinary_paths(doc).is_empty(), "{format} reopens non-empty ordinary vectors");
+        let mut live = 0;
+        for layer in &doc.layers {
+            layer.walk(&mut |node| {
+                live += usize::from(matches!(node.kind, NodeKind::Mesh(_) | NodeKind::Repeat(_) | NodeKind::Blend { .. }));
+            });
+        }
+        assert_eq!(live, 0, "{format} carries no live mesh/repeat/blend");
+    }
 }
