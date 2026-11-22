@@ -4,3 +4,5 @@
 
 mod automation_args;
 mod help;
+// CoralCraft (P5 Task 4): the real crash/restart recovery acceptance.
+mod recovery_restart;
