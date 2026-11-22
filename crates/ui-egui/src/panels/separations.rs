@@ -215,4 +215,93 @@ mod tests {
         assert!(panel.iter().any(|(id, _)| id == "tritanopia"));
         assert!(panel.iter().all(|(id, _)| cms::ProofTarget::parse(id).is_some_and(|t| t.id() == *id)));
     }
+
+    // CoralCraft (P4 Task 2): the panel driven through real interaction — the plate eye toggles
+    // (Alt-click solos), and a proof-target change — with the rendered preview (the canvas's own
+    // view-derived render options) proven to change. The global proof view is restored at the end.
+    #[test]
+    fn plate_toggles_solo_and_proof_target_change_the_rendered_preview() {
+        use super::super::tests_appearance::{click, frame_events, text_rect};
+
+        const SPOT: &str = "Coral Spot Orange";
+        let mut app = VectorcraftApp::new(Session::new(), Default::default());
+        let run = |app: &mut VectorcraftApp, cmd: &str, p: Value| app.session.execute(cmd, &p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        run(&mut app, "file.new", json!({"width": 200, "height": 150}));
+        let base = run(&mut app, "shape.rectangle", json!({"x": 0, "y": 0, "width": 60, "height": 60}))["id"].as_u64().unwrap();
+        run(&mut app, "paint.setFill", json!({"ids": [base], "color": "#ff0000"}));
+        run(&mut app, "paint.setStroke", json!({"ids": [base], "none": true}));
+        run(&mut app, "swatch.new", json!({"name": SPOT, "color": {"c": 0, "m": 35, "y": 95, "k": 0}, "global": true}));
+        run(&mut app, "swatch.setSpot", json!({"name": SPOT}));
+        let spot = run(&mut app, "shape.rectangle", json!({"x": 70, "y": 0, "width": 60, "height": 60}))["id"].as_u64().unwrap();
+        run(&mut app, "paint.setFill", json!({"ids": [spot], "swatch": SPOT}));
+        run(&mut app, "paint.setStroke", json!({"ids": [spot], "none": true}));
+
+        // What the canvas shows: the render options the app derives from the global view.
+        let pixel = |app: &VectorcraftApp, x: u32, y: u32| {
+            let doc = app.session.active().unwrap().doc.clone();
+            let opts = vectorcraft_render::RenderOptions {
+                proof: vectorcraft_render::proof::active_proof(),
+                overprint_preview: vectorcraft_render::proof::overprint_preview_on(),
+                background: Some([255, 255, 255, 255]),
+                ..Default::default()
+            };
+            let mut r = vectorcraft_render::Renderer::new();
+            r.threads = 0;
+            r.render(&doc, 200, 150, vectorcraft_geom::Affine::IDENTITY, &opts).pixel(x, y)
+        };
+
+        let show = |app: &mut VectorcraftApp, ui: &mut egui::Ui| show(app, ui);
+        let ctx = egui::Context::default();
+
+        // Turn Separations Preview on through its checkbox.
+        let texts = frame_events(&ctx, &mut app, vec![], show);
+        let checkbox = text_rect(&texts, "Overprint Preview (separations)");
+        click(&ctx, &mut app, checkbox.center(), show);
+        assert!(proof::view().separations.is_some(), "the checkbox turned the preview on");
+
+        // The eye toggle of the spot plate (left of its label: eye, colour chip, label).
+        let texts = frame_events(&ctx, &mut app, vec![], show);
+        let label = text_rect(&texts, &format!("{SPOT} (spot)"));
+        let eye = egui::pos2(label.left() - 14.0 - 8.0 - 9.0, label.center().y);
+        click(&ctx, &mut app, eye, show);
+        let hidden: Vec<String> = proof::view().separations.as_ref().map(|s| s.clone()).unwrap_or_default();
+        assert!(!hidden.iter().any(|n| n == SPOT), "the spot plate is hidden: {hidden:?}");
+        // With the spot plate hidden its object renders empty (the spot is its only ink).
+        let hidden_px = pixel(&app, 100, 30);
+        assert_eq!(hidden_px, [255, 255, 255, 255], "hiding the only plate empties the object");
+
+        // Alt-click the same eye: solo the spot plate.
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        for e in [
+            egui::Event::ModifiersChanged(alt),
+            egui::Event::PointerMoved(eye),
+            egui::Event::PointerButton { pos: eye, button: egui::PointerButton::Primary, pressed: true, modifiers: alt },
+            egui::Event::PointerButton { pos: eye, button: egui::PointerButton::Primary, pressed: false, modifiers: alt },
+        ] {
+            frame_events(&ctx, &mut app, vec![e], show);
+        }
+        let solo = proof::view().separations.clone().unwrap_or_default();
+        assert_eq!(solo, vec![SPOT.to_owned()], "Alt-click solos the spot plate");
+        let solo_px = pixel(&app, 100, 30);
+        assert_ne!(solo_px, [255, 255, 255, 255], "the soloed spot plate shows its ink");
+
+        // A proof-target change through the dropdown: red under protanopia.
+        run(&mut app, "view.separationsPreview", json!({"on": false}));
+        run(&mut app, "view.proofColors", json!({"on": true}));
+        let unproofed = pixel(&app, 30, 30);
+        let texts = frame_events(&ctx, &mut app, vec![], show);
+        let current = text_rect(&texts, "Working CMYK");
+        click(&ctx, &mut app, current.center(), show);
+        let texts = frame_events(&ctx, &mut app, vec![], show);
+        let target = text_rect(&texts, "Color blindness – Protanopia-type");
+        click(&ctx, &mut app, target.center(), show);
+        assert_eq!(proof::view().setup.target.id(), "protanopia");
+        let proofed = pixel(&app, 30, 30);
+        assert_ne!(proofed, unproofed, "the proof target changes the rendered preview: {unproofed:?} -> {proofed:?}");
+
+        // Restore the global view.
+        run(&mut app, "view.proofColors", json!({"on": false}));
+        run(&mut app, "view.proofSetup", json!({"target": "workingCmyk"}));
+        assert!(proof::view().separations.is_none());
+    }
 }

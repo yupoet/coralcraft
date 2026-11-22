@@ -34,6 +34,8 @@ mod coreldraw_appearance;
 mod coreldraw_p1_acceptance;
 // CoralCraft: the P2 brochure acceptance scenario (P2 Task 12).
 mod coreldraw_p2_acceptance;
+// CoralCraft: P4 colour, proof, separations, and overprint production evidence (P4 Task 2).
+mod coreldraw_p4_production;
 // CoralCraft: P3 native/CDR/CMX persistence and fallbacks (P3 Task 10).
 mod coreldraw_p3_persistence;
 mod coreldraw_texture;

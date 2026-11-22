@@ -390,3 +390,42 @@ fn loading_the_working_rgb_profile_again_takes_effect_at_once() {
     assert!(after.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-4), "after the reload {after:?}, want {want:?}");
     assert!(redrawn, "the canvas redraws");
 }
+
+// CoralCraft (P4 Task 2): the rendering-intent × black-point-compensation matrix over the
+// process-wide colour settings, each setting echoed back exactly and restored afterwards. These
+// run here (their own binary) because every colour in the process goes through the settings.
+#[test]
+fn p4_intent_and_bpc_matrix_round_trips() {
+    let _g = settings();
+    let mut s = session();
+    let original = cms::active_settings();
+
+    // Every intent with and without BPC: the command's echo and the active settings agree.
+    let mut results: Vec<(String, bool, serde_json::Value)> = vec![];
+    for intent in ["perceptual", "relative", "saturation", "absolute"] {
+        for bpc in [true, false] {
+            let r = s.execute("edit.colorSettings", &json!({"intent": intent, "bpc": bpc})).unwrap();
+            assert_eq!(r["intent"].as_str().unwrap(), intent, "echoes {intent}");
+            assert_eq!(r["bpc"].as_bool(), Some(bpc), "echoes bpc {bpc}");
+            let active = cms::active_settings();
+            assert_eq!(active.intent, cms::Intent::parse(intent).unwrap());
+            assert_eq!(active.bpc, bpc);
+            // The intent reaches a real conversion of an out-of-gamut colour.
+            let c = s.execute("color.convert", &json!({"color": "#0000ff", "to": "cmyk", "intent": intent})).unwrap();
+            results.push((intent.to_owned(), bpc, c["values"].clone()));
+        }
+    }
+    // The intents are not all the same conversion (the matrix means something).
+    let distinct: std::collections::BTreeSet<String> = results.iter().map(|(_, _, v)| v.to_string()).collect();
+    assert!(distinct.len() >= 2, "the four intents differ somewhere: {results:?}");
+
+    // An unknown intent is refused and changes nothing.
+    let before = cms::active_settings();
+    assert!(s.execute("edit.colorSettings", &json!({"intent": "vivid"})).is_err());
+    assert_eq!(cms::active_settings().intent, before.intent, "the refusal left the settings alone");
+
+    // Restore.
+    s.execute("edit.colorSettings", &json!({"intent": original.intent.id(), "bpc": original.bpc})).unwrap();
+    assert_eq!(cms::active_settings().intent, original.intent);
+    assert_eq!(cms::active_settings().bpc, original.bpc);
+}
