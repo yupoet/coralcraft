@@ -264,7 +264,7 @@ mod tests {
         let label = text_rect(&texts, &format!("{SPOT} (spot)"));
         let eye = egui::pos2(label.left() - 14.0 - 8.0 - 9.0, label.center().y);
         click(&ctx, &mut app, eye, show);
-        let hidden: Vec<String> = proof::view().separations.as_ref().map(|s| s.clone()).unwrap_or_default();
+        let hidden: Vec<String> = proof::view().separations.unwrap_or_default();
         assert!(!hidden.iter().any(|n| n == SPOT), "the spot plate is hidden: {hidden:?}");
         // With the spot plate hidden its object renders empty (the spot is its only ink).
         let hidden_px = pixel(&app, 100, 30);

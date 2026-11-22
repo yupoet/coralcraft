@@ -326,7 +326,7 @@ fn print_layout_matrix_places_mixed_artboards_exactly() {
     // Default: auto-rotation turns the paper to each artboard — both print landscape, centred.
     let r = preview(&mut s, json!({}));
     assert_eq!(r["pages"].as_u64(), Some(2), "one page per artboard");
-    let [a, b] = [0, 1].map(|i| r["sheets"][i].clone()) else { panic!("two sheets") };
+    let (a, b) = (r["sheets"][0].clone(), r["sheets"][1].clone());
     for (sheet, trim_w, trim_h) in [(&a, 200.0, 150.0), (&b, 300.0, 100.0)] {
         assert_eq!((sheet["width"].as_f64(), sheet["height"].as_f64()), (Some(LETTER.1), Some(LETTER.0)), "landscape: {sheet}");
         assert_eq!(sheet["scale"].as_array().unwrap(), &vec![json!(100.0), json!(100.0)]);
@@ -334,7 +334,7 @@ fn print_layout_matrix_places_mixed_artboards_exactly() {
         let (x0, y0, x1, y1) = (trim[0].as_f64().unwrap(), trim[1].as_f64().unwrap(), trim[2].as_f64().unwrap(), trim[3].as_f64().unwrap());
         assert_eq!(x1 - x0, trim_w, "trim width");
         assert_eq!(y1 - y0, trim_h, "trim height");
-        assert_eq!(((x0 + x1) / 2.0 - LETTER.1 / 2.0).abs() < 0.01 && ((y0 + y1) / 2.0 - LETTER.0 / 2.0).abs() < 0.01, true, "centred: {trim:?}");
+        assert!(((x0 + x1) / 2.0 - LETTER.1 / 2.0).abs() < 0.01 && ((y0 + y1) / 2.0 - LETTER.0 / 2.0).abs() < 0.01, "centred: {trim:?}");
     }
 
     // Forced portrait keeps the paper upright; transverse turns the page a quarter turn.
@@ -514,7 +514,7 @@ fn data_merge_exports_one_variant_pdf_per_row_and_keeps_the_template() {
     };
     let vars = names(&mut s);
     assert_eq!(vars.len(), 4, "text, visibility, image, graph: {vars:?}");
-    let [text_var, vis_var, image_var, graph_var] = [vars[0].clone(), vars[1].clone(), vars[2].clone(), vars[3].clone()] else { unreachable!() };
+    let (text_var, vis_var, image_var, graph_var) = (vars[0].clone(), vars[1].clone(), vars[2].clone(), vars[3].clone());
 
     // Three rows.
     let rows = [

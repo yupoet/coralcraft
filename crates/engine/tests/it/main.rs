@@ -36,6 +36,8 @@ mod coreldraw_p1_acceptance;
 mod coreldraw_p2_acceptance;
 // CoralCraft: P4 colour, proof, separations, and overprint production evidence (P4 Task 2).
 mod coreldraw_p4_production;
+// CoralCraft: the P4 complete production-job acceptance (P4 Task 6).
+mod coreldraw_p4_acceptance;
 // CoralCraft: P3 native/CDR/CMX persistence and fallbacks (P3 Task 10).
 mod coreldraw_p3_persistence;
 mod coreldraw_texture;
