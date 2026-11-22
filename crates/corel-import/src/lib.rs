@@ -739,6 +739,8 @@ const LIVE_TRACE_WARNING: &str =
 const GRADIENT_ALPHA_WARNING: &str = "gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable";
 // CoralCraft (P3 Task T3): the CDR/CMX writers carry no object or item merge mode.
 const BLEND_MODE_WARNING: &str = "merge modes other than Normal are dropped in CDR/CMX; native blend modes remain editable";
+// CoralCraft (P4 Task 6): the CDR/CMX writers carry no overprint flags.
+const OVERPRINT_WARNING: &str = "overprint fill and stroke flags are dropped in CDR/CMX; native documents keep them";
 const DROPPED_MASK_WARNING: &str = "enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable";
 const MISSING_IMAGE_WARNING: &str =
     "missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged";
@@ -760,6 +762,8 @@ struct ExportWarningLedger {
     texture_fill: bool,
     /// CoralCraft (P3 Task T3): a merge mode other than Normal was dropped.
     blend_mode: bool,
+    /// CoralCraft (P4 Task 6): an overprint fill or stroke flag was dropped.
+    overprint_dropped: bool,
     mesh_point_opacity_sources: BTreeSet<u64>,
     unsupported_bitmap_effects: BTreeSet<String>,
     missing_image_pixels: bool,
@@ -787,6 +791,9 @@ impl ExportWarningLedger {
         }
         if self.blend_mode {
             warnings.push(BLEND_MODE_WARNING.to_owned());
+        }
+        if self.overprint_dropped {
+            warnings.push(OVERPRINT_WARNING.to_owned());
         }
         if self.texture_fill {
             warnings.push(TEXTURE_FILL_WARNING.to_owned());
@@ -3042,12 +3049,14 @@ fn convert_vc_appearance_to_cdr<'a>(
             AppearanceItem::Fill(fl) if fl.visible && !fl.paint.is_none() => {
                 first_fill_idx.get_or_insert(idx);
                 warnings.blend_mode |= fl.blend != BlendMode::Normal;
+                warnings.overprint_dropped |= fl.overprint;
                 fill_paint = Some(&fl.paint);
                 fill_effects = Some(fl.effects.as_slice());
             }
             AppearanceItem::Stroke(sl) if sl.visible && !sl.paint.is_none() => {
                 first_stroke_idx.get_or_insert(idx);
                 warnings.blend_mode |= sl.blend != BlendMode::Normal;
+                warnings.overprint_dropped |= sl.overprint;
                 stroke_paint = Some(sl);
                 stroke_effects = Some(sl.effects.as_slice());
             }
