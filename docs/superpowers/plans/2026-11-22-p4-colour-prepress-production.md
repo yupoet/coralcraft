@@ -8,6 +8,13 @@
 
 **Tech Stack:** Rust, `vectorcraft-color`, `vectorcraft-render`, `vectorcraft-pdf`, `vectorcraft-engine`, `vectorcraft-ui-egui`, Hayro-backed PDF import, `usvg`, existing CLI/MCP, and `cargo xtask`.
 
+> **DELIVERED 2026-11-23** (after P3 closed the same session). Task 1 inventory
+> `b99c84332`/`87feda6c5`; Tasks 2–6 `4296a3161`, `c1f439e90`, `82a4fb167`, `0d6038f22`,
+> `8a450f272`+`04134910d`. Every step's date note sits beside it below; the measured evidence,
+> the one RED-first production fix (the CDR/CMX dropped-overprint warning), and the final gate
+> (engine 4,378/1 = known-issue 0b only, 16 serial gates green — not a clean full-CI pass) are
+> recorded in [`docs/p4-inventory.md`](../../p4-inventory.md) §2–§7. S2/P0.1 stay open.
+
 ---
 
 ## Entry gate and evidence boundaries

@@ -193,3 +193,54 @@ target for every row is level 4, and 5 for the final scenario row.
   throughout P4; self-skipping tests and self-round-trips are not certification.
 - HPGL, cutter nesting, and a PHOTO-PAINT-class bitmap editor stay out of scope (operator
   constraint) unless a concrete verified use case and public behaviour reference are supplied.
+
+## 7. P4 delivery record (2026-11-23)
+
+All six tasks delivered on the P3 branch (commits `4296a3161` Task 2, `c1f439e90` Task 3,
+`82a4fb167` Task 4, `0d6038f22` Task 5, `8a450f272`+`04134910d` Task 6), every matrix row of §4
+proven end to end with independent structural evidence:
+
+- **Colour/proof/spot/overprint (rows 1–3):** the production fixture's five-plate set with the
+  named spot, separation and overprint-preview pixels, exact undo/redo and native reopen, the
+  intent × BPC matrix in `crates/engine/tests/color_settings.rs`, `print.preview`'s per-ink
+  sheets, the separations print PDF, and the Separations panel driven by real interaction with
+  rendered-pixel evidence. One production defect found and fixed test-first: CDR/CMX dropped
+  overprint flags silently — the export now names the channel exactly once
+  (`8a450f272`, RED in the acceptance).
+- **PDF/X-1a/X-3/X-4 (rows 4–8):** the full rule matrix over one mixed document (fonts
+  embedded with `advanced.outlineText: false` — the flattener outlines the text it reaches),
+  exact boxes, per-standard colour/transparency rules, output-intent refusals, and Hayro
+  reimports of the live document per standard with the blend evaluated and the native sources
+  untouched.
+- **Boxes/marks/preview/imposition (rows 9–11):** the print-layout matrix (orientation,
+  auto-rotate, transverse, fit, margin, skip-blank, copies, reverse) with exact sheet geometry
+  cross-checked against the printed PDF; marks drawn on the paper with the exact TrimBox; A4
+  tiling with columns/rows/overlap/tileRange and every tile non-empty in the independent read;
+  the Print dialog preset+scaling path through the host print service.
+- **Data merge/batch/presets (rows 12–14):** the template (text, visibility, linked image,
+  graph variables) producing one verified variant PDF per row with one undo step each and the
+  bindings surviving native reopen; `document.exportForScreens` over the variants in
+  SVG/PNG/PDF with unique names and per-format folders; print and PDF preset save/apply/move.
+- **MCP/CLI (row 15):** `p3_commands_run_through_run_command` (P3) and
+  `p4_production_commands_run_through_run_command` cover every P4-domain command over the real
+  MCP surface with one invalid call leaving a byte-identical document; `docs_sync` 2/2; the CLI
+  `commands` listing names every family.
+- **Final scenario (row 16):** `coreldraw_p4_acceptance` runs the complete two-page
+  mixed-size production job through all five channels (X-1a, X-3, X-4, separations, imposed)
+  plus the data variant, reopens and re-edits the native source, and asserts the exact
+  one-warning CDR/CMX degradation set (the dropped overprint flags, and nothing else).
+
+**Final gate (2026-11-23):** `cargo xtask ci` — fmt ok, clippy ok (`-D warnings`), workspace
+tests stopped solely at the documented platform-flake known-issue 0b: engine library **4,378
+passed / 1 failed / 2 ignored**, recorded verbatim, not silenced. **Not a clean full-CI pass.**
+All 16 skipped later gates then ran serially and exited 0: doctests, cleanroom (2,658 files),
+no-bundled-fonts, the four feature trees (default bundled, no-default not), no-default UI
+Clippy, install-fonts, pdf-deps, assets (309), brands, cursors, i18n-report, layers (30
+crates), wasm. Measured tree: `cargo xtask stats` → **2,061 files, 892,413 lines, 14,864
+`#[test]`, 66 `proptest!`**.
+
+**Evidence boundaries kept:** Hayro (`vectorcraft_pdf::import`) is an independent structural
+reader, not an ISO PDF/X preflight suite — no third-party PDF/X conformance certification is
+claimed. S2/P0.1 (real libcdr oracle + operator samples) remain open; self-skips and
+self-round trips are not certification. HPGL and cutter nesting stayed out of scope. **P4
+closes; the next phase is P5** (automation, performance, and product hardening).
