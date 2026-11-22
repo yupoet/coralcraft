@@ -255,3 +255,57 @@ fn invalid_colour_and_print_inputs_are_refused_atomically() {
     assert_eq!(after, before, "the refused calls mutated nothing");
     assert_eq!(s.active().unwrap().history.undo.len(), undo_before, "the refused calls added no history");
 }
+
+/// The PDF/X rule matrix over the live production document: every standard's file reimports
+/// through the independent Hayro reader with the blend evaluated and the text real, and no
+/// export mutates the native live sources.
+#[test]
+fn pdfx_matrix_over_the_live_document_reads_back_independently() {
+    let mut s = production_document();
+    let a = s.execute("shape.ellipse", &json!({"x": 140, "y": 0, "width": 24, "height": 24})).unwrap()["id"].as_u64().unwrap();
+    let b = s.execute("shape.ellipse", &json!({"x": 170, "y": 40, "width": 24, "height": 24})).unwrap()["id"].as_u64().unwrap();
+    let blend = s.execute("object.blend.make", &json!({"ids": [a, b], "steps": 3})).unwrap()["id"].as_u64().unwrap();
+    s.execute("text.create", &json!({"x": 8, "y": 138, "text": "Proof"})).unwrap();
+    s.execute("document.setup", &json!({"bleed": 9.0})).unwrap();
+    let native = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+
+    for (standard, header) in [("pdfX1a", "%PDF-1.3"), ("pdfX3", "%PDF-1.3"), ("pdfX4", "%PDF-1.6")] {
+        let out = s
+            .execute(
+                "document.exportPdf",
+                &json!({"standard": standard, "advanced": {"outlineText": false}, "bleed": {"useDocument": true}, "compression": {"compressText": false}}),
+            )
+            .unwrap();
+        let bytes = vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap();
+        assert!(String::from_utf8_lossy(&bytes[..20]).starts_with(header), "{standard}");
+        let read = vectorcraft_pdf::import(&bytes).unwrap_or_else(|e| panic!("{standard} reimports: {e}"));
+        assert_eq!(read.artboards.len(), 1, "{standard}");
+        // The blend is evaluated output: its keys and intermediate shapes all reimport as
+        // ordinary painted paths (more than the document's own five shapes plus two keys).
+        let mut paths = 0;
+        for layer in &read.layers {
+            layer.walk(&mut |node| paths += usize::from(node.path_data().is_some_and(|p| !p.subpaths.is_empty())));
+        }
+        assert!(paths >= 9, "{standard} carries the evaluated blend: {paths} paths");
+        // The text is real (not outlines) and reads back.
+        let mut texts = vec![];
+        for layer in &read.layers {
+            layer.walk(&mut |node| {
+                if let vectorcraft_doc::NodeKind::Text(t) = &node.kind {
+                    texts.push(t.plain_text());
+                }
+            });
+        }
+        assert!(texts.iter().any(|t| t.contains("Proof")), "{standard} keeps real text: {texts:?}");
+        // The export never touched the native live sources.
+        assert!(
+            matches!(s.doc().unwrap().doc.node(vectorcraft_doc::NodeId(blend)).map(|n| &n.kind), Some(vectorcraft_doc::NodeKind::Blend { .. })),
+            "{standard} keeps the blend live"
+        );
+        assert_eq!(
+            s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"],
+            native,
+            "{standard} leaves the native bytes unchanged"
+        );
+    }
+}
