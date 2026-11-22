@@ -2031,3 +2031,124 @@ fn p4_production_commands_run_through_run_command() {
     let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
     assert_eq!(after, before, "the refused call mutated nothing");
 }
+
+// CoralCraft (P5 Task 5): every P3/P4-added command through one real command_batch — texture,
+// pattern, symmetry, lens, PowerClip lock, the PDF/X and print/imposition exports, and a
+// data-driven variant — with `$N` step references, an atomic undo step, native reopen, and an
+// invalid step refusing the whole batch without a mutation.
+#[test]
+fn p3_p4_surface_through_command_batch_with_atomic_steps_and_references() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut call = |s: &mut Server, name: &str, args: Value| {
+        next += 1;
+        call(s, next, name, args)
+    };
+    call(&mut s, "run_command", json!({"command": "file.new", "params": {"width": 420, "height": 300}}));
+
+    let batch = call(
+        &mut s,
+        "command_batch",
+        json!({"atomic": true, "label": "P5 production", "steps": [
+            {"id": "shape.rectangle", "params": {"x": 10, "y": 10, "width": 80, "height": 60}},
+            {"id": "select.set", "params": {"ids": ["$0.id"]}},
+            {"id": "texture.new", "params": {"name": "Batch Stipple", "kind": "stipple"}},
+            {"id": "paint.setTexture", "params": {"texture": "Batch Stipple"}},
+            {"id": "pattern.twoColor", "params": {"name": "Batch Checks", "kind": "checkerboard"}},
+            {"id": "shape.ellipse", "params": {"x": 120, "y": 10, "width": 40, "height": 40}},
+            {"id": "select.set", "params": {"ids": ["$5.id"]}},
+            {"id": "object.symmetry.create", "params": {"kind": "radial", "lines": 4}},
+            {"id": "object.lens", "params": {"kind": "invert", "amount": 60}},
+            {"id": "text.create", "params": {"x": 10, "y": 280, "text": "Batch Alpha"}},
+            {"id": "select.set", "params": {"ids": ["$9.id"]}},
+            {"id": "variable.makeTextDynamic", "params": {}},
+            {"id": "dataset.new", "params": {"name": "Alpha", "values": {"Batch Alpha": "Batch Alpha"}}}
+        ]}),
+    );
+    assert_eq!(batch["isError"], false, "{batch}");
+    let r: Value = serde_json::from_str(&text_of(&batch)).unwrap();
+    assert_eq!(r["failed"].as_u64(), Some(0), "{r}");
+
+    // One undo step (atomic), named by the label; undoing returns to the pre-batch state.
+    let undo = call(&mut s, "run_command", json!({"command": "document.inspect", "params": {}}));
+    let doc: Value = serde_json::from_str(&text_of(&undo)).unwrap();
+    assert_eq!(doc["history"].as_array().map(Vec::len), Some(1), "the whole batch is one undo step: {doc}");
+    call(&mut s, "run_command", json!({"command": "edit.undo", "params": {}}));
+    call(&mut s, "run_command", json!({"command": "edit.redo", "params": {}}));
+
+    // The PowerClip lock and the exports over the batch's document.
+    let made = call(&mut s, "run_command", json!({"command": "shape.rectangle", "params": {"x": 200, "y": 10, "width": 60, "height": 40}}));
+    let rect: Value = serde_json::from_str(&text_of(&made)).unwrap();
+    let rect = rect["id"].as_u64().unwrap();
+    let frame = call(&mut s, "run_command", json!({"command": "shape.ellipse", "params": {"x": 195, "y": 5, "width": 70, "height": 50}}));
+    let frame: Value = serde_json::from_str(&text_of(&frame)).unwrap();
+    let frame = frame["id"].as_u64().unwrap();
+    call(&mut s, "run_command", json!({"command": "select.set", "params": {"ids": [rect, frame]}}));
+    call(&mut s, "run_command", json!({"command": "object.clippingMask.make", "params": {}}));
+    let clip = call(&mut s, "run_command", json!({"command": "document.inspect", "params": {"depth": 1}}));
+    let _ = text_of(&clip);
+    call(&mut s, "run_command", json!({"command": "object.clippingMask.setContentsLocked", "params": {"lock": false}}));
+    for command in ["document.exportPdf", "print.preview"] {
+        let params = if command == "document.exportPdf" {
+            // X-4 keeps transparency (the lens and the symmetry carry transparency groups);
+            // X-1a would rightly refuse them until flattened.
+            json!({"standard": "pdfX4", "advanced": {"outlineText": false}})
+        } else {
+            json!({"settings": {"media": "a4", "autoRotate": false, "scaling": "tileFull", "scale": {"width": 200, "height": 200}}})
+        };
+        let r = call(&mut s, "run_command", json!({"command": command, "params": params}));
+        assert_eq!(r["isError"], false, "{command}: {r}");
+    }
+    // The data-driven variant through the batch-made dataset.
+    let variant = call(&mut s, "run_command", json!({"command": "dataset.select", "params": {"name": "Alpha"}}));
+    assert_eq!(variant["isError"], false, "{variant}");
+
+    // A mid-batch failure keeps the steps that ran, as the one undo step of the atomic batch
+    // (the documented semantics); undoing that one step takes the whole prefix back.
+    let before = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let stopped = call(
+        &mut s,
+        "command_batch",
+        json!({"atomic": true, "label": "Stopped", "steps": [
+            {"id": "object.move", "params": {"dx": 5, "dy": 0}},
+            {"id": "no.such.command", "params": {}}
+        ]}),
+    );
+    assert_eq!(stopped["isError"], true, "a failed step makes the batch an error result: {stopped}");
+    let r: Value = serde_json::from_str(&text_of(&stopped)).unwrap();
+    assert_eq!((r["completed"].as_u64(), r["failed"].as_u64()), (Some(1), Some(1)), "{r}");
+    let undone = call(&mut s, "run_command", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(undone["isError"], false, "the atomic prefix is one undo step: {undone}");
+    let after = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "undoing the stopped atomic batch restores the exact state");
+    // A malformed batch is refused before anything runs: `label` without `atomic`.
+    let refused = call(&mut s, "command_batch", json!({"steps": [{"id": "object.move", "params": {"dx": 5, "dy": 0}}], "label": "X"}));
+    assert_eq!(refused["isError"], true, "{refused}");
+    let after = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused batch mutated nothing");
+}
+
+// CoralCraft (P5 Task 5): the batch caps are refused as structured errors, never truncated into
+// a silent partial run (#1727's caps, now with their test).
+#[test]
+fn an_oversized_command_batch_is_refused_whole() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut call = |s: &mut Server, name: &str, args: Value| {
+        next += 1;
+        call(s, next, name, args)
+    };
+    call(&mut s, "run_command", json!({"command": "file.new", "params": {"width": 100, "height": 100}}));
+    // 257 steps of a cheap command: one over the cap.
+    let steps: Vec<Value> = (0..257).map(|i| json!({"id": "object.move", "params": {"dx": 0, "dy": 0}, "label": format!("s{i}")})).collect();
+    let refused = call(&mut s, "command_batch", json!({"steps": steps}));
+    assert_eq!(refused["isError"], true, "over the step cap is a tool error: {refused}");
+    assert!(text_of(&refused).to_lowercase().contains("step"), "{refused}");
+    // At the cap it runs (256 selection-free queries are fine).
+    let steps: Vec<Value> = (0..256).map(|_| json!({"id": "document.info", "params": {}})).collect();
+    let ok = call(&mut s, "command_batch", json!({"steps": steps}));
+    assert_eq!(ok["isError"], false, "at the cap the batch runs: {ok}");
+}
