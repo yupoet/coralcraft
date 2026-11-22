@@ -1965,3 +1965,69 @@ fn bitmap_resample_runs_through_run_command() {
     let invalid = call(&mut s, 5, "run_command", json!({"command": "object.resampleImage", "params": {"id": bitmap, "width": 0, "height": 9}}));
     assert_eq!(invalid["isError"], true, "{invalid}");
 }
+
+// CoralCraft (P4 Tasks 2–5): the production-domain commands through the real MCP run_command
+// surface — colour/proof, print, data merge, batch export, and presets — with one invalid call
+// over an unchanged document.
+#[test]
+fn p4_production_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut run = |s: &mut Server, command: &str, params: Value| {
+        next += 1;
+        call(s, next, "run_command", json!({"command": command, "params": params}))
+    };
+    run(&mut s, "file.new", json!({"width": 200, "height": 150}));
+
+    // Colour and proof.
+    let plates = run(&mut s, "color.plates", json!({}));
+    assert_eq!(plates["isError"], false, "{plates}");
+    let proof = run(&mut s, "view.proofSetup", json!({"target": "workingCmyk", "proof": true}));
+    assert_eq!(proof["isError"], false, "{proof}");
+    run(&mut s, "view.proofColors", json!({"on": false}));
+
+    // Print preview and separations ink reporting.
+    let preview = run(&mut s, "print.preview", json!({"settings": {"output": {"mode": "separations"}}}));
+    assert_eq!(preview["isError"], false, "{preview}");
+    let inks = serde_json::from_str::<Value>(&text_of(&preview)).unwrap()["inks"].as_array().unwrap().clone();
+    assert_eq!(inks.len(), 4, "the process inks: {inks:?}");
+
+    // Data merge: a text variable, two rows, and a variant export per row.
+    let title = run(&mut s, "text.create", json!({"x": 10, "y": 10, "text": "One"}));
+    let title = serde_json::from_str::<Value>(&text_of(&title)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [title]}));
+    run(&mut s, "variable.makeTextDynamic", json!({}));
+    let name = serde_json::from_str::<Value>(&text_of(&run(&mut s, "variable.list", json!({})))).unwrap()["variables"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run(&mut s, "dataset.new", json!({"name": "One", "values": {name.clone(): "One"}}));
+    run(&mut s, "dataset.new", json!({"name": "Two", "values": {name.clone(): "Two"}}));
+    for row in ["One", "Two"] {
+        let selected = run(&mut s, "dataset.select", json!({"name": row}));
+        assert_eq!(selected["isError"], false, "{selected}");
+        let exported = run(&mut s, "document.exportPdf", json!({}));
+        assert_eq!(exported["isError"], false, "{exported}");
+    }
+
+    // Batch export and presets.
+    let batch = run(
+        &mut s,
+        "document.exportForScreens",
+        json!({"formats": [{"format": "svg"}, {"format": "png", "scale": "1x"}], "name": "mcp-####.ext", "folders": "format"}),
+    );
+    assert_eq!(batch["isError"], false, "{batch}");
+    let saved = run(&mut s, "print.presets.save", json!({"name": "MCP Press", "settings": {"media": "a4"}}));
+    assert_eq!(saved["isError"], false, "{saved}");
+    let applied = run(&mut s, "print.setup", json!({"preset": "MCP Press"}));
+    assert_eq!(applied["isError"], false, "{applied}");
+
+    // One invalid input: an MCP error result, and the document unchanged.
+    let before = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let invalid = run(&mut s, "dataset.select", json!({"name": "No Such Row"}));
+    assert_eq!(invalid["isError"], true, "invalid input is an MCP error result: {invalid}");
+    let after = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused call mutated nothing");
+}

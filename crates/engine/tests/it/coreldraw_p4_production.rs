@@ -447,3 +447,211 @@ fn print_tiling_imposes_tiles_that_all_print() {
     }
     assert!(paths >= 2, "the imposed art reads back: {paths} paths");
 }
+
+/// A fresh temp folder for one test (removed when dropped).
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("p4-production-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str) -> String {
+        self.0.join(name).to_string_lossy().into_owned()
+    }
+
+    fn png(&self, name: &str, colour: [u8; 3]) -> String {
+        let path = self.file(name);
+        image::RgbaImage::from_pixel(12, 12, image::Rgba([colour[0], colour[1], colour[2], 255])).save(&path).unwrap();
+        path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The data-driven production loop: one template (text, visibility, linked image, graph
+/// variables), three data rows, one exported PDF per row verified through the independent
+/// reader — one undo step per row, the template still bound after a native reopen, and a
+/// missing row refused without mutation.
+#[test]
+fn data_merge_exports_one_variant_pdf_per_row_and_keeps_the_template() {
+    let dir = TempDir::new("data-merge");
+    let red = dir.png("red.png", [200, 30, 30]);
+    let blue = dir.png("blue.png", [30, 30, 200]);
+
+    let mut s = session();
+    let title = s.execute("text.create", &json!({"x": 10, "y": 10, "text": "Hello Alpha"})).unwrap()["id"].as_u64().unwrap();
+    let badge = s.execute("shape.rectangle", &json!({"x": 10, "y": 40, "width": 40, "height": 20})).unwrap()["id"].as_u64().unwrap();
+    s.execute("paint.setFill", &json!({"ids": [badge], "color": {"c": 0, "m": 0, "y": 0, "k": 20}})).unwrap();
+    let photo = s.execute("file.place", &json!({"path": red, "link": true, "at": [60, 10]})).unwrap()["ids"][0].as_u64().unwrap();
+    let graph =
+        s.execute("graph.create", &json!({"type": "column", "x": 10, "y": 70, "width": 100, "height": 60, "csv": ",a\nQ1,10\nQ2,5"})).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+
+    s.execute("select.set", &json!({"ids": [title]})).unwrap();
+    s.execute("variable.makeTextDynamic", &json!({})).unwrap();
+    s.execute("select.set", &json!({"ids": [badge]})).unwrap();
+    s.execute("variable.makeVisibilityDynamic", &json!({})).unwrap();
+    s.execute("select.set", &json!({"ids": [photo]})).unwrap();
+    s.execute("variable.makeImageDynamic", &json!({})).unwrap();
+    s.execute("select.set", &json!({"ids": [graph]})).unwrap();
+    s.execute("variable.makeGraphDynamic", &json!({})).unwrap();
+    let names = |s: &mut Session| -> Vec<String> {
+        s.execute("variable.list", &json!({})).unwrap()["variables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let vars = names(&mut s);
+    assert_eq!(vars.len(), 4, "text, visibility, image, graph: {vars:?}");
+    let [text_var, vis_var, image_var, graph_var] = [vars[0].clone(), vars[1].clone(), vars[2].clone(), vars[3].clone()] else { unreachable!() };
+
+    // Three rows.
+    let rows = [
+        ("Alpha", true, red.as_str(), ",a\nQ1,10\nQ2,5"),
+        ("Beta", false, blue.as_str(), ",a\nQ1,8\nQ2,4\nQ3,2"),
+        ("Gamma", true, red.as_str(), ",a\nQ1,12"),
+    ];
+    for (row, visible, image_path, csv) in rows {
+        s.execute(
+            "dataset.new",
+            &json!({"name": row, "values": {text_var.clone(): format!("Hello {row}"), vis_var.clone(): visible, image_var.clone(): image_path, graph_var.clone(): csv}}),
+        )
+        .unwrap();
+    }
+
+    // One exported variant PDF per row, each verified through the independent reader.
+    for (row, _visible, _, _) in rows {
+        let undo_before = s.active().unwrap().history.undo.len();
+        let applied = s.execute("dataset.select", &json!({"name": row})).unwrap();
+        assert_eq!((applied["applied"].as_u64(), applied["skipped"].as_u64()), (Some(4), Some(0)), "{row}: {applied}");
+        assert_eq!(s.active().unwrap().history.undo.len(), undo_before + 1, "{row}: one undo step");
+        let out = s.execute("document.exportPdf", &json!({"compression": {"compressText": false}})).unwrap();
+        let read = vectorcraft_pdf::import(&vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap()).unwrap();
+        let mut texts = vec![];
+        let mut images = 0;
+        let mut paths = 0;
+        for layer in &read.layers {
+            layer.walk(&mut |node| {
+                if let vectorcraft_doc::NodeKind::Text(t) = &node.kind {
+                    texts.push(t.plain_text());
+                }
+                images += usize::from(matches!(node.kind, vectorcraft_doc::NodeKind::Image(_)));
+                paths += usize::from(node.path_data().is_some_and(|p| !p.subpaths.is_empty()));
+            });
+        }
+        assert!(texts.iter().any(|t| t.contains(&format!("Hello {row}"))), "{row}: {texts:?}");
+        assert_eq!(images, 1, "{row} keeps its photo");
+    }
+    // The visibility difference is real: the hidden row's PDF has one painted shape fewer.
+    let variants: Vec<(String, usize)> = rows
+        .iter()
+        .map(|(row, _, _, _)| {
+            s.execute("dataset.select", &json!({"name": row})).unwrap();
+            let out = s.execute("document.exportPdf", &json!({})).unwrap();
+            let read = vectorcraft_pdf::import(&vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap()).unwrap();
+            let mut paths = 0;
+            for layer in &read.layers {
+                layer.walk(&mut |node| paths += usize::from(node.path_data().is_some_and(|p| !p.subpaths.is_empty())));
+            }
+            (row.to_string(), paths)
+        })
+        .collect();
+    let count = |row: &str| variants.iter().find(|(r, _)| r == row).unwrap().1;
+    assert!(count("Alpha") > count("Beta"), "the hidden badge drops out: {variants:?}");
+    assert!(count("Gamma") > count("Beta"), "the graph's third category adds geometry: {variants:?}");
+
+    // The template survives a native reopen with every binding and row.
+    let native = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    s.execute("document.open", &json!({"name": "p4.vectorcraft", "dataBase64": native})).unwrap();
+    assert_eq!(names(&mut s).len(), 4, "the variables reopen");
+    let sets = s.execute("dataset.list", &json!({})).unwrap()["datasets"].as_array().unwrap().clone();
+    assert_eq!(sets.len(), 3, "the rows reopen: {sets:?}");
+
+    // A missing row is refused without touching the document.
+    let before = s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert!(s.execute("dataset.select", &json!({"name": "No Such Row"})).is_err());
+    assert_eq!(s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"], before);
+}
+
+/// Batch export writes every variant in every format with unique names and per-format folders,
+/// and the print/PDF presets save, apply, and move between documents.
+#[test]
+fn batch_export_writes_every_variant_and_presets_move_between_documents() {
+    let mut s = session();
+    s.execute("artboard.new", &json!({"width": 200, "height": 150})).unwrap();
+    let title = s.execute("text.create", &json!({"x": 10, "y": 10, "text": "One"})).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({"ids": [title]})).unwrap();
+    s.execute("variable.makeTextDynamic", &json!({})).unwrap();
+    let name = s.execute("variable.list", &json!({})).unwrap()["variables"][0]["name"].as_str().unwrap().to_owned();
+    s.execute("dataset.new", &json!({"name": "One", "values": {name.clone(): "One"}})).unwrap();
+    s.execute("dataset.new", &json!({"name": "Two", "values": {name.clone(): "Two"}})).unwrap();
+
+    // Every variant × {SVG, PNG, PDF}: unique names, per-format folders, nothing empty.
+    let mut svgs = vec![];
+    for row in ["One", "Two"] {
+        s.execute("dataset.select", &json!({"name": row})).unwrap();
+        let r = s
+            .execute(
+                "document.exportForScreens",
+                &json!({"range": "1-2", "name": "variant-<filename>-####.ext", "folders": "format", "formats": [
+                    {"format": "svg"},
+                    {"format": "png", "scale": "1x"},
+                    {"format": "pdf"}
+                ]}),
+            )
+            .unwrap();
+        let files = r["files"].as_array().unwrap();
+        assert_eq!(files.len(), 6, "{row}: {files:?}");
+        let mut names: Vec<&str> = files.iter().map(|f| f["name"].as_str().unwrap()).collect();
+        names.sort();
+        assert_eq!(names.len(), names.iter().collect::<std::collections::BTreeSet<_>>().len(), "{row}: unique names");
+        for folder in ["svg/", "png/", "pdf/"] {
+            assert!(names.iter().filter(|n| n.starts_with(folder)).count() == 2, "{row}: {names:?}");
+        }
+        for f in files {
+            let size = f["bytes"]
+                .as_u64()
+                .or_else(|| f["dataBase64"].as_str().map(|d| d.len() as u64))
+                .or_else(|| f["data"].as_str().map(|d| d.len() as u64))
+                .unwrap_or(0);
+            assert!(size > 0, "{row}: non-empty output: {f:?}");
+        }
+        let svg = files.iter().find(|f| f["name"].as_str().is_some_and(|n| n.starts_with("svg/"))).unwrap();
+        let data = svg["dataBase64"].as_str().or_else(|| svg["data"].as_str()).unwrap_or_else(|| panic!("{svg:?}"));
+        svgs.push(vectorcraft_format::base64_decode(data).unwrap());
+    }
+    assert_ne!(svgs[0], svgs[1], "the two variants' SVG outputs differ");
+
+    // Print presets save, apply through print.setup, and move between documents.
+    s.execute("print.presets.save", &json!({"name": "P4 Press", "settings": {"media": "a4", "marks": {"trim": true}}})).unwrap();
+    let listed = s.execute("print.presets.list", &json!({})).unwrap()["presets"].as_array().unwrap().clone();
+    assert!(listed.iter().any(|p| p["name"] == "P4 Press"), "{listed:?}");
+    let applied = s.execute("print.setup", &json!({"preset": "P4 Press"})).unwrap()["settings"].clone();
+    assert_eq!(applied["media"], "a4", "the preset applies: {applied}");
+    let exported = s.execute("print.presets.export", &json!({})).unwrap();
+    let moved = exported["data"].as_str().unwrap();
+    let mut fresh = Session::new();
+    fresh.execute("file.new", &json!({"width": 100, "height": 100})).unwrap();
+    let imported = fresh.execute("print.presets.import", &json!({"data": moved})).unwrap();
+    assert_eq!(imported["imported"].as_array().unwrap(), &vec![json!("P4 Press")], "the saved preset moves: {imported}");
+    assert!(fresh.execute("print.setup", &json!({"preset": "P4 Press"})).is_ok(), "the moved preset applies");
+
+    // PDF presets save and apply to an export.
+    s.execute("pdf.preset.save", &json!({"name": "P4/X-1a", "standard": "pdfX1a"})).unwrap();
+    let out = s.execute("document.exportPdf", &json!({"preset": "P4/X-1a"})).unwrap();
+    assert!(
+        String::from_utf8_lossy(&vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap()).starts_with("%PDF-1.3"),
+        "the saved preset's standard applies"
+    );
+}
