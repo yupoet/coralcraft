@@ -952,6 +952,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-text",
  "serde_json",
+ "sha2",
  "tempfile",
  "vectorcraft-color",
  "vectorcraft-doc",
