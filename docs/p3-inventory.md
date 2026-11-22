@@ -988,3 +988,48 @@ export, non-empty ordinary vectors, no live mesh/repeat/blend in the reimported 
 Evidence-only: no production change was needed. `coreldraw_p3_persistence` **20/20**; battery:
 CorelDRAW integration **127/127**, corel-import **75/75**, MCP `docs_sync` **2/2**, formatting
 clean.
+
+## 31. P3 final acceptance and closing gate (2026-11-22)
+
+The final-acceptance plan
+([`2026-11-19-p3-final-acceptance.md`](superpowers/plans/2026-11-19-p3-final-acceptance.md)),
+executed in order:
+
+- **Task 1 (M1/M2 hardening, `941539ec5`).** M1's CDR/CMX import check can no longer hide an
+  error (the `if let Ok` block and its no-op line removed; any import `Err` fails the test). M2
+  gained the combined native regressions: radial Symmetry keeps its translucent mesh source
+  editable through native reopen (repeat parameters and every point's colour/opacity/position/
+  handles; a post-reopen mesh edit is one undo step), a Blend of two translucent meshes stays
+  live with `Steps(4)` and editable keys, and editing a source after the reopen changes the
+  evaluated Repeat/Blend output read through independent `usvg` fill fingerprints. Evidence-only
+  — no production change was needed. `coreldraw_p3_persistence` **20/20**; CorelDRAW integration
+  **127/127**, corel-import **75/75**, MCP `docs_sync` **2/2**, fmt clean.
+- **Task 2 (scenario + MCP/CLI, `5dd6373f7`).** The poster/traced acceptance now also covers
+  radial Symmetry (`setProps` revision between two native reopens), Block Shadow, Perspective,
+  an E5-style Zig Zag parameter edit, an invert colour lens, and an unlocked PowerClip. Asserts
+  native editability of every object after both reopens, independent `usvg` structure (the
+  clip path; exactly one non-Normal blend group — the lens), a Hayro-backed PDF read (one
+  artboard), non-empty ordinary vectors in reimported CDR/CMX, and the exact fallback warning
+  set: live Blend/Radial-Repeat expansion, dropped lens merge mode, unsupported
+  `distort.perspective`, and the relock each exactly once, nothing else (the scenario's trace
+  was expanded, so no live-trace warning). The clippy complexity fix was amended into the same
+  commit. `p3_commands_run_through_run_command` (MCP) drives texture ×4, two-colour pattern ×3,
+  symmetry ×4, lens, and the explicit-ID dual-clip `setContentsLocked`, with one invalid call
+  returning an MCP error over a byte-identical document. The CLI `commands` listing names all
+  five new command families. Battery: coreldraw **127/127**, ui `coreldraw_effects` **15/15**,
+  tools **853/853**, doc **413/413**, docs_sync **2/2**, fmt clean.
+- **Task 3 (final gate).** `cargo xtask ci`: fmt ok, clippy ok (`-D warnings`), then the
+  workspace tests stopped at the sole failure — engine library **4,376 passed / 1 failed /
+  2 ignored**, the documented platform-flake known-issue 0b
+  (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`,
+  recorded verbatim, not silenced). **Not a clean full-CI pass.** Every skipped later gate then
+  ran serially and exited 0: doctests, cleanroom (2,656 files), no-bundled-fonts, the four
+  feature trees (default trees contain `bundled-fonts`, no-default trees omit it), no-default
+  UI Clippy, install-fonts, pdf-deps, assets (309), brands, cursors, i18n-report, layers
+  (30 crates), and wasm (the four pre-existing ui-egui warnings, not errors).
+
+**P3 closes here.** S2/P0.1 (real libcdr oracle + operator samples) remain open, self-skips and
+self-round trips are not certification, and no production-performance or independent CDR/CMX
+conformance claim is made. Current measured tree: `cargo xtask stats` → **2,059 files,
+891,237 lines, 14,848 `#[test]`, 66 `proptest!`**. Next phase: **P4** (colour, prepress, and
+production output), inventoried in [`docs/p4-inventory.md`](p4-inventory.md).

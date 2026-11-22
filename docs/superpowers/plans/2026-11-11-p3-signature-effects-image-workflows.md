@@ -93,7 +93,10 @@ certification; S2 stays open.
 
 The recorded poster/traced-image acceptance stands as evidence. It does **not** replace Task 13.
 
-### Task 13: final P3 gate — OPEN
+### Task 13: final P3 gate — CLOSED (2026-11-22)
+
+All items delivered by the final-acceptance plan
+([`2026-11-19-p3-final-acceptance.md`](2026-11-19-p3-final-acceptance.md)):
 
 - [ ] Rerun `run_command` MCP coverage and `docs_sync` for every command added during P3.
 - [ ] Rerun the poster/traced-image acceptance scenarios on the final tree.
@@ -102,6 +105,14 @@ The recorded poster/traced-image acceptance stands as evidence. It does **not** 
 - [ ] Update parity rows only where new evidence exists.
 - [ ] P3 closes only when every open item above is resolved; unresolved items become named
       follow-ups, never silent closures.
+
+**Closure record (2026-11-22):** MCP coverage is `p3_commands_run_through_run_command` with
+`docs_sync` 2/2; the acceptance scenario is extended (Symmetry/Block Shadow/Perspective/Zig
+Zag/lens/unlocked clip, two native reopens, exact CDR/CMX warning categories); the full gate
+stopped solely at known-issue 0b (engine 4,376/1/2) and all 16 skipped later gates passed
+serially; parity rows were updated only with delivered evidence. Everything is recorded in
+[`docs/p3-inventory.md`](../../p3-inventory.md) §31. P3 closes; S2/P0.1 stay open as named
+follow-ups. **Next: P4.**
 
 ---
 
