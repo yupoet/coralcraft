@@ -1848,6 +1848,95 @@ fn p2_commands_run_through_run_command() {
     assert_eq!(node["isError"], false, "the page-number object is inspectable after insertion: {node}");
 }
 
+// CoralCraft (P3 final acceptance): every new P3 command through the real MCP run_command
+// surface — texture, two-colour pattern, symmetry, lens, and the explicit-ID dual-clip
+// setContentsLocked — valid calls mutating the document, one invalid call mutating nothing.
+#[test]
+fn p3_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut run = |s: &mut Server, command: &str, params: Value| {
+        next += 1;
+        call(s, next, "run_command", json!({"command": command, "params": params}))
+    };
+    run(&mut s, "file.new", json!({"width": 400, "height": 300}));
+
+    // Texture: definition, edit, list, and fill application.
+    let made = run(&mut s, "texture.new", json!({"name": "Coral Stipple", "kind": "stipple", "density": 0.5}));
+    assert_eq!(made["isError"], false, "{made}");
+    let edited = run(&mut s, "texture.setProps", json!({"name": "Coral Stipple", "density": 0.7}));
+    assert_eq!(edited["isError"], false, "{edited}");
+    let listed = run(&mut s, "texture.list", json!({}));
+    assert_eq!(listed["isError"], false, "{listed}");
+    let textures = serde_json::from_str::<Value>(&text_of(&listed)).unwrap();
+    assert_eq!(textures["textures"][0]["density"].as_f64(), Some(0.7), "the edit reached the definition: {textures}");
+    let rect = run(&mut s, "shape.rectangle", json!({"x": 20, "y": 20, "width": 80, "height": 60}));
+    let rect = serde_json::from_str::<Value>(&text_of(&rect)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [rect]}));
+    let textured = run(&mut s, "paint.setTexture", json!({"texture": "Coral Stipple"}));
+    assert_eq!(textured["isError"], false, "{textured}");
+
+    // Two-colour pattern: definition, edit, and fill application.
+    let pattern = run(&mut s, "pattern.twoColor", json!({"name": "Coral Checks", "kind": "checkerboard"}));
+    assert_eq!(pattern["isError"], false, "{pattern}");
+    let rekind = run(&mut s, "pattern.setTwoColorProps", json!({"name": "Coral Checks", "kind": "polkaDot"}));
+    assert_eq!(rekind["isError"], false, "{rekind}");
+    let rect2 = run(&mut s, "shape.rectangle", json!({"x": 120, "y": 20, "width": 80, "height": 60}));
+    let rect2 = serde_json::from_str::<Value>(&text_of(&rect2)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [rect2]}));
+    let painted = run(&mut s, "paint.setPattern", json!({"pattern": "Coral Checks"}));
+    assert_eq!(painted["isError"], false, "{painted}");
+
+    // Symmetry: create, setProps, info, break.
+    let source = run(&mut s, "shape.ellipse", json!({"x": 240, "y": 20, "width": 40, "height": 40}));
+    let source = serde_json::from_str::<Value>(&text_of(&source)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [source]}));
+    let symmetry = run(&mut s, "object.symmetry.create", json!({"kind": "radial", "lines": 4}));
+    assert_eq!(symmetry["isError"], false, "{symmetry}");
+    let symmetry = serde_json::from_str::<Value>(&text_of(&symmetry)).unwrap()["id"].as_u64().unwrap();
+    let turned = run(&mut s, "object.symmetry.setProps", json!({"id": symmetry, "angle": 45.0}));
+    assert_eq!(turned["isError"], false, "{turned}");
+    let info = run(&mut s, "object.symmetry.info", json!({"id": symmetry}));
+    assert_eq!(info["isError"], false, "{info}");
+    let info = serde_json::from_str::<Value>(&text_of(&info)).unwrap();
+    assert_eq!(info["kind"].as_str(), Some("radial"), "the info reports the symmetry: {info}");
+    assert_eq!(info["angle"].as_f64(), Some(45.0), "the revision is visible: {info}");
+    let broken = run(&mut s, "object.symmetry.break", json!({"id": symmetry}));
+    assert_eq!(broken["isError"], false, "{broken}");
+
+    // Lens.
+    let lens = run(&mut s, "shape.ellipse", json!({"x": 240, "y": 100, "width": 60, "height": 45}));
+    let lens = serde_json::from_str::<Value>(&text_of(&lens)).unwrap()["id"].as_u64().unwrap();
+    let lensed = run(&mut s, "object.lens", json!({"id": lens, "kind": "invert", "amount": 60}));
+    assert_eq!(lensed["isError"], false, "{lensed}");
+
+    // Explicit-ID dual-clip setContentsLocked: a clip inside a clip, both named by id.
+    let inner_contents = run(&mut s, "shape.rectangle", json!({"x": 20, "y": 120, "width": 60, "height": 50}));
+    let inner_contents = serde_json::from_str::<Value>(&text_of(&inner_contents)).unwrap()["id"].as_u64().unwrap();
+    let inner_frame = run(&mut s, "shape.rectangle", json!({"x": 15, "y": 115, "width": 70, "height": 60}));
+    let inner_frame = serde_json::from_str::<Value>(&text_of(&inner_frame)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [inner_contents, inner_frame]}));
+    let inner = run(&mut s, "object.clippingMask.make", json!({}));
+    let inner = serde_json::from_str::<Value>(&text_of(&inner)).unwrap()["id"].as_u64().unwrap();
+    let outer_frame = run(&mut s, "shape.rectangle", json!({"x": 5, "y": 105, "width": 90, "height": 80}));
+    let outer_frame = serde_json::from_str::<Value>(&text_of(&outer_frame)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [inner, outer_frame]}));
+    let outer = run(&mut s, "object.clippingMask.make", json!({}));
+    let outer = serde_json::from_str::<Value>(&text_of(&outer)).unwrap()["id"].as_u64().unwrap();
+    let unlocked = run(&mut s, "object.clippingMask.setContentsLocked", json!({"ids": [inner, outer], "lock": false}));
+    assert_eq!(unlocked["isError"], false, "{unlocked}");
+
+    // One invalid input: an MCP error result, and the document unchanged.
+    let before = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let invalid = run(&mut s, "object.symmetry.create", json!({"kind": "kaleidoscope"}));
+    assert_eq!(invalid["isError"], true, "invalid input is an MCP error result: {invalid}");
+    assert!(text_of(&invalid).to_lowercase().contains("kind"), "{invalid}");
+    let after = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused call mutated nothing");
+}
+
 // CoralCraft: bitmap resampling through the generic MCP run_command surface (P3 Task 8).
 #[test]
 fn bitmap_resample_runs_through_run_command() {
