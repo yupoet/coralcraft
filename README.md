@@ -27,7 +27,7 @@
 
 ## Status
 
-**Pre-alpha: P1 and P2 are complete; P3 is in final acceptance.** CoralCraft re-based on a fork of [storytold/vectorcraft](https://github.com/storytold/vectorcraft) and completed a full source sync through `36ef34df` while preserving every CoralCraft extension. The native desktop application, drawing and editing commands, and multi-format input/output are implemented and exercised by automated tests. This is not yet a production-ready replacement for VectorCraft or CorelDRAW; remaining work and evidence limits are tracked in [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md).
+**Pre-alpha: the full product roadmap (P0–P5) is delivered.** CoralCraft re-based on a fork of [storytold/vectorcraft](https://github.com/storytold/vectorcraft) and completed a full source sync through `36ef34df` while preserving every CoralCraft extension. The native desktop application, drawing and editing commands, multi-format input/output, print production, automation, crash recovery, and measured performance baselines are implemented and exercised by automated tests. This is not yet a production-ready replacement for VectorCraft or CorelDRAW; remaining work and evidence limits are tracked in [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md).
 
 **What works today:**
 
@@ -36,6 +36,8 @@
 - **CorelDRAW multi-page & master-layer model.** Per-page dimensions and orientation, page insert/delete/rename/reorder, Master All/Odd/Even and Desktop layers, and a bottom Page Navigator with editable page tabs.
 - **PowerClip, live effects, and image workflows.** Blend, Contour, Envelope, Distort, Extrude, Drop Shadow, Block Shadow, Perspective, colour lenses, Symmetry, dedicated Push/Pull and Zipper handles, PowerClip Lock Contents to Frame, bitmap crop/resample/adjustments, and PowerTRACE with editable expanded paths.
 - **Advanced fills and transparency.** Reusable texture definitions, Corel two-colour pattern parameters, generic vector/bitmap patterns, mesh fills, gradient stop opacity, editable opacity masks, and the 16-mode merge-mode matrix, with explicit CDR/CMX degradation warnings where the formats cannot preserve native semantics.
+- **Colour management and print production.** ICC colour settings with every rendering intent and black-point compensation, soft proofing, Separations Preview with per-plate toggles and real spot inks, overprint preview and export, PDF/X-1a/X-3/X-4 export with output intents, exact media/trim/bleed boxes and embedded subset fonts, printer's marks, the Print dialog with presets, print preview and tiling imposition, data merge (text/visibility/image/graph variables with per-row variant export), batch Export for Screens, and reusable print/PDF presets — verified with independent structural reads and real MCP/CLI/UI paths.
+- **Crash recovery and measured performance.** Data Recovery copies of modified documents survive a real process kill and restore into a fresh app with the edits intact; representative-document benchmarks (`coralcraft-cli perf --class/--bench`) record measured baselines, and a profiled optimization cut image-heavy native saves 2.7× (924 → 343 ms) without changing a byte of output.
 - **Clean-room `.cdr` and `.cmx` read/write (`coralcraft-cdr`, `corel-import`).**
   - Opens legacy `WL`, bare `RIFF`/`RIFX`, modern `ZIP+RIFF`, and Corel Presentation Exchange files into the VectorCraft document model, preserving Corel residuals under `document.unknown["coralcraft"]`.
   - Writes **CDR7** (`RIFF....CDR7`), **CDRX** (X4+ `ZIP+RIFF`), and **CMX1** (`RIFF....CMX1`) through Save As, Export, CLI, and MCP. Unsupported semantics use named warnings and, where possible, lossless native residuals rather than silent substitution.
@@ -48,10 +50,7 @@
 
 **Active product roadmap (P0–P5; see [`ROADMAP.md`](ROADMAP.md)):**
 
-- **P0/P1/P2:** Evidence baseline, professional core vector workflow, and professional text/multipage layout are delivered.
-- **P3:** Texture, Corel pattern parameters, merge modes, Symmetry, Block Shadow, Perspective, Lens, Push/Pull and Zipper handles, PowerClip locking, and the combined persistence matrix are implemented. Final acceptance, remaining evidence hardening, and the final full gate are in progress.
-- **P4:** Colour management, prepress, and production output are still open.
-- **P5:** Automation, performance, crash recovery, and platform/product hardening are still open.
+- **P0–P5: all six phases are delivered** — evidence baseline, core vector workflow, professional text/multipage layout, signature effects and image workflows, colour/prepress/production output, and automation/performance/hardening (including a real macOS install-and-launch acceptance; other packages are built and install-tested by their CI).
 
 CDR/CMX interoperability, MCP/CLI, upstream syncs, and legacy retirement advance throughout these phases. The migration's V7 is not the end of the CorelDRAW product roadmap.
 
@@ -106,7 +105,7 @@ GitHub Actions builds native packages via [`release.yml`](.github/workflows/rele
 2. Linux `.deb`, `.rpm`, AppImage, and Flatpak (`packaging/linux/`); the `.deb` is install-tested in CI.
 3. Windows installer and portable `.zip` for x64 (`packaging/windows/`); ARM64 packages are built, installed and launched on a native Windows ARM64 runner in CI.
 
-Until the next tagged release is published, build from source with `cargo build --release -p coralcraft`.
+The first tagged release, **`v0.0.1`**, is published from this tree; grab the artifacts from [Releases](https://github.com/yupoet/coralcraft/releases), or build from source with `cargo build --release -p coralcraft`.
 
 ## Clean-room methodology
 
