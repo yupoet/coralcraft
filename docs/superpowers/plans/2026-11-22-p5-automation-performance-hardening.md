@@ -8,6 +8,14 @@
 
 **Tech Stack:** Rust, `coralcraft-cli perf`, `vectorcraft-engine`, `vectorcraft-render`, `vectorcraft-mcp`, `vectorcraft-plugins`, Data Recovery, GitHub Actions, native platform package tools, and `cargo xtask`.
 
+> **DELIVERED 2026-11-23** (entry after P4 closed the same branch). Task 1 `9b060eb71`;
+> Task 2 first slice `d8f8f6f91` (the only measured hot path inside our crates — the other
+> candidates were profiled out to vello_cpu or left recorded); Task 3 `2f5dce8be`; Task 4
+> `5961cb5a3`; Task 5 `6fd34abb9`; Tasks 6–7 `2ee27f4c6` plus the closing docs. Measured
+> evidence, the platform record (macOS x86_64 locally; others on CI), and the final gate (engine
+> 4,378/1 = known-issue 0b only, 16 serial gates green) are in
+> [`docs/p5-inventory.md`](../../p5-inventory.md) §2–§9. S2/P0.1 stay open.
+
 ---
 
 ## Entry gate and evidence boundaries

@@ -147,3 +147,53 @@ pass, and the brochure's saved length is unchanged (31,648,787 bytes).
 
 The improvement (~580 ms per save, ~2.7×) is far beyond the observed run-to-run noise (±25 ms).
 Every CDR-origin document benefits on every save and every page-affecting edit.
+
+## 9. Task 6–7 record: platform packages and the closing gate (2026-11-23)
+
+**Packages built and launched on the actual target (this machine, macOS x86_64, darwin 25.6):**
+
+- `packaging/macos/package.sh --arch x86_64` exited 0 and produced the signed `CoralCraft.app`
+  (staged in `target/macos-package/`), `dist/release/coralcraft-0.0.1-macos-x86_64.dmg`, and
+  `dist/release/coralcraft-cli-0.0.1-macos-x86_64.zip`. The `.app.zip` was made exactly as the
+  release workflow does (`ditto -c -k --keepParent`) and unpacked into a scratch folder.
+- Archive identity: `codesign -dv` reports `Identifier=io.github.yupoet.coralcraft`,
+  `Signature=adhoc` (`flags=0x10002(adhoc,runtime)`) — the documented local-testing signature;
+  Gatekeeper on other Macs would reject it, which the script header states. No notarization is
+  claimed.
+- Launch: the unpacked app's binary `--version` → `coralcraft 0.0.1`; the CLI zip's
+  `coralcraft-cli --version` → `coralcraft-cli 0.0.1`; `packaging/check-app-specific.sh` → ok.
+- The real GUI acceptance: the installed `CoralCraft.app` was launched as a process with
+  `--new-instance --control <port>` and its preferences redirected into a temp
+  `CORALCRAFT_CONFIG_DIR`; over the JSON-lines channel it created a document, added a rectangle
+  and the text "Installed launch proof", and exported an SVG holding that text (573 bytes) and a
+  PDF (11,135 bytes), then terminated cleanly. The developer's app and preferences were never
+  touched.
+- **Other platforms ride their CI, not this machine**: the macOS universal DMG + `.app.zip`
+  (release.yml), Linux `.deb` (with the Debian 11 glibc baseline smoke), `.rpm`, AppImage,
+  Flatpak, Windows x64 installer/portable + ARM64, FreeBSD, and the wasm web bundle are built and
+  installed by their workflows; this record does not claim any of them as locally validated.
+
+**Task 7 Step 1 — the per-class production chains** (`2ee27f4c6`): for each representative class,
+`representative_production_chain_per_class` runs sustained mixed edits (text edit → move → undo
+of the move), a native save/reopen that keeps the edit, an SVG export, a PDF/X-4 export, a CDR
+export whose warnings all belong to the named degradation families (live expansion, merge modes,
+mesh opacity, dropped overprint, relock, texture, live trace, pattern — nothing unexplained), and
+the recovery chain (a modified copy in a `MemoryStore`, the saving app going away, a fresh session
+restoring every copy with the last edit intact). The other Step-1 pieces are the committed
+suites: sustained editing (`coreldraw_p5_hardening`), automation (`p3_p4_surface…`,
+`…run_through_run_command`), the real crash/restart (`apps/coralcraft/tests/it/recovery_restart`),
+and the installed-package launch above.
+
+**Final gate (2026-11-23):** `cargo xtask ci` — fmt ok, clippy ok (`-D warnings`), workspace
+tests stopped solely at the documented platform-flake known-issue 0b: engine library **4,378
+passed / 1 failed / 2 ignored**, recorded verbatim, not silenced. **Not a clean full-CI pass.**
+All 16 skipped later gates then ran serially and exited 0: doctests, cleanroom (2,661 files),
+no-bundled-fonts, the four feature trees, no-default UI Clippy, install-fonts, pdf-deps, assets
+(309), brands, cursors, i18n-report, layers (30 crates), wasm. Measured tree: `cargo xtask stats`
+→ **2,063 files, 893,582 lines, 14,871 `#[test]`, 66 `proptest!`**.
+
+**Honest limits at close:** known-issue 0b stays red on this host (green in CI); S2/P0.1 (real
+libcdr oracle + operator samples) remain open as independent certification work; the zoom-render
+budget overrun at 50k paths was profiled into `vello_cpu` (external dependency, outside the
+optimizable crates) and stays recorded in §4/§8; only macOS x86_64 is locally
+package-validated. **P5 closes; the roadmap P0–P5 is complete on this branch pending S2.**
