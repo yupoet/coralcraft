@@ -1,6 +1,6 @@
 # CoralCraft Roadmap
 
-> Stage: **pre-alpha, P2 complete; P3 in progress** · Updated: 2026-11-16
+> Stage: **pre-alpha, P0–P5 delivered** · Updated: 2026-11-23
 > Direction (operator decision 2026-10-21): CoralCraft is a **fork of [`storytold/vectorcraft`](https://github.com/storytold/vectorcraft)** extended toward CorelDRAW. Reuse VectorCraft; build only the CorelDRAW extension; open and save every VectorCraft file. See [`AGENTS.md`](AGENTS.md), the umbrella product roadmap [`docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md`](docs/superpowers/specs/2026-11-09-coreldraw-main-application-roadmap-design.md), the completed P2 plan [`docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md`](docs/superpowers/plans/2026-11-11-p2-professional-text-layout.md), and the migration plan [`docs/superpowers/plans/2026-10-21-vectorcraft-fork.md`](docs/superpowers/plans/2026-10-21-vectorcraft-fork.md).
 
 > [!IMPORTANT]
