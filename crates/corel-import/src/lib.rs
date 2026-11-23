@@ -251,12 +251,24 @@ pub fn write_coralcraft_data(doc: &mut VcDocument, data: &CoralCraftDocData) -> 
 /// by the same `Serialize` implementation the whole-block path used, so the written file is
 /// byte-identical for every block this code wrote, and unknown keys in older blocks are now
 /// preserved rather than dropped by a full parse/serialize round trip.
+///
+/// CoralCraft (P6 prep, review fix): a `pages` entry that is present but does not parse fails
+/// closed with a structured error and the block untouched — rebuilding pages from defaults there
+/// would drop each page's bleed, background, and residual. An absent `pages` key is the normal
+/// older shape and keeps building the pages from the artboards, as the whole-block path did.
 pub fn sync_coralcraft_extension(doc: &mut VcDocument) -> Result<(), CorelImportError> {
     let Some(block) = doc.unknown.get_mut(CORALCRAFT_UNKNOWN_KEY).and_then(serde_json::Value::as_object_mut) else {
         return Ok(());
     };
     let default_bleed = F64::new(doc.setup.bleed.first().copied().unwrap_or(0.0).max(0.0)).unwrap_or(F64::ZERO);
-    let old_pages: Vec<CoralCraftPageMeta> = block.get("pages").cloned().and_then(|p| serde_json::from_value(p).ok()).unwrap_or_default();
+    let old_pages: Vec<CoralCraftPageMeta> = match block.get("pages") {
+        None => vec![],
+        Some(p) => serde_json::from_value(p.clone()).map_err(|e| {
+            CorelImportError::Conversion(format!(
+                "the document's CoralCraft extension has a `pages` entry that does not parse ({e}); not rebuilding it: pages would lose their bleed, background and residual"
+            ))
+        })?,
+    };
     let mut new_pages = Vec::with_capacity(doc.artboards.len());
     for (idx, ab) in doc.artboards.iter().enumerate() {
         let w = ab.rect.width().max(1.0);

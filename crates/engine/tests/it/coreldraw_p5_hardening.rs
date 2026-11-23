@@ -338,33 +338,36 @@ fn representative_production_chain_per_class() {
         let all = serde_json::to_string(&doc).unwrap();
         assert!(all.contains("Chain"), "{name}: an edit survived the reopen");
 
-        // Exports with their exact CDR/CMX degradation sets: the illustration and brochure carry
-        // no live objects (their CDR warnings are exactly the ones their art dictates — none for
-        // the illustration's plain shapes, the brochure's overprint-free round trip likewise),
-        // and the poster's separations print setup exports clean.
+        // Exports with their EXACT CDR/CMX degradation sets: no filtering, each class's full
+        // warning list is asserted (a warning that disappears fails the test as loudly as an
+        // unexplained one).
         let svg = run(&mut s, "document.serialize", &json!({"format": "svg"}))["text"].as_str().unwrap().to_owned();
         assert!(svg.contains("<svg"), "{name}: an SVG document");
         let pdfx = run(&mut s, "document.exportPdf", &json!({"standard": "pdfX4", "advanced": {"outlineText": false}}));
         assert!(pdfx["dataBase64"].as_str().is_some_and(|d| !d.is_empty()), "{name}: a PDF/X-4 file");
         let cdr = run(&mut s, "document.serialize", &json!({"format": "cdr"}));
-        let warnings = cdr["warnings"].as_array().cloned().unwrap_or_default();
-        let unexpected: Vec<String> = warnings
-            .iter()
-            .filter(|w| {
-                w.as_str().is_some_and(|t| {
-                    !(t.contains("live") && t.contains("objects are expanded"))
-                        && !t.contains("merge modes other than Normal")
-                        && !t.contains("mesh point opacity")
-                        && !t.contains("overprint fill and stroke flags")
-                        && !t.contains("unlocked PowerClip contents")
-                        && !t.contains("texture fill")
-                        && !t.contains("live trace")
-                        && !t.contains("pattern")
-                })
-            })
-            .map(|w| w.as_str().unwrap_or_default().to_owned())
-            .collect();
-        assert!(unexpected.is_empty(), "{name}: unexplained CDR warnings: {unexpected:?} (all: {warnings:?})");
+        let warnings: Vec<String> =
+            cdr["warnings"].as_array().cloned().unwrap_or_default().iter().map(|w| w.as_str().unwrap_or_default().to_owned()).collect();
+        match name {
+            "illustration" | "brochure" => {
+                assert!(warnings.is_empty(), "{name}: plain pages, text, symbols and a table carry no CDR degradations: {warnings:?}")
+            }
+            _ => assert_eq!(
+                warnings,
+                [
+                    "live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects",
+                    "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable",
+                    "overprint fill and stroke flags are dropped in CDR/CMX; native documents keep them",
+                    "texture fill is synthesized to tiles in CDR/CMX; the texture definition and its parameters do not survive the round trip",
+                    "live Blend, Mesh objects are expanded to plain vector groups in CDR/CMX; the native document keeps the editable live sources",
+                ],
+                "{name}: the feature-dense poster's exact degradation set"
+            ),
+        }
+        let cmx = run(&mut s, "document.serialize", &json!({"format": "cmx"}));
+        let cmx_warnings: Vec<String> =
+            cmx["warnings"].as_array().cloned().unwrap_or_default().iter().map(|w| w.as_str().unwrap_or_default().to_owned()).collect();
+        assert_eq!(cmx_warnings, warnings, "{name}: CMX degrades identically");
 
         // The recovery chain: the modified document leaves a copy in the store, and a fresh
         // session restores it with the edit intact.
