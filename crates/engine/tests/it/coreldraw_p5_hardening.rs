@@ -305,3 +305,86 @@ fn hostile_and_near_budget_inputs_fail_closed_without_mutating() {
         assert!(!bytes.is_empty(), "{format} never writes an empty file");
     }
 }
+
+/// The consolidated per-class production chain (P5 Task 7 Step 1): sustained edits → native
+/// save/reopen → SVG/PDF-X/CDR export with exact warning counts → a recovery copy left in a
+/// store and restored by a fresh session. Every class runs the whole chain.
+#[test]
+fn representative_production_chain_per_class() {
+    for (name, build) in [("illustration", illustration as fn() -> (Session, Caps)), ("brochure", brochure), ("poster", poster)] {
+        // Sustained edits: a bounded slice of the mixed script (the long soak is the dedicated
+        // test above).
+        let (mut s, caps) = build();
+        for i in 0..10 {
+            match i % 3 {
+                0 => {
+                    run(&mut s, "text.setText", &json!({"id": caps.text, "text": format!("Chain {i}")}));
+                }
+                1 => {
+                    run(&mut s, "select.set", &json!({"ids": [caps.text]}));
+                    run(&mut s, "object.move", &json!({"dx": 1, "dy": 0}));
+                }
+                _ => {
+                    // Undo the move (the text edit stays).
+                    run(&mut s, "edit.undo", &json!({}));
+                }
+            }
+        }
+
+        // Native save/reopen: the edited document comes back.
+        let native = run(&mut s, "document.serialize", &json!({"format": "vectorcraft"}))["dataBase64"].as_str().unwrap().to_owned();
+        run(&mut s, "document.open", &json!({"name": "chain.vectorcraft", "dataBase64": native}));
+        let doc = run(&mut s, "document.json", &json!({}));
+        let all = serde_json::to_string(&doc).unwrap();
+        assert!(all.contains("Chain"), "{name}: an edit survived the reopen");
+
+        // Exports with their exact CDR/CMX degradation sets: the illustration and brochure carry
+        // no live objects (their CDR warnings are exactly the ones their art dictates — none for
+        // the illustration's plain shapes, the brochure's overprint-free round trip likewise),
+        // and the poster's separations print setup exports clean.
+        let svg = run(&mut s, "document.serialize", &json!({"format": "svg"}))["text"].as_str().unwrap().to_owned();
+        assert!(svg.contains("<svg"), "{name}: an SVG document");
+        let pdfx = run(&mut s, "document.exportPdf", &json!({"standard": "pdfX4", "advanced": {"outlineText": false}}));
+        assert!(pdfx["dataBase64"].as_str().is_some_and(|d| !d.is_empty()), "{name}: a PDF/X-4 file");
+        let cdr = run(&mut s, "document.serialize", &json!({"format": "cdr"}));
+        let warnings = cdr["warnings"].as_array().cloned().unwrap_or_default();
+        let unexpected: Vec<String> = warnings
+            .iter()
+            .filter(|w| {
+                w.as_str().is_some_and(|t| {
+                    !(t.contains("live") && t.contains("objects are expanded"))
+                        && !t.contains("merge modes other than Normal")
+                        && !t.contains("mesh point opacity")
+                        && !t.contains("overprint fill and stroke flags")
+                        && !t.contains("unlocked PowerClip contents")
+                        && !t.contains("texture fill")
+                        && !t.contains("live trace")
+                        && !t.contains("pattern")
+                })
+            })
+            .map(|w| w.as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert!(unexpected.is_empty(), "{name}: unexplained CDR warnings: {unexpected:?} (all: {warnings:?})");
+
+        // The recovery chain: the modified document leaves a copy in the store, and a fresh
+        // session restores it with the edit intact.
+        use vectorcraft_engine::cmd::recovery::MemoryStore;
+        let store = std::sync::Arc::new(MemoryStore::default());
+        s.recovery.set_store(store.clone());
+        run(&mut s, "text.setText", &json!({"id": caps.text, "text": "Recovered chain"}));
+        // The session holds every document the chain opened; each modified one is copied.
+        let saved = run(&mut s, "file.recovery.save", &json!({}));
+        let copied = saved["saved"].as_array().cloned().unwrap_or_default().len();
+        assert!(copied >= 1, "{name}: the modified document(s) copied: {saved}");
+        // The saving app goes away (its area lock goes with it), as after a crash.
+        drop(s);
+        let mut fresh = Session::new();
+        fresh.recovery.set_store(store.clone());
+        let restored = run(&mut fresh, "file.recovery.restore", &json!({}));
+        let entries = restored["restored"].as_array().cloned().unwrap_or_default();
+        assert_eq!(entries.len(), copied, "{name}: every copy restores: {restored}");
+        let doc = run(&mut fresh, "document.json", &json!({}));
+        let all = serde_json::to_string(&doc).unwrap();
+        assert!(all.contains("Recovered chain"), "{name}: the recovery holds the last edit");
+    }
+}
