@@ -408,7 +408,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 return match which.as_str() {
                     "zoom" => bench_zoom(ms),
                     "save" => bench_save(ms),
-                    other => Err(format!("unknown bench `{other}` (zoom|save)")),
+                    "open" => bench_open(ms),
+                    other => Err(format!("unknown bench `{other}` (zoom|save|open)")),
                 };
             }
             "--class" => {
@@ -887,6 +888,27 @@ fn bench_save(ms: u64) -> Result<(), String> {
     }
     let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
     outln!("document.serialize vectorcraft (engine), brochure class: {per:.2} ms median over {runs} runs ({ms} ms loop)");
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2, second slice): the deep run's other exceeded budget — opening the
+// 50,000-path native document (baseline 361.43 ms against the 300 ms budget). Deterministic and
+// sampleable like the others; the reopened document's object count is printed every run as the
+// correctness guard.
+fn bench_open(ms: u64) -> Result<(), String> {
+    let n = 50_000usize;
+    let doc = synthetic(n)?;
+    let bytes = vectorcraft_format::save_file(&doc);
+    let first = vectorcraft_format::load(&bytes).map_err(|e| e.to_string())?;
+    let objects = class_counts(&first).0;
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(vectorcraft_format::load(&bytes).map_err(|e| e.to_string())?);
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("open .vectorcraft, 50,000 paths ({objects} objects reopen): {per:.2} ms median over {runs} runs ({ms} ms loop)");
     Ok(())
 }
 

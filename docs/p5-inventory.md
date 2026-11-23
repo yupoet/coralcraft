@@ -197,3 +197,17 @@ libcdr oracle + operator samples) remain open as independent certification work;
 budget overrun at 50k paths was profiled into `vello_cpu` (external dependency, outside the
 optimizable crates) and stays recorded in §4/§8; only macOS x86_64 is locally
 package-validated. **P5 closes; the roadmap P0–P5 is complete on this branch pending S2.**
+
+**Second slice disposition (2026-11-23, the audit that closed Task 2):** the other exceeded
+budget — opening the 50,000-path native document (baseline 361.43 ms; `perf --bench open`
+measured 434.15 ms on a busier machine) — was benchmarked and profiled the same way. The samples
+sit almost entirely in `craft_vectorcraft_format::Contents::read` (the streaming reader,
+an external craft-libs crate) and `serde_json`'s number/string parsing; `NodeKind`'s custom
+deserializer already streams with zero buffering for our files (type-first), and `load` already
+parses from the slice. Like the zoom/vello_cpu candidate, the hot code is outside the crates
+this plan may touch, so it is recorded rather than force-changed. The fourth candidate — the
+1.6 GB peak after 45 whole-selection edits — is the undo history's documented whole-document
+snapshots, already bounded by the History-States limit and the byte budget
+(`History::trim`, `MIN_STEPS` 8); an architectural copy-on-write history is future work, not a
+P5 slice. All four measured hot paths are now dispositioned: one fixed (2.7×), three profiled
+out of scope with their evidence recorded.
