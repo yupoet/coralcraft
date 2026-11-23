@@ -17,6 +17,10 @@ pub struct NodeExtras {
     pub wrap: Option<crate::text::TextWrap>,
     /// CoralCraft: a text object whose contents evaluate to the current 1-based page number.
     pub page_number: bool,
+    /// CoralCraft (P3 Task E6): a clip group whose contents do NOT move with its frame
+    /// (CorelDRAW's Lock Contents to PowerClip off): a transform of the group moves the clip
+    /// path alone, the contents staying where the page put them. Default false: locked.
+    pub contents_unlocked: bool,
     /// Graph object: the group's children are generated from this spec (Object → Graph).
     pub graph: Option<Box<crate::graph::GraphSpec>>,
     /// Index of the graph series this generated group belongs to. Axes, the legend and other
@@ -76,6 +80,7 @@ pub(super) static NO_EXTRAS: NodeExtras = NodeExtras {
     trace: None,
     wrap: None,
     page_number: false,
+    contents_unlocked: false,
     graph: None,
     series_index: None,
     type_outlines: false,

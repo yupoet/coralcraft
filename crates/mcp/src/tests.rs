@@ -1847,3 +1847,308 @@ fn p2_commands_run_through_run_command() {
     let node = call(&mut s, 5, "run_command", json!({"command": "document.node", "params": {"id": id, "summary": true}}));
     assert_eq!(node["isError"], false, "the page-number object is inspectable after insertion: {node}");
 }
+
+// CoralCraft (P3 final acceptance): every new P3 command through the real MCP run_command
+// surface — texture, two-colour pattern, symmetry, lens, and the explicit-ID dual-clip
+// setContentsLocked — valid calls mutating the document, one invalid call mutating nothing.
+#[test]
+fn p3_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut run = |s: &mut Server, command: &str, params: Value| {
+        next += 1;
+        call(s, next, "run_command", json!({"command": command, "params": params}))
+    };
+    run(&mut s, "file.new", json!({"width": 400, "height": 300}));
+
+    // Texture: definition, edit, list, and fill application.
+    let made = run(&mut s, "texture.new", json!({"name": "Coral Stipple", "kind": "stipple", "density": 0.5}));
+    assert_eq!(made["isError"], false, "{made}");
+    let edited = run(&mut s, "texture.setProps", json!({"name": "Coral Stipple", "density": 0.7}));
+    assert_eq!(edited["isError"], false, "{edited}");
+    let listed = run(&mut s, "texture.list", json!({}));
+    assert_eq!(listed["isError"], false, "{listed}");
+    let textures = serde_json::from_str::<Value>(&text_of(&listed)).unwrap();
+    assert_eq!(textures["textures"][0]["density"].as_f64(), Some(0.7), "the edit reached the definition: {textures}");
+    let rect = run(&mut s, "shape.rectangle", json!({"x": 20, "y": 20, "width": 80, "height": 60}));
+    let rect = serde_json::from_str::<Value>(&text_of(&rect)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [rect]}));
+    let textured = run(&mut s, "paint.setTexture", json!({"texture": "Coral Stipple"}));
+    assert_eq!(textured["isError"], false, "{textured}");
+
+    // Two-colour pattern: definition, edit, and fill application.
+    let pattern = run(&mut s, "pattern.twoColor", json!({"name": "Coral Checks", "kind": "checkerboard"}));
+    assert_eq!(pattern["isError"], false, "{pattern}");
+    let rekind = run(&mut s, "pattern.setTwoColorProps", json!({"name": "Coral Checks", "kind": "polkaDot"}));
+    assert_eq!(rekind["isError"], false, "{rekind}");
+    let rect2 = run(&mut s, "shape.rectangle", json!({"x": 120, "y": 20, "width": 80, "height": 60}));
+    let rect2 = serde_json::from_str::<Value>(&text_of(&rect2)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [rect2]}));
+    let painted = run(&mut s, "paint.setPattern", json!({"pattern": "Coral Checks"}));
+    assert_eq!(painted["isError"], false, "{painted}");
+
+    // Symmetry: create, setProps, info, break.
+    let source = run(&mut s, "shape.ellipse", json!({"x": 240, "y": 20, "width": 40, "height": 40}));
+    let source = serde_json::from_str::<Value>(&text_of(&source)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [source]}));
+    let symmetry = run(&mut s, "object.symmetry.create", json!({"kind": "radial", "lines": 4}));
+    assert_eq!(symmetry["isError"], false, "{symmetry}");
+    let symmetry = serde_json::from_str::<Value>(&text_of(&symmetry)).unwrap()["id"].as_u64().unwrap();
+    let turned = run(&mut s, "object.symmetry.setProps", json!({"id": symmetry, "angle": 45.0}));
+    assert_eq!(turned["isError"], false, "{turned}");
+    let info = run(&mut s, "object.symmetry.info", json!({"id": symmetry}));
+    assert_eq!(info["isError"], false, "{info}");
+    let info = serde_json::from_str::<Value>(&text_of(&info)).unwrap();
+    assert_eq!(info["kind"].as_str(), Some("radial"), "the info reports the symmetry: {info}");
+    assert_eq!(info["angle"].as_f64(), Some(45.0), "the revision is visible: {info}");
+    let broken = run(&mut s, "object.symmetry.break", json!({"id": symmetry}));
+    assert_eq!(broken["isError"], false, "{broken}");
+
+    // Lens.
+    let lens = run(&mut s, "shape.ellipse", json!({"x": 240, "y": 100, "width": 60, "height": 45}));
+    let lens = serde_json::from_str::<Value>(&text_of(&lens)).unwrap()["id"].as_u64().unwrap();
+    let lensed = run(&mut s, "object.lens", json!({"id": lens, "kind": "invert", "amount": 60}));
+    assert_eq!(lensed["isError"], false, "{lensed}");
+
+    // Explicit-ID dual-clip setContentsLocked: a clip inside a clip, both named by id.
+    let inner_contents = run(&mut s, "shape.rectangle", json!({"x": 20, "y": 120, "width": 60, "height": 50}));
+    let inner_contents = serde_json::from_str::<Value>(&text_of(&inner_contents)).unwrap()["id"].as_u64().unwrap();
+    let inner_frame = run(&mut s, "shape.rectangle", json!({"x": 15, "y": 115, "width": 70, "height": 60}));
+    let inner_frame = serde_json::from_str::<Value>(&text_of(&inner_frame)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [inner_contents, inner_frame]}));
+    let inner = run(&mut s, "object.clippingMask.make", json!({}));
+    let inner = serde_json::from_str::<Value>(&text_of(&inner)).unwrap()["id"].as_u64().unwrap();
+    let outer_frame = run(&mut s, "shape.rectangle", json!({"x": 5, "y": 105, "width": 90, "height": 80}));
+    let outer_frame = serde_json::from_str::<Value>(&text_of(&outer_frame)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [inner, outer_frame]}));
+    let outer = run(&mut s, "object.clippingMask.make", json!({}));
+    let outer = serde_json::from_str::<Value>(&text_of(&outer)).unwrap()["id"].as_u64().unwrap();
+    let unlocked = run(&mut s, "object.clippingMask.setContentsLocked", json!({"ids": [inner, outer], "lock": false}));
+    assert_eq!(unlocked["isError"], false, "{unlocked}");
+
+    // One invalid input: an MCP error result, and the document unchanged.
+    let before = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let invalid = run(&mut s, "object.symmetry.create", json!({"kind": "kaleidoscope"}));
+    assert_eq!(invalid["isError"], true, "invalid input is an MCP error result: {invalid}");
+    assert!(text_of(&invalid).to_lowercase().contains("kind"), "{invalid}");
+    let after = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused call mutated nothing");
+}
+
+// CoralCraft: bitmap resampling through the generic MCP run_command surface (P3 Task 8).
+#[test]
+fn bitmap_resample_runs_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    call(&mut s, 1, "run_command", json!({"command": "file.new", "params": {"width": 200, "height": 200}}));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([30, 120, 180, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = call(
+        &mut s,
+        2,
+        "run_command",
+        json!({"command": "file.place", "params": {"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}}),
+    );
+    assert_eq!(placed["isError"], false, "{placed}");
+    let bitmap = serde_json::from_str::<Value>(&text_of(&placed)).unwrap()["ids"][0].as_u64().unwrap();
+    call(&mut s, 3, "run_command", json!({"command": "select.none", "params": {}}));
+    let resampled = call(
+        &mut s,
+        4,
+        "run_command",
+        json!({"command": "object.resampleImage", "params": {"id": bitmap, "width": 12, "height": 9, "filter": "lanczos3"}}),
+    );
+    assert_eq!(resampled["isError"], false, "{resampled}");
+    let result = serde_json::from_str::<Value>(&text_of(&resampled)).unwrap();
+    assert_eq!((result["id"].as_u64(), result["width"].as_u64(), result["height"].as_u64()), (Some(bitmap), Some(12), Some(9)));
+    let invalid = call(&mut s, 5, "run_command", json!({"command": "object.resampleImage", "params": {"id": bitmap, "width": 0, "height": 9}}));
+    assert_eq!(invalid["isError"], true, "{invalid}");
+}
+
+// CoralCraft (P4 Tasks 2–5): the production-domain commands through the real MCP run_command
+// surface — colour/proof, print, data merge, batch export, and presets — with one invalid call
+// over an unchanged document.
+#[test]
+fn p4_production_commands_run_through_run_command() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut run = |s: &mut Server, command: &str, params: Value| {
+        next += 1;
+        call(s, next, "run_command", json!({"command": command, "params": params}))
+    };
+    run(&mut s, "file.new", json!({"width": 200, "height": 150}));
+
+    // Colour and proof.
+    let plates = run(&mut s, "color.plates", json!({}));
+    assert_eq!(plates["isError"], false, "{plates}");
+    let proof = run(&mut s, "view.proofSetup", json!({"target": "workingCmyk", "proof": true}));
+    assert_eq!(proof["isError"], false, "{proof}");
+    run(&mut s, "view.proofColors", json!({"on": false}));
+
+    // Print preview and separations ink reporting.
+    let preview = run(&mut s, "print.preview", json!({"settings": {"output": {"mode": "separations"}}}));
+    assert_eq!(preview["isError"], false, "{preview}");
+    let inks = serde_json::from_str::<Value>(&text_of(&preview)).unwrap()["inks"].as_array().unwrap().clone();
+    assert_eq!(inks.len(), 4, "the process inks: {inks:?}");
+
+    // Data merge: a text variable, two rows, and a variant export per row.
+    let title = run(&mut s, "text.create", json!({"x": 10, "y": 10, "text": "One"}));
+    let title = serde_json::from_str::<Value>(&text_of(&title)).unwrap()["id"].as_u64().unwrap();
+    run(&mut s, "select.set", json!({"ids": [title]}));
+    run(&mut s, "variable.makeTextDynamic", json!({}));
+    let name = serde_json::from_str::<Value>(&text_of(&run(&mut s, "variable.list", json!({})))).unwrap()["variables"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    run(&mut s, "dataset.new", json!({"name": "One", "values": {name.clone(): "One"}}));
+    run(&mut s, "dataset.new", json!({"name": "Two", "values": {name.clone(): "Two"}}));
+    for row in ["One", "Two"] {
+        let selected = run(&mut s, "dataset.select", json!({"name": row}));
+        assert_eq!(selected["isError"], false, "{selected}");
+        let exported = run(&mut s, "document.exportPdf", json!({}));
+        assert_eq!(exported["isError"], false, "{exported}");
+    }
+
+    // Batch export and presets.
+    let batch = run(
+        &mut s,
+        "document.exportForScreens",
+        json!({"formats": [{"format": "svg"}, {"format": "png", "scale": "1x"}], "name": "mcp-####.ext", "folders": "format"}),
+    );
+    assert_eq!(batch["isError"], false, "{batch}");
+    let saved = run(&mut s, "print.presets.save", json!({"name": "MCP Press", "settings": {"media": "a4"}}));
+    assert_eq!(saved["isError"], false, "{saved}");
+    let applied = run(&mut s, "print.setup", json!({"preset": "MCP Press"}));
+    assert_eq!(applied["isError"], false, "{applied}");
+
+    // One invalid input: an MCP error result, and the document unchanged.
+    let before = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let invalid = run(&mut s, "dataset.select", json!({"name": "No Such Row"}));
+    assert_eq!(invalid["isError"], true, "invalid input is an MCP error result: {invalid}");
+    let after = run(&mut s, "document.serialize", json!({"format": "vectorcraft"}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused call mutated nothing");
+}
+
+// CoralCraft (P5 Task 5): every P3/P4-added command through one real command_batch — texture,
+// pattern, symmetry, lens, PowerClip lock, the PDF/X and print/imposition exports, and a
+// data-driven variant — with `$N` step references, an atomic undo step, native reopen, and an
+// invalid step refusing the whole batch without a mutation.
+#[test]
+fn p3_p4_surface_through_command_batch_with_atomic_steps_and_references() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut call = |s: &mut Server, name: &str, args: Value| {
+        next += 1;
+        call(s, next, name, args)
+    };
+    call(&mut s, "run_command", json!({"command": "file.new", "params": {"width": 420, "height": 300}}));
+
+    let batch = call(
+        &mut s,
+        "command_batch",
+        json!({"atomic": true, "label": "P5 production", "steps": [
+            {"id": "shape.rectangle", "params": {"x": 10, "y": 10, "width": 80, "height": 60}},
+            {"id": "select.set", "params": {"ids": ["$0.id"]}},
+            {"id": "texture.new", "params": {"name": "Batch Stipple", "kind": "stipple"}},
+            {"id": "paint.setTexture", "params": {"texture": "Batch Stipple"}},
+            {"id": "pattern.twoColor", "params": {"name": "Batch Checks", "kind": "checkerboard"}},
+            {"id": "shape.ellipse", "params": {"x": 120, "y": 10, "width": 40, "height": 40}},
+            {"id": "select.set", "params": {"ids": ["$5.id"]}},
+            {"id": "object.symmetry.create", "params": {"kind": "radial", "lines": 4}},
+            {"id": "object.lens", "params": {"kind": "invert", "amount": 60}},
+            {"id": "text.create", "params": {"x": 10, "y": 280, "text": "Batch Alpha"}},
+            {"id": "select.set", "params": {"ids": ["$9.id"]}},
+            {"id": "variable.makeTextDynamic", "params": {}},
+            {"id": "dataset.new", "params": {"name": "Alpha", "values": {"Batch Alpha": "Batch Alpha"}}}
+        ]}),
+    );
+    assert_eq!(batch["isError"], false, "{batch}");
+    let r: Value = serde_json::from_str(&text_of(&batch)).unwrap();
+    assert_eq!(r["failed"].as_u64(), Some(0), "{r}");
+
+    // One undo step (atomic), named by the label; undoing returns to the pre-batch state.
+    let undo = call(&mut s, "run_command", json!({"command": "document.inspect", "params": {}}));
+    let doc: Value = serde_json::from_str(&text_of(&undo)).unwrap();
+    assert_eq!(doc["history"].as_array().map(Vec::len), Some(1), "the whole batch is one undo step: {doc}");
+    call(&mut s, "run_command", json!({"command": "edit.undo", "params": {}}));
+    call(&mut s, "run_command", json!({"command": "edit.redo", "params": {}}));
+
+    // The PowerClip lock and the exports over the batch's document.
+    let made = call(&mut s, "run_command", json!({"command": "shape.rectangle", "params": {"x": 200, "y": 10, "width": 60, "height": 40}}));
+    let rect: Value = serde_json::from_str(&text_of(&made)).unwrap();
+    let rect = rect["id"].as_u64().unwrap();
+    let frame = call(&mut s, "run_command", json!({"command": "shape.ellipse", "params": {"x": 195, "y": 5, "width": 70, "height": 50}}));
+    let frame: Value = serde_json::from_str(&text_of(&frame)).unwrap();
+    let frame = frame["id"].as_u64().unwrap();
+    call(&mut s, "run_command", json!({"command": "select.set", "params": {"ids": [rect, frame]}}));
+    call(&mut s, "run_command", json!({"command": "object.clippingMask.make", "params": {}}));
+    let clip = call(&mut s, "run_command", json!({"command": "document.inspect", "params": {"depth": 1}}));
+    let _ = text_of(&clip);
+    call(&mut s, "run_command", json!({"command": "object.clippingMask.setContentsLocked", "params": {"lock": false}}));
+    for command in ["document.exportPdf", "print.preview"] {
+        let params = if command == "document.exportPdf" {
+            // X-4 keeps transparency (the lens and the symmetry carry transparency groups);
+            // X-1a would rightly refuse them until flattened.
+            json!({"standard": "pdfX4", "advanced": {"outlineText": false}})
+        } else {
+            json!({"settings": {"media": "a4", "autoRotate": false, "scaling": "tileFull", "scale": {"width": 200, "height": 200}}})
+        };
+        let r = call(&mut s, "run_command", json!({"command": command, "params": params}));
+        assert_eq!(r["isError"], false, "{command}: {r}");
+    }
+    // The data-driven variant through the batch-made dataset.
+    let variant = call(&mut s, "run_command", json!({"command": "dataset.select", "params": {"name": "Alpha"}}));
+    assert_eq!(variant["isError"], false, "{variant}");
+
+    // A mid-batch failure keeps the steps that ran, as the one undo step of the atomic batch
+    // (the documented semantics); undoing that one step takes the whole prefix back.
+    let before = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let before = serde_json::from_str::<Value>(&text_of(&before)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    let stopped = call(
+        &mut s,
+        "command_batch",
+        json!({"atomic": true, "label": "Stopped", "steps": [
+            {"id": "object.move", "params": {"dx": 5, "dy": 0}},
+            {"id": "no.such.command", "params": {}}
+        ]}),
+    );
+    assert_eq!(stopped["isError"], true, "a failed step makes the batch an error result: {stopped}");
+    let r: Value = serde_json::from_str(&text_of(&stopped)).unwrap();
+    assert_eq!((r["completed"].as_u64(), r["failed"].as_u64()), (Some(1), Some(1)), "{r}");
+    let undone = call(&mut s, "run_command", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(undone["isError"], false, "the atomic prefix is one undo step: {undone}");
+    let after = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "undoing the stopped atomic batch restores the exact state");
+    // A malformed batch is refused before anything runs: `label` without `atomic`.
+    let refused = call(&mut s, "command_batch", json!({"steps": [{"id": "object.move", "params": {"dx": 5, "dy": 0}}], "label": "X"}));
+    assert_eq!(refused["isError"], true, "{refused}");
+    let after = call(&mut s, "run_command", json!({"command": "document.serialize", "params": {"format": "vectorcraft"}}));
+    let after = serde_json::from_str::<Value>(&text_of(&after)).unwrap()["dataBase64"].as_str().unwrap().to_owned();
+    assert_eq!(after, before, "the refused batch mutated nothing");
+}
+
+// CoralCraft (P5 Task 5): the batch caps are refused as structured errors, never truncated into
+// a silent partial run (#1727's caps, now with their test).
+#[test]
+fn an_oversized_command_batch_is_refused_whole() {
+    let mut s = Server::new(Box::new(crate::headless::Headless::default()));
+    let mut next = 0u64;
+    let mut call = |s: &mut Server, name: &str, args: Value| {
+        next += 1;
+        call(s, next, name, args)
+    };
+    call(&mut s, "run_command", json!({"command": "file.new", "params": {"width": 100, "height": 100}}));
+    // 257 steps of a cheap command: one over the cap.
+    let steps: Vec<Value> = (0..257).map(|i| json!({"id": "object.move", "params": {"dx": 0, "dy": 0}, "label": format!("s{i}")})).collect();
+    let refused = call(&mut s, "command_batch", json!({"steps": steps}));
+    assert_eq!(refused["isError"], true, "over the step cap is a tool error: {refused}");
+    assert!(text_of(&refused).to_lowercase().contains("step"), "{refused}");
+    // At the cap it runs (256 selection-free queries are fine).
+    let steps: Vec<Value> = (0..256).map(|_| json!({"id": "document.info", "params": {}})).collect();
+    let ok = call(&mut s, "command_batch", json!({"steps": steps}));
+    assert_eq!(ok["isError"], false, "at the cap the batch runs: {ok}");
+}

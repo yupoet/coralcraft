@@ -62,6 +62,8 @@ pub mod params;
 mod path;
 pub(crate) mod pathops;
 mod patterncmds;
+// CoralCraft (P3 Task T1): the texture-fill commands.
+mod lenscmds;
 pub mod patternlib;
 pub mod pdfcmds;
 pub mod perspgrid;
@@ -87,8 +89,10 @@ mod swatch;
 pub mod swatchlib;
 pub(crate) mod symboledit;
 pub mod symbollib;
+mod symmetrycmds;
 pub(crate) mod tabs;
 mod textedit;
+mod texturecmds;
 pub use textedit::effective_kerning;
 pub mod textstyles;
 pub(crate) mod textwrap;
@@ -301,6 +305,11 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(shaper::specs());
         v.extend(brushsym::specs());
         v.extend(patterncmds::specs());
+        v.extend(texturecmds::specs());
+        // CoralCraft: the CorelDRAW Symmetry commands (P3 Task E1).
+        v.extend(symmetrycmds::specs());
+        // CoralCraft: the colour lenses (P3 Task E4).
+        v.extend(lenscmds::specs());
         v.extend(intertwine::specs());
         v.extend(objects_on_path::specs());
         v.extend(prefscmds::specs());

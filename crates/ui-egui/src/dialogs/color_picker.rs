@@ -208,7 +208,7 @@ fn proxy_color(app: &VectorcraftApp, stroke: bool) -> Color {
     match if stroke { s } else { f } {
         Paint::Solid { color, .. } => color,
         Paint::Gradient(g) => g.gradient.stops.first().map_or(app.session.last_solid, |s| s.color),
-        Paint::None | Paint::Pattern { .. } => app.session.last_solid,
+        Paint::None | Paint::Pattern { .. } | Paint::Texture { .. } => app.session.last_solid,
     }
 }
 

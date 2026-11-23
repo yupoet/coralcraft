@@ -137,3 +137,103 @@ fn pdfx_1a_flattening_keeps_the_inks_behind_an_image_in_a_cmyk_document() {
     let ink = image_inks_at(&back, vectorcraft_geom::Point::new(88.0, 50.0)).expect("a CMYK image behind the see-through pixels");
     assert!(ink.iter().zip(teal).all(|(a, b)| (a - b).abs() <= 1.5 / 255.0), "{ink:?} is not {teal:?}");
 }
+
+// CoralCraft (P4 Task 3): the full rule matrix over one mixed document — process CMYK, RGB,
+// a named spot ink, transparency, an image with see-through pixels, text, and document bleed —
+// independently read back, with the page boxes exact and the native document never touched.
+fn mixed_session() -> Session {
+    let mut s = session();
+    s.execute("swatch.new", &json!({"name": "Matrix Spot", "color": {"model": "cmyk", "c": 0.0, "m": 0.35, "y": 0.95, "k": 0.0}, "global": true}))
+        .unwrap();
+    s.execute("swatch.setSpot", &json!({"name": "Matrix Spot"})).unwrap();
+    let spot = s.execute("shape.rectangle", &json!({"x": 120, "y": 10, "width": 40, "height": 40})).unwrap()["id"].as_u64().unwrap();
+    s.execute("paint.setFill", &json!({"ids": [spot], "swatch": "Matrix Spot"})).unwrap();
+    s.execute("text.create", &json!({"x": 165, "y": 2, "text": "Proof"})).unwrap();
+    s.execute("document.setup", &json!({"bleed": 9.0})).unwrap();
+    s
+}
+
+#[test]
+fn the_pdfx_rule_matrix_over_a_mixed_document() {
+    let mut s = mixed_session();
+    for (standard, header) in [("pdfX1a", "%PDF-1.3"), ("pdfX3", "%PDF-1.3"), ("pdfX4", "%PDF-1.6")] {
+        let before = s.doc().unwrap().doc.clone();
+        let (text, warnings) = pdf(&mut s, json!({"standard": standard, "advanced": {"outlineText": false}, "bleed": {"useDocument": true}}));
+        assert!(text.starts_with(header), "{standard}: {header}");
+        // The output intent and the standard's version metadata.
+        assert!(text.contains("/S/GTS_PDFX") && text.contains("/GTS_PDFXVersion"), "{standard}");
+        // Fonts are embedded (subsets), and there is no encryption or editing payload.
+        assert!(text.contains("/FontFile"), "{standard} embeds its fonts");
+        assert!(text.contains('+'), "{standard} writes subset font names: {:?}", &text[..text.len().min(400)]);
+        assert!(!text.contains("/Encrypt"), "{standard} is not encrypted");
+        assert!(!text.contains("/PieceInfo"), "{standard} carries no editing data");
+        // The spot ink keeps its own colour space in every standard.
+        assert!(text.contains("/Separation") && text.contains("Matrix#20Spot"), "{standard} keeps the spot ink");
+        // Exact page boxes: the TrimBox is the 200×100 artboard inside the 9 pt bleed media box.
+        assert!(text.contains("/MediaBox[0 0 218 118]"), "{standard} media box: {:?}", &text[..80]);
+        assert!(text.contains("/TrimBox[9 9 209 109]"), "{standard} trim box");
+        assert!(text.contains("/BleedBox[0 0 218 118]"), "{standard} bleed box");
+        // The standard's own colour and transparency rules.
+        match standard {
+            "pdfX1a" => {
+                for no in ["/DeviceRGB", "/ICCBased", "/CalRGB", "/CalGray", "/Lab"] {
+                    assert!(!text.contains(no), "{standard} has no {no}");
+                }
+                assert!(!text.split_whitespace().any(|t| t == "rg"), "{standard} has no RGB fills");
+                for no in ["/SMask", "/S/Transparency", "/ca 0.5"] {
+                    assert!(!text.contains(no), "{standard} is flattened: no {no}");
+                }
+                assert!(warnings.iter().any(|w| w.contains("flattened")), "{standard}: {warnings:?}");
+            }
+            "pdfX3" => {
+                assert!(text.contains("/ICCBased"), "{standard} tags its colours");
+                for no in ["/SMask", "/S/Transparency", "/ca 0.5"] {
+                    assert!(!text.contains(no), "{standard} is flattened: no {no}");
+                }
+                assert!(warnings.iter().any(|w| w.contains("flattened")), "{standard}: {warnings:?}");
+            }
+            _ => {
+                assert!(text.contains("/SMask"), "{standard} keeps transparency");
+                assert!(text.contains("/ICCBased"), "{standard} tags its colours");
+                assert!(!warnings.iter().any(|w| w.contains("flattened")), "{standard}: {warnings:?}");
+                assert!(text.contains("<pdfxid:GTS_PDFXVersion"), "{standard} XMP");
+            }
+        }
+        // An independent Hayro read of the written file.
+        let bytes = s.execute("document.exportPdf", &json!({"standard": standard, "compression": {"compressText": false}, "advanced": {"outlineText": false}, "bleed": {"useDocument": true}})).unwrap();
+        let read = vectorcraft_pdf::import(&vectorcraft_format::base64_decode(bytes["dataBase64"].as_str().unwrap()).unwrap())
+            .unwrap_or_else(|e| panic!("{standard} reimports: {e}"));
+        assert_eq!(read.artboards.len(), 1, "{standard}");
+        // The export never touched the native document.
+        assert_eq!(s.doc().unwrap().doc, before, "{standard} leaves the document alone");
+    }
+}
+
+#[test]
+fn invalid_pdfx_output_intents_are_refused_and_change_nothing() {
+    let mut s = mixed_session();
+    let before = s.doc().unwrap().doc.clone();
+    // A grey profile can't be a PDF/X output intent; a registered condition without an embedded
+    // profile is legal for X-1a and X-3 but not for X-4, which always embeds one.
+    for p in [
+        json!({"standard": "pdfX1a", "output": {"outputIntent": vectorcraft_color::cms::GRAY}}),
+        json!({"standard": "pdfX3", "output": {"outputIntent": vectorcraft_color::cms::GRAY}}),
+        json!({"standard": "pdfX4", "output": {"outputIntent": vectorcraft_color::cms::GRAY}}),
+        json!({"standard": "pdfX4", "output": {"outputIntent": "Some Press", "outputConditionId": "X", "registry": "http://fiege.com"}}),
+    ] {
+        let e = s.execute("document.exportPdf", &p).unwrap_err();
+        assert!(matches!(e, crate::EngineError::BadParams { .. }), "{p}: {e}");
+        assert_eq!(s.doc().unwrap().doc, before, "{p} changed the document");
+    }
+    // A registered printing condition stands in for the embedded profile in X-1a and X-3.
+    for standard in ["pdfX1a", "pdfX3"] {
+        let v = s
+            .execute(
+                "document.exportPdf",
+                &json!({"standard": standard, "output": {"outputIntent": "Some Press", "outputConditionId": "X", "registry": "http://fiege.com"}}),
+            )
+            .unwrap();
+        let text = String::from_utf8_lossy(&vectorcraft_format::base64_decode(v["dataBase64"].as_str().unwrap()).unwrap()).into_owned();
+        assert!(text.contains("/GTS_PDFX"), "{standard} names the registered condition");
+    }
+}

@@ -8,6 +8,33 @@ use vello_cpu::peniko::{self, ColorStop};
 use super::{BlendMode, Compose, FillRule, Mix, vello_cpu};
 use crate::Frame;
 
+/// CoralCraft (P3 Task T1): set a texture's two-by-two-cell period as a repeated,
+/// nearest-sampled image paint.
+fn set_texture_paint(ctx: &mut RenderContext, name: &str, f: &Frame) -> bool {
+    let Some(def) = f.doc.texture(name) else { return false };
+    let (pw, ph) = def.period();
+    let tiles = def.tiles(Rect::new(0.0, 0.0, pw, ph));
+    if tiles.len() != 4 {
+        return false;
+    }
+    let mut data = vec![vello_cpu::color::PremulRgba8 { r: 0, g: 0, b: 0, a: 0 }; 4];
+    let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    for (rect, color) in tiles {
+        let i = (rect.x0 / (pw / 2.0)).round() as usize;
+        let j = (rect.y0 / (ph / 2.0)).round() as usize;
+        let [r, g, b] = f.ink.rgb(&color).map(channel);
+        if let Some(pixel) = data.get_mut(j * 2 + i) {
+            *pixel = vello_cpu::color::PremulRgba8 { r, g, b, a: 255 };
+        }
+    }
+    let pixmap = std::sync::Arc::new(vello_cpu::Pixmap::from_parts(data, 2, 2));
+    let sampler =
+        peniko::ImageSampler { x_extend: peniko::Extend::Repeat, y_extend: peniko::Extend::Repeat, quality: peniko::ImageQuality::Low, alpha: 1.0 };
+    ctx.set_paint(vello_cpu::Image { image: vello_cpu::ImageSource::Pixmap(pixmap), sampler });
+    ctx.set_paint_transform(vectorcraft_geom::Affine::scale_non_uniform(pw / 2.0, ph / 2.0));
+    true
+}
+
 /// Set the context paint (colours as frame `f` paints them). Returns false if nothing should be
 /// drawn.
 pub(crate) fn set_paint(ctx: &mut RenderContext, p: &Paint, bounds: Rect, f: &Frame) -> bool {
@@ -17,6 +44,7 @@ pub(crate) fn set_paint(ctx: &mut RenderContext, p: &Paint, bounds: Rect, f: &Fr
             ctx.set_paint(f.ink.color(c, 1.0));
             true
         }
+        Paint::Texture { texture } => set_texture_paint(ctx, texture, f),
         Paint::Gradient(g) if g.gradient.kind == GradientKind::Freeform => crate::freeform::set_freeform_paint(ctx, g, bounds, f.ink),
         Paint::Gradient(g) => {
             let geom = g.resolve(bounds);

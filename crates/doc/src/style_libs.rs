@@ -78,7 +78,7 @@ impl GraphicStyle {
                     gp.swatch = None;
                     gp.gradient.stops.iter_mut().for_each(|st| st.set_color(st.color, None));
                 }
-                Paint::None | Paint::Pattern { .. } => {}
+                Paint::None | Paint::Pattern { .. } | Paint::Texture { .. } => {}
             }
         }
         g

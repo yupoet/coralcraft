@@ -340,6 +340,17 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                         c("Edit Clipping Path", "object.clippingMask.editMask"),
                     ],
                 ),
+                // CoralCraft (P3 Task E1): CorelDRAW's Object > Symmetry.
+                sub(
+                    "Symmetry",
+                    vec![
+                        cp("Create Line Symmetry", "object.symmetry.create", json!({ "kind": "line" })),
+                        cp("Create Grid Symmetry", "object.symmetry.create", json!({ "kind": "grid" })),
+                        cp("Create Radial Symmetry", "object.symmetry.create", json!({ "kind": "radial" })),
+                        Sep,
+                        c("Break Symmetry", "object.symmetry.break"),
+                    ],
+                ),
                 sub("Compound Path", vec![c("Make", "object.compoundPath.make"), c("Release", "object.compoundPath.release")]),
                 sub(
                     "Artboards",
@@ -640,6 +651,8 @@ pub fn menu_tree_named(english_names: bool) -> Vec<(&'static str, Vec<Item>)> {
                 panel("Asset Export", crate::panels::asset_export::ID),
                 panel("Attributes", "attributes"),
                 panel("Blend", crate::panels::blend::ID),
+                // CoralCraft (P3 Task E4): the Lens docker.
+                panel("Lens", crate::panels::lens::ID),
                 panel("Brushes", "brushes"),
                 panel("Color", "color"),
                 panel("Color Guide", "colorGuide"),

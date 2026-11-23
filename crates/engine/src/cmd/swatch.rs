@@ -750,6 +750,10 @@ pub(super) fn swatch_json(sw: &Swatch, group: Option<&str>) -> Value {
             v["kind"] = json!("pattern");
             v["pattern"] = json!(pattern);
         }
+        Paint::Texture { texture } => {
+            v["kind"] = json!("texture");
+            v["texture"] = json!(texture);
+        }
     }
     v
 }
@@ -827,6 +831,7 @@ fn swatch_unused(s: &mut Session, _: &Value) -> Result<Value> {
             gradients.push(g.gradient.clone());
         }
         Paint::Pattern { pattern, .. } => patterns.push(pattern.clone()),
+        Paint::Texture { .. } => {}
         Paint::None => {}
     };
     d.visit_paints(&mut paint);
@@ -849,6 +854,7 @@ fn swatch_unused(s: &mut Session, _: &Value) -> Result<Value> {
                 Paint::Solid { color, .. } => colors.contains(color),
                 Paint::Gradient(g) => gradients.contains(&g.gradient),
                 Paint::Pattern { pattern, .. } => patterns.contains(pattern),
+                Paint::Texture { .. } => false,
             }
     };
     let names: Vec<&str> = d.swatches_iter().filter(|w| !used(w)).map(|w| w.name.as_str()).collect();
@@ -916,6 +922,7 @@ fn swatch_sort_by_kind(s: &mut Session, _: &Value) -> Result<Value> {
         Paint::Solid { .. } => 2,
         Paint::Gradient(_) => 3,
         Paint::Pattern { .. } => 4,
+        Paint::Texture { .. } => 5,
     };
     s.edit("Sort Swatches", |d, _| {
         // A stable sort: swatches keep their order within a kind.

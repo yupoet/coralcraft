@@ -305,6 +305,24 @@ fn open_object_dialog(app: &mut VectorcraftApp, id: &str, p: &Value) -> bool {
         }
         return true;
     }
+    // CoralCraft: Resample Image uses the generic parameter dialog for palette and menu picks.
+    if id == "object.resampleImage" && p.as_object().is_none_or(|o| o.is_empty()) {
+        let image = app.session.active().and_then(|st| {
+            st.selection.objects.iter().find_map(|id| match st.doc.node(*id).map(|n| &n.kind) {
+                Some(vectorcraft_doc::NodeKind::Image(im)) => Some((im.width, im.height)),
+                _ => None,
+            })
+        });
+        if let Some((width, height)) = image {
+            let _ = app.run(
+                "ui.paramDialog",
+                json!({"command": id, "label": "Resample Image", "params": {"width": width, "height": height, "filter": "lanczos3"}}),
+            );
+        } else {
+            app.status("select an image");
+        }
+        return true;
+    }
     // Rasterize…: its options, starting from the document's raster effects settings.
     if id == "object.rasterize" && p.as_object().is_none_or(|o| o.is_empty()) {
         match app.session.execute("document.rasterEffectsSettings", &json!({})) {

@@ -392,6 +392,11 @@ impl<'a> Scene<'a> {
                 let first = self.doc.pattern(pattern).and_then(|def| def.art.iter().find_map(|a| first_solid(a)));
                 Some(first.map_or([128; 3], |c| rgb_of(&c)))
             }
+            // CoralCraft (P3 Task T1): a texture is one flat colour here, its foreground.
+            Paint::Texture { texture } => {
+                self.warn(FLAT_PATTERNS);
+                Some(self.doc.texture(texture).map_or([128; 3], |def| rgb_of(&def.foreground)))
+            }
         }
     }
 

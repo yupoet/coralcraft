@@ -242,6 +242,46 @@ mod tests {
         }
     }
 
+    /// CoralCraft: the resample command's palette pick opens a real parameter dialog, and OK
+    /// resamples the selected image instead of running with empty dimensions.
+    #[test]
+    fn resample_image_palette_pick_opens_a_working_parameter_dialog() {
+        assert!(items().iter().any(|(_, id, _)| id == "object.resampleImage"));
+        let mut app = VectorcraftApp::new(vectorcraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([30, 120, 180, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let bitmap = app
+            .run(
+                "file.place",
+                json!({"name": "synthetic.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [40, 50]}),
+            )
+            .unwrap()["ids"][0]
+            .as_u64()
+            .unwrap();
+        app.ui.status.clear();
+        // Run a pick exactly as the palette does: no parameters.
+        menus::invoke(&mut app, "object.resampleImage", json!({}));
+        let dialog = app.ui.dialog.as_ref().expect("the palette pick opens a parameter dialog");
+        assert_eq!(dialog.str("__command"), "object.resampleImage");
+        assert_eq!(dialog.fields["width"], json!(4));
+        assert_eq!(dialog.fields["height"], json!(2));
+        assert_eq!(dialog.str("filter"), "lanczos3");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| crate::dialogs::show(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        app.ui.dialog.as_mut().unwrap().fields.insert("width".into(), json!(12));
+        app.ui.dialog.as_mut().unwrap().fields.insert("height".into(), json!(9));
+        crate::dialogs::confirm(&mut app).unwrap();
+        assert!(app.ui.dialog.is_none());
+        let st = app.session.active().unwrap();
+        let vectorcraft_doc::NodeKind::Image(im) = &st.doc.node(vectorcraft_doc::NodeId(bitmap)).unwrap().kind else { panic!("resampled image") };
+        assert_eq!((im.width, im.height), (12, 9));
+        let decoded = image::load_from_memory(&st.doc.images[&im.key].bytes).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (12, 9));
+    }
+
     /// #1757: Up and Down move the highlighted result, wrapping at the ends; a new query starts
     /// from the first again.
     #[test]

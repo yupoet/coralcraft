@@ -211,7 +211,54 @@ impl Writer<'_> {
             },
             Paint::Solid { color, .. } => color.to_hex(),
             Paint::Gradient(g) => format!("url(#{})", self.gradient_def(g, bounds.unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0)))),
+            Paint::Texture { texture } => match self.texture_def(texture) {
+                Some(id) => format!("url(#{id})"),
+                None => "none".into(),
+            },
         }
+    }
+
+    /// CoralCraft (P3 Task T1): a texture's deterministic two-by-two-cell period, painted through
+    /// the ordinary SVG appearance stack so compounds, opacity, blend modes, effects and paint
+    /// order stay intact.
+    fn texture_def(&mut self, name: &str) -> Option<String> {
+        let def = self.doc.texture(name)?.clone();
+        let m = self.xf;
+        let key = format!("texture|{name}|{:?}", m.as_coeffs());
+        if let Some(id) = self.textures.get(&key) {
+            return Some(id.clone());
+        }
+        let (pw, ph) = def.period();
+        let tiles = def.tiles(Rect::new(0.0, 0.0, pw, ph));
+        if tiles.len() != 4 {
+            return None;
+        }
+        let id = self.fresh_id("texture");
+        self.textures.insert(key, id.clone());
+        let (saved_body, saved_depth) = (std::mem::take(&mut self.body), self.depth);
+        self.depth = 3;
+        for (rect, color) in tiles {
+            self.line(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+                self.num(rect.x0),
+                self.num(rect.y0),
+                self.num(rect.width()),
+                self.num(rect.height()),
+                color.to_hex()
+            ));
+        }
+        let content = std::mem::replace(&mut self.body, saved_body);
+        self.depth = saved_depth;
+        let head = format!(
+            "<pattern id=\"{id}\" patternUnits=\"userSpaceOnUse\" width=\"{}\" height=\"{}\" patternTransform=\"{}\">",
+            self.num(pw),
+            self.num(ph),
+            self.matrix(m)
+        );
+        self.def(1, &head);
+        self.defs.push_str(&content);
+        self.def(1, "</pattern>");
+        Some(id)
     }
 
     /// A `<pattern>` def for pattern `name` placed by `xf`: one period (super-tile) of the tiling,

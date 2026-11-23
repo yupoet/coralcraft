@@ -337,6 +337,26 @@ pub(super) fn grid_repeat_overlay(app: &mut VectorcraftApp, p: &egui::Painter, x
 /// The radius of the Rotate View dial, in screen points.
 pub(super) const DIAL_RADIUS: f32 = 40.0;
 
+/// CoralCraft (P3 Task E5): the Zipper and Push/Pull dedicated handles of the one selected
+/// object carrying either effect, as circles the Selection tool's hit testing takes.
+pub(super) fn distort_handles_overlay(app: &mut VectorcraftApp, p: &egui::Painter, xf: &Xf) {
+    use vectorcraft_tools::distort_handles::{DistortHandles, HANDLE_RADIUS};
+    if app.session.tool_id() != "selection" || !app.ui.view.bounding_box {
+        return;
+    }
+    let frame = app.selection_box();
+    let Some(st) = app.session.active() else { return };
+    let Some(handles) = DistortHandles::of(&st.doc, &st.selection, frame, xf.zoom) else { return };
+    let t = Tokens::get(p.ctx());
+    for at in [Some(handles.amplitude), handles.frequency, handles.amount].into_iter().flatten() {
+        let c = xf.to_screen(at);
+        if c.is_finite() {
+            p.circle_filled(c, HANDLE_RADIUS, t.measure_bg);
+            p.circle_stroke(c, HANDLE_RADIUS, Stroke::new(2.0, t.selection));
+        }
+    }
+}
+
 /// The dial a Rotate View drag shows, centered on `c`: a tick every 15° (longer every 90°), a
 /// needle pointing where the document's top points in a view turned by `rotation` degrees, and the
 /// angle under the center, rounded to whole degrees as in the status bar.

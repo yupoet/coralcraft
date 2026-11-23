@@ -246,6 +246,8 @@ pub(crate) fn path_cull_bounds(symbols: &SymbolBoxes, n: &Node, visual: impl FnO
     let plain = matches!(n.kind, NodeKind::Path { .. } | NodeKind::Compound { .. })
         && !effects::has_crop_marks(n)
         && !effects::addons::halftone::has_halftone(n)
+        // CoralCraft (P3 Task E2): the shadow reaches past the object.
+        && !effects::addons::block_shadow::has_block_shadow(n)
         && !effects::has_container_appearance(n)
         && !has_fx(n)
         && !has_object_fx(n);
@@ -271,6 +273,8 @@ fn cull_bounds_in(symbols: &SymbolBoxes, n: &Node, after_reshape: bool) -> Optio
             let reach = effects::addons::halftone::reach(n);
             inner(&effects::addons::halftone::split(n).0).map(|b| b.inflate(reach, reach))
         }
+        // CoralCraft (P3 Task E2): the swept silhouette and the object.
+        _ if effects::addons::block_shadow::has_block_shadow(n) => effects::addons::block_shadow::block_shadow_art(n).and_then(|art| inner(&art)),
         // The evaluated art (its fills, strokes and geometry effects) and the raster effects' reach.
         _ if effects::has_container_appearance(n) => {
             let art = effects::evaluate_container(Some(symbols.document()), n);

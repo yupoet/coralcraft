@@ -1,0 +1,974 @@
+//! CoralCraft: P3 native/CDR/CMX persistence and fallback audit (P3 Task 10).
+
+use corel_import::coralcraft_color::Color as CdrColor;
+use corel_import::coralcraft_doc::{FillStyle, PatternKind};
+use serde_json::json;
+use vectorcraft_color::{Color, Paint};
+use vectorcraft_doc::{AppearanceItem, BlendSpacing, Document, Node, NodeId, NodeKind, TextRun};
+use vectorcraft_engine::Session;
+
+fn session() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 300, "height": 200})).unwrap();
+    s
+}
+
+fn rectangle(s: &mut Session, x: f64) -> u64 {
+    s.execute("shape.rectangle", &json!({"x": x, "y": 30, "width": 60, "height": 50})).unwrap()["id"].as_u64().unwrap()
+}
+
+fn reopen(s: &mut Session, format: &str) -> serde_json::Value {
+    let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+    s.execute("document.open", &json!({"name": format!("p3.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+    exported
+}
+
+fn inspect(doc: &Document) -> (usize, Vec<String>, usize) {
+    let mut clips = 0;
+    let mut effects = Vec::new();
+    let mut nonempty_paths = 0;
+    for layer in &doc.layers {
+        layer.walk(&mut |node| {
+            if matches!(node.kind, NodeKind::Group { clip: true, .. }) {
+                clips += 1;
+            }
+            if matches!(node.kind, NodeKind::Path { .. }) && node.path_data().is_some_and(|path| !path.subpaths.is_empty()) {
+                nonempty_paths += 1;
+            }
+            effects.extend(node.appearance.effects.iter().map(|effect| effect.id.clone()));
+        });
+    }
+    (clips, effects, nonempty_paths)
+}
+
+#[test]
+fn cdr_and_cmx_reopen_powerclip_with_supported_live_effects() {
+    for format in ["cdr", "cmx"] {
+        let mut s = session();
+        let contents = rectangle(&mut s, 20.0);
+        s.execute("effect.apply", &json!({"id": contents, "effect": "threeD.extrude", "params": {"depth": 35}})).unwrap();
+        s.execute("effect.apply", &json!({"id": contents, "effect": "stylize.dropShadow", "params": {"x": 6, "y": 4}})).unwrap();
+        let frame = s.execute("shape.ellipse", &json!({"x": 30, "y": 35, "width": 40, "height": 35})).unwrap()["id"].as_u64().unwrap();
+        s.execute("select.set", &json!({"ids": [contents, frame]})).unwrap();
+        s.execute("object.clippingMask.make", &json!({})).unwrap();
+
+        reopen(&mut s, format);
+        let (clips, effects, _) = inspect(&s.doc().unwrap().doc);
+        assert_eq!(clips, 1, "{format} keeps the PowerClip structure");
+        assert!(effects.contains(&"threeD.extrude".to_owned()), "{format} effects: {effects:?}");
+        assert!(effects.contains(&"stylize.dropShadow".to_owned()), "{format} effects: {effects:?}");
+    }
+}
+
+#[test]
+fn cdr_live_blend_export_warns_and_keeps_visible_vector_geometry() {
+    let mut s = session();
+    let a = rectangle(&mut s, 20.0);
+    let b = rectangle(&mut s, 180.0);
+    s.execute("object.blend.make", &json!({"ids": [a, b], "steps": 3})).unwrap();
+    let exported = s.execute("document.serialize", &json!({"format": "cdr"})).unwrap();
+    let warnings = exported["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("live") && text.contains("Blend"))),
+        "explicit live-effect fallback warning: {warnings:?}"
+    );
+    s.execute("document.open", &json!({"name": "blend.cdr", "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+    let (_, _, paths) = inspect(&s.doc().unwrap().doc);
+    assert!(paths > 0, "the fallback retains visible vector paths rather than an empty path");
+}
+
+fn native_bytes(s: &mut Session) -> String {
+    s.execute("document.serialize", &json!({"format": "vectorcraft"})).unwrap()["dataBase64"].as_str().unwrap().to_owned()
+}
+
+fn open_native(s: &mut Session, data: &str) {
+    s.execute("document.open", &json!({"name": "source.vectorcraft", "dataBase64": data})).unwrap();
+}
+
+fn ordinary_paths(doc: &Document) -> Vec<&Node> {
+    let mut paths = vec![];
+    for layer in &doc.layers {
+        layer.walk(&mut |node| {
+            if matches!(node.kind, NodeKind::Path { .. }) && node.path_data().is_some_and(|path| !path.subpaths.is_empty()) {
+                paths.push(node);
+            }
+        });
+    }
+    paths
+}
+
+fn trace_and_image_counts(doc: &Document) -> (usize, usize) {
+    let mut traces = 0;
+    let mut images = 0;
+    for layer in &doc.layers {
+        layer.walk(&mut |node| {
+            traces += usize::from(node.extras().trace.is_some());
+            images += usize::from(matches!(node.kind, NodeKind::Image(_)));
+        });
+    }
+    (traces, images)
+}
+
+fn has_live_trace_warning(warnings: &[serde_json::Value]) -> bool {
+    warnings.iter().any(|warning| {
+        warning.as_str().is_some_and(|text| {
+            text.contains("live trace") && text.contains("parameters and source relationships") && text.contains("ordinary objects")
+        })
+    })
+}
+
+fn make_trace(s: &mut Session) -> u64 {
+    let image = image::RgbaImage::from_fn(60, 60, |x, y| {
+        if (12..48).contains(&x) && (12..48).contains(&y) { image::Rgba([20, 40, 80, 255]) } else { image::Rgba([255; 4]) }
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = s
+        .execute(
+            "file.place",
+            &json!({"name": "trace-source.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        )
+        .unwrap();
+    let bitmap = placed["ids"][0].as_u64().unwrap();
+    let made = s
+        .execute(
+            "imageTrace.make",
+            &json!({"id": bitmap, "preset": "Default", "params": {"mode": "color", "ignoreWhite": true, "fills": true, "strokes": false}}),
+        )
+        .unwrap();
+    assert!(made["paths"].as_u64().is_some_and(|paths| paths > 0));
+    made["id"].as_u64().unwrap()
+}
+
+fn session_with_trace() -> (Session, u64) {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 120, "height": 120})).unwrap();
+    let trace = make_trace(&mut s);
+    (s, trace)
+}
+
+fn pattern_paint(name: &str) -> Paint {
+    Paint::Pattern { pattern: name.to_owned(), xf: Default::default() }
+}
+
+fn session_with_unused_pattern(name: &str) -> Session {
+    let mut s = session();
+    let tile = rectangle(&mut s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": name, "edit": false})).unwrap();
+    s
+}
+
+#[test]
+fn generic_pattern_export_warns_without_mutating_the_editable_native_pattern() {
+    let mut s = session();
+    let tile = rectangle(&mut s, 10.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": "Persistence Tile", "edit": false})).unwrap();
+    let target = rectangle(&mut s, 120.0);
+    s.execute("paint.setFill", &json!({"id": target, "swatch": "Persistence Tile"})).unwrap();
+    s.execute("paint.setStroke", &json!({"id": target, "swatch": "Persistence Tile"})).unwrap();
+
+    let native_source = native_bytes(&mut s);
+    open_native(&mut s, &native_source);
+    assert!(s.doc().unwrap().doc.pattern("Persistence Tile").is_some());
+    assert!(matches!(
+        s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.fill_paint(),
+        Paint::Pattern { pattern, .. } if pattern == "Persistence Tile"
+    ));
+
+    let exported_cdr = corel_import::export_document(&s.doc().unwrap().doc).unwrap();
+    let default_checker = exported_cdr.pages.iter().flat_map(|page| &page.layers).flat_map(|layer| &layer.objects).any(|object| {
+        matches!(
+            &object.fill,
+            Some(FillStyle::TwoColorPattern { kind: PatternKind::Checkerboard, fg_color, bg_color, tile_size_pt })
+                if fg_color == &CdrColor::BLACK && bg_color == &CdrColor::WHITE && (tile_size_pt.get() - 12.0).abs() < 1e-9
+        )
+    });
+    assert!(default_checker, "the measured fallback is the default 12 pt black/white checkerboard");
+
+    let native = native_bytes(&mut s);
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert!(
+            warnings.iter().any(|warning| {
+                warning.as_str().is_some_and(|text| {
+                    text.contains("generic Pattern")
+                        && text.contains("default black/white checkerboard")
+                        && text.contains("or dropped")
+                        && text.contains("native")
+                        && text.contains("editable")
+                })
+            }),
+            "{format} names the generic-pattern substitution and editable native source: {warnings:?}"
+        );
+        assert!(s.doc().unwrap().doc.pattern("Persistence Tile").is_some(), "export does not consume the native definition");
+        assert!(matches!(
+            s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.fill_paint(),
+            Paint::Pattern { pattern, .. } if pattern == "Persistence Tile"
+        ));
+
+        s.execute("document.open", &json!({"name": format!("pattern.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        let paths = ordinary_paths(doc);
+        assert!(!paths.is_empty());
+        assert!(paths.iter().any(|node| matches!(node.appearance.fill_paint(), Paint::Solid { .. })));
+        assert!(doc.pattern("Persistence Tile").is_none(), "self-reimport is substituted appearance, not native pattern semantics");
+    }
+
+    let mut unused = session();
+    let tile = rectangle(&mut unused, 10.0);
+    unused.execute("object.pattern.make", &json!({"id": tile, "name": "Unused Tile", "edit": false})).unwrap();
+    for format in ["cdr", "cmx"] {
+        let exported = unused.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert!(!warnings.iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("generic Pattern"))));
+    }
+}
+
+#[test]
+fn live_trace_export_warns_and_reopens_only_as_ordinary_vectors_and_source_image() {
+    let (mut s, trace) = session_with_trace();
+    s.execute("imageTrace.setView", &json!({"id": trace, "view": "outlines"})).unwrap();
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    let stored = s.doc().unwrap().doc.node(NodeId(trace)).unwrap().extras().trace.clone().unwrap();
+    assert_eq!(stored["preset"], "Custom");
+    assert_eq!(stored["params"]["mode"], "color");
+    assert_eq!(stored["view"], "outlines");
+
+    let retraced = s.execute("imageTrace.make", &json!({"id": trace, "preset": "Default", "params": {"paths": 30}})).unwrap()["id"].as_u64().unwrap();
+    assert_ne!(retraced, trace, "native reopen permits a real retrace");
+    s.execute("imageTrace.setView", &json!({"id": retraced, "view": "outlines"})).unwrap();
+    let stored = s.doc().unwrap().doc.node(NodeId(retraced)).unwrap().extras().trace.clone().unwrap();
+    assert_eq!(stored["params"]["paths"].as_f64(), Some(30.0));
+
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(retraced)).unwrap().extras().trace.as_ref(), Some(&stored));
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert!(has_live_trace_warning(warnings), "{format} explicitly drops live tracing relationships: {warnings:?}");
+        assert_eq!(s.doc().unwrap().doc.node(NodeId(retraced)).unwrap().extras().trace.as_ref(), Some(&stored));
+
+        s.execute("document.open", &json!({"name": format!("live-trace.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        assert!(!ordinary_paths(doc).is_empty(), "{format} retains non-empty ordinary vector results");
+        let (traces, images) = trace_and_image_counts(doc);
+        assert_eq!(traces, 0, "{format} has no live trace metadata");
+        assert!(images > 0, "{format} retains the hidden source as an ordinary image object");
+    }
+}
+
+fn assert_edited_expanded_path(node: &Node, edited: &vectorcraft_geom::PathData) {
+    let actual = node.path_data().expect("ordinary edited path");
+    assert_eq!(actual.subpaths.len(), edited.subpaths.len());
+    for (actual_subpath, edited_subpath) in actual.subpaths.iter().zip(&edited.subpaths) {
+        assert_eq!(actual_subpath.closed, edited_subpath.closed);
+        assert_eq!(actual_subpath.anchors.len(), edited_subpath.anchors.len());
+        for (actual_anchor, edited_anchor) in actual_subpath.anchors.iter().zip(&edited_subpath.anchors) {
+            for (actual_point, edited_point) in
+                [(actual_anchor.p, edited_anchor.p), (actual_anchor.h_in, edited_anchor.h_in), (actual_anchor.h_out, edited_anchor.h_out)]
+            {
+                assert!((actual_point.x - edited_point.x).abs() < 0.001 && (actual_point.y - edited_point.y).abs() < 0.001);
+            }
+        }
+    }
+    let stroke = node.appearance.stroke().expect("edited centreline stroke");
+    assert!(matches!(&stroke.paint, Paint::Solid { color, .. } if color.to_hex() == "#e04838"));
+}
+
+#[test]
+fn expanded_trace_edits_round_trip_without_a_live_trace_warning() {
+    let image = image::RgbaImage::from_fn(100, 100, |x, y| {
+        if (10..90).contains(&x) && (49..52).contains(&y) { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255; 4]) }
+    });
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let mut s = Session::new();
+    s.execute("file.new", &json!({"width": 240, "height": 240})).unwrap();
+    let placed = s
+        .execute(
+            "file.place",
+            &json!({"name": "centreline.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        )
+        .unwrap();
+    let bitmap = placed["ids"][0].as_u64().unwrap();
+    let params = json!({"mode": "blackAndWhite", "ignoreWhite": true, "fills": true, "strokes": true, "strokeWidth": 5});
+    let trace = s.execute("imageTrace.make", &json!({"id": bitmap, "preset": "Default", "params": params})).unwrap()["id"].as_u64().unwrap();
+    let expanded =
+        s.execute("imageTrace.makeAndExpand", &json!({"id": trace, "preset": "Default", "params": params})).unwrap()["id"].as_u64().unwrap();
+    assert!(s.doc().unwrap().doc.node(NodeId(expanded)).unwrap().extras().trace.is_none());
+    let path = ordinary_paths(&s.doc().unwrap().doc)[0].id;
+    s.execute("select.set", &json!({"ids": [path.0]})).unwrap();
+    s.execute("paint.setStroke", &json!({"color": "#e04838"})).unwrap();
+    s.execute("path.moveAnchor", &json!({"id": path.0, "subpath": 0, "anchor": 0, "x": 37, "y": 43})).unwrap();
+    let edited = s.doc().unwrap().doc.node(path).unwrap().path_data().unwrap().clone();
+    assert_eq!(edited.subpaths[0].anchors[0].p.x, 37.0);
+    assert_eq!(edited.subpaths[0].anchors[0].p.y, 43.0);
+    assert_edited_expanded_path(s.doc().unwrap().doc.node(path).unwrap(), &edited);
+
+    let native_source = native_bytes(&mut s);
+    open_native(&mut s, &native_source);
+    assert_edited_expanded_path(s.doc().unwrap().doc.node(path).unwrap(), &edited);
+
+    let native = native_bytes(&mut s);
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert!(!has_live_trace_warning(warnings), "expanded traces are already ordinary paths: {warnings:?}");
+        s.execute("document.open", &json!({"name": format!("expanded-trace.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()}))
+            .unwrap();
+        let doc = &s.doc().unwrap().doc;
+        let paths = ordinary_paths(doc);
+        assert_eq!(paths.len(), 1);
+        assert_edited_expanded_path(paths[0], &edited);
+        assert_eq!(trace_and_image_counts(doc).0, 0);
+    }
+}
+
+fn session_with_pattern(name: &str) -> (Session, u64) {
+    let mut s = session();
+    let tile = rectangle(&mut s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": name, "edit": false})).unwrap();
+    let target = rectangle(&mut s, 70.0);
+    s.execute("paint.setFill", &json!({"id": target, "swatch": name})).unwrap();
+    (s, target)
+}
+
+fn fallback_warning_count(exported: &serde_json::Value, category: &str) -> usize {
+    exported["warnings"].as_array().unwrap().iter().filter(|warning| warning.as_str().is_some_and(|text| text.contains(category))).count()
+}
+
+#[test]
+fn linked_placed_pattern_and_live_trace_warn_once_per_fallback_category() {
+    let (mut source, trace) = session_with_trace();
+    add_nested_pattern(&mut source);
+    assert!(source.doc().unwrap().doc.node(NodeId(trace)).unwrap().extras().trace.is_some());
+    let linked = native_bytes(&mut source);
+    let path = std::env::temp_dir().join(format!("coralcraft-p3-linked-{}.vectorcraft", std::process::id()));
+    std::fs::write(&path, vectorcraft_format::base64_decode(&linked).unwrap()).unwrap();
+    let mut parent = session();
+    let placed = parent.execute("file.place", &json!({"path": path, "link": true, "at": [20, 20]})).unwrap();
+    assert_eq!(placed["linked"], true);
+
+    for format in ["cdr", "cmx"] {
+        let exported = parent.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 1, "{format} pattern warnings: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "live trace"), 1, "{format} trace warnings: {exported}");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+fn add_nested_pattern(s: &mut Session) {
+    let tile = rectangle(s, 5.0);
+    s.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    s.execute("object.pattern.make", &json!({"id": tile, "name": "Nested Tile", "edit": false})).unwrap();
+    let target = rectangle(s, 70.0);
+    s.execute("paint.setFill", &json!({"id": target, "swatch": "Nested Tile"})).unwrap();
+}
+
+#[test]
+fn invisible_and_shadowed_pattern_items_do_not_warn() {
+    let (mut invisible, invisible_id) = session_with_pattern("Invisible Tile");
+    invisible.execute("appearance.setItem", &json!({"id": invisible_id, "index": 0, "visible": false})).unwrap();
+
+    let (mut shadowed, shadowed_id) = session_with_pattern("Shadowed Tile");
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_id})).unwrap();
+    shadowed.execute("appearance.setItem", &json!({"id": shadowed_id, "index": 2, "color": "#112233"})).unwrap();
+    let items = &shadowed.doc().unwrap().doc.node(NodeId(shadowed_id)).unwrap().appearance.items;
+    assert!(
+        matches!(items.last(), Some(AppearanceItem::Fill(fill)) if matches!(fill.paint, Paint::Solid { .. })),
+        "last visible fill is solid: {items:?}"
+    );
+
+    for (name, s) in [("invisible", &mut invisible), ("shadowed", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 0, "{name} pattern must not warn in {format}: {exported}");
+        }
+    }
+}
+
+#[test]
+fn temporary_symbol_and_mask_editing_layers_do_not_warn() {
+    let (mut symbol, symbol_id) = session_with_pattern("Symbol Edit Tile");
+    symbol.execute("select.set", &json!({"ids": [symbol_id]})).unwrap();
+    symbol.execute("symbol.new", &json!({"name": "Temporary Symbol"})).unwrap();
+    symbol.execute("symbol.edit", &json!({"name": "Temporary Symbol"})).unwrap();
+    assert!(symbol.doc().unwrap().doc.symbol_edit.is_some());
+
+    let mut mask = session();
+    let target = rectangle(&mut mask, 150.0);
+    mask.execute("paint.setFill", &json!({"id": target, "color": "#ff0000"})).unwrap();
+    let tile = rectangle(&mut mask, 5.0);
+    mask.execute("paint.setFill", &json!({"id": tile, "color": "#336699"})).unwrap();
+    mask.execute("object.pattern.make", &json!({"id": tile, "name": "Mask Edit Tile", "edit": false})).unwrap();
+    let mask_id = rectangle(&mut mask, 70.0);
+    mask.execute("paint.setFill", &json!({"id": mask_id, "swatch": "Mask Edit Tile"})).unwrap();
+    mask.execute("select.set", &json!({"ids": [target, mask_id]})).unwrap();
+    let made = mask.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    let masked = made["id"].as_u64().unwrap();
+    assert!(mask.doc().unwrap().doc.node(NodeId(masked)).unwrap().extras().mask.is_some());
+    mask.execute("transparency.editOpacityMask", &json!({"id": masked})).unwrap();
+    assert!(mask.doc().unwrap().doc.mask_edit.is_some());
+    // Keep the active mask solid so only the temporary editing layer carries the pattern.
+    {
+        let state = mask.doc_mut().unwrap();
+        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        let node = doc.node_mut(NodeId(masked)).unwrap();
+        let mut extras = node.extras_mut();
+        let mask_model = extras.mask.as_deref_mut().unwrap();
+        std::sync::Arc::make_mut(&mut mask_model.art).appearance.set_fill(Paint::solid(Color::WHITE));
+    }
+
+    for (name, s) in [("symbol", &mut symbol), ("mask", &mut mask)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "generic Pattern"), 0, "{name} editing-only pattern must not warn in {format}: {exported}");
+        }
+    }
+}
+
+fn assert_channel_warnings(exported: &serde_json::Value, format: &str, trace: bool) {
+    assert_eq!(fallback_warning_count(exported, "generic Pattern"), 1, "{format} pattern warnings: {exported}");
+    assert_eq!(fallback_warning_count(exported, "live trace"), usize::from(trace), "{format} trace warnings: {exported}");
+    assert!(exported["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().is_some_and(|text| text.contains("or dropped"))));
+}
+
+#[test]
+fn later_text_run_pattern_fill_warns() {
+    let mut s = session_with_unused_pattern("Later Run Tile");
+    let text = s.execute("text.create", &json!({"x": 20, "y": 60, "text": "AB", "size": 24})).unwrap()["id"].as_u64().unwrap();
+    s.edit("Pattern in the later text run", move |d, _| {
+        let NodeKind::Text(object) = &mut d.node_mut(NodeId(text)).unwrap().kind else { panic!("text object") };
+        let mut later = object.runs[0].style.clone();
+        later.fill = pattern_paint("Later Run Tile");
+        object.runs.push(TextRun::new("B", later));
+        Ok(())
+    })
+    .unwrap();
+    let NodeKind::Text(object) = &s.doc().unwrap().doc.node(NodeId(text)).unwrap().kind else { panic!("text object") };
+    assert!(!matches!(object.runs[0].style.fill, Paint::Pattern { .. }));
+    assert!(matches!(object.runs[1].style.fill, Paint::Pattern { .. }));
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn text_run_pattern_stroke_warns() {
+    let mut s = session_with_unused_pattern("Run Stroke Tile");
+    let text = s.execute("text.create", &json!({"x": 20, "y": 60, "text": "A", "size": 24})).unwrap()["id"].as_u64().unwrap();
+    s.edit("Pattern text stroke", move |d, _| {
+        let NodeKind::Text(object) = &mut d.node_mut(NodeId(text)).unwrap().kind else { panic!("text object") };
+        object.runs[0].style.stroke = pattern_paint("Run Stroke Tile");
+        object.runs[0].style.stroke_width = 1.5;
+        Ok(())
+    })
+    .unwrap();
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn image_pattern_colorize_warns() {
+    let mut s = session_with_unused_pattern("Colorize Tile");
+    let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([128, 128, 128, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let placed = s
+        .execute(
+            "file.place",
+            &json!({"name": "gray.png", "dataBase64": vectorcraft_format::base64_encode(&png.into_inner()), "link": false, "at": [20, 20]}),
+        )
+        .unwrap();
+    let image = placed["ids"][0].as_u64().unwrap();
+    s.edit("Pattern image colorize", move |d, _| {
+        d.node_mut(NodeId(image)).unwrap().extras_mut().colorize = Some(Box::new(pattern_paint("Colorize Tile")));
+        Ok(())
+    })
+    .unwrap();
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, false);
+    }
+}
+
+#[test]
+fn active_opacity_mask_pattern_and_live_trace_warn_once() {
+    let mut s = session_with_unused_pattern("Active Mask Tile");
+    let target = rectangle(&mut s, 150.0);
+    s.execute("paint.setFill", &json!({"id": target, "color": "#ff0000"})).unwrap();
+    let trace = make_trace(&mut s);
+    let path = ordinary_paths(&s.doc().unwrap().doc)[0].id;
+    s.edit("Pattern in active mask art", move |d, _| {
+        d.node_mut(path).unwrap().appearance.set_fill(pattern_paint("Active Mask Tile"));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.set", &json!({"ids": [target, trace]})).unwrap();
+    let made = s.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    let masked = made["id"].as_u64().unwrap();
+    assert_eq!(masked, target);
+    let node = s.doc().unwrap().doc.node(NodeId(masked)).unwrap();
+    let mask = node.extras().mask.as_deref().unwrap();
+    assert!(!mask.disabled);
+    assert!(mask.art.extras().trace.is_some());
+    assert!(s.doc().unwrap().doc.mask_edit.is_none());
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_channel_warnings(&exported, format, true);
+    }
+}
+
+fn gradient_with_opacity(opacity: f32) -> Paint {
+    let stops = vec![
+        vectorcraft_color::GradientStop { opacity, ..vectorcraft_color::GradientStop::new(0.0, Color::BLACK) },
+        vectorcraft_color::GradientStop::new(1.0, Color::WHITE),
+    ];
+    Paint::Gradient(Box::new(vectorcraft_color::GradientPaint::new(vectorcraft_color::Gradient::new(vectorcraft_color::GradientKind::Linear, stops))))
+}
+
+fn session_with_gradient_and_mask(opacity: f32, disabled: bool) -> (Session, u64) {
+    let mut s = session();
+    let target = rectangle(&mut s, 100.0);
+    let mask = rectangle(&mut s, 20.0);
+    s.edit("Gradient alpha", move |d, _| {
+        d.node_mut(NodeId(target)).unwrap().appearance.set_fill(gradient_with_opacity(opacity));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.set", &json!({"ids": [target, mask]})).unwrap();
+    let made = s.execute("transparency.makeOpacityMask", &json!({"clip": true, "invert": false})).unwrap();
+    assert_eq!(made["id"].as_u64().unwrap(), target);
+    if disabled {
+        s.edit("Disable mask", move |d, _| {
+            d.node_mut(NodeId(target)).unwrap().extras_mut().mask.as_deref_mut().unwrap().disabled = true;
+            Ok(())
+        })
+        .unwrap();
+    }
+    (s, target)
+}
+
+fn assert_gradient_and_mask(doc: &Document, id: u64, opacity: f32, disabled: bool) {
+    let node = doc.node(NodeId(id)).unwrap();
+    let Paint::Gradient(gradient) = node.appearance.fill_paint() else { panic!("editable native gradient") };
+    assert_eq!(gradient.gradient.stops[0].opacity, opacity);
+    let mask = node.extras().mask.as_deref().unwrap();
+    assert_eq!(mask.disabled, disabled);
+    assert!(matches!(mask.art.kind, NodeKind::Path { .. }));
+}
+
+#[test]
+fn gradient_alpha_and_enabled_mask_warn_once_and_remain_natively_editable() {
+    let (mut s, target) = session_with_gradient_and_mask(0.25, false);
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.25, false);
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 1, "{format}: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "enabled opacity masks"), 1, "{format}: {exported}");
+        assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.25, false);
+        let converted = corel_import::export_document(&s.doc().unwrap().doc).unwrap();
+        assert!(converted.pages[0].layers[0].objects[0].transparency.is_none());
+    }
+    assert_eq!(native_bytes(&mut s), native);
+
+    s.edit("Edit native gradient and mask", move |d, _| {
+        let node = d.node_mut(NodeId(target)).unwrap();
+        let gradient = node
+            .appearance
+            .items
+            .iter_mut()
+            .find_map(|item| match item.paint_mut() {
+                Paint::Gradient(gradient) => Some(gradient),
+                _ => None,
+            })
+            .unwrap();
+        gradient.gradient.stops[0].opacity = 0.7;
+        let mut extras = node.extras_mut();
+        let mask = extras.mask.as_deref_mut().unwrap();
+        std::sync::Arc::make_mut(&mut mask.art).appearance.set_fill(Paint::solid(Color::gray(0.4)));
+        Ok(())
+    })
+    .unwrap();
+    let revised = native_bytes(&mut s);
+    open_native(&mut s, &revised);
+    assert_gradient_and_mask(&s.doc().unwrap().doc, target, 0.7, false);
+
+    let (mut opaque, opaque_target) = session_with_gradient_and_mask(1.0, true);
+    assert_gradient_and_mask(&opaque.doc().unwrap().doc, opaque_target, 1.0, true);
+    for format in ["cdr", "cmx"] {
+        let exported = opaque.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 0, "{format}: {exported}");
+        assert_eq!(fallback_warning_count(&exported, "enabled opacity masks"), 0, "{format}: {exported}");
+    }
+}
+
+#[test]
+fn invisible_and_shadowed_gradient_alpha_stays_silent() {
+    let (mut invisible, target) = session_with_gradient_and_mask(0.25, true);
+    invisible
+        .edit("Hide gradient", move |d, _| {
+            let node = d.node_mut(NodeId(target)).unwrap();
+            node.extras_mut().mask = None;
+            let AppearanceItem::Fill(fill) = &mut node.appearance.items[0] else { panic!("fill") };
+            fill.visible = false;
+            Ok(())
+        })
+        .unwrap();
+
+    let mut shadowed = session();
+    let shadowed_target = rectangle(&mut shadowed, 100.0);
+    shadowed
+        .edit("Gradient alpha", move |d, _| {
+            d.node_mut(NodeId(shadowed_target)).unwrap().appearance.set_fill(gradient_with_opacity(0.25));
+            Ok(())
+        })
+        .unwrap();
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_target})).unwrap();
+    shadowed.execute("appearance.setItem", &json!({"id": shadowed_target, "index": 2, "color": "#112233"})).unwrap();
+
+    for (name, s) in [("invisible", &mut invisible), ("shadowed", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "gradient stop opacity"), 0, "{name} in {format}: {exported}");
+        }
+    }
+}
+
+#[test]
+fn visible_appearance_item_effects_warn_with_object_effects_and_controls_stay_silent() {
+    let mut s = session();
+    let target = rectangle(&mut s, 100.0);
+    s.execute("effect.apply", &json!({"id": target, "effect": "blur.gaussian", "item": 0, "params": {"radius": 3}})).unwrap();
+    assert_eq!(s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.effects_at(Some(0)).unwrap().len(), 1);
+    assert!(s.doc().unwrap().doc.node(NodeId(target)).unwrap().appearance.effects.is_empty());
+
+    for format in ["cdr", "cmx"] {
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 1, "item-only {format}: {exported}");
+        assert!(
+            exported["warnings"].as_array().unwrap().iter().any(|warning| {
+                warning.as_str().is_some_and(|text| text.contains("blur.gaussian") && !text.contains("adjust.brightnessContrast"))
+            })
+        );
+    }
+
+    let mut combined = session();
+    let combined_target = rectangle(&mut combined, 100.0);
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "adjust.brightnessContrast", "item": null})).unwrap();
+    combined.execute("effect.apply", &json!({"id": combined_target, "effect": "blur.gaussian", "item": null})).unwrap();
+    for format in ["cdr", "cmx"] {
+        let exported = combined.execute("document.serialize", &json!({"format": format})).unwrap();
+        assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 1, "combined {format}: {exported}");
+        assert!(
+            exported["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|warning| { warning.as_str().is_some_and(|text| text.contains("adjust.brightnessContrast, blur.gaussian")) })
+        );
+    }
+
+    let mut invisible = session();
+    let invisible_target = rectangle(&mut invisible, 100.0);
+    invisible.execute("effect.apply", &json!({"id": invisible_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    invisible.execute("effect.setParams", &json!({"id": invisible_target, "index": 0, "item": 0, "visible": false})).unwrap();
+
+    let mut shadowed = session();
+    let shadowed_target = rectangle(&mut shadowed, 100.0);
+    shadowed.execute("effect.apply", &json!({"id": shadowed_target, "effect": "blur.gaussian", "item": 0})).unwrap();
+    shadowed.execute("appearance.addFill", &json!({"id": shadowed_target})).unwrap();
+
+    for (name, s) in [("invisible effect", &mut invisible), ("shadowed item", &mut shadowed)] {
+        for format in ["cdr", "cmx"] {
+            let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+            assert_eq!(fallback_warning_count(&exported, "unsupported bitmap effects"), 0, "{name} in {format}: {exported}");
+        }
+    }
+}
+
+#[test]
+fn mesh_points_survive_native_reopen_and_cdr_cmx_keep_only_opaque_tessellated_paths() {
+    const WARNING: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+    let mut s = session();
+    let shape = rectangle(&mut s, 20.0);
+    s.execute("object.mesh.create", &json!({"id": shape, "rows": 2, "cols": 2})).unwrap();
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 4, "color": "#28aa5a", "opacity": 0.5})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": 75, "y": 60})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": 85, "y": 65, "handle": 0})).unwrap();
+    let NodeKind::Mesh(expected) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("created mesh") };
+    let expected = expected.clone();
+
+    let native = native_bytes(&mut s);
+    open_native(&mut s, &native);
+    let NodeKind::Mesh(mesh) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("native mesh reopen") };
+    assert_eq!((mesh.rows, mesh.cols), (2, 2));
+    assert_eq!(mesh.points.len(), expected.points.len());
+    for (index, (actual, expected)) in mesh.points.iter().zip(&expected.points).enumerate() {
+        assert_eq!(actual.p, expected.p, "point {index} position");
+        assert_eq!(actual.color, expected.color, "point {index} colour");
+        assert_eq!(actual.opacity, expected.opacity, "point {index} opacity");
+        assert_eq!(actual.handles, expected.handles, "point {index} handles");
+    }
+
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 1, "x": 95, "y": 45})).unwrap();
+    let NodeKind::Mesh(edited) = &s.doc().unwrap().doc.node(NodeId(shape)).unwrap().kind else { panic!("edited native mesh") };
+    assert_eq!(edited.points[0].color.to_hex(), "#ff0000");
+    assert_eq!(edited.points[0].opacity, 0.75);
+    assert_eq!(edited.points[1].p, vectorcraft_geom::Point::new(95.0, 45.0));
+
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let exported = s.execute("document.serialize", &json!({"format": format})).unwrap();
+        let warnings = exported["warnings"].as_array().unwrap();
+        assert_eq!(warnings.iter().filter(|warning| warning.as_str() == Some(WARNING)).count(), 1, "{format}: {warnings:?}");
+        assert_eq!(native_bytes(&mut s), native, "{format} export leaves native mesh data unchanged");
+        s.execute("document.open", &json!({"name": format!("mesh.{format}"), "dataBase64": exported["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        assert!(!ordinary_paths(doc).is_empty(), "{format} reopens ordinary non-empty vector paths");
+        let mut live_meshes = 0;
+        for layer in &doc.layers {
+            layer.walk(&mut |node| live_meshes += usize::from(matches!(node.kind, NodeKind::Mesh(_))));
+        }
+        assert_eq!(live_meshes, 0, "{format} has no live mesh metadata or restoration claim");
+    }
+}
+
+// CoralCraft (P3 Task M, M1): nested PowerClips with an unlocked inner clip — native persistence
+// keeps both clip trees and the unlock flag with editing still working, and the CDR/CMX relock
+// warning appears exactly once per export, never once per nested node (the §30 matrix row).
+#[test]
+fn nested_powerclips_keep_the_unlock_flag_and_warn_once() {
+    const RELOCK: &str = "unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents keep the flag";
+    let mut s = session();
+    // An inner clip (contents + frame) inside an outer frame.
+    let inner_contents = rectangle(&mut s, 40.0);
+    let inner_frame = rectangle(&mut s, 50.0);
+    s.execute("select.set", &json!({ "ids": [inner_contents, inner_frame] })).unwrap();
+    let inner = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+    let outer_frame = s.execute("shape.rectangle", &json!({ "x": 20, "y": 10, "width": 120, "height": 90 })).unwrap()["id"].as_u64().unwrap();
+    s.execute("select.set", &json!({ "ids": [inner, outer_frame] })).unwrap();
+    let outer = s.execute("object.clippingMask.make", &json!({})).unwrap()["id"].as_u64().unwrap();
+    // Unlock BOTH nested clips: the flag survives native reopen on each, and editing still works.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": false })).unwrap();
+    let unlocked = |s: &Session| {
+        let st = s.doc().unwrap();
+        let mut flags = vec![];
+        for id in [inner, outer] {
+            flags.push(st.doc.node(NodeId(id)).unwrap().extras().contents_unlocked);
+        }
+        flags
+    };
+    assert_eq!(unlocked(&s), [true, true], "both nested clips unlocked");
+    reopen(&mut s, "vectorcraft");
+    assert_eq!(unlocked(&s), [true, true], "reopen keeps both unlock flags");
+    s.execute("select.set", &json!({ "ids": [outer] })).unwrap();
+    s.execute("object.clippingMask.editContents", &json!({})).unwrap();
+    s.execute("object.move", &json!({ "dx": 5.0, "dy": 0.0 })).unwrap();
+    let st = s.doc().unwrap();
+    assert_eq!(st.selection.objects.len(), 1, "editing still reaches the contents");
+    // CDR/CMX: the relock warning once per export (not once per nested node), the clip model
+    // intact, and locked controls stay silent.
+    for format in ["cdr", "cmx"] {
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+        let count = warnings.iter().filter(|w| w.as_str() == Some(RELOCK)).count();
+        assert_eq!(count, 1, "the relock warning once ({format}): {warnings:?}");
+        let bytes = vectorcraft_format::base64_decode(out["dataBase64"].as_str().unwrap()).unwrap();
+        let imported = corel_import::import_cdr_bytes(&bytes).unwrap_or_else(|error| panic!("{format} import failed: {error}"));
+        let (clips, _, paths) = inspect(&imported.document);
+        assert!(clips >= 2 && paths >= 3, "{format}: nested clips and non-empty paths survive: {clips} clips, {paths} paths");
+    }
+    // A locked document stays silent.
+    s.execute("object.clippingMask.setContentsLocked", &json!({ "ids": [inner, outer], "lock": true })).unwrap();
+    let out = s.execute("document.serialize", &json!({ "format": "cdr" })).unwrap();
+    let warnings = out["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(!warnings.iter().any(|w| w.as_str() == Some(RELOCK)), "locked stays silent: {warnings:?}");
+}
+
+// CoralCraft (P3 Task M, M2 — final-acceptance hardening): a translucent mesh inside Repeat and
+// Blend stays live and editable through native reopen, and editing the source changes the
+// evaluated output (the §30 matrix rows the standalone mesh and live suites only covered apart).
+
+/// A 2×2 mesh at `x` with point 4 at half opacity and a moved point, as the §18 mesh anchors use.
+fn translucent_mesh(s: &mut Session, x: f64, colour: &str) -> u64 {
+    let shape = rectangle(s, x);
+    s.execute("object.mesh.create", &json!({"id": shape, "rows": 2, "cols": 2})).unwrap();
+    s.execute("object.mesh.setPointColor", &json!({"id": shape, "index": 4, "color": colour, "opacity": 0.5})).unwrap();
+    s.execute("object.mesh.movePoint", &json!({"id": shape, "index": 4, "x": x + 45.0, "y": 60.0})).unwrap();
+    shape
+}
+
+/// The mesh at `id` as a cloned point list (positions, colours, opacities, handles).
+fn mesh_points(doc: &Document, id: u64) -> Vec<vectorcraft_doc::MeshPoint> {
+    let NodeKind::Mesh(mesh) = &doc.node(NodeId(id)).unwrap().kind else { panic!("mesh at {id}") };
+    mesh.points.clone()
+}
+
+fn assert_same_points(actual: &[vectorcraft_doc::MeshPoint], expected: &[vectorcraft_doc::MeshPoint]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (a, e)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(a.p, e.p, "point {index} position");
+        assert_eq!(a.color, e.color, "point {index} colour");
+        assert_eq!(a.opacity, e.opacity, "point {index} opacity");
+        assert_eq!(a.handles, e.handles, "point {index} handles");
+    }
+}
+
+#[test]
+fn radial_symmetry_keeps_its_translucent_mesh_source_editable_through_reopen() {
+    let mut s = session();
+    let mesh = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    s.execute("select.set", &json!({ "ids": [mesh] })).unwrap();
+    let symmetry = s.execute("object.symmetry.create", &json!({ "kind": "radial", "lines": 5, "angle": 30.0 })).unwrap()["id"].as_u64().unwrap();
+    let (kind, expected) = {
+        let NodeKind::Repeat(r) = &s.doc().unwrap().doc.node(NodeId(symmetry)).unwrap().kind else { panic!("live symmetry") };
+        assert!(matches!(r.kind, vectorcraft_doc::RepeatKind::Radial { instances: 5, .. }), "radial 5: {:?}", r.kind);
+        (serde_json::to_value(&r.kind).unwrap(), mesh_points(&s.doc().unwrap().doc, mesh))
+    };
+
+    reopen(&mut s, "vectorcraft");
+    {
+        let st = s.doc().unwrap();
+        let NodeKind::Repeat(r) = &st.doc.node(NodeId(symmetry)).unwrap().kind else { panic!("reopen keeps the live symmetry") };
+        assert_eq!(serde_json::to_value(&r.kind).unwrap(), kind, "repeat parameters survive the reopen");
+        let [source] = r.source.as_slice() else { panic!("one mesh source: {}", r.source.len()) };
+        let NodeKind::Mesh(m) = &source.kind else { panic!("the source stays an editable mesh") };
+        assert_eq!((m.rows, m.cols), (2, 2));
+        assert_same_points(&m.points, &expected);
+    }
+
+    // The source is still editable through the repeat, as one undo step.
+    let undo_before = s.active().unwrap().history.undo.len();
+    s.execute("object.mesh.setPointColor", &json!({"id": mesh, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    assert_eq!(s.active().unwrap().history.undo.len(), undo_before + 1, "one undo step");
+    let NodeKind::Mesh(edited) = &s.doc().unwrap().doc.node(NodeId(mesh)).unwrap().kind else { panic!("edited mesh") };
+    assert_eq!(edited.points[0].color.to_hex(), "#ff0000");
+    assert_eq!(edited.points[0].opacity, 0.75);
+    assert!(matches!(s.doc().unwrap().doc.node(NodeId(symmetry)).unwrap().kind, NodeKind::Repeat(_)), "the repeat stays live");
+}
+
+#[test]
+fn blend_keeps_its_translucent_mesh_keys_live_through_reopen() {
+    let mut s = session();
+    let a = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    let b = translucent_mesh(&mut s, 180.0, "#aa2855");
+    let blend = s.execute("object.blend.make", &json!({ "ids": [a, b], "steps": 4 })).unwrap()["id"].as_u64().unwrap();
+    let (expected_a, expected_b) = (mesh_points(&s.doc().unwrap().doc, a), mesh_points(&s.doc().unwrap().doc, b));
+
+    reopen(&mut s, "vectorcraft");
+    {
+        let st = s.doc().unwrap();
+        let NodeKind::Blend { children, spec } = &st.doc.node(NodeId(blend)).unwrap().kind else { panic!("live blend") };
+        assert_eq!(children.len(), 2, "both mesh keys");
+        assert!(matches!(spec.spacing, BlendSpacing::Steps(4)), "steps unchanged: {:?}", spec.spacing);
+        for (key, expected) in [&children[0], &children[1]].into_iter().zip([&expected_a, &expected_b]) {
+            let NodeKind::Mesh(m) = &key.kind else { panic!("mesh key stays editable") };
+            assert_same_points(&m.points, expected);
+        }
+    }
+
+    // Editing a key through the blend keeps the blend live.
+    s.execute("object.mesh.movePoint", &json!({"id": b, "index": 1, "x": 230.0, "y": 45.0})).unwrap();
+    let NodeKind::Blend { children, .. } = &s.doc().unwrap().doc.node(NodeId(blend)).unwrap().kind else { panic!("blend stays live") };
+    let NodeKind::Mesh(m) = &children[1].kind else { panic!("second key") };
+    assert_eq!(m.points[1].p, vectorcraft_geom::Point::new(230.0, 45.0));
+}
+
+/// The sorted set of solid fill paints of the evaluated SVG, read through independent `usvg`
+/// parsing (a structural fingerprint: editing a mesh point colour changes the tessellation).
+fn svg_fill_fingerprint(s: &mut Session) -> Vec<String> {
+    let svg = s.execute("document.serialize", &json!({ "format": "svg" })).unwrap()["text"].as_str().unwrap().to_owned();
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).expect("independent usvg parse");
+    let mut fills = vec![];
+    fn walk(group: &usvg::Group, fills: &mut Vec<String>) {
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => walk(child, fills),
+                usvg::Node::Path(path) if !path.data().is_empty() => {
+                    if let Some(fill) = path.fill() {
+                        fills.push(format!("{:?}", fill.paint()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    walk(tree.root(), &mut fills);
+    fills.sort();
+    fills
+}
+
+#[test]
+fn mesh_edits_change_the_evaluated_repeat_and_blend_output() {
+    const MESH_OPACITY: &str = "mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable";
+
+    // Repeat: editing the mesh source after a reopen changes the evaluated symmetry output.
+    let mut s = session();
+    let mesh = translucent_mesh(&mut s, 30.0, "#28aa5a");
+    s.execute("select.set", &json!({ "ids": [mesh] })).unwrap();
+    s.execute("object.symmetry.create", &json!({ "kind": "radial", "lines": 4 })).unwrap();
+    reopen(&mut s, "vectorcraft");
+    let repeat_before = svg_fill_fingerprint(&mut s);
+    s.execute("object.mesh.setPointColor", &json!({"id": mesh, "index": 0, "color": "#ff0000", "opacity": 0.75})).unwrap();
+    let repeat_after = svg_fill_fingerprint(&mut s);
+    assert_ne!(repeat_before, repeat_after, "editing the source changes the evaluated repeat");
+
+    // Blend: the same proof on a blend between two translucent meshes.
+    let mut s = session();
+    let a = translucent_mesh(&mut s, 20.0, "#28aa5a");
+    let b = translucent_mesh(&mut s, 180.0, "#aa2855");
+    s.execute("object.blend.make", &json!({ "ids": [a, b], "steps": 3 })).unwrap();
+    reopen(&mut s, "vectorcraft");
+    let blend_before = svg_fill_fingerprint(&mut s);
+    s.execute("object.mesh.setPointColor", &json!({"id": b, "index": 4, "color": "#fff200", "opacity": 0.5})).unwrap();
+    let blend_after = svg_fill_fingerprint(&mut s);
+    assert_ne!(blend_before, blend_after, "editing a key changes the evaluated blend");
+
+    // §18 CDR/CMX anchors: the mesh-opacity warning once per export, non-empty ordinary vectors
+    // after the reopen, and no live mesh/repeat/blend in the reimported document. Each leg
+    // reopens the native document first: a reimported CDR/CMX is already flattened.
+    let native = native_bytes(&mut s);
+    for format in ["cdr", "cmx"] {
+        open_native(&mut s, &native);
+        let out = s.execute("document.serialize", &json!({ "format": format })).unwrap();
+        let warnings = out["warnings"].as_array().unwrap();
+        assert_eq!(warnings.iter().filter(|w| w.as_str() == Some(MESH_OPACITY)).count(), 1, "{format}: {warnings:?}");
+        assert!(
+            warnings.iter().any(|w| w.as_str().is_some_and(|text| text.contains("live") && text.contains("objects are expanded"))),
+            "{format} names the live expansion: {warnings:?}"
+        );
+        s.execute("document.open", &json!({"name": format!("m2.{format}"), "dataBase64": out["dataBase64"].as_str().unwrap()})).unwrap();
+        let doc = &s.doc().unwrap().doc;
+        assert!(!ordinary_paths(doc).is_empty(), "{format} reopens non-empty ordinary vectors");
+        let mut live = 0;
+        for layer in &doc.layers {
+            layer.walk(&mut |node| {
+                live += usize::from(matches!(node.kind, NodeKind::Mesh(_) | NodeKind::Repeat(_) | NodeKind::Blend { .. }));
+            });
+        }
+        assert_eq!(live, 0, "{format} carries no live mesh/repeat/blend");
+    }
+}

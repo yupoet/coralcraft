@@ -13,15 +13,17 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use vectorcraft_color::Paint;
-use vectorcraft_doc::pattern::{self, Overlap, PATTERN_EDIT_LAYER, PatternDef, PatternEdit, RepeatKind, RepeatSpec, TileType, pattern_paint};
+use vectorcraft_doc::pattern::{
+    self, Overlap, PATTERN_EDIT_LAYER, PatternDef, PatternEdit, RepeatKind, RepeatSpec, TileType, TwoColorKind, TwoColorSource, pattern_paint,
+};
 use vectorcraft_doc::{Document, Node, NodeId, NodeKind, Selection};
 use vectorcraft_geom::Rect;
 
 use super::edit::{outermost, selected_roots};
 use super::pathops::Beside;
 use super::{
-    CommandSpec, EngineError, Result, Session, bad, bool_or, cmd, f64_or, has_doc, has_selection, ids_param, matrix_param, ok, point_param,
-    str_param, targets,
+    CommandSpec, EngineError, Result, Session, bad, bool_or, cmd, color_value, f64_or, has_doc, has_selection, ids_param, matrix_param, ok,
+    point_param, str_param, targets,
 };
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -69,9 +71,37 @@ pub fn specs() -> Vec<CommandSpec> {
             "Pattern Options",
             ["Window", "Pattern Options"],
             None,
-            "{name? (default: the pattern being edited), newName? (trimmed; blank: the name is kept), tileType?, brickOffset?, width?, height?, hSpacing?, vSpacing?, sizeTileToArt?: bool, overlap?: {h: left|right, v: top|bottom}, copies?: 3|5|7|9, dimCopies?: %, showTileEdge?: bool, showSwatchBounds?: bool (outline the part of the tiling the swatch repeats, dashed)}",
+            "{name? (default: the pattern being edited), newName? (trimmed; blank: the name is kept), tileType?, brickOffset?, width?, height?, hSpacing?, vSpacing?, sizeTileToArt?: bool, overlap?: {h: left|right, v: top|bottom}, copies?: 3|5|7|9, dimCopies?: %, showTileEdge?: bool, showSwatchBounds?: bool (outline the part of the tiling the swatch repeats, dashed)} (a two-colour pattern whose tile changes here becomes plain art: pattern.setTwoColorProps owns its tile size)",
             has_doc,
             pattern_options
+        ),
+        // CoralCraft (P3 Task T2): the Corel two-colour pattern fills.
+        cmd!(
+            "pattern.twoColor",
+            "Two-Color Pattern",
+            ["Object", "Pattern"],
+            None,
+            "{name? (trimmed; blank: Two-Color Pattern N), kind: checkerboard|polkaDot|horizontalStripe|verticalStripe|diagonalCrosshatch, foreground?: colour (black), background?: colour (white), tileSize?: pt > 0 (12)} make a pattern swatch whose tile art is synthesized from the two-colour source; a duplicate name or invalid parameter is an error → {name}",
+            has_doc,
+            pattern_two_color
+        ),
+        cmd!(
+            "pattern.setTwoColorProps",
+            "Two-Color Pattern Properties",
+            ["Object", "Pattern"],
+            None,
+            "{name, kind?, foreground?, background?, tileSize?: pt > 0} edit the named two-colour pattern's source; every object painted with it follows, one undo step; an art pattern is refused (pattern.options owns it) → {name}",
+            has_doc,
+            pattern_set_two_color_props
+        ),
+        cmd!(
+            "paint.setPattern",
+            "Apply Pattern Fill",
+            [],
+            None,
+            "{pattern: name} fill the selection (or `ids`) with the named pattern swatch → {objects}",
+            has_doc,
+            paint_set_pattern
         ),
         cmd!(
             "pattern.delete",
@@ -189,7 +219,7 @@ fn has_selection_or_ids(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)
 }
 
-fn selected_repeats(s: &Session) -> Vec<NodeId> {
+pub(crate) fn selected_repeats(s: &Session) -> Vec<NodeId> {
     let Some(st) = s.active() else { return vec![] };
     let mut out = vec![];
     for id in &st.selection.objects {
@@ -216,7 +246,7 @@ fn ids_json(ids: &[NodeId]) -> Value {
     json!({ "ids": ids.iter().map(|i| i.0).collect::<Vec<_>>() })
 }
 
-fn roots(s: &Session, p: &Value) -> Result<Vec<NodeId>> {
+pub(crate) fn roots(s: &Session, p: &Value) -> Result<Vec<NodeId>> {
     match ids_param(p, "ids") {
         Some(ids) => {
             let st = s.doc()?;
@@ -384,6 +414,11 @@ pub(crate) fn pattern_done(s: &mut Session, _: &Value) -> Result<Value> {
             if def.size_tile_to_art {
                 def.fit_tile_to_art();
             }
+            // CoralCraft (P3 Task T2 review): the source must describe the stored art. A pure
+            // recolour re-syncs it (the exact CDR mapping follows the edit); anything structural
+            // ends it, so the CDR export takes the named generic degradation instead of the old
+            // parameters.
+            def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         }
         Ok(pe.pattern)
     })?;
@@ -423,6 +458,9 @@ fn pattern_save_copy(s: &mut Session, p: &Value) -> Result<Value> {
         if def.size_tile_to_art {
             def.fit_tile_to_art();
         }
+        // CoralCraft (P3 Task T2 review): the copy's source is whatever the art it saves is, not
+        // the original's.
+        def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         add_pattern(d, def);
         Ok(name)
     })?;
@@ -498,6 +536,9 @@ fn pattern_options(s: &mut Session, p: &Value) -> Result<Value> {
             let c = def.tile.center();
             def.tile = Rect::from_center_size(c, (num("width").unwrap_or(def.tile.width()), num("height").unwrap_or(def.tile.height())));
         }
+        // CoralCraft (P3 Task T2 review): a changed tile invalidates a two-colour source (its
+        // art was synthesized for the old one); pattern.setTwoColorProps owns the tile size.
+        def.two_color = TwoColorSource::recognized(&def.art, def.tile);
         if let Some(nn) = &new_name {
             def.name = nn.clone();
             rename_pattern_uses(d, &name, nn);
@@ -562,6 +603,112 @@ fn nodes_using(d: &Document, name: Option<&str>) -> Vec<NodeId> {
     ids
 }
 
+// CoralCraft (P3 Task T2): the Corel two-colour pattern fills.
+
+/// The two-colour parameters of `p`: the name when one is given (else the existing definition's),
+/// the kind and colours (defaults: black over white, or the existing source's), and the tile size.
+fn two_color_params(
+    p: &Value,
+    existing: Option<&PatternDef>,
+) -> Result<(Option<String>, TwoColorKind, vectorcraft_color::Color, vectorcraft_color::Color, f64)> {
+    const C: &str = "two-colour pattern parameters";
+    let source = existing.and_then(|d| d.two_color.as_ref());
+    let name = match p.get("name") {
+        Some(v) => Some(v.as_str().unwrap_or_default().trim().to_string()),
+        None => existing.map(|d| d.name.clone()),
+    };
+    let kind = match p.get("kind") {
+        Some(v) => v.as_str().and_then(TwoColorKind::of_id).ok_or_else(|| {
+            bad(C, format!("unknown two-colour pattern kind {:?} ({})", v.as_str().unwrap_or_default(), TwoColorKind::IDS.join("|")))
+        })?,
+        None => source.map(|s| s.kind).ok_or_else(|| bad(C, "missing kind"))?,
+    };
+    let colour = |key: &str, pick: fn(&TwoColorSource) -> vectorcraft_color::Color, fallback: vectorcraft_color::Color| match p
+        .get(key)
+        .filter(|v| !v.is_null())
+    {
+        Some(v) => color_value(v).ok_or_else(|| bad(C, format!("`{key}` must be a colour"))),
+        None => Ok(source.map_or(fallback, pick)),
+    };
+    let foreground = colour("foreground", |s| s.foreground, vectorcraft_color::Color::rgb8(0, 0, 0))?;
+    let background = colour("background", |s| s.background, vectorcraft_color::Color::rgb8(255, 255, 255))?;
+    let tile = match p.get("tileSize") {
+        Some(v) => v.as_f64().filter(|t| t.is_finite() && *t > 0.0).ok_or_else(|| bad(C, "tileSize must be a number greater than 0"))?,
+        None => existing.map_or(12.0, |d| d.tile.width().max(d.tile.height())),
+    };
+    Ok((name, kind, foreground, background, tile))
+}
+
+fn pattern_two_color(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "pattern.twoColor";
+    let (name, kind, foreground, background, tile) = two_color_params(p, None)?;
+    let name = match name.filter(|n| !n.is_empty()) {
+        Some(name) => name,
+        None => {
+            let st = s.doc()?;
+            let base = format!("Two-Color {}", kind.id());
+            let mut n = base.clone();
+            let mut i = 1;
+            while st.doc.pattern(&n).is_some() || st.doc.swatch_name_taken(&n) {
+                i += 1;
+                n = format!("{base} {i}");
+            }
+            n
+        }
+    };
+    let reply = name.clone();
+    s.edit("Two-Color Pattern", move |d, _| {
+        if d.pattern(&name).is_some() {
+            return Err(EngineError::Other(format!("{C}: a pattern named {name:?} already exists")));
+        }
+        add_pattern(d, PatternDef::two_color(&name, TwoColorSource { kind, foreground, background }, tile));
+        Ok(())
+    })?;
+    Ok(json!({ "name": reply }))
+}
+
+fn pattern_set_two_color_props(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "pattern.setTwoColorProps";
+    let lookup = p.get("name").and_then(Value::as_str).map(str::to_owned).ok_or_else(|| bad(C, "missing name"))?;
+    let existing = {
+        let st = s.doc()?;
+        let def = st.doc.pattern(&lookup).ok_or_else(|| bad(C, format!("no pattern named {lookup:?}")))?;
+        if def.two_color.is_none() {
+            return Err(bad(C, format!("{lookup:?} is an art pattern (pattern.options owns it), not a two-colour pattern")));
+        }
+        def.clone()
+    };
+    let (_, kind, foreground, background, tile) = two_color_params(p, Some(&existing))?;
+    let reply = existing.name.clone();
+    s.edit("Two-Color Pattern Properties", move |d, _| {
+        let slot =
+            d.patterns.iter_mut().find(|def| def.name == lookup).ok_or_else(|| EngineError::Other(format!("{C}: no pattern named {lookup:?}")))?;
+        if !slot.set_two_color(TwoColorSource { kind, foreground, background }, Some(tile)) {
+            return Err(EngineError::Other(format!("{C}: {lookup:?} is an art pattern, not a two-colour pattern")));
+        }
+        Ok(())
+    })?;
+    Ok(json!({ "name": reply }))
+}
+
+fn paint_set_pattern(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "paint.setPattern";
+    let name = p.get("pattern").and_then(Value::as_str).map(str::to_owned).ok_or_else(|| bad(C, "missing pattern"))?;
+    {
+        let st = s.doc()?;
+        if st.doc.pattern(&name).is_none() {
+            let hint = if st.doc.texture(&name).is_some() {
+                "; a texture name is not a pattern"
+            } else {
+                "; object.pattern.make or pattern.twoColor makes one"
+            };
+            return Err(bad(C, format!("no pattern named {name:?}{hint}")));
+        }
+    }
+    // The same selection plumbing `paint.setFill` uses, with the pattern paint built here.
+    super::paint::apply_paint(s, p, pattern_paint(&name), true)
+}
+
 fn pattern_delete(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pattern.delete";
     let name = str_param(p, "name").ok_or_else(|| bad(C, "missing name"))?.to_string();
@@ -620,6 +767,12 @@ fn pattern_list(s: &mut Session, _: &Value) -> Result<Value> {
                 "showTileEdge": p.show_tile_edge,
                 "showSwatchBounds": p.show_swatch_bounds,
                 "artCount": p.art.len(),
+                "twoColor": p.two_color.as_ref().map(|s| json!({
+                    "kind": s.kind.id(),
+                    "foreground": s.foreground.to_hex(),
+                    "background": s.background.to_hex(),
+                    "tileSize": p.tile.width().max(p.tile.height()),
+                })),
             })
         })
         .collect();
@@ -658,7 +811,7 @@ fn pattern_transform(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- Repeat ----------
 
 /// Make a repeat from the selection, or switch the selected repeat's kind.
-fn make_repeat(s: &mut Session, p: &Value, label: &str, make: impl Fn(Vec<Arc<Node>>) -> RepeatSpec) -> Result<Value> {
+pub(crate) fn make_repeat(s: &mut Session, p: &Value, label: &str, make: impl Fn(Vec<Arc<Node>>) -> RepeatSpec) -> Result<Value> {
     let existing = selected_repeats(s);
     if ids_param(p, "ids").is_none()
         && let [r] = existing.as_slice()
@@ -759,7 +912,7 @@ fn repeat_expand(s: &mut Session, _: &Value) -> Result<Value> {
 
 /// Repeat `r` replaced by a group of its instances, keeping its id and place; every generated
 /// instance node gets a fresh id.
-fn expand_repeat(d: &mut Document, r: NodeId) -> Result<()> {
+pub(crate) fn expand_repeat(d: &mut Document, r: NodeId) -> Result<()> {
     let Some(n) = d.node(r).cloned() else { return Ok(()) };
     let hooks = vectorcraft_doc::live::Hooks { symbols: Some(d), ..Default::default() };
     let mut g = vectorcraft_doc::live::expanded_group_hooks(&n, hooks);
@@ -810,7 +963,7 @@ fn repeat_options(s: &mut Session, p: &Value) -> Result<Value> {
         for r in &reps {
             let Some(NodeKind::Repeat(spec)) = d.node_mut(*r).map(|n| &mut n.kind) else { continue };
             match &mut spec.kind {
-                RepeatKind::Radial { instances, radius, center: c, reverse_overlap, start_angle, end_angle } => {
+                RepeatKind::Radial { instances, radius, center: c, reverse_overlap, start_angle, end_angle, .. } => {
                     if let Some(v) = num("instances") {
                         *instances = v as u32;
                     }

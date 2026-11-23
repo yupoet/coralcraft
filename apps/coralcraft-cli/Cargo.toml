@@ -27,6 +27,8 @@ vectorcraft-render = { workspace = true }
 vectorcraft-text = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# CoralCraft (P5 Task 1): the representative project classes' saved-byte SHA-256.
+sha2 = { version = "0.10", default-features = false }
 
 # `perf` on Windows (src/perf.rs) reads how busy the processors are (GetSystemTimes) and this
 # process's working set (GetProcessMemoryInfo) through winsafe's safe wrappers over Win32 (MIT),

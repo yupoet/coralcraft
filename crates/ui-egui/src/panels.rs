@@ -25,6 +25,7 @@ pub mod history;
 pub mod image_trace;
 pub mod info;
 pub mod layers;
+pub mod lens;
 pub mod libraries;
 pub mod library_panel;
 pub mod links;
@@ -150,6 +151,7 @@ pub fn show_icon_panel(app: &mut VectorcraftApp, ui: &mut Ui, id: &str) {
         "align" => align::show(app, ui),
         "pathfinder" => pathfinder::show(app, ui),
         blend::ID => blend::show(app, ui),
+        lens::ID => lens::show(app, ui),
         "transform" => transform::show(app, ui),
         "history" => history::show(app, ui),
         "actions" => actions::show(app, ui),
@@ -552,6 +554,8 @@ pub(crate) fn paint_params(p: &Paint) -> Value {
         Paint::Solid { color, .. } => json!({"color": color_json(color)}),
         Paint::Gradient(g) => json!({"gradient": vectorcraft_tools::params::gradient_params(g)}),
         Paint::Pattern { pattern, .. } => json!({"pattern": pattern}),
+        // CoralCraft (P3 Task T1)
+        Paint::Texture { texture } => json!({"texture": texture}),
     }
 }
 
@@ -653,6 +657,9 @@ mod tests_constrain;
 // CoralCraft: the CorelDRAW core dockers (P1 Task 8).
 #[cfg(test)]
 mod tests_coreldraw_dockers;
+// CoralCraft: signature-effect workflows (P3 Task 2).
+#[cfg(test)]
+mod tests_coreldraw_effects;
 // CoralCraft: the CorelDRAW text Property Bar (P2 Task 2).
 #[cfg(test)]
 mod tests_coreldraw_text;

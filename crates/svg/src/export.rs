@@ -93,6 +93,7 @@ fn write(doc: &Document, opts: &ExportOptions, native: Option<&[u8]>, id_prefix:
         names: HashMap::new(),
         depth: 1,
         patterns: HashMap::new(),
+        textures: HashMap::new(),
         gradients: HashMap::new(),
         pattern_nest: 0,
         brushes: None,
@@ -248,6 +249,8 @@ struct Writer<'a> {
     depth: usize,
     /// `<pattern>` def ids by pattern name + placement.
     patterns: HashMap<String, String>,
+    /// Texture `<pattern>` def ids by texture name + placement.
+    textures: HashMap<String, String>,
     /// Gradient def ids by content (everything but the id).
     gradients: HashMap<String, String>,
     pattern_nest: u32,

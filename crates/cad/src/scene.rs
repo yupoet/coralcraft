@@ -748,6 +748,11 @@ impl<'a> Scene<'a> {
                 let first = self.doc.pattern(pattern).and_then(|def| def.art.iter().find_map(|a| first_solid(a)));
                 Some(first.map_or([128; 3], |c| rgb(&c)))
             }
+            // CoralCraft (P3 Task T1): a texture is one flat colour here, its foreground.
+            Paint::Texture { texture } => {
+                self.warn("pattern fills are written as one colour");
+                Some(self.doc.texture(texture).map_or([128; 3], |def| rgb(&def.foreground)))
+            }
         }
     }
 

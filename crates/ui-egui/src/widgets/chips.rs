@@ -14,7 +14,8 @@ pub fn paint_chip(ui: &Ui, rect: Rect, paint: &Paint) {
             p.rect_filled(rect, 0.0, Color32::from_rgb(r, g, b));
         }
         Paint::Gradient(gp) => gradient_chip(ui, rect, gp),
-        Paint::Pattern { .. } => {
+        // CoralCraft (P3 Task T1): a texture chips like a pattern.
+        Paint::Texture { .. } | Paint::Pattern { .. } => {
             p.rect_filled(rect, 0.0, Color32::from_gray(200));
             for i in 0..4 {
                 let x = rect.left() + rect.width() * i as f32 / 4.0;

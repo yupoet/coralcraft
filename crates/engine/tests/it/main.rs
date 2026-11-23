@@ -16,10 +16,16 @@ mod compound_attributes;
 mod copy_direct_selection;
 // CoralCraft: legacy CDR text decoding and residuals (P2 Task 9).
 mod coreldraw_cdr_text;
+// CoralCraft: advanced fills and transparency (P3 Task 3).
+mod coreldraw_fills_transparency;
+// CoralCraft: bitmap and PowerTRACE workflows (P3 Tasks 8-9).
+mod coreldraw_image_workflows;
 // CoralCraft: the CorelDRAW selection and node workflow (P1 Task 3).
 mod coreldraw_node_workflow;
 // CoralCraft: the CorelDRAW pages and master layers (P1 Task 10).
 mod coreldraw_pages;
+// CoralCraft: the CorelDRAW PowerClip lifecycle (P3 Task 2).
+mod coreldraw_powerclip;
 // CoralCraft: the P1 persistence audit (P1 Task 11).
 mod coreldraw_p1_persistence;
 // CoralCraft: the CorelDRAW fill/outline appearance (P1 Task 7).
@@ -28,6 +34,23 @@ mod coreldraw_appearance;
 mod coreldraw_p1_acceptance;
 // CoralCraft: the P2 brochure acceptance scenario (P2 Task 12).
 mod coreldraw_p2_acceptance;
+// CoralCraft: P4 colour, proof, separations, and overprint production evidence (P4 Task 2).
+mod coreldraw_p4_production;
+// CoralCraft: the P4 complete production-job acceptance (P4 Task 6).
+mod coreldraw_p4_acceptance;
+// CoralCraft: P5 sustained editing and bounded resources (P5 Task 3).
+mod coreldraw_p5_hardening;
+// CoralCraft: P3 native/CDR/CMX persistence and fallbacks (P3 Task 10).
+mod coreldraw_p3_persistence;
+mod coreldraw_texture;
+// CoralCraft: the Corel two-colour pattern parameters (P3 Task T2).
+mod coreldraw_pattern_params;
+// CoralCraft: CorelDRAW Symmetry over the Repeat architecture (P3 Task E1).
+mod coreldraw_symmetry;
+// CoralCraft: the colour lenses (P3 Task E4).
+mod coreldraw_lens;
+// CoralCraft: the P3 poster and traced-image acceptance scenario (P3 Task 12).
+mod coreldraw_p3_acceptance;
 // CoralCraft: the CorelDRAW shaping operations (P1 Task 4).
 mod coreldraw_shaping;
 // CoralCraft: the CorelDRAW styles and symbols (P1 Task 9).
@@ -36,6 +59,8 @@ mod coreldraw_styles_symbols;
 mod coreldraw_text;
 // CoralCraft: path text, wrapping, and layout workflows (P2 Task 5).
 mod coreldraw_layout;
+// CoralCraft: Blend, Contour, and other live effects (P3 Task 4).
+mod coreldraw_live_effects;
 // CoralCraft: the CorelDRAW transform and align workflows (P1 Task 6).
 mod coreldraw_transform;
 mod dimensions;

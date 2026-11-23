@@ -90,6 +90,8 @@ pub(crate) fn describe(paint: &Paint, global: bool, spot: bool) -> String {
             &[("kind", crate::i18n::tr_ctx(crate::i18n::current(), "gradient-kind", g.gradient.kind.label()))],
         ),
         Paint::Pattern { .. } => tl!("Pattern").into(),
+        // CoralCraft (P3 Task T1)
+        Paint::Texture { .. } => tl!("Texture").into(),
         Paint::None => tl!("None").into(),
     }
 }
@@ -145,7 +147,7 @@ pub(crate) fn list_icons(ui: &Ui, r: Rect, paint: &Paint, global: bool, spot: bo
             };
             icons::paint(ui, icon, kind.expand(1.0), t.icon);
         }
-        Paint::Pattern { .. } => icons::paint(ui, "grid-3x3", kind.expand(1.0), t.icon),
+        Paint::Pattern { .. } | Paint::Texture { .. } => icons::paint(ui, "grid-3x3", kind.expand(1.0), t.icon),
         Paint::None => {}
     }
 }

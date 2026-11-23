@@ -1,0 +1,1035 @@
+# P3 Signature Effects and Image Workflows Inventory
+
+> Baseline: `13232f0a917086f104edc4396da856c43bb5ae6a` (P2 complete). This inventory distinguishes an existing implementation from CorelDRAW workflow evidence; neither a registered command nor a self-round trip proves level 4.
+
+Measured with the same-revision CLI/xtask binaries: the JSON command catalog was captured successfully; `cargo xtask stats` reports 2,039 files, 879,598 lines, 14,647 test attributes, and 66 proptest blocks.
+
+## 1. Existing reusable base
+
+| Slice | Existing implementation | Existing evidence | P3 acceptance still required |
+|---|---|---|---|
+| PowerClip | `object.clippingMask.make/release/editContents/editMask` in `crates/engine/src/cmd/object/commands.rs`; clip-group document/render support | **P3 Task 2:** two engine lifecycle tests and one CorelDRAW Object-menu test pass; native editing/nesting/release, independent `usvg` and Hayro-backed PDF reads | Dedicated CorelDRAW PowerClip naming and lock-contents-to-frame UI remain open; CDR mapping is audited in Task 10 |
+| Blend | `object.blend.make/options/info/release/expand`, spine and order commands in `cmd/live/`; `panels/blend.rs`, `dialogs/blend_options.rs`, canvas blend controls | **P3 Task 4:** steps/spine/order/source editing, undo/redo, native reopen, independent SVG geometry, and CorelDRAW Blend-panel test pass | CDR live/flattened mapping is audited in Task 10 |
+| Contour | `addon.contour.set` over `path.offsetPath`; `canvas/contour_bar.rs` | **P3 Task 4:** live update, native parameter persistence, independent SVG, explicit expand, and existing on-canvas corner/bake pointer test pass | Multi-step contour presets and CDR mapping remain open |
+| Envelope | `object.envelope.makeWithWarp/makeWithMesh/makeWithTopObject`, reset/options/release/expand/editContents/setMeshPoint | **P3 Task 5:** warp options, content editing, mesh reset/point editing, two native reopens, independent SVG, expand, and CorelDRAW menu evidence pass | CDR mapping and top-object workflow are audited later |
+| Distort | `distort.twist` through `effect.apply/setParams`; shared effect dialog | **P3 Task 5:** parameter edit, native reopen, independent SVG, and CorelDRAW dialog evidence pass | Push/pull and zipper-specific interactive handles remain open |
+| Extrude/shadows/other signature effects | `threeD.extrude` (including bevel) and `stylize.dropShadow` in the ordered appearance stack | **P3 progress:** ordered parameter edits, native reopen, independent SVG+PDF, and CorelDRAW dialog tests pass | Block Shadow, Lens, Perspective, Symmetry, and their CorelDRAW-specific controls remain open |
+| Effect stack | `effect.apply/list/remove/setParams/expandAppearance/duplicate/move`; visibility is handled by `setParams` | **P3 Task 7:** reorder/duplicate/hide/remove/undo/redo/expand, invalid-input atomicity, native reopen, CorelDRAW Appearance and existing drag/eye tests pass | No new stack model is needed; CDR fallback is audited in Task 10 |
+| Advanced fills | Existing paint model, arbitrary vector/image `PatternDef.art`, gradients, `object.mesh.*` | **P3 progress:** fountain, vector-pattern, and mesh native/edit/independent SVG+PDF tests pass. Generic two-colour pattern art now proves two ordinary vector objects, ordinary colour edits, undo/redo, native reopen and another edit; independent `usvg` checks the target's actual tile rect and recursive non-empty paths with literal edited RGB values, while Hayro-backed PDF import reconstructs a connected real pattern definition and vector tile art. Generic bitmap pattern art now proves `file.place {replace:true}` inside pattern editing, undo/redo, native reopen, an editable `NodeKind::Image` with exact replacement pixels, and an unflattened vector target; independent `usvg` decodes the connected tile's exact replacement PNG and Hayro-backed PDF import reconstructs the bitmap pattern/tile art. The rendered CorelDRAW Object > Pattern Make/Edit controls are clicked through synthetic pointer events and the visible Pattern Options Done control is clicked through AccessKit, proving a real edit/done/edit/done lifecycle without direct menu invocation or UI-state injection | This is generic two-colour and bitmap pattern art, not a Corel-specific foreground/background/kind model. Texture fill remains unsupported, so Task 3 Step 1 stays open. Generic CDR export currently substitutes a default black/white checkerboard, so CDR pattern parameter fidelity remains open. PDF evidence is reconstructed structure, not live PDF editing |
+| Transparency | Existing transparency commands, merge modes, opacity masks, Transparency panel | **P3 Task 3 Step 2:** uniform opacity + Multiply remains proven. Graded stop opacity edits survive undo/redo/native reopen; independent `usvg` verifies real gradient offsets/colours/alpha. A top vector object becomes editable mask art outside the layer tree; clip/invert, disable/enable, source/target edits, undo/redo/native reopen, and release/restoration pass. Independent `usvg` proves the edited vector mask art is connected to the target. Actual CorelDRAW Transparency panel Make Mask/Invert Mask/Release controls pass through AccessKit | Step 1 texture fill, a broader merge-mode matrix, and consolidated CDR/CMX transparency fallbacks remain open. Graded PDF evidence is one page with vector geometry; mask PDF evidence is one page with reconstructed vector soft-mask structure. Neither is a live-PDF/native-editing-relationship claim |
+| Bitmap workflows | `file.place`, `object.cropImage`, `object.resampleImage`, `adjust.brightnessContrast`, and live `blur.gaussian`; existing `links.editOriginal` handoff and generic effect dialog | **P3 Task 8:** synthetic bitmap crop, undo/redo, adjustment parameters, native reopen, independent SVG, and invalid-input atomicity evidence pass. Resampling adds decoded output dimensions/pixels for every filter, identity/appearance/display-bounds preservation, undo/redo/native reopen, linked-source-to-embedded-PNG derivation without source-file changes, structural independent `usvg` image size/transform checks, and real MCP `run_command`. The final PowerClip scenario preserves original PNG bytes/pixels, the vector frame/live clip, and ordered effects/radius through native reopen; independent `usvg` proves the connected non-empty clip, actual image, and Gaussian structure. Hayro-backed PDF import proves a real page and rendered raster composition, not live clip/effect semantics. The CorelDRAW Gaussian dialog confirms a radius edit on a selected bitmap. Links tests prove system/PhotoCraft handoff and explicit errors 9/9, not an external-editor round trip | CMYK and 32-bit-float rasters are rejected rather than silently converted |
+| PowerTRACE | `imageTrace.make/makeAndExpand/setView/presets.*` in `cmd/buildcmds/trace.rs`; `panels/image_trace.rs`; `vectorcraft-trace` | **P3 Task 9:** outline and centreline make/view/make-and-expand/native-reopen/independent-`usvg` evidence passes. The expanded centreline itself is selected and edited to `#e04838` at 7.25 pt. Independent `usvg` finds exactly one matching path and checks literal stroke, no Close segment, and horizontal endpoint relationship/length. Limited-palette retrace reduces four unique fills to two in document and `usvg`; higher Paths fidelity adds anchors on the fixed sine fixture in document and export. Saved-preset lifecycle/revision/invalid-input and Prefs-vs-document persistence pass. Make/make-and-expand/retrace/view undo/redo checks identity, selection, parent/stacking position and history stacks, including live metadata/hidden-source restoration and expanded editable geometry. Invalid retrace is atomic with exactly one redo entry before successful redo. Actual CorelDRAW panel controls drive preset, a real Color→Grayscale→Color transition with neutral grayscale fills and exact original Colour palette restoration, colours, Paths, view, Preview, Trace, and same-ID Expand | Consolidated CDR/CMX trace fallback remains under Task 10; no real-sample or CDR certification is claimed |
+| CDR/CMX | `corel-import` and `coralcraft-cdr` mapping, residuals and warning paths | **P3 progress:** PowerClip + Extrude/Drop Shadow CDR/CMX reopen; live Blend exports expanded vector groups with an explicit warning instead of an empty path. Used generic pattern paints and live trace metadata now have explicit CDR/CMX fallback warnings; native editability, retrace, ordinary-object self-reimport, edited expanded-path persistence, unused-pattern and expanded-trace negative controls pass | Combined mesh/transparency/bitmap/residual matrix and S2 real oracle/samples remain open. The exact new warnings and focused gate are in §5; self-reimport is not independent CDR certification |
+| Automation | All features use shared engine command dispatch; MCP `run_command`; generated `docs/mcp.md` | **P3 Task 11:** `object.resampleImage` has real `run_command` coverage and no bespoke tool; both live-registry/protocol `docs_sync` tests pass with a clean generated document | Future commands must enter the same shared dispatch and add invalid-input evidence |
+
+## 2. Evidence and architecture boundaries
+
+- Native `.vectorcraft`/`.drawcraft`/`.vctemplate` reopen must preserve editable source objects and parameters.
+- `usvg` and Hayro-backed `vectorcraft-pdf` are the independent SVG/PDF readers. Text search in our own export is supplementary, not independent parsing.
+- SVG/PDF expansion may show generated geometry while the native document keeps live effects. Expansion is not evidence that CDR retains live effects.
+- CDR/CMX must warn when it flattens or drops live semantics. No oracle or real-sample result may be claimed while S2 prerequisites are absent.
+- Reuse VectorCraft only. TraceDraw remains a selectively audited reference/donor, not a second application base.
+
+## 3. Acceptance scenarios
+
+1. **Poster:** nested PowerClip, advanced fill/transparency, Blend, Envelope, shadow, and live text; native reopen and revision; independent SVG/PDF reads; explicit CDR/CMX fallback ledger.
+2. **Traced image:** handcrafted synthetic bitmap, tracing preset/mode/colour/smoothing, editable expanded paths, bitmap adjustment, native reopen and independent SVG read.
+3. **Automation:** all new commands run through shared `run_command`; invalid input returns errors without mutation; generated MCP documentation matches the live registry.
+4. **Measured P3 acceptance:** `coreldraw_p3_acceptance` passes with PowerClip + Extrude + Drop Shadow + Blend + live text + traced paths, two native reopens, source/parameter/text revision, independent `usvg` and Hayro-backed PDF reads, and an explicit CDR live-Blend warning. This does not close the remaining P3 capability rows.
+
+## 4. Gate baseline
+
+P2's final `cargo xtask ci` result was fmt and Clippy passed, workspace tests 4,375 passed and 1 failed. The only failure was known-issue 0b (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`), an existing x86_64 macOS 1-ulp issue. All gates skipped by that stop were run separately and passed. P3 must record its own results and must not describe that baseline as a clean full-CI pass.
+
+Current P3 working-tree stats after the Task 10 nested-bitmap reconstruction follow-up: 2,048 files, 884,864 lines, 14,760 test attributes, and 66 proptest blocks. The desktop layer totals 533,934 lines (`vectorcraft-ui-egui` 213,705 + `coralcraft` 13,519 + `vectorcraft-tools` 57,314 + `vectorcraft-engine` 249,396).
+
+P3 gate: the first CI run stopped on formatting in the new acceptance test; after formatting and re-running that test, the full gate passed fmt and Clippy, then workspace tests finished **4,375 passed / 1 failed / 2 ignored**, solely known-issue 0b. The large-edit 50,000-object test passed without the earlier concurrent-build timeout. Doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm were then run separately and all exited successfully. Both no-default-feature dependency trees contain no `bundled-fonts` feature. Wasm emitted four existing UI warnings, not errors. This is not a clean full-CI claim because known-issue 0b remains red.
+
+Task 8 resample gate at `643f06c51`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **53/53**. Every skipped later gate was separately run and passed, including doctests, all no-bundled-fonts checks and both dependency-tree assertions, cleanroom, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim.
+
+Task 8 final focused gate: image workflows **11/11**, PowerClip **2/2**, CorelDRAW effects UI **8/8**, raster filters **11/11**, Gaussian SVG **3/3**, and `vectorcraft-effects` **380 passed / 2 ignored** pass. Existing bitmap-filtered tests, `cargo fmt --all -- --check`, focused engine/UI Clippy with `-D warnings`, and unblessed MCP `docs_sync` **2/2** also pass. This evidence-only slice did not change production code or the generated MCP registry document.
+
+Completed Task 8 gate at `dfab92929`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **54/54**. Every skipped later gate was separately run and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim.
+
+Task 3 Step 2 focused gate: `coreldraw_fills_transparency` **6/6**, existing opacity-mask engine tests **31/31**, gradient-filtered engine tests **102/102**, CorelDRAW effects UI **9/9**, Transparency panel **4/4**, mask-view panel tests **3/3**, SVG mask options **4/4**, SVG round trips **46/46**, PDF opacity-mask tests **5/5**, and PDF gradient tests **16/16** pass. `cargo fmt --all -- --check`, focused engine/UI Clippy with `-D warnings`, and unblessed MCP `docs_sync` **2/2** also pass. This evidence-only slice changed no production code or generated MCP registry document. The graded PDF check proves one page with vector geometry; the mask PDF check proves one page with reconstructed vector soft-mask structure. Neither claims live PDF editing or preservation of the original native editing relationships.
+
+Task 3 Step 2 gate at `209e66996`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **56/56**. Every skipped later gate was separately run and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim.
+
+Generic two-colour/bitmap pattern-art focused gate: `coreldraw_fills_transparency` **8/8**, pattern-filtered engine tests **143/143**, CorelDRAW effects UI **10/10**, Pattern Options-filtered UI **10/10**, SVG pattern tests **1/1 unit + 3/3 integration**, and PDF pattern tests **4/4** pass. `cargo fmt --all -- --check`, focused engine/UI Clippy with `-D warnings`, and unblessed MCP `docs_sync` **2/2** also pass. This evidence-only slice changed no production code or generated MCP registry document. Independent `usvg` proves the actual target-connected tile rectangle, recursive edited vector RGB paths, and exact replacement PNG dimensions/pixels. Hayro-backed PDF import proves reconstructed pattern definitions and vector/bitmap tile art connected to the target paint; neither PDF check claims live PDF editing. Task 3 Step 1 stays open for texture fill; Step 3, P3.3, and P3 stay open.
+
+Generic two-colour/bitmap pattern-art final gate at `8998aa38d`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **58/58**. Every skipped later gate was separately run and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. A concurrent-feature-build rlib failure in doctests was rerun serially and passed; it was not a product test failure. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+Rendered-menu evidence follow-up: CorelDRAW effects UI **10/10**, menu tests **40/40**, and Pattern Options-filtered UI **10/10** pass, along with `cargo fmt --all` and focused UI Clippy with `-D warnings`. The test renders `menus::menu_bar` in a persistent `egui::Context`, locates the visible Object, Pattern, and Make/Edit text, and sends synthetic PointerMoved/press/release events through the repository's real menu-test helpers. It does not call `menus::invoke` or `click_target`, and it does not inject menu/panel state. The visible Pattern Options Done control is clicked through AccessKit in both cycles of the same application model.
+
+Task 9 PowerTRACE focused gate: image workflows **16/16**, CorelDRAW effects UI **10/10**, Image Trace panel tests **43/43**, `vectorcraft-trace` **252 passed / 3 existing ignored**, and engine `image_trace` tests **30/30** pass. `cargo fmt --all -- --check`, focused engine/UI Clippy with `-D warnings`, and unblessed MCP `docs_sync` **2/2** also pass. This evidence-only slice changed no production code or generated MCP registry document. P3.9 is complete; P3.10, the other open capability rows, S2, and P3 remain open.
+
+Task 9 final gate at `7f1c82107`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **63/63**. Every skipped later gate was then run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim.
+
+
+## 5. Task 10 focused fallback-warning slice
+
+The two new CDR/CMX warnings are exactly:
+
+- `generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable`
+- `live trace parameters and source relationships are dropped in CDR/CMX; vector results and the hidden source become ordinary objects`
+
+Warnings are collected during `corel-import` conversion through `export_document_with_warnings` and the warning-returning CDR7/CDRX/CMX1 writers; existing export/write APIs retain their signatures, and legacy wrappers return the same bytes as the warning-returning functions at the same revision; this is wrapper equivalence, not independent base-byte certification. The engine supplies its normalized export document after linked-art materialization and `without_edit_modes`, so linked `PlacedDocument::art` is covered exactly once per fallback category. Appearance warnings are emitted only for the last visible fill/stroke actually converted (plus actual text-style colour fallback), never for invisible or shadowed items, unused definitions, or symbol/mask editing-only layers. Direct `corel_import::export_document` inspection proves the existing 12 pt black/white checker substitution. The trace warning is driven by actual `extras().trace` metadata during the same node conversion, so expanded traces do not warn.
+
+RED evidence before the production edit: `generic_pattern_export_warns_without_mutating_the_editable_native_pattern` and `live_trace_export_warns_and_reopens_only_as_ordinary_vectors_and_source_image` both failed on `warnings == []`; the expanded-trace control already passed. GREEN: `coreldraw_p3_persistence` **5/5**, image workflows **16/16**, fills/transparency **8/8**, the complete CorelDRAW integration group **66/66**, warning-filtered engine tests **33/33**, `corel-import` **8 unit + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused engine Clippy with `-D warnings` pass. Both `CORALCRAFT_FUZZ_ITERS=2000 cargo run --manifest-path fuzz/Cargo.toml --release --bin probe` and `--bin parse_cdr` exited successfully. The oracle/sample tests self-skip on this host and are not independent CDR certification.
+
+Native reopen retains editable named pattern definitions/paints and live-trace preset/params/view, and permits retrace. CDR/CMX self-reimport contains non-empty ordinary vector paths and an ordinary source image without `extras().trace`; edited expanded centreline stroke colour and geometry survive native/CDR/CMX reopen without a live-trace warning. This does not claim native Pattern or live PowerTRACE persistence in CDR/CMX. The combined mesh/transparency/bitmap/residual matrix remains open, so Task 10/P3.10, P3, and S2 stay open.
+
+Full CI for this slice passed formatting and workspace Clippy, then stopped at the sole engine-library failure, known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was then run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 6. Task 10 normalized-warning review
+
+Review found that the initial stored-layer scan missed linked `PlacedDocument::art` and warned for invisible, shadowed, and temporary-edit-only patterns. Before the production fix, `linked_placed_pattern_and_live_trace_warn_once_per_fallback_category` returned only the existing Placed Document warning, `invisible_and_shadowed_pattern_items_do_not_warn` returned a generic-pattern warning, and `temporary_symbol_and_mask_editing_layers_do_not_warn` returned a generic-pattern warning. The public API test also failed because the warning-returning APIs did not exist.
+
+The fix keeps warning text unchanged and records it in `corel-import` at actual conversion sites. The engine routes CDR7/CDRX/CMX1 through warning-returning writers over its existing normalized document; compatibility wrappers preserve `export_document` and all three existing writer signatures, returning the same bytes as the warning-returning functions at that revision. Appearance conversion now selects the final visible fill/stroke before converting it. Linked placed pattern/trace art warns once per category, while hidden, shadowed, unused-definition, expanded-trace, and temporary-edit-only controls stay silent.
+
+GREEN: persistence **8/8**, public export API compatibility **1/1**, complete CorelDRAW integration **69/69**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 1 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully. Self-skipping oracle/sample tests remain non-certifying; Task 10/P3.10, P3, and S2 stay open.
+
+The normalized-review full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 7. Task 10 remaining conversion channels
+
+Final review found four coverage gaps: later text-run Pattern fills, any text-run Pattern stroke, image colorize Pattern, and enabled opacity-mask art containing Pattern plus live trace metadata. Before the production change, the three paint-channel tests returned `warnings == []`; the active-mask test returned no live-trace warning, and the shared wording assertion failed because dropped channels were not named.
+
+Conversion now checks every text run's fill/stroke and image `extras().colorize`, and recursively inspects enabled `extras().mask` art. Temporary editing layers remain excluded by normalization, while the active-mask case warns once per category. The pattern warning is now exactly:
+
+`generic Pattern paints are substituted with a default black/white checkerboard/black or dropped in CDR/CMX; native pattern definitions and paints remain editable`
+
+This wording distinguishes substitution from dropped paint/metadata; no preservation or new format mapping is claimed. The live-trace warning is unchanged. Linked placed art, visible-paint selection, unused-definition/expanded-trace controls, temporary symbol/mask editing controls, and same-revision legacy-wrapper equivalence remain covered.
+
+GREEN: persistence **12/12**, public export API compatibility **1/1**, complete CorelDRAW integration **73/73**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 1 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully. Self-skipping oracle/sample tests remain non-certifying; Task 10/P3.10, P3, and S2 stay open.
+
+The channel-coverage full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 8. Task 10 metadata-restoration warning coverage
+
+Final review found that early `CoralCraftObjectMeta` restoration returned before appearance, later text-run, and image-colorize warning hooks. Public-API regressions import metadata-restorable path, text, and bitmap objects and then apply Pattern without changing name/bounds/visibility/lock. Before the production change, all three returned no generic-pattern warning; the path's live-trace control already warned.
+
+Detection now runs before early restoration. The restorable path emits one generic-pattern and one live-trace warning while its original solid fill and the old `export_document` result remain unchanged, proving this is warning-only coverage rather than a restoration redesign. Later text-run Pattern fill/stroke and image Pattern colorize also warn once. Existing ordinary/placed/mask/text/colorize channels and negative controls remain green.
+
+GREEN: public export API tests **4/4**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 4 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully.
+
+The early predicate still compares only name/bounds/visibility/lock, so it can restore old appearance after an edit. That separate appearance-restoration limitation is recorded in known issues and remains open; the warning does not claim the edited appearance is preserved. Task 10/P3.10, P3, and S2 stay open.
+
+The metadata-restoration full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 9. Task 10 nested-restoration warning coverage
+
+Final review found two nested bypasses: a restored group whose current kind/child count no longer matched metadata returned without visiting current children, and successful PowerClip restoration skipped the frame. Public-API regressions delete a non-bounds-determining child from a restorable two-child group and apply Pattern to the remaining child; a separate restorable PowerClip receives Pattern and live trace metadata on its frame. Before the fix, both returned `warnings == []` for CDR and CMX.
+
+Structural mismatches now convert current children into a discarded value solely for warning collection. Successful PowerClip restoration inspects the frame separately before converting contents. Children already used by restored output are not converted a second time, restoration mappings remain unchanged, and each category is deduplicated.
+
+GREEN: public export API tests **6/6**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed-document tests **41/41**, appearance tests **84/84**, warning-filtered tests **33/33**, `corel-import` **8 unit + 6 public API + 2 oracle self-skip**, `coralcraft-cdr` **58 unit + 2 oracle self-skip**, hostile import fuzz **190/190**, and MCP `docs_sync` **2/2** pass. Formatting and focused corel-import/engine Clippy with `-D warnings` pass. Both 2,000-iteration release `probe` and `parse_cdr` runs exit successfully.
+
+Compatibility assertions compare legacy wrappers with warning-returning functions at the same revision. This is wrapper equivalence, not independent base-byte proof; no current-HEAD hashes are presented as hashes from `6a84b3dec`. The separate early-restoration appearance limitation remains open. Task 10/P3.10, P3, and S2 stay open.
+
+The nested-restoration full CI run passed formatting and workspace Clippy, then stopped only at known-issue 0b: **4,376 passed / 1 failed / 2 ignored**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks and both dependency-tree assertions, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+## 10. Task 10 appearance-aware metadata restoration
+
+RED root-cause evidence: `same_bounds_solid_fill_edit_exports_the_current_color` imported a black rectangle, changed only its fill to red, and observed `export_document` restore the original black. Focused regressions also proved stale restoration after same-length text content/first-run edits, later-run style edits, same-bounds path and group-child deletion, image-byte replacement, effect edits, unsupported-container edits, and PowerClip frame/content edits. The old public warning test incorrectly asserted the restored solid fill; it now asserts the current generic-Pattern fallback while retaining every warning assertion.
+
+The fix stores each root projection in the existing `CoralCraftDocData.extra` extension map under `corel.import.original_vc.v1.<node-id>`, populated only by a root wrapper around the three top-level import loops. Nested objects have no sidecar entry, avoiding recursive native-snapshot duplication. Native save/reopen preserves the root projection, while exported CDR extras exclude this internal namespace. Legacy metadata without a sidecar is reconstructed once per top-level subtree through the existing CDR→VC converter with isolated temporary state.
+
+Restoration compares normalized shallow VC shells: local IDs and text layout caches are canonicalized, mask-art IDs are normalized, and main children are cleared only for the shell comparison while container kind/clip remains. Semantic references in extras are not zeroed. Images compare exact encoded bytes from the current document against reconstructed/original expected data, not keys; same-key byte mutation and missing data fail closed, while equivalent bytes under a new key may match. Any unknown semantic difference fails closed. Name/bounds/visibility/lock checks have no unsupported-object wildcards.
+
+Matching groups and unsupported containers deep-clone the original object for residual fields, then always replace children with all converted current children, passing corresponding expected children by stable identity where structure permits; no old-children count fallback remains. This is not a shell-only clone optimization. Legacy reconstruction builds a full temporary metadata map that is discarded, retaining that performance limitation. PowerClips compare outer and frame shells separately, convert the current frame once, preserve original frame/container data only when it matches, and convert every current contents child without a count guard. Existing Pattern/live-trace warning pre-scans and deduplication remain, with no discarded warning-only child conversion.
+
+Public export/write signatures and wrapper behaviour are unchanged. The original metadata literal and `Eq` on both metadata structs are preserved because projections live only in the existing extension map. No new CDR preservation is claimed for later-run styles, image colorize, gradient stop alpha, blend modes, or other fields the converter cannot represent; those cases export current conversion/fallback instead of stale originals, with existing warnings where applicable.
+
+GREEN: metadata restoration **21/21**, `corel-import` **8 unit + 6 public API + 21 restoration + 2 oracle self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probe/parse runs, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Full CI/later serial gates remain for the controller. The combined mesh/transparency/bitmap/residual matrix and S2 remain open; Task 10/P3.10, P3, and S2 stay open.
+
+
+## 11. Task 10 frame-transparency and missing-bounds review follow-up
+
+Spec review of `358d1d2d0` found two remaining violations. RED: `powerclip_frame_transparency_edit_uses_current_conversion` and `powerclip_frame_transparency_removal_uses_current_conversion_in_restore_and_fallback` both retained the original fountain transparency after the frame mask changed or was removed. `missing_current_bounds_fail_closed_for_original_unknown_fill` restored the original Unknown fill and unsupported payload through the `(None, None)` bounds arm instead of exporting the current gray/path conversion.
+
+The restored-shell and fallback PowerClip paths now propagate converted frame `transparency` alongside kind/fill/outline/transform/opacity/effects. This adds no new opacity-mask conversion: edited or removed mask art exports the converted `None` rather than stale original transparency, while an unchanged transparent PowerClip still restores its exact original transparency. Existing warning collection and deduplication are unchanged.
+
+Missing current bounds now always fail closed, including when expected bounds are also absent. Bounded unchanged objects continue to restore exact native patterns, unknown fills, unsupported payloads, and residuals. A no-bounds unsupported object uses its current conversion instead of restoring original semantics.
+
+GREEN: metadata restoration **25/25**, `corel-import` **8 unit + 6 public API + 25 restoration + 2 oracle self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Full CI/later serial gates remain for the controller. Later-run styles, colorize, gradient stop alpha, blend modes, edited opacity masks, and other unrepresentable fields remain conversion/fallback limits. The combined mesh/transparency/bitmap/residual matrix and S2 remain open; Task 10/P3.10, P3, and S2 stay open.
+
+
+## 12. Task 10 nested-cache, frame-state, and source-compatibility review
+
+Quality review of `0f1a8ea8` found three Important issues with failing-first regressions. Nested point-text cache differences rejected unchanged group and unsupported shells in both stored-snapshot and legacy modes, dropping shell-only Unknown/residual data. Frame visible/locked edits were overwritten by outer state in both restored-shell and fallback paths. A downstream-style `CoralCraftObjectMeta { original, page_index, initial_local_bounds }` literal failed to compile because `original_vc` was required, and both public metadata structs lacked `Eq`.
+
+Bounds comparison now recursively clears `TextObject.cached_bounds` and `cached_baselines` in the cloned comparison tree using `Arc::make_mut` for child mutation. Legitimate nested cache changes therefore cannot reject unchanged group/unsupported shells. Visibility/lock precedence is projection-aware: restored outer + changed frame uses converted frame state; changed outer + matching frame uses current outer state; both changed uses current outer state because CDR exposes one container state and cannot represent conflicting values; no reliable expected metadata defaults to current outer. Other frame appearance mappings are unchanged.
+
+Root projections now live in the existing `CoralCraftDocData.extra` extension map under `corel.import.original_vc.v1.<node-id>`. Nested objects have no sidecar entry. The original public struct shape and `Eq` on both metadata structs are restored, and the old-style literal plus `Eq` assertions compile and pass. The sidecar persists through native save/reopen, is filtered from exported CDR extras, and older/superseded documents use the existing isolated reconstruction fallback. Export/write signatures are unchanged.
+
+Native reader compatibility boundary: every snapshot node is still a real serialized node whose ID counts against the shared `with_node_budget` used by native loading (`MAX_READ_NODES`: 4,194,304 on desktop, 524,288 on wasm32). Root-only projections increase the total count, so a document near the cap can be rejected where its pre-snapshot form fit. The budget is unchanged and is not weakened.
+
+GREEN: metadata restoration **32/32**, public API **6/6**, `corel-import` **8 unit + 6 public API + 32 restoration + 2 oracle self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Full CI/later serial gates remain for the controller. Later-run styles, colorize, gradient stop alpha, blend modes, edited opacity masks, near-budget native documents, and other existing conversion limits remain explicit. Task 10/P3.10, P3, and S2 stay open.
+
+
+## 13. Task 10 projection-aware PowerClip precedence re-review
+
+Re-review of `6ac1d4ae` found that an unchanged original frame could overwrite current outer visibility/lock. New outer-only, conflicting both-changed, and metadata-free regressions all failed before the fix. An older forced-fallback test changed both outer and frame and initially encoded the wrong frame precedence; it now asserts the approved outer precedence, while the frame-only restored-shell control remains unchanged and green.
+
+Visibility/lock precedence is now explicit:
+
+- Restored outer shell + changed frame: converted current frame wins.
+- Changed outer shell + matching frame: current outer wins; original frame cannot overwrite it.
+- Both changed: current outer wins because CDR exposes one container state and cannot represent conflicting values.
+- No reliable expected metadata: current outer wins by default.
+
+Fallback conversion therefore always assigns current outer visibility/lock, while the restored-shell branch retains converted frame precedence. Fill, outline, transform, opacity, transparency, and effect mappings are unchanged.
+
+The documentation also corrects the prior shell-only implication: matching containers deep-clone the original object for residual fields before replacing children, and legacy reconstruction builds a full temporary metadata map that is discarded. These remain performance costs; no shell-only clone or metadata-free reconstruction optimization is claimed.
+
+GREEN: metadata restoration **35/35**, public API **6/6**, `corel-import` **8 unit + 6 public API + 35 restoration + 2 oracle self-skip**, persistence **12/12**, complete CorelDRAW integration **73/73**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Final gate at `01d4ab95`: `cargo xtask ci` passed fmt and Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts tests/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. This is not a clean full-CI claim. Existing conversion-fidelity, native-budget, and deep-clone/temporary-metadata performance limits remain. Task 10/P3.10, P3, and S2 stay open.
+
+
+
+## 14. Task 10 transparency and bitmap fallback slice
+
+The new conversion warnings are exactly:
+
+- `gradient stop opacity is dropped in CDR/CMX; native gradient stops remain editable`
+- `enabled opacity masks are dropped in CDR/CMX; native opacity masks remain editable`
+- `unsupported bitmap effects are dropped in CDR/CMX: <sorted, deduplicated IDs>; native effect parameters remain editable`
+- `missing image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged`
+- `undecodable or empty image pixels are replaced with opaque white in CDR/CMX; native image bytes and references remain unchanged`
+
+Gradient alpha is checked on the visible fill/stroke selected by appearance conversion and on text-run and image-colorize paints. Opaque, invisible, and shadowed gradients stay silent. Enabled masks are inspected recursively, but the dropped-mask warning is committed only when exact original restoration does not succeed. An unchanged imported CDR Fountain therefore restores its original transparency with no dropped-mask warning; an edited mask exports converted `transparency: None` and warns, while a disabled mask stays silent. Native gradient stops and mask art remain editable.
+
+The supported bitmap-effect IDs are exactly `stylize.dropShadow`, `path.offsetPath`, `threeD.extrude`, `distort.puckerBloat`, `distort.zigZag`, and `distort.twist`. The converter's existing match is the only support list: visible unmatched IDs are collected in a `BTreeSet` and emitted once in sorted order, including after edited metadata restoration fails. Invisible unsupported effects and the six supported visible IDs do not warn.
+
+Missing image blobs and present-but-undecodable or empty decoded pixels have separate warning categories. Small fallbacks remain opaque white RGBA, valid all-white PNGs do not warn, and export does not mutate native image keys or bytes. Both white-fallback allocation paths use checked `u64` dimension/byte multiplication and `coralcraft_cdr::parse::MAX_BITMAP_PIXELS` (64 Mpx / 256 MiB). Overflow or over-budget fallback dimensions return `CorelImportError::Conversion` through the existing fallible APIs instead of allocating or panicking; this includes `encoded_original_bitmap`.
+
+RED evidence: all eight new public tests failed before the production change—six on missing warning categories and both huge-dimension tests on capacity overflow. The engine gradient/mask test also failed with `warnings: []`; its opaque/disabled and invisible/shadowed controls passed. GREEN: public export/warnings **14/14**, metadata restoration **35/35**, `corel-import` **8 unit + 14 public + 35 restoration + 2 oracle self-skip**, persistence **14/14**, complete CorelDRAW integration **75/75**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Current stats: **2,048 files, 884,657 lines, 14,756 test attributes, 66 proptest blocks; desktop layer 533,881 lines**. Full CI and later serial gates remain for the controller. Self-skipping oracle/sample checks are not certification. The combined mesh/transparency/bitmap/residual matrix remains open; Task 10/P3.10, P3, and S2 stay open.
+
+
+
+## 15. Task 10 transparency/bitmap quality-review follow-ups
+
+RED evidence: the existing stored huge-original-bitmap test passed while the new legacy-reconstruction variant with the original-VC sidecar cleared panicked with capacity overflow before reaching `encoded_original_bitmap`. The item-only public `effect.apply {item: 0}` regression returned `warnings: []`; an initial combined test was corrected because object-level effects masked that gap. The strengthened unchanged-Fountain assertions require completely empty warnings and already passed as an evidence-only guard.
+
+Legacy reconstruction now validates bitmap dimensions through `checked_rgba_len` before calling `convert_cdr_node_to_vc`. On overflow or over-budget dimensions it records the conversion error and returns no expected projection, so current conversion reaches the existing structured `CorelImportError::Conversion` without reaching `raw.resize` or allocating. Stored and legacy huge-dimension tests both pass, and public signatures are unchanged.
+
+Appearance conversion now returns the effect slices for the same last-visible fill/stroke items whose paints it converts. After exact restoration fails, those slices are scanned by the existing six-arm effect conversion alongside `node.appearance.effects`, with no separate allowlist. Item-only effects warn in CDR and CMX; combined object/item IDs remain sorted and deduplicated; invisible effects and shadowed items stay silent. Unchanged direct and writer Fountain exports assert `warnings.is_empty()`.
+
+GREEN: public export/warnings **15/15**, metadata restoration **35/35**, `corel-import` **8 unit + 15 public + 35 restoration + 2 oracle self-skip**, persistence **15/15**, complete CorelDRAW integration **76/76**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Current stats: **2,048 files, 884,766 lines, 14,758 test attributes, 66 proptest blocks; desktop layer 533,934 lines**. Full CI and later serial gates remain for the controller. Self-skipping oracle/sample checks are not certification. The combined mesh/transparency/bitmap/residual matrix remains open; Task 10/P3.10, P3, and S2 stay open.
+
+
+
+## 16. Task 10 nested-bitmap reconstruction review
+
+RED evidence: new legacy regressions placed a `u32::MAX × u32::MAX` bitmap at depth two in an ordinary group and in a PowerClip. Both panicked with capacity overflow because the previous preflight examined only `metadata.original.kind` at the root. Recursive group, unsupported-object, and PowerClip conversion could still reach the unguarded `raw.resize`.
+
+The root-only check is replaced by an iterative complete-original-tree preflight. It visits every ordinary `ObjectKind::Group` child, every `ObjectKind::Unsupported` child, and every `powerclip_children` descendant at arbitrary depth. Each bitmap dimension is checked with `checked_rgba_len`; overflow or over-budget input records the conversion error and returns no expected projection before recursive reconstruction can allocate. Public signatures and stored/root legacy behavior are unchanged, and item-effect/Fountain controls remain green.
+
+GREEN: public export/warnings **17/17**, metadata restoration **35/35**, `corel-import` **8 unit + 17 public + 35 restoration + 2 oracle self-skip**, persistence **15/15**, complete CorelDRAW integration **76/76**, placed documents **41/41**, appearance **84/84**, warnings **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, formatting, focused Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Current stats: **2,048 files, 884,864 lines, 14,760 test attributes, 66 proptest blocks; desktop layer 533,934 lines**. Self-skipping oracle/sample checks are not certification. The combined mesh/transparency/bitmap/residual matrix remains open; Task 10/P3.10, P3, and S2 stay open.
+
+Final gate at `4745ec3f`: `cargo xtask ci` passed formatting and workspace Clippy, then engine library tests finished **4,376 passed / 1 failed / 2 ignored**, solely known-issue 0b. The complete CorelDRAW integration group passed **76/76**. Every skipped later gate was run serially and passed: doctests, cleanroom, no-bundled-fonts test/Clippy/install-font checks, pdf-deps, assets, brands, cursors, i18n-report, layers, and wasm. Wasm emitted the same four existing UI warnings, not errors. This is not a clean full-CI claim.
+
+
+
+## 17. Task 10 mesh-opacity fallback and empty-live fail-closed slice
+
+The new mesh warning is exactly:
+
+`mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable`
+
+Before live expansion, conversion checks original `NodeKind::Mesh` descendants for point opacity below 1.0. The warning is committed only after exact original restoration fails, so all-opaque meshes and successful exact restoration stay silent. Direct public `corel-import` model assertions require a non-empty group of ordinary non-empty paths with retained tessellated RGB colour, 10..110 × 20..80 coordinates, and object opacity 1.0. CDR7 and CMX1 warning-returning writers each emit the warning once; legacy wrappers return identical bytes at the same revision. Native mesh data is unchanged.
+
+Any originally live node whose deep expansion produces an empty group now records `CorelImportError::Conversion("live expansion produced an empty object; refusing to export empty CDR/CMX geometry")` instead of writing a successful empty object. This covers invalid/empty meshes, a nested live child, and generation-budget exhaustion through `export_document`, `export_document_with_warnings`, and all existing CDR7/CDRX/CMX1 writers. The new public `vectorcraft_doc::live::live_expansion_failed()` query describes the latest outermost deep expansion on the current thread: it resets at the next outermost expansion, remains sticky across nested failures, and can be queried after expansion returns. Existing expansion signatures and the production `MAX_GENERATED` budget of 4,000,000 are unchanged. A test-local RAII budget override proves the real zero-budget exhaustion branch and restores the previous thread-local state on drop; no override is public.
+
+RED evidence: the doc tests initially did not compile because `live_expansion_failed` was absent; the public mesh test returned `warnings == []` (0 matching warnings instead of 1); both empty-expansion tests returned successful exports instead of `CorelImportError::Conversion`; and the engine persistence test returned only the existing generic live-Mesh expansion warning. The all-opaque and exact-restoration negative controls passed before the fix and remain green.
+
+Spec-review RED follow-up: an ordinary parent with a changed name failed restoration while its nested translucent mesh restored its original shell. The nested output proved restoration with original opacity 0.37 rather than current opacity 1.0 and retained non-empty children, but the parent's pre-scan incorrectly returned `["mesh point opacity is dropped in CDR/CMX, so expanded patches are opaque; tessellated patch colours and positions are retained, and native mesh points remain editable"]`. Source-mesh detection now runs only when `live::is_live(node)` is true, before that live node is replaced by its expansion. Ordinary-group children are handled by their own restoration-dependent conversions, and opacity-mask art is not scanned wholesale; the existing recursive mask conversion remains the only mask path. Warning text and commit-after-local-restoration ordering are unchanged, as is empty-expansion status.
+
+Code-quality RED follow-ups: a changed live parent failed restoration while its nested translucent mesh restored original opacity 0.37 and non-empty output, yet the ancestor's aggregate boolean emitted the mesh warning. An exactly restored owner with enabled translucent-mesh mask art also emitted the warning from the discarded mask pre-scan. Both negative controls failed with the exact warning array; the fallback-owner positive control already emitted one mesh warning and one dropped-mask warning. Source meshes now contribute their unique IDs to a private per-export set, and the category is committed after a node's own exact-restoration early return only when that expanded node's ID is in the set. Live ancestors no longer proxy nested mesh results. Mask pre-scans checkpoint and restore only mesh-opacity warning/source state; conversion errors and all other warning categories remain untouched, and the mask contribution merges only after owner restoration fails. The `live_expansion_failed` API documentation now names both `expand_deep` and `expand_deep_hooks` and the existing reentrant live-evaluation guard without adding another nesting mechanism.
+
+GREEN: `vectorcraft-doc` **406/406**, public export/warnings **26/26**, metadata restoration **35/35**, `corel-import` **8 unit + 26 public + 35 restoration + 2 oracle self-skip**, persistence **16/16**, complete CorelDRAW integration **77/77**, placed documents **41/41**, appearance **84/84**, warning-filtered engine tests **33/33**, `coralcraft-cdr` **58 + 2 self-skip**, hostile import fuzz **190/190**, both 2,000-iteration release probes, formatting, focused doc/corel-import/engine Clippy with `-D warnings`, and MCP docs_sync **2/2** pass. Current stats: **2,048 files, 885,298 lines, 14,772 test attributes, 66 proptest blocks**. Full CI and later serial gates remain for the controller. Self-skipping oracle/sample checks are not independent certification; CDR/CMX reopen proves only ordinary non-empty vector paths without live mesh metadata, not live-mesh restoration. The combined matrix remains open, and this slice does not close Task 10/P3.10, P3, or S2.
+
+## 18. Mesh-opacity attribution closed on expansion provenance (P3 mesh review)
+
+The review of the mesh slice found the original-id attribution blind to generated art: a Repeat
+holds its source meshes in its spec (no child conversion ever reaches them), and a Repeat's copies
+and a Blend's intermediates carry `NodeId(0)` or cloned ids, so `mesh_point_opacity_sources
+.contains(top id)` could only fire when the top node itself was the mesh. A translucent-mesh Repeat
+therefore exported silently.
+
+Attribution is now expansion provenance (`live_drops_mesh_point_opacity` in `corel-import`), never
+original node ids alone, and generated node ids stay untouched:
+
+- the node itself, when it is a translucent mesh;
+- a Repeat's spec-held source art, scanned recursively (nested Repeats included);
+- the generated copies of one live evaluation level (`live::expand_live`), recognized by carrying
+  no id of the original tree — a Blend's intermediate meshes qualify, while its sources keep their
+  ids and convert on their own;
+- original child subtrees are deliberately excluded: each child owns its own warning in its own
+  fallback, so a restored child never proxy-warns its parent.
+
+New regressions, each observed failing before the fix (the plain Repeat case) and green after:
+translucent-mesh Repeat warns exactly once over its expanded opaque copies; the review's exact
+Blend scenario — the two source objects restore exactly from the stored original while the
+generated intermediates fall back — warns exactly once; a plain group over a translucent mesh
+still yields exactly the single child warning; and every existing control (exact/nested/mask
+restoration silence, empty-expansion fail-closed, dedup, all-opaque silence) stays green. GREEN
+battery: corel-import 8 unit + 30 public export/warnings + 35 restoration + 2 oracle self-skip,
+`vectorcraft-doc` 406/406, engine integration 266/266, MCP docs_sync 2/2, fmt, focused Clippy
+`-D warnings`. Full CI/serial gates run after this commit; S2 stays open, and this closes the
+mesh-opacity attribution question without closing Task 10/P3.10 or P3. Gate (`d18ce9f3b`, 2026-11-14): fmt/clippy ok, tests 4,376/1 (known-issue 0b only, verbatim), all serial gates green — not a clean full-CI pass (0b).
+
+## 19. Task T1 Texture fill — the reusable model: positive/negative matrix (frozen 2026-11-14)
+
+The texture model mirrors the pattern architecture and is not an ordinary pattern relabelled: a
+document-level reusable `TextureDef` (name, procedural `kind` with parameters, two colours), a
+distinct `Paint::Texture { texture }`, deterministic bounded synthesis for render/export, and
+shared-engine commands. Semantics frozen for this slice:
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `texture.new` creates a named definition (`kind`, parameters, foreground/background) and `texture.list` reports it with those parameters. |
+| P2 | `paint.setTexture` applies the definition to an object; the object's inspected paint is the texture (not a pattern, not a solid). |
+| P3 | A second object painted with the same name reuses the ONE definition (definition count does not grow). |
+| P4 | Editing the definition (`texture.setProps`) propagates to every user's rendered tiles (both objects' exported tile colours change). |
+| P5 | Undo/redo of definition edits and of `paint.setTexture` round-trips exactly. |
+| P6 | Native `.vectorcraft` save/reopen keeps the definition and its users; an edit after reopen still propagates. |
+| P7 | SVG export renders the synthesized tiles; independent `usvg` reads the tiles' actual geometry and both colours. |
+| P8 | PDF export reconstructs the tile art (Hayro-backed read: a page with the tile geometry — structure, not live-PDF claims). |
+| P9 | CDR/CMX export emits exactly one explicit texture fallback warning (the synthesized tiles or the named degradation, never a silent default checkerboard). |
+
+**Negatives (each must pass — no silent fallbacks, no pattern/texture confusion):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `paint.setTexture {texture: "<unknown>"}` errors and changes nothing. |
+| N2 | A texture definition is NOT listed by `pattern.list`, and a pattern name is refused by `paint.setTexture`. |
+| N3 | Texture paint survives no channel that cannot represent it without the P9 warning (no silent flattening into a plain pattern/solid on CDR/CMX paths). |
+| N4 | Invalid definition parameters (unknown kind, out-of-range parameter values) are refused at `texture.new`/`texture.setProps` without document change. |
+
+Out of scope for this slice (follow-ups, not blockers): the Corel foreground/background/kind mapping
+depth (Task T2), merge-mode interactions (Task T3), a texture picker UI.
+
+## 20. Task T1 texture-fill model core (delivered) and its open remainder
+
+RED first: all five initial tests failed on `UnknownCommand("texture.new")` (and, after the
+commands landed, on the summary-format and SVG-tile assertions). The delivered model core:
+
+- `vectorcraft-doc`: `TextureDef { name, kind: TextureKind (stipple), density 0..1, foreground,
+  background }` with deterministic bounded cell synthesis (`tiles`/`tile_nodes`), held in
+  `Document.textures`; `Document::texture(name)`.
+- `vectorcraft-color`: a distinct `Paint::Texture { texture }` kind (label `texture <name>`) —
+  never an ordinary pattern in disguise; every exhaustive `Paint` match across the workspace now
+  names it.
+- Commands (`crates/engine/src/cmd/texturecmds.rs`): `texture.new`, `texture.setProps` (one undo
+  step, duplicate names refused), `texture.list`, `paint.setTexture` (unknown names and pattern
+  names refused).
+- Export: CDR/CMX emits exactly one explicit fallback warning (`texture fill is synthesized to
+  tiles in CDR/CMX; …`); SVG/PDF/EPS/metafile/CAD degrade to the definition's background colour
+  with named notes.
+- Native `.vectorcraft` reopen keeps the definition and it still edits after reopen.
+
+Matrix status: P1–P3, P5, P6, P9, N1, N2, N4 green (coreldraw_texture 4 passed; negatives refuse
+unknown/pattern names and invalid kinds/densities). **Open remainder, kept as two `#[ignore]`-named
+anchors runnable with `--ignored` (P4/P7/P8): independent SVG/PDF tile synthesis** — until the
+tiles actually render, edit propagation is asserted through `texture.list`, not the export, and
+T1 stays open. GREEN battery: doc 406, color 149, corel-import 8+30+35+2, engine CorelDRAW
+integration 84, MCP docs_sync 2; fmt and focused Clippy `-D warnings` clean.
+
+## 21. Task T1 review fixes: shared texture tiling and the closure gate
+
+Same-reviewer re-review found that the first exporter-only implementation did not satisfy the
+frozen render/export contract: raster output was transparent, SVG compounds had no tiles, PDF
+hard-coded NonZero and filled even-odd holes, foreground SVG tiles bypassed object opacity and the
+appearance stack, synthesis had no cell budget, and `texture.new` returned a null name. The P4/P6/P8
+assertions were also too weak to identify both users, a post-reopen exported edit, or actual tile
+art.
+
+RED first: all six new engine regressions failed for those reasons, and both document tests failed
+for an over-budget grid and non-finite bounds. The SVG opacity regression initially used fill alpha
+instead of the target's inherited group opacity; its XML already had the correct `opacity="0.5"`,
+so the test was corrected to multiply usvg group and fill opacity. The original P7/P8 test was then
+strengthened from root-node/path counts to the connected SVG/PDF pattern definitions and both
+colours.
+
+The replacement uses one deterministic 24 × 24 period (2 × 2 cells): a nearest-sampled repeating
+image on the raster path, an ordinary SVG `<pattern>` through the existing appearance stack, and a
+PDF tiling pattern through `area`/`area_paint`, preserving fill rules, opacity, blend modes,
+overprint, effects and paint order. Bounded fallback tiles use the same 250,000-instance limit and
+finite/index checks as the pattern architecture; `texture.new` returns its name. Both former
+exporter-only `texture_tiles` bypasses are removed.
+
+GREEN so far: document texture budget **2/2**, the strengthened `coreldraw_texture` matrix
+**12/12**, SVG **67 + 7 + 337**, PDF **446 + 1 + 1 + 1** (one ignored library performance test), and
+render **537 + 38** (four existing manual timing probes ignored), and focused Clippy (`-D warnings`)
+over all five changed crates.
+Real CLI exports return the correct texture name; the half-opacity raster centre is `(191, 32, 32,
+128)`, the compound raster/PDF outer is red and its centre is transparent/white, and both SVGs use
+real patterns (the compound keeps `fill-rule="evenodd"`). The first CLI assertion script wrongly
+required background cells at density 1; its corrected assertions pass without changing the output.
+Full gate on the integrated T1 tree (`e3737fb4c`, 2026-11-16): `cargo xtask ci` exited 1.
+Formatting and workspace Clippy passed. The workspace run stopped at the engine library's sole
+failure, recorded verbatim:
+
+```text
+failures:
+    tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars
+
+test result: FAILED. 4376 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 34.91s
+
+error: test failed, to rerun pass `-p vectorcraft-engine --lib`
+
+CI summary:
+  ok    fmt
+  ok    clippy
+  FAIL  test: cargo test --workspace --lib --bins --tests: exited with exit status: 101
+  skip  doctests
+  skip  cleanroom
+  skip  no-bundled-fonts
+  skip  pdf-deps
+  skip  assets
+  skip  brands
+  skip  cursors
+  skip  i18n-report
+  skip  layers
+  skip  wasm
+error: ci failed at `test`
+```
+
+This is known-issue 0b on x86_64 macOS, not a clean full-CI pass, and no failure was hidden or
+silenced. Because it was the sole failure, every skipped later gate then ran serially and exited
+0, in this order:
+
+1. `cargo test --workspace --doc`.
+2. `cargo xtask cleanroom` (**2,643 files**).
+3. `cargo test -p vectorcraft-text --no-default-features --test without_bundled_fonts` (**1/1**).
+4. `cargo tree -p vectorcraft-ui-egui --target all -e features,normal -i vectorcraft-text`.
+5. `cargo tree -p vectorcraft-ui-egui --no-default-features --target all -e features,normal -i vectorcraft-text`.
+6. `cargo tree -p vectorcraft-mcp --target all -e features,normal -i vectorcraft-text`.
+7. `cargo tree -p vectorcraft-mcp --no-default-features --target all -e features,normal -i vectorcraft-text`.
+8. `cargo clippy -p vectorcraft-ui-egui --no-default-features --all-targets -- -D warnings`.
+9. `cargo test -p vectorcraft-ui-egui --no-default-features --test install_fonts` (**2/2**).
+10. `cargo xtask pdf-deps`.
+11. `cargo xtask assets` (**309 files**).
+12. `cargo xtask brands`.
+13. `cargo xtask cursors`.
+14. `cargo xtask i18n-report`.
+15. `cargo xtask layers` (**30 crates**).
+16. `cargo xtask wasm` (**25 crates**).
+
+Both default-feature trees contain `vectorcraft-text feature "bundled-fonts"`; both
+no-default-feature trees do not. Wasm emitted the same four existing UI warnings and no errors.
+
+The focused matrix and all eligible closure gates therefore support closing **T1**. **T2 Corel
+Pattern parameters is next.** T3, P3.3, P3, S2, and P0.1 remain open. CDR/CMX evidence remains
+limited to the explicit synthesized-tile fallback warning; no independent format certification is
+claimed.
+
+### Final-review addendum: pattern/texture cache separation (2026-11-17)
+
+Final review found that the SVG writer's shared `HashMap<String, String>` allowed a valid pattern
+named `texture|Coral Stipple` and a texture named `Coral Stipple` with matching transforms to
+produce the same cache key. The new `texture_and_pattern_cache_keys_do_not_collide` regression uses
+both definitions on separate targets and reads the export through independent `usvg`, including
+target positions and definition art. A zero-origin setup initially did not reproduce the collision
+because signed-zero transform coefficients made the strings differ; the final non-zero-origin setup
+makes the transforms match. Against the pre-fix code, the test failed at the distinct-definition
+assertion: the actual SVG emitted only `pattern-1`, connected both targets to it, and contained only
+the pattern's `#336699` art rather than the texture tiles.
+
+`Writer` now has separate pattern and texture caches. Existing key construction within each kind,
+name validity, definition reuse, and deterministic ID allocation are unchanged. Focused GREEN:
+`coreldraw_texture` **13/13**, SVG **67 + 7 + 337**, rustfmt, SVG/engine Clippy with `-D warnings`,
+and MCP docs_sync **2/2** all pass.
+
+The renewed `cargo xtask ci` passed formatting and workspace Clippy, then exited 1 solely at
+known-issue 0b: engine library **4,376 passed / 1 failed / 2 ignored**, failing
+`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`. This is
+not a clean full-CI pass. Every skipped later gate then reran serially in the exact 16-command order
+above and exited 0: doctests; cleanroom (**2,643 files**); no-bundled-fonts (**1/1**); all four
+feature-tree assertions with bundled fonts present only in the default-feature trees; no-default UI
+Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
+(**30 crates**); and wasm (**25 crates**). Wasm emitted the same four existing UI warnings and no
+errors. T1 remains complete and **T2 is next**; T3, P3.3, P3, S2, and P0.1 remain open.
+
+## 22. Task T2 Corel Pattern parameters — positive/negative matrix (frozen 2026-11-17)
+
+The CorelDRAW two-colour pattern fill maps **onto the synced pattern architecture**: a document-level
+reusable `PatternDef` carrying an optional `two_color` source (geometric `kind`, `fg`, `bg`), the
+tile size on the tile rectangle, art synthesized deterministically from the source, and the ordinary
+`Paint::Pattern` naming it. Generic `PatternDef.art` workflows stay as they are and do not count for
+this slice; a texture is not a pattern and vice versa.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `pattern.twoColor` creates a named definition (kind, fg, bg, tile size) for each of the five kinds, and `pattern.list` reports the source parameters. |
+| P2 | `paint.setPattern` fills the selection with the named pattern; the inspected paint is `pattern <name>` (not a texture, not a solid). |
+| P3 | A second object painted with the same name reuses the ONE definition (definition count does not grow). |
+| P4 | Each parameter edits through `pattern.setTwoColorProps` and reaches every user's exported tiles: **kind** (the tile art's geometry changes), **fg**, **bg** (the exported colours change), **tileSize** (the exported pattern period changes); each edit is one undo step and undo/redo round-trips exactly. |
+| P5 | Native `.vectorcraft` save/reopen keeps the definition, its parameters and its users; each parameter still edits after reopen. |
+| P6 | SVG export renders the synthesized tiles; independent `usvg` reads the connected pattern's tile rect and both colours, and kind-specific geometry (a polka-dot tile holds an ellipse where a checkerboard tile holds quadrant rectangles). |
+| P7 | PDF export reconstructs the tile art and a connected pattern definition (Hayro-backed read: structure, not live-PDF claims). |
+| P8 | CDR/CMX **import** maps `FillStyle::TwoColorPattern {kind, fg, bg, tile_size}` to a definition with exactly those parameters and a `Paint::Pattern` naming it (no solid-lerp substitution). |
+| P9 | CDR/CMX **export** of a two-colour pattern writes `FillStyle::TwoColorPattern` with exactly the definition's kind, colours and tile size, with **no** generic-pattern warning; a generic art pattern still emits exactly one named generic-pattern warning. |
+
+**Negatives (each must pass — no silent fallbacks, no pattern/texture confusion):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `pattern.twoColor`/`pattern.setTwoColorProps` refuse an unknown kind id, a non-colour fg/bg, and a non-finite or ≤ 0 tile size, without document change. |
+| N2 | `pattern.setTwoColorProps` on a definition without a two-colour source is refused with an error that names it an art pattern (pattern.options owns it). |
+| N3 | `paint.setPattern` with an unknown name or a texture name errors and changes nothing. |
+| N4 | A two-colour pattern is NOT listed by `texture.list`, and `paint.setTexture` refuses its name. |
+| N5 | CDR import of `PatternKind::Unknown` degrades to the solid blend **with a named warning** (never a silent checkerboard or silent solid). |
+
+Out of scope for this slice (follow-ups, not blockers): full-colour and bitmap pattern fill kinds,
+the Corel pattern transform parameters (mirror/rotate/skew/row-column offset), a pattern picker UI,
+and merge-mode interactions (Task T3).
+
+### 22a. Task T2 delivered: the parameter mapping (2026-11-17)
+
+RED first: all eight `coreldraw_pattern_params` engine tests failed (`UnknownCommand("pattern.twoColor")`
+and the import/export assertions) on the pre-change tree. The delivered mapping:
+
+- `vectorcraft-doc` (`pattern.rs`): `TwoColorKind` (the five geometric kinds, ids `checkerboard` …
+  `diagonalCrosshatch`), `TwoColorSource { kind, foreground, background }` with deterministic
+  bounded `tile_art` (background rectangle + the kind's foreground pieces; the polka dot is a real
+  ellipse, the crosshatch two diagonal parallelograms), and `PatternDef.two_color: Option<…>`
+  (serde-defaulted, so old documents load) with `PatternDef::two_color` / `set_two_color`
+  (regenerates the art; refuses an art pattern).
+- Commands (`patterncmds.rs`): `pattern.twoColor` (named definition from kind/colours/tile size,
+  blank names numbered), `pattern.setTwoColorProps` (one undo step, art patterns refused by name),
+  `paint.setPattern` (unknown and texture names refused), and `pattern.list` reporting the
+  `twoColor` source.
+- `corel-import`: CDR/CMX import maps `FillStyle::TwoColorPattern {kind, fg, bg, tile_size}` to a
+  definition with exactly those parameters (one per unique parameter set, "Two-Color <Kind>" named)
+  and a `Paint::Pattern` naming it; the forward-compatible `PatternKind::Unknown` keeps the solid
+  blend **with the named warning** `unknown Corel pattern kinds import as a solid blend …`. Export
+  writes the exact `FillStyle::TwoColorPattern` parameters back (kind, both colours, tile size,
+  no generic warning); generic art patterns keep exactly one named checkerboard warning.
+
+GREEN: `coreldraw_pattern_params` **8/8** (P1–P9, N1–N5), document pattern suite **30/30**
+(411 doc-crate tests in all), texture T1 regression **13/13**, fills/transparency **8/8**,
+P3 persistence **16/16**, corel-import **35 + 2**, SVG **337**, PDF, and MCP `docs_sync` **2/2**
+(unblessed; the command-level MCP doc refresh belongs to Task 13). Formatting and focused Clippy
+(`-D warnings`) over `vectorcraft-doc`, `vectorcraft-engine`, and `corel-import` pass.
+GitNexus `detect-changes --scope all`: 5 files, 43 symbols, one affected flow (a const-reposition
+attribution), risk medium, result complete.
+
+### 22b. Task T2 full gate (2026-11-17, tree `792b445ba`)
+
+`cargo xtask ci` exited 1: formatting and workspace Clippy passed; the workspace run stopped at the
+engine library's sole failure, recorded verbatim:
+
+```text
+failures:
+    tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars
+
+test result: FAILED. 4376 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 32.74s
+```
+
+That is known-issue 0b (the documented x86_64 macOS libm platform difference, green on every CI
+platform); this is **not** a clean full-CI pass. Every skipped later gate then ran serially and
+passed: doctests; cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both feature-tree pairs
+(bundled fonts present only in the default-feature trees); no-default-features UI Clippy
+(`-D warnings`); install_fonts (**2/2**); pdf-deps; assets; brands; cursors; i18n-report; layers;
+and wasm. T2 is complete on this evidence; **T3 merge-mode matrix and combined transparency is
+next**. T3, P3.3, P3, S2, and P0.1 remain open; no independent CDR/CMX certification is claimed.
+
+### 22c. Task T2 review fix: the source stays honest with the art (2026-11-17)
+
+The slice re-review found a blocking hole: `object.pattern.done` stored the edited tile art but
+kept the old two-colour source, and the CDR export trusted the source blindly — so a real
+CLI edit (recolour the tile to `#123456`, done) exported **no** warning and a CDR reopen
+silently restored the old `#c02020`/`#204080`. The blank-name behaviour also contradicted its
+own spec (the doc said blank names number themselves; the code refused them).
+
+RED first: three new regressions reproduced all of it (`editing_the_tile_art_resyncs_the_source_or_degrades_loudly`,
+`save_copy_and_tile_options_keep_the_two_color_source_honest`, `a_blank_two_color_name_is_numbered`).
+
+The invariant now: **a definition's source describes its art, or does not exist.**
+`TwoColorSource::recognized` recognizes a kind's synthesis back from real art (exact geometry per
+piece, plain solid fills, the background first, one foreground colour). Every art mutation
+re-derives it: `object.pattern.done` (a pure recolour re-syncs the source — the exact CDR mapping
+follows the edit; a structural edit ends the source), `object.pattern.saveCopy` (the copy carries
+the art it saves), `pattern.options` (a tile change ends the source; `pattern.setTwoColorProps`
+owns the tile size), and the colour-management conversion re-recognizes converted art. The CDR
+export no longer reads the stored source at all — it maps exactly what the **art** spells out and
+otherwise takes the named generic checkerboard degradation, so no future mutation path can export
+stale parameters silently. Audited paths that only re-id, rename, or render-bake pattern art
+(`colorcmds`, `library`, `expand`'s Cow bakes, text/symbol visitors) cannot desynchronize it.
+Blank names now number themselves (`Two-Color polkaDot`, `… 2`) like an omitted name, matching
+`object.pattern.make`.
+
+GREEN: `coreldraw_pattern_params` **11/11** (three review regressions plus the eight original),
+document pattern suite **31/31** (412 doc-crate tests), engine pattern commands **143**, texture
+**13/13**, fills/transparency **8/8**, P3 persistence **16/16**, corel-import **35 + 2**,
+formatting and focused Clippy (`-D warnings`) over the three changed crates. GitNexus
+`detect-changes --scope all`: 5 files, 8 symbols, no affected processes, risk low, complete.
+
+## 23. Task T3 Merge-mode matrix and combined transparency — positive/negative matrix (frozen 2026-11-17)
+
+The merge modes are the 16 `BlendMode`s of the shared Transparency panel (PDF's own set). Each
+mode is an object-level merge mode through `transparency.set` (item-level blends ride the same
+model); the matrix proves them on the shared engine with independent readers, and the combined
+scenario proves the CDR/CMX channel warnings once each.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | Every one of the 16 modes edits through `transparency.set {blend}` (panel label or CSS name) onto the object; the inspected node carries it. |
+| P2 | Each mode's edit undoes and redoes exactly (blend and opacity round-trip). |
+| P3 | Each mode survives a native `.vectorcraft` reopen and still edits after it. |
+| P4 | Independent `usvg` reads each mode's own `mix-blend-mode` value off the exported group (16 distinct CSS names, not just "some blend"). |
+| P5 | The Hayro-backed PDF read returns the mode (PDF names the exporter writes, proven per-mode at crate level; the engine check reads the mode back on the imported node). |
+| P6 | A combined object — translucent mesh fill + gradient with alpha + enabled opacity mask + a non-Normal blend — renders and exports, and the CDR/CMX export lists each channel warning **exactly once** (gradient alpha, opacity mask, mesh point opacity, blend mode). |
+| P7 | CDR/CMX export of any non-Normal merge mode emits the named blend-mode degradation warning (deduplicated); Normal emits none. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | `transparency.set {blend: "<unknown>"}` errors and changes nothing. |
+| N2 | The CDR/CMX blend-mode warning appears zero times when every blend is Normal (no noise warnings). |
+| N3 | The combined scenario's warnings are the four named ones only — no generic/unexplained warnings appear. |
+
+Out of scope for this slice (follow-ups, not blockers): a CorelDRAW Transparency-panel docker UI
+for the mode list (the panel evidence of Task 3 Step 2 stands), Fountain blend-mode import
+mapping, and live PDF editing claims (reads are structural).
+
+### 23a. Task T3 delivered: the merge-mode matrix and the blend-mode warning (2026-11-17)
+
+RED first: `combined_transparency_channels_warn_once_each_and_normal_warns_nothing` failed exactly
+on the missing blend-mode degradation (count 0); the 16-mode matrix and the unknown-name negative
+were written against the existing shared model and passed as evidence-only (no production change
+was needed for them).
+
+The delivered production change is one honest channel: the CDR/CMX writers carry no object or
+item merge mode, so `convert_vc_node_to_cdr_with_expected` (object blends) and
+`convert_vc_appearance_to_cdr` (fill/stroke item blends) now note any non-Normal mode and the
+export emits the named, deduplicated warning `merge modes other than Normal are dropped in
+CDR/CMX; native blend modes remain editable` once per export.
+
+GREEN: `coreldraw_fills_transparency` **11/11** — the 16-mode matrix (panel label and CSS name
+edit, opacity edit undo/redo beside the mode, mode-edit undo, native reopen, post-reopen edit,
+per-mode `usvg` `mix-blend-mode` read, per-mode Hayro PDF read on the imported node), the combined
+mesh + gradient-alpha + enabled-mask + Screen scenario (each of the four channel warnings exactly
+once in CDR and CMX, live-trace and live-Mesh aside, nothing unexplained), Normal-warning silence,
+and the unknown-name refusal. Regressions: corel-import **8 + 30 + 35 + 2**, formatting and
+focused Clippy (`-D warnings`) over `corel-import` and `vectorcraft-engine`. GitNexus
+`detect-changes`: complete, no affected processes. **The slice's full gate is pending** — the
+reopened-T2 gate below covers the tree this change was written on; T3's own gate runs with the
+next full-gate pass (Task 13 reruns everything).
+
+### 22d. Task T2 renewed gate after the review fix (2026-11-17, tree `65716a9e5`)
+
+`cargo xtask ci` on the reopened slice: formatting and workspace Clippy passed; the workspace run
+stopped at the engine library's sole failure — known-issue 0b, verified by a targeted rerun
+(`constrain_angle_turns_the_base_orientation_of_polygons_and_stars`,
+**4,376 passed / 1 failed / 2 ignored**) — not a clean full-CI pass. Every skipped later gate then
+ran serially on the final tree (the T3 test additions of §23a included) and passed: doctests;
+cleanroom (**2,644 files**); no-bundled-fonts (**1/1**); both feature-tree pairs; no-default UI
+Clippy; install_fonts (**2/2**); pdf-deps; assets (**309**); brands; cursors; i18n-report; layers
+(**30 crates**); wasm (its four existing UI warnings only). T2 closes on this evidence; T3's
+slice shares this gate run (its RED was observed on the same tree), and Task 13 reruns everything.
+
+### 23b. P3.3 closed (2026-11-17)
+
+With T1 (§19–§21), T2 (§22, review fix §22c/§22d), and T3 (§23/§23a) complete, the advanced
+fills/transparency slice P3.3 closes: fountain, generic and Corel two-colour patterns, texture
+fills, meshes, opacity masks, and the full 16-mode merge matrix all have native
+edit/undo/redo/reopen evidence, independent SVG/PDF reads, and named deduplicated CDR/CMX
+degradations. The remaining P3 work (E1–E6, M, Task 13) stays under P3, which remains open; S2
+and P0.1 are untouched.
+
+## 24. Task E1 Symmetry — positive/negative matrix (frozen 2026-11-17)
+
+CorelDRAW Symmetry maps onto the synced **Repeat** architecture: a symmetry object is a live
+`NodeKind::Repeat` whose arrangement is Corel's kind — **line** = `Mirror` (one mirror line),
+**grid** = `Grid` 2×2 with both flips (mirrored quadrants), **radial** = `Radial` with the new
+`mirror` flag (N instances at 2π/N, alternating chirality: the kaleidoscope sectors Corel shows
+for N lines). The source stays editable; Break dissolves to plain copies. No second model.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.symmetry.create` makes each kind from the selection: the node is a live Repeat with the mapped arrangement (line: 2 instances; grid: 4 mirrored; radial: N), and `object.symmetry.info` reports the kind and parameters. |
+| P2 | Radial instances alternate chirality (an asymmetric source's odd instances are mirrored) — real kaleidoscope semantics, not plain rotation. |
+| P3 | `object.symmetry.setProps` edits angle/center/lines in place, one undo step each; undo/redo round-trips exactly. |
+| P4 | Native reopen keeps the symmetry and its parameters; it still edits after reopen (source art too). |
+| P5 | The source art stays editable and every instance follows (an edit reaches all N instances). |
+| P6 | `object.symmetry.break` dissolves to exactly the instance count as plain editable copies (no Repeat left). |
+| P7 | Independent `usvg` reads the exported copies (N instances' geometry); the Hayro-backed PDF read returns them as objects. |
+| P8 | The real rendered controls work: Object > Symmetry menu items invoke create/break on the real menu tree, and the CorelDRAW Property Bar's symmetry row (Lines field, Angle field, Break button), shown with a symmetry object selected, drives `setProps`/`break` through synthetic input. |
+| P9 | CDR/CMX export emits the existing named live-Repeat expansion warning exactly once (arrangement parameters named as expanded). |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | An unknown kind, radial `lines` outside 2..1000, a non-finite angle/center, or setProps on a non-Repeat errors without document change. |
+| N2 | `object.symmetry.break`/`setProps` on an ordinary object errors and changes nothing. |
+
+Out of scope: a live symmetry *drawing mode* (edits mirroring as you draw), adding lines
+interactively on canvas, and CDR/CMX native symmetry preservation (the named expansion warning is
+the stated degradation).
+
+### 24a. Task E1 delivered: Symmetry over the Repeat architecture (2026-11-17)
+
+RED first: all four `coreldraw_symmetry` behaviour tests failed on `UnknownCommand("object.symmetry.create")`
+(the refusal negative passed vacuously). The delivered mapping:
+
+- `vectorcraft-doc` (`pattern.rs`): `RepeatKind::Radial` gains the serde-defaulted `mirror` flag
+  (a `// CoralCraft:` extension, ledger-rowed): odd instances compose the reflection across the
+  radial line at `start_angle` — alternating chirality, the kaleidoscope sectors Corel's N lines
+  show; plain radials serialize unchanged and load without the flag.
+- Commands (`symmetrycmds.rs`): `object.symmetry.create` (line → `Mirror`, grid → mirrored 2×2
+  `Grid`, radial → mirrored `Radial` with N lines; explicit angle/centre), `object.symmetry.setProps`
+  (angle/centre/lines, one undo step; grid pointed at `object.repeat.options`), `object.symmetry.break`
+  (the repeat expander), and the `object.symmetry.info` query mapping the kinds back.
+- UI: Object > Symmetry (Create Line/Grid/Radial, Break) on the real menu tree, and the
+  CorelDRAW Property Bar's symmetry row (Lines and Angle fields for the kinds that have them,
+  Break Symmetry always; grid carries Break alone) — wired into the control bar next to the
+  table row.
+
+GREEN: `coreldraw_symmetry` **5/5** (each kind's arrangement, chirality by winding flip, edits +
+undo/redo, native reopen + post-reopen edit, the source driving every instance, break's plain
+copies, usvg/Hayro instance reads, the named live-Repeat expansion warning once in CDR and CMX,
+refusals changing nothing), the UI control test (menu tree, real row, synthetic Break click,
+grid/plain rows), document pattern suite **32/32**, live effects **6/6**, engine pattern
+commands **143**, formatting and focused Clippy (`-D warnings`) over the three changed crates.
+GitNexus `detect-changes`: complete, 9 files, 16 symbols, 2 affected processes (the repeat
+arrangement evaluation), risk medium. The slice's full gate rides the next full-gate pass
+(Task 13 reruns everything).
+
+## 25. Task E2 Block Shadow — positive/negative matrix (frozen 2026-11-17)
+
+Block Shadow is a live vector effect on the shared appearance stack: `stylize.blockShadow`
+{x: pt, y: pt, color} sweeps the object's silhouette along (x, y) — the union of the outline, its
+translation, and the side walls — painted solid behind the object. Paths and compound paths only
+(the validation names the limit); CDR/CMX carries the geometry as its Extrude vector effect.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `effect.apply` puts the effect on the object's stack with its parameters; `effect.list` reports them. |
+| P2 | The rendered/exported art holds the swept block: independent `usvg` reads a shadow path with the effect's colour at the offset behind the object, and the Hayro-backed PDF read returns both paths. |
+| P3 | `effect.setParams` edits x/y/colour (one undo step each); undo/redo round-trips; the shadow's exported position/colour follows. |
+| P4 | Native reopen keeps the effect; it still edits after reopen. |
+| P5 | The shared effect dialog opens for the effect (`effect.dialog`) with its fields on the CorelDRAW workspace. |
+| P6 | CDR/CMX export maps the effect to the Extrude vector effect with exactly `hypot(x, y)` depth and `atan2` angle. |
+| P7 | `effect.remove` takes it off (the export no longer carries the shadow). |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | Non-finite x/y, a non-colour colour, or applying to a non-path (a group) is refused without document change. |
+
+Out of scope: the on-canvas direction-drag editing handle, shadows of type/images (the validation
+names the path limit), and CDR/CMX native Block Shadow (the Extrude mapping is the stated channel).
+
+### 25a. Task E2 delivered: the Block Shadow effect (2026-11-17)
+
+RED first: `block_shadow_sweeps_edits_and_exports` failed on `unknown effect "stylize.blockShadow"`.
+The delivered effect:
+
+- `vectorcraft-effects` (`addons/block_shadow.rs`, a CoralCraft module beside Vector Halftone):
+  the `stylize.blockShadow` catalogue entry ({x, y, color}), validation (finite numbers, a real
+  colour, paths/compound paths only — the error names the limit), and the art: the silhouette
+  swept along (x, y) as one united path (outline ∪ translation ∪ the side walls, pathops
+  `unite_all`, a 10 000-point outline budget), painted the effect's colour behind the unchanged
+  object. Wired beside Vector Halftone at every art site: `needs_bake`, `bake_node`, the
+  renderer's art chain, and the cull bounds (the shadow reaches past the object), with
+  `is_geometry` excluding it like the other art effects.
+- CDR/CMX: the sweep maps onto the legacy Extrude vector effect with exactly `hypot(x, y)` depth
+  and `atan2(y, x)` angle (a real parameter mapping, no warning).
+- UI: the shared effect dialog opens for it (`effect.dialog`, catalog-driven fields).
+
+GREEN: `block_shadow_sweeps_edits_and_exports` (apply/list, usvg shadow colour read, Hayro PDF
+two-path read, colour edit + one-step undo/redo, native reopen + post-reopen edit, the exact
+Extrude mapping, remove taking the shadow out of the export) and `block_shadow_refusals`
+(a group, a non-number x, a non-colour colour — all without document change), the dialog UI test,
+live effects **8/8**, effects crate **380**, render fx **81**, formatting and focused Clippy
+(`-D warnings`) over the four changed crates. GitNexus `detect-changes`: complete, low risk.
+
+### 26a. Task E3 delivered: Add Perspective as a true projective effect (2026-11-17)
+
+RED first: the battery failed on `unknown effect "distort.perspective"`. The delivered effect:
+
+- `vectorcraft-effects` (`distort.rs`, `// CoralCraft:`): `distort.perspective` — the bounding box
+  mapped **projectively** onto four new corners (Heckbert's closed-form square-to-quad homography,
+  anchors past the horizon keeping their place, the same curve-splitting budget as Free Distort,
+  which stays bilinear). Catalogued beside Free Distort under Effect > Distort & Transform; the
+  corners dialog (drag handles, arrow keys, Reset) is shared with it; `effect.apply`/`setParams`/
+  `remove` and native persistence come from the shared stack, with apply-time validation (four
+  finite [x, y] pairs, refused without document change).
+- CDR/CMX: the named unsupported-effect warning carries `distort.perspective` exactly once
+  (the geometry itself exports evaluated; the live parameters are the stated loss).
+
+GREEN: `perspective_is_projective_edits_and_exports` (corner-exact usvg anchors, one-step edits
+with undo/redo, native reopen + post-reopen edit, Hayro PDF read-back, the named degradation in
+CDR and CMX, remove restoring the plain rectangle) and the refusal negative, the dialog/menu UI
+test, live effects **10/10**, effects crate **380**, formatting and focused Clippy (`-D warnings`).
+GitNexus `detect-changes`: complete, medium risk (the geometry dispatch).
+
+## 27. Task E4 Lens — positive/negative matrix (frozen 2026-11-17)
+
+CorelDRAW's colour lenses map onto the shared paint + merge-mode architecture: a lens is a filled
+shape over the backdrop whose fill, blend mode and opacity carry the kind — **invert** = white
+fill with Difference, **brighten** = white with Lighten, **darken** = black with Darken,
+**lighten** = white with Screen, **tintedGrayscale** = the tint colour with Color — each at the
+lens's `amount` (opacity share). The backdrop-distorting lenses (Magnify, Fish Eye, Heat Map,
+Posterize, Find Edges) have no channel in the formats we write and are refused with a message
+naming exactly that (never a silent substitution).
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.lens` converts the selected shape into each colour lens: the inspected fill, blend and opacity are the kind's mapping (invert: white + Difference; tintedGrayscale: the tint + Color; …). |
+| P2 | The lens renders against what is under it: independent `usvg` reads the lens shape's `mix-blend-mode` and opacity; the Hayro-backed PDF read returns the blend on the imported node. |
+| P3 | Re-applying with another kind or amount edits in place, one undo step; undo/redo round-trips exactly. |
+| P4 | Native reopen keeps the lens (an ordinary paint object, editable as one). |
+| P5 | The Lens docker shows in the CorelDRAW workspace (kind list, amount, tint, Apply) and its Apply runs `object.lens` on the selection. |
+| P6 | CDR/CMX export of a lens emits the named merge-mode warning once (T3's channel); the shape and its colour survive as ordinary paint. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | A backdrop-distorting kind (magnify, fishEye, heatMap, posterize, findEdges), an unknown kind, a non-finite amount, or a target without a fill is refused without document change. |
+
+Out of scope: rendered backdrop distortion (Magnify/Fish Eye — refused, named), frozen/painted
+lens snapshots, and a CDR/CMX native lens channel (the merge-mode warning is the degradation).
+
+### 27a. Task E4 delivered: the colour lenses (2026-11-17)
+
+RED first: both behaviour tests failed on `UnknownCommand("object.lens")`. The delivered mapping:
+
+- `object.lens` (`lenscmds.rs`): the five colour lenses as fills whose paint, blend and opacity
+  carry the kind — invert (white + Difference), brighten (white + Lighten), darken (black +
+  Darken), lighten (white + Screen), tintedGrayscale (the tint + Color) — at the amount's opacity
+  share, one undo step through the shared item-editing plumbing. The backdrop-distorting kinds
+  (magnify, fishEye, heatMap, posterize, findEdges) are refused with a message that names exactly
+  what has no channel, as are unknown kinds, non-number amounts and non-colours.
+- The Lens docker (`panels/lens.rs`, Window > Lens): kind list, Amount, Tint and Apply running
+  `object.lens` on the selection (the tint belongs to tinted grayscale alone).
+
+GREEN: `coreldraw_lens` **3/3** (every kind's mapping with one-step edits, undo/redo and native
+reopen; usvg blend read + Hayro PDF blend read-back; the named T3 merge-mode degradation once in
+CDR and CMX; refusals changing nothing), the docker UI test (labels + a synthetic Apply click
+making an invert lens), live effects unchanged, formatting and focused Clippy (`-D warnings`).
+GitNexus `detect-changes` (compare `HEAD~1`): complete, **high risk** — 9 files, 6 symbols, 11
+affected processes, all through the two registration hubs the slice extends additively
+(`command_specs`, which every command lists through, and `show_icon_panel`, which routes every
+panel); the lens logic itself is a new leaf module, and the engine/UI batteries above cover both
+hubs' flows.
+
+## 28. Task E5 Push/Pull and Zipper dedicated handles — positive/negative matrix (frozen 2026-11-17)
+
+The shared `distort.zigZag` (Zipper: size + ridges) and `distort.puckerBloat` (Push/Pull: amount)
+effects and their CDR Distortion mappings exist; the slice is the **dedicated on-canvas handles**
+CorelDRAW's Distort tool drags, on the shared Selection tool like the grid-repeat handles.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | With the Selection tool and one object carrying a visible Zipper (Push/Pull) effect selected, its dedicated handles show on the canvas: Zipper an amplitude handle above the top edge and a frequency handle right of the right edge; Push/Pull one amount handle above the top edge. |
+| P2 | Dragging the amplitude handle vertically changes `size` (up grows), the frequency handle horizontally changes `ridges` (right grows, whole 1..100), and the amount handle horizontally changes `amount` (right bloats, left puckers, −200..200) — each drag previews `effect.setParams` and commits as one undo step. |
+| P3 | A drag that ends where it began leaves no undo step; Escape cancels the drag. |
+| P4 | The handle-set parameters survive native reopen and still edit (the shared effect stack). |
+| P5 | Independent `usvg` reads the re-distorted geometry after a handle-set value; the Hayro-backed PDF read returns the distorted path. |
+| P6 | CDR/CMX carries the exact Distortion vector effect — Zipper with the handle-set amplitude and frequency, Push/Pull with the handle-set amplitude. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | No handle shows for a selection without such an effect, with several objects, or with Cmd/Ctrl/Alt held. |
+
+Out of scope: the standalone Corel Distort tool's mode switching UI, and per-ridge handle editing.
+
+### 28a. Task E5 delivered: the Push/Pull and Zipper dedicated handles (2026-11-18)
+
+RED first: the canvas regression failed on the missing `vectorcraft_tools::distort_handles`
+module. The delivered handles:
+
+- `vectorcraft-tools` (`distort_handles.rs`, a CoralCraft module mirroring the grid-repeat
+  handles): with the Selection tool and one object carrying a visible `distort.zigZag`
+  (Zipper) or `distort.puckerBloat` (Push/Pull), dedicated handles show — Zipper an amplitude
+  handle above the top edge (drag up grows `size`) and a frequency handle right of the right edge
+  (drag right grows `ridges`, ten points each, whole 1..100); Push/Pull one amount handle above
+  the top edge (drag right bloats, left puckers, two percent a point, −200..200). A drag previews
+  the existing `effect.setParams` and commits as one undo step; a no-move drag leaves no step;
+  Escape cancels; Cmd/Ctrl/Alt pass the press through; no handle without the effect or with
+  several objects selected. Wired into the Selection tool beside the grid-repeat drag and drawn
+  as circles by a canvas overlay.
+
+GREEN: the canvas regression (synthetic pointer drags on the real handles: amplitude +20 pt →
+size 6→26, one undo step, undo/redo exact; frequency +30 pt → ridges 4→7; the no-move drag;
+Push/Pull +25 pt → amount 50), the engine evidence (handle-set values survive native reopen and
+still edit; usvg reads the re-distorted anchors; the Hayro PDF read returns the path; CDR/CMX
+carries the exact Zipper Distortion with amplitude 26 and frequency 7), tools **853**, canvas
+suite **273**, live effects **11/11**, formatting and focused Clippy (`-D warnings`).
+
+## 29. Task E6 PowerClip Lock Contents to Frame — positive/negative matrix (frozen 2026-11-18)
+
+CorelDRAW's Lock Contents to PowerClip: while **on** (the default) a clip group's contents move
+with its frame; while **off** a transform of the clip group moves the frame alone — the contents
+stay where the page put them, the frame reveals a different part of them. The flag is the clip
+group's own (`contents_unlocked`), toggled by command or the CorelDRAW Property Bar button.
+
+**Positives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| P1 | `object.clippingMask.setContentsLocked {lock: false}` (true) sets (clears) the flag on the selected clip groups, one undo step; undo/redo round-trips. |
+| P2 | Locked (the default): moving the clip group moves the frame and the contents together (today's behaviour, kept). |
+| P3 | Unlocked: moving (or scaling) the clip group moves the frame alone — the contents' coordinates are untouched, one undo step. |
+| P4 | Native reopen keeps the flag; it still toggles after reopen, and the behaviour follows. |
+| P5 | The CorelDRAW Property Bar shows Lock Contents to Frame with a clip group selected (its label the current state) and its synthetic click toggles the flag; no button without a clip group selected. |
+| P6 | CDR/CMX export of an unlocked clip group emits the named relock warning exactly once; a locked one emits none, and the clip itself still exports. |
+
+**Negatives (each must pass):**
+
+| # | Behaviour |
+|---|---|
+| N1 | The toggle on an ordinary object errors and changes nothing; a missing/non-bool `lock` errors. |
+
+Out of scope: Frame Type options, contents auto-centering on unlock (Corel's "Auto-center"
+preference), and a CDR/CMX native channel for the lock state (the named warning is the stated
+degradation).
+
+### 29a. Task E6 delivered: Lock Contents to PowerClip (2026-11-18)
+
+RED first: the battery failed on `UnknownCommand("object.clippingMask.setContentsLocked")`. The
+delivered behaviour:
+
+- Model (`vectorcraft-doc`, a `// CoralCraft:` flag wired through `NodeWire`): a clip group's
+  `contents_unlocked` — while false (the default, Corel's lock on) frame and contents transform
+  together; while true a transform of the clip group moves the clip path alone, the contents
+  staying where the page put them. Native documents round-trip the flag.
+- Command: `object.clippingMask.setContentsLocked {lock}` (one undo step; an ordinary target and
+  a non-bool lock are refused by name), hooked into the shared transform's per-target loop.
+- CDR/CMX: an unlocked clip group warns once by name
+  (`unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents
+  keep the flag`); a locked one stays silent and the clip itself still exports.
+- UI: the CorelDRAW Property Bar's Lock Contents to Frame button with a clip group selected —
+  its label the current state, a click toggling it; no button without a clip group.
+
+GREEN: `coreldraw_powerclip` **4/4** (the default-locked move kept, the unlocked move leaving the
+contents untouched with exact undo/redo of move and toggle, native reopen keeping and re-toggling
+the flag with the behaviour following, the named relock warning once and only while unlocked, the
+refusals), the button UI test (synthetic clicks both ways, label flips, no button for ordinary
+objects), document crate **413** (the wire round-trip included), engine transform suite **76**,
+formatting and focused Clippy (`-D warnings`).
+
+### 29b. Task E6 review fix: explicit ids name their own clip groups (2026-11-18)
+
+The re-review found `object.clippingMask.setContentsLocked` accepting `ids` in its schema but
+reading only the selection — an automation call naming clip 4 while clip 7 was selected would
+toggle 7. The fix resolves explicit ids through the same idiom the transform commands use
+(`ids_param`: the named ids' own clip groups, an inner id finding its group), with the selection
+driving it only without ids. The dual-clip regression proves the named clip alone changes (and
+the reply names it), the selection still works without ids, an inner id resolves to its group,
+and a plain object with explicit ids errors rather than falling back.
+GREEN: `coreldraw_powerclip` **5/5**, the CorelDRAW integration battery **123/123**, effects UI
+**33/33**, MCP docs_sync **2/2**, formatting and focused Clippy (`-D warnings`). GitNexus
+`detect-changes`: complete, low risk.
+
+## 30. Task M combined persistence matrix (frozen 2026-11-18; anchors recorded, closure in progress)
+
+Evidence consolidation over the existing suites — each row names native editability, direct CDR
+model assertions, CDR/CMX non-empty-vector evidence, exact warning counts, and negative controls.
+Existing anchors may satisfy a row; only a real gap adds a regression.
+
+| # | Fixture | Native evidence (anchor) | CDR/CMX + negative evidence (anchor) |
+|---|---|---|---|
+| M1 | Nested PowerClip with an unlocked inner clip | Reopen keeps both clip trees and the unlock flag; frame/content edits still work (`coreldraw_powerclip` nesting + §29a reopen; the nested-unlock combination is a gap to cover) | Model keeps nested clips, non-empty paths; the relock warning once per export (never per nested node); locked stays silent (§29a warns once; the nested double-count is a gap to cover) |
+| M2 | Translucent mesh inside Repeat and Blend | Reopen keeps editable mesh sources and Repeat/Blend parameters (`coreldraw_p3_persistence` mesh rows + live suites) | Expanded fallbacks carry non-empty opaque tessellations; the mesh-opacity warning once per real fallback category, never proxy-warning for restored sources or plain groups (mesh attribution slice §18) |
+| M3 | Gradient + enabled opacity mask | Reopen keeps stops and editable mask art; a further edit works (fills/transparency §Task 3 Step 2 rows) | Gradient-alpha and enabled-mask warnings each exactly once; exactly-restored Fountain masks and disabled masks silent (§5/§14 rows) |
+| M4 | Bitmap + live trace + expanded trace | Reopen keeps source pixels, live parameters, separately editable expanded paths (`coreldraw_p3_persistence` trace rows) | Live-trace warning once; ordinary non-empty vectors + ordinary source image; expanded traces emit no live warning (§5 rows) |
+| M5 | Residuals and restoration failure | Imported residuals and current edits preserved without stale originals (metadata_restoration suite) | Exact restoration only for unchanged semantics; edited appearance/container/bounds use current conversion; missing bounds fail closed (§7–§17 rows) |
+| M6 | Abnormal input and generation budget | Rejected commands leave no mutation or history (per-command negatives through §22–§29) | Empty live expansion and budget exhaustion give structured conversion errors through CDR7/CDRX/CMX1; hostile imports error, never panic (import fuzz + conversion-error rows) |
+
+**Anchor status at freeze (2026-11-18):** `coreldraw_p3_persistence` **16/16**, corel-import
+**75** (all suites), the E6 ids regression and battery of §29b green. **Closed (2026-11-19):** the M1 nested-unlock regression passes — a clip inside a clip with
+both unlocked keeps both flags through native reopen, still edits its contents, warns exactly
+once per CDR/CMX export (never once per nested node) and stays silent relocked, with the nested
+clip model and non-empty paths surviving the import; and the M6 fuzz gates pass
+(`CORALCRAFT_FUZZ_ITERS=2000` `probe` and `parse_cdr`, both exit 0). With M2–M5's anchors above,
+the combined matrix closes: `coreldraw_p3_persistence` **17/17**, the CorelDRAW integration
+battery green, MCP `docs_sync` **2/2**, formatting clean. **Task 3's acceptance additions are
+next.**
+
+**Final-acceptance hardening (2026-11-22, final-acceptance plan Task 1):** M1's import check can
+no longer hide an error — the `if let Ok` block and its no-op line are gone, so any CDR/CMX
+import `Err` fails the test. M2's combined native evidence is real now: a radial Symmetry keeps
+its translucent mesh source editable through native reopen (repeat parameters and every point's
+colour/opacity/position/handles intact; a post-reopen mesh edit is one undo step), a Blend
+between two translucent meshes stays live with `Steps(4)` and editable keys, and editing a
+source after the reopen changes the evaluated Repeat/Blend output read through independent
+`usvg` fill fingerprints — with the §18 anchors retained (the mesh-opacity warning once per
+export, non-empty ordinary vectors, no live mesh/repeat/blend in the reimported CDR/CMX).
+Evidence-only: no production change was needed. `coreldraw_p3_persistence` **20/20**; battery:
+CorelDRAW integration **127/127**, corel-import **75/75**, MCP `docs_sync` **2/2**, formatting
+clean.
+
+## 31. P3 final acceptance and closing gate (2026-11-22)
+
+The final-acceptance plan
+([`2026-11-19-p3-final-acceptance.md`](superpowers/plans/2026-11-19-p3-final-acceptance.md)),
+executed in order:
+
+- **Task 1 (M1/M2 hardening, `941539ec5`).** M1's CDR/CMX import check can no longer hide an
+  error (the `if let Ok` block and its no-op line removed; any import `Err` fails the test). M2
+  gained the combined native regressions: radial Symmetry keeps its translucent mesh source
+  editable through native reopen (repeat parameters and every point's colour/opacity/position/
+  handles; a post-reopen mesh edit is one undo step), a Blend of two translucent meshes stays
+  live with `Steps(4)` and editable keys, and editing a source after the reopen changes the
+  evaluated Repeat/Blend output read through independent `usvg` fill fingerprints. Evidence-only
+  — no production change was needed. `coreldraw_p3_persistence` **20/20**; CorelDRAW integration
+  **127/127**, corel-import **75/75**, MCP `docs_sync` **2/2**, fmt clean.
+- **Task 2 (scenario + MCP/CLI, `5dd6373f7`).** The poster/traced acceptance now also covers
+  radial Symmetry (`setProps` revision between two native reopens), Block Shadow, Perspective,
+  an E5-style Zig Zag parameter edit, an invert colour lens, and an unlocked PowerClip. Asserts
+  native editability of every object after both reopens, independent `usvg` structure (the
+  clip path; exactly one non-Normal blend group — the lens), a Hayro-backed PDF read (one
+  artboard), non-empty ordinary vectors in reimported CDR/CMX, and the exact fallback warning
+  set: live Blend/Radial-Repeat expansion, dropped lens merge mode, unsupported
+  `distort.perspective`, and the relock each exactly once, nothing else (the scenario's trace
+  was expanded, so no live-trace warning). The clippy complexity fix was amended into the same
+  commit. `p3_commands_run_through_run_command` (MCP) drives texture ×4, two-colour pattern ×3,
+  symmetry ×4, lens, and the explicit-ID dual-clip `setContentsLocked`, with one invalid call
+  returning an MCP error over a byte-identical document. The CLI `commands` listing names all
+  five new command families. Battery: coreldraw **127/127**, ui `coreldraw_effects` **15/15**,
+  tools **853/853**, doc **413/413**, docs_sync **2/2**, fmt clean.
+- **Task 3 (final gate).** `cargo xtask ci`: fmt ok, clippy ok (`-D warnings`), then the
+  workspace tests stopped at the sole failure — engine library **4,376 passed / 1 failed /
+  2 ignored**, the documented platform-flake known-issue 0b
+  (`tests::constrain_new::constrain_angle_turns_the_base_orientation_of_polygons_and_stars`,
+  recorded verbatim, not silenced). **Not a clean full-CI pass.** Every skipped later gate then
+  ran serially and exited 0: doctests, cleanroom (2,656 files), no-bundled-fonts, the four
+  feature trees (default trees contain `bundled-fonts`, no-default trees omit it), no-default
+  UI Clippy, install-fonts, pdf-deps, assets (309), brands, cursors, i18n-report, layers
+  (30 crates), and wasm (the four pre-existing ui-egui warnings, not errors).
+
+**P3 closes here.** S2/P0.1 (real libcdr oracle + operator samples) remain open, self-skips and
+self-round trips are not certification, and no production-performance or independent CDR/CMX
+conformance claim is made. Current measured tree: `cargo xtask stats` → **2,059 files,
+891,237 lines, 14,848 `#[test]`, 66 `proptest!`**. Next phase: **P4** (colour, prepress, and
+production output), inventoried in [`docs/p4-inventory.md`](p4-inventory.md).

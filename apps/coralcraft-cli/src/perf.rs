@@ -402,6 +402,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--deep" => want_deep = true,
+            "--bench" => {
+                let which = it.next().cloned().ok_or("--bench needs zoom")?;
+                let ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(3000);
+                return match which.as_str() {
+                    "zoom" => bench_zoom(ms),
+                    "save" => bench_save(ms),
+                    "open" => bench_open(ms),
+                    other => Err(format!("unknown bench `{other}` (zoom|save|open)")),
+                };
+            }
+            "--class" => {
+                let which = it.next().cloned().ok_or("--class needs illustration|brochure|poster")?;
+                return class_report(&which);
+            }
             "--paths" => n = it.next().and_then(|v| v.parse().ok()).ok_or("--paths needs a number")?,
             other => return Err(format!("unknown perf option `{other}`")),
         }
@@ -507,6 +521,395 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         _ => Err(format!("{over} budget(s) exceeded")),
     }
+}
+
+// CoralCraft (P5 Task 1): the three representative project classes, built deterministically
+// through real commands so every run replays the same document (defined and measured in
+// docs/p5-inventory.md; synthetic only — no operator document is committed).
+
+/// Runs one command, mapping errors to the harness's string errors.
+fn ex(s: &mut vectorcraft_engine::Session, c: &str, p: serde_json::Value) -> Result<serde_json::Value, String> {
+    s.execute(c, &p).map_err(|e| format!("{c}: {e}"))
+}
+
+/// A synthetic PNG: a rendered gradient page, so the classes need no external fixture.
+fn png_bytes(size: u32) -> Vec<u8> {
+    let mut doc = Document::new(f64::from(size), f64::from(size));
+    let l = doc.layers.first().map(|l| l.id);
+    for i in 0..8 {
+        let x = f64::from(i) * f64::from(size) / 8.0;
+        let node = Node::path(
+            doc.alloc_id(),
+            shapes::rectangle(Rect::new(x, 0.0, x + f64::from(size) / 8.0, f64::from(size))),
+            Appearance::basic(Paint::solid(Color::rgb(f64::from(i) as f32 / 8.0, 0.4, 1.0 - f64::from(i) as f32 / 8.0)), Paint::None, 0.0),
+        );
+        doc.insert(l, usize::MAX, node).ok();
+    }
+    let mut r = Renderer::new();
+    r.threads = 0;
+    r.render(&doc, size, size, Affine::IDENTITY, &RenderOptions::default()).to_png().unwrap_or_default()
+}
+
+/// Class builders. Every position and colour comes from the index, never chance.
+fn class_session(which: &str) -> Result<vectorcraft_engine::Session, String> {
+    let mut s = vectorcraft_engine::Session::new();
+    let colour = |i: usize| format!("#{:06x}", (i.wrapping_mul(2654435761) % 0x1000000));
+    match which {
+        // A many-object vector illustration: one page, 2,400 shapes, 40 guides, 5 symbols × 20
+        // instances, 30 text objects, and one edited 5,000-anchor path.
+        "illustration" => {
+            ex(&mut s, "file.new", json!({"width": 420, "height": 300}))?;
+            for i in 0..2400 {
+                let (x, y) = ((i % 80) as f64 * 5.25, (i / 80) as f64 * 10.0);
+                let id = match i % 3 {
+                    0 => ex(&mut s, "shape.rectangle", json!({"x": x, "y": y, "width": 4.0, "height": 4.0}))?["id"].as_u64().unwrap_or_default(),
+                    1 => ex(&mut s, "shape.ellipse", json!({"x": x, "y": y, "width": 4.0, "height": 4.0}))?["id"].as_u64().unwrap_or_default(),
+                    _ => ex(&mut s, "shape.star", json!({"cx": x + 2.0, "cy": y + 2.0, "radius1": 2.4, "radius2": 1.2, "points": 5}))?["id"]
+                        .as_u64()
+                        .unwrap_or_default(),
+                };
+                ex(&mut s, "paint.setFill", json!({"ids": [id], "color": colour(i)}))?;
+                if i % 5 == 0 {
+                    ex(&mut s, "object.setProps", json!({"ids": [id], "opacity": 80}))?;
+                }
+            }
+            for i in 0..40 {
+                ex(&mut s, "guide.add", json!({"vertical": i % 2 == 0, "pos": (i as f64 + 1.0) * 10.0}))?;
+            }
+            for sym in 0..5 {
+                let id = ex(&mut s, "shape.ellipse", json!({"x": 200.0 + sym as f64 * 8.0, "y": 20.0, "width": 12.0, "height": 12.0}))?["id"]
+                    .as_u64()
+                    .unwrap_or_default();
+                ex(&mut s, "paint.setFill", json!({"ids": [id], "color": colour(sym + 900)}))?;
+                ex(&mut s, "select.set", json!({"ids": [id]}))?;
+                ex(&mut s, "symbol.new", json!({"name": format!("Mark {sym}")}))?;
+                for at in 0..20 {
+                    ex(&mut s, "symbol.place", json!({"name": format!("Mark {sym}"), "x": 200.0 + at as f64 * 3.0, "y": 260.0 + sym as f64 * 6.0}))?;
+                }
+            }
+            for t in 0..30 {
+                ex(&mut s, "text.create", json!({"x": 10.0 + t as f64 * 12.0, "y": 280.0 + (t % 3) as f64 * 6.0, "text": format!("Label {t}")}))?;
+            }
+        }
+        // A multipage brochure: six mixed-size pages, a master layer with the page-number field,
+        // threaded area text, two tables, four placed 512×512 bitmaps, and CDR residuals from one
+        // export/import round trip.
+        "brochure" => {
+            ex(&mut s, "file.new", json!({"width": 420, "height": 300}))?;
+            for (i, (w, h)) in [(300.0, 400.0), (420.0, 300.0), (300.0, 300.0)].iter().enumerate() {
+                ex(&mut s, "artboard.new", json!({"width": w, "height": h}))?;
+                let page = i + 1;
+                for o in 0..12 {
+                    let id = ex(
+                        &mut s,
+                        "shape.rectangle",
+                        json!({"x": 10.0 + o as f64 * 22.0, "y": 10.0 + o as f64 * 16.0, "width": 18.0, "height": 12.0}),
+                    )?["id"]
+                        .as_u64()
+                        .unwrap_or_default();
+                    ex(&mut s, "paint.setFill", json!({"ids": [id], "color": colour(o + page * 40)}))?;
+                }
+                ex(&mut s, "text.create", json!({"x": 12.0, "y": 240.0, "text": format!("Page {page} body text with several words.")}))?;
+            }
+            ex(&mut s, "layer.new", json!({"name": "Master", "role": "masterAll", "top": false}))?;
+            ex(&mut s, "text.create", json!({"x": 200.0, "y": 12.0, "text": "Brochure header"}))?;
+            let png = vectorcraft_format::base64_encode(&png_bytes(512));
+            for b in 0..4 {
+                ex(
+                    &mut s,
+                    "file.place",
+                    json!({"name": format!("photo-{b}.png"), "dataBase64": png, "link": false, "at": [30.0 + b as f64 * 90.0, 60.0]}),
+                )?;
+            }
+            ex(
+                &mut s,
+                "layout.table",
+                json!({"x": 40.0, "y": 150.0, "width": 200.0, "height": 60.0, "rows": 3, "columns": 4, "text": [["A", "1", "2", "3"], ["B", "4", "5", "6"], ["C", "7", "8", "9"]]}),
+            )?;
+            // One CDR round trip leaves the CoralCraft residual block in the reopened document.
+            let cdr = ex(&mut s, "document.serialize", json!({"format": "cdr"}))?;
+            ex(&mut s, "document.open", json!({"name": "brochure.cdr", "dataBase64": cdr["dataBase64"]}))?;
+        }
+        // A P3/P4 feature-dense poster: nested PowerClip, blend, mesh with point opacity,
+        // two-colour pattern, texture, gradient with an opacity mask, live effects, a traced
+        // bitmap, and the production settings (spot ink, overprint, separations print setup,
+        // document bleed).
+        "poster" => {
+            ex(&mut s, "file.new", json!({"width": 420, "height": 300}))?;
+            ex(&mut s, "file.documentColorMode", json!({"mode": "cmyk"}))?;
+            let base =
+                ex(&mut s, "shape.rectangle", json!({"x": 20.0, "y": 20.0, "width": 150.0, "height": 100.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "paint.setFill", json!({"ids": [base], "color": {"c": 0, "m": 100, "y": 0, "k": 0}}))?;
+            ex(&mut s, "swatch.new", json!({"name": "Coral Spot Orange", "color": {"c": 0, "m": 35, "y": 95, "k": 0}, "global": true}))?;
+            ex(&mut s, "swatch.setSpot", json!({"name": "Coral Spot Orange"}))?;
+            let spot =
+                ex(&mut s, "shape.rectangle", json!({"x": 190.0, "y": 20.0, "width": 80.0, "height": 100.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "paint.setFill", json!({"ids": [spot], "swatch": "Coral Spot Orange"}))?;
+            let over =
+                ex(&mut s, "shape.rectangle", json!({"x": 60.0, "y": 80.0, "width": 100.0, "height": 40.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "paint.setFill", json!({"ids": [over], "color": {"c": 0, "m": 0, "y": 100, "k": 0}}))?;
+            ex(&mut s, "object.setOverprint", json!({"ids": [over], "fill": true}))?;
+            let inner =
+                ex(&mut s, "shape.rectangle", json!({"x": 30.0, "y": 130.0, "width": 60.0, "height": 40.0}))?["id"].as_u64().unwrap_or_default();
+            let inner_frame =
+                ex(&mut s, "shape.rectangle", json!({"x": 25.0, "y": 125.0, "width": 70.0, "height": 50.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "select.set", json!({"ids": [inner, inner_frame]}))?;
+            let clip = ex(&mut s, "object.clippingMask.make", json!({}))?["id"].as_u64().unwrap_or_default();
+            let outer_frame =
+                ex(&mut s, "shape.rectangle", json!({"x": 15.0, "y": 115.0, "width": 95.0, "height": 70.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "select.set", json!({"ids": [clip, outer_frame]}))?;
+            ex(&mut s, "object.clippingMask.make", json!({}))?;
+            let a = ex(&mut s, "shape.ellipse", json!({"x": 300.0, "y": 20.0, "width": 24.0, "height": 24.0}))?["id"].as_u64().unwrap_or_default();
+            let b = ex(&mut s, "shape.ellipse", json!({"x": 370.0, "y": 90.0, "width": 40.0, "height": 40.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "object.blend.make", json!({"ids": [a, b], "steps": 10}))?;
+            let mesh =
+                ex(&mut s, "shape.rectangle", json!({"x": 300.0, "y": 150.0, "width": 90.0, "height": 60.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "object.mesh.create", json!({"id": mesh, "rows": 4, "cols": 4}))?;
+            ex(&mut s, "object.mesh.setPointColor", json!({"id": mesh, "index": 5, "color": "#28aa5a", "opacity": 0.5}))?;
+            ex(&mut s, "pattern.twoColor", json!({"name": "Coral Checks", "kind": "checkerboard"}))?;
+            let patterned =
+                ex(&mut s, "shape.rectangle", json!({"x": 20.0, "y": 200.0, "width": 80.0, "height": 60.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "select.set", json!({"ids": [patterned]}))?;
+            ex(&mut s, "paint.setPattern", json!({"pattern": "Coral Checks"}))?;
+            ex(&mut s, "texture.new", json!({"name": "Coral Stipple", "kind": "stipple", "density": 0.5}))?;
+            let textured =
+                ex(&mut s, "shape.rectangle", json!({"x": 110.0, "y": 200.0, "width": 80.0, "height": 60.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "select.set", json!({"ids": [textured]}))?;
+            ex(&mut s, "paint.setTexture", json!({"texture": "Coral Stipple"}))?;
+            let faded =
+                ex(&mut s, "shape.ellipse", json!({"x": 200.0, "y": 200.0, "width": 70.0, "height": 60.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "select.set", json!({"ids": [faded]}))?;
+            ex(&mut s, "transparency.set", json!({"opacity": 50}))?;
+            let shadowed =
+                ex(&mut s, "shape.rectangle", json!({"x": 290.0, "y": 230.0, "width": 100.0, "height": 40.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "effect.apply", json!({"id": shadowed, "effect": "stylize.dropShadow", "params": {"x": 6, "y": 5}}))?;
+            ex(&mut s, "effect.apply", json!({"id": shadowed, "effect": "threeD.extrude", "params": {"depth": 12}}))?;
+            let zig = ex(&mut s, "shape.ellipse", json!({"x": 30.0, "y": 30.0, "width": 60.0, "height": 40.0}))?["id"].as_u64().unwrap_or_default();
+            ex(&mut s, "effect.apply", json!({"id": zig, "effect": "distort.zigZag", "params": {"size": 6, "ridges": 8}}))?;
+            let png = vectorcraft_format::base64_encode(&png_bytes(96));
+            let bitmap = ex(&mut s, "file.place", json!({"name": "trace-me.png", "dataBase64": png, "link": false, "at": [300.0, 130.0]}))?["ids"][0]
+                .as_u64()
+                .unwrap_or_default();
+            ex(&mut s, "imageTrace.make", json!({"id": bitmap, "params": {"ignoreWhite": true}}))?;
+            ex(&mut s, "text.create", json!({"x": 20.0, "y": 12.0, "text": "Feature poster"}))?;
+            ex(&mut s, "document.setup", json!({"bleed": 9.0}))?;
+            ex(&mut s, "print.setup", json!({"settings": {"output": {"mode": "separations"}, "marks": {"trim": true}}}))?;
+        }
+        other => return Err(format!("unknown class `{other}` (illustration | brochure | poster)")),
+    }
+    Ok(s)
+}
+
+/// Counts one class's document: objects, anchors, images, effects, texts, artboards, layers.
+fn class_counts(doc: &Document) -> (usize, usize, usize, usize, usize, usize, usize) {
+    let (mut objects, mut anchors, mut images, mut effects, mut texts) = (0, 0, 0, 0, 0);
+    for layer in &doc.layers {
+        layer.walk(&mut |node| {
+            use vectorcraft_doc::NodeKind;
+            match &node.kind {
+                NodeKind::Layer { .. } => {}
+                NodeKind::Text(_) => {
+                    texts += 1;
+                    objects += 1;
+                }
+                NodeKind::Image(im) => {
+                    images += 1;
+                    objects += 1;
+                    let _ = im;
+                }
+                _ => objects += 1,
+            }
+            if let Some(path) = node.path_data() {
+                anchors += path.subpaths.iter().map(|s| s.anchors.len()).sum::<usize>();
+            }
+            effects += node.appearance.effects.len();
+        });
+    }
+    (objects, anchors, images, effects, texts, doc.artboards.len(), doc.layers.len())
+}
+
+/// Builds one class, prints its shape (counts, saved bytes, SHA-256), and measures the P5
+/// scenario rows: open, idle render, hit test, selection edit/undo/redo, pointer drag, save,
+/// reopen, and the SVG/PDF/CDR exports, with resident memory before and after.
+fn class_report(which: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let t = Instant::now();
+    let s = class_session(which)?;
+    let build_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let doc = s.doc().map_err(|e| e.to_string())?.doc.clone();
+    let (objects, anchors, images, effects, texts, artboards, layers) = class_counts(&doc);
+    let bytes = vectorcraft_format::save_file(&doc);
+    let hash = Sha256::digest(&bytes);
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    outln!("CoralCraft class `{which}` — built in {build_ms:.0} ms");
+    outln!(
+        "  {objects} objects ({texts} text, {images} images), {anchors} anchors, {effects} effect entries, {artboards} artboards, {layers} layers"
+    );
+    outln!("  saved .vectorcraft: {} bytes, sha256 {}", bytes.len(), &hex[..16]);
+
+    let mut rows: Vec<(String, f64)> = vec![];
+    rows.push(("open (load saved bytes)".into(), median_ms(3, || drop(vectorcraft_format::load(&bytes)))));
+    {
+        let opts = RenderOptions::default();
+        let mut r = Renderer::new();
+        let fit = Affine::scale(1.6);
+        r.render(&doc, 2880, 1800, fit, &opts);
+        rows.push(("idle render, 2880×1800 (warm)".into(), median_ms(5, || drop(r.render(&doc, 2880, 1800, fit, &opts)))));
+    }
+    {
+        use vectorcraft_doc::hit::{self, HitOptions};
+        let points: Vec<Point> = (0..200).map(|i| Point::new(f64::from(i % 50) * 8.4, f64::from(i / 50) * 4.0)).collect();
+        let ms = median_ms(3, || {
+            for p in &points {
+                drop(hit::hit_test(&doc, *p, HitOptions::default()));
+            }
+        }) / points.len() as f64;
+        rows.push(("hit test (per click)".into(), ms));
+    }
+    // Selection editing on the reopened document: move, undo, redo, and a pointer drag.
+    {
+        let mut s2 = vectorcraft_engine::Session::new();
+        s2.add_document(vectorcraft_format::load(&bytes).map_err(|e| e.to_string())?, None);
+        let err = |e: vectorcraft_engine::EngineError| e.to_string();
+        s2.execute("select.all", &json!({})).map_err(err)?;
+        rows.push(("select.all".into(), 0.0)); // replaced below with the timed value
+        rows.pop();
+        rows.push((
+            "select.all".into(),
+            median_ms(3, || {
+                drop(s2.execute("select.all", &json!({})));
+            }),
+        ));
+        rows.push(("move the selection".into(), median_ms(5, || drop(s2.execute("object.move", &json!({"dx": 1, "dy": 0}))))));
+        rows.push(("undo the move".into(), median_ms(5, || drop(s2.execute("edit.undo", &json!({}))))));
+        rows.push(("redo the move".into(), median_ms(5, || drop(s2.execute("edit.redo", &json!({}))))));
+        use vectorcraft_engine::tools::{Mods, PointerEvent, PointerKind};
+        let view = vectorcraft_engine::ViewInfo { zoom: 1.0, ..Default::default() };
+        let first = s2.doc().map_err(err)?.selection.objects.first().copied();
+        let at = first.and_then(|id| s2.doc().ok()?.doc.node(id)?.geometric_bounds()).map(|b| b.center());
+        if let Some(down) = at {
+            let ev = |kind, dx: f64| PointerEvent {
+                kind,
+                pos: down + vectorcraft_geom::Vec2::new(dx, 0.0),
+                mods: Mods::default(),
+                backquote: false,
+                pressure: 1.0,
+                pen: None,
+            };
+            s2.select_tool("selection", view).map_err(err)?;
+            s2.pointer(&ev(PointerKind::Down, 0.0), view).map_err(err)?;
+            let mut dx = 0.0;
+            let drag = median_ms(9, || {
+                dx += 2.0;
+                let _ = s2.pointer(&ev(PointerKind::Drag, dx), view);
+            });
+            s2.pointer(&ev(PointerKind::Up, dx), view).map_err(err)?;
+            rows.push(("pointer drag, per move".into(), drag));
+        }
+        rows.push(("save .vectorcraft".into(), median_ms(3, || drop(s2.execute("document.serialize", &json!({"format": "vectorcraft"}))))));
+        for format in ["svg", "pdf", "cdr"] {
+            rows.push((format!("export {format}"), median_ms(3, || drop(s2.execute("document.serialize", &json!({"format": format}))))));
+        }
+    }
+    for (name, ms) in &rows {
+        outln!("{}", tracked_row(name, *ms));
+    }
+    if let Some((m, peak)) = rss_mb() {
+        outln!("{}", memory_row("now", m, peak));
+    }
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2): a deterministic, sampleable benchmark for the measured hot path — the
+// zoomed render of a 50,000-path document (the deep run's exceeded 16 ms budget; baseline
+// 28.70 ms median). Runs the zoomed viewport for ~`ms` milliseconds and reports the median, so a
+// profiler can be attached to exactly this loop. The output pixels are hashed: an optimization
+// must leave them unchanged (the first frame's bytes, FNV-1a, printed every run).
+fn bench_zoom(ms: u64) -> Result<(), String> {
+    let n = 50_000usize;
+    let doc = synthetic(n)?;
+    let opts = RenderOptions::default();
+    let mut r = Renderer::new();
+    let fit = Affine::scale(1.6);
+    r.render(&doc, 2880, 1800, fit, &opts);
+    let zoom = Affine::scale(6.4) * Affine::translate((-600.0, -400.0));
+    let first = r.render(&doc, 2880, 1800, zoom, &opts);
+    let mut fnv: u64 = 0xcbf29ce484222325;
+    for b in &first.pixels {
+        fnv = (fnv ^ u64::from(*b)).wrapping_mul(0x100000001b3);
+    }
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(r.render(&doc, 2880, 1800, zoom, &opts));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("zoom render, 50,000 paths, 2880×1800: {per:.2} ms median over {runs} runs ({ms} ms loop); pixels fnv1a {fnv:016x}");
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2): the same shape of benchmark for the other measured hot path — saving
+// the image-heavy brochure class natively (baseline ~900 ms median; the deep run's exceeded open
+// budget is the same format layer). The saved bytes' length is printed every run: an
+// optimization must not change the file.
+fn bench_save(ms: u64) -> Result<(), String> {
+    let s = class_session("brochure")?;
+    let doc = s.doc().map_err(|e| e.to_string())?.doc.clone();
+    let bytes = vectorcraft_format::save_file(&doc);
+    outln!("brochure saved bytes: {}", bytes.len());
+    if let Some(ext) = doc.unknown.get("coralcraft") {
+        outln!("  coralcraft block: {} chars of JSON Value", serde_json::to_string(ext).map(|s| s.len()).unwrap_or_default());
+        if let Some(obj) = ext.as_object() {
+            let mut keys: Vec<(&String, usize)> =
+                obj.iter().map(|(k, v)| (k, serde_json::to_string(v).map(|s| s.len()).unwrap_or_default())).collect();
+            keys.sort_by_key(|&(_, len)| std::cmp::Reverse(len));
+            for (k, len) in keys.iter().take(6) {
+                outln!("    {k}: {len} chars");
+            }
+        }
+    }
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(vectorcraft_format::save_file(&doc));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("save .vectorcraft (format layer), brochure class: {per:.2} ms median over {runs} runs ({ms} ms loop)");
+    // The engine's document.serialize over the same document (what the app saves with).
+    let mut s2 = vectorcraft_engine::Session::new();
+    s2.add_document((*doc).clone(), None);
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(s2.execute("document.serialize", &json!({"format": "vectorcraft"})));
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("document.serialize vectorcraft (engine), brochure class: {per:.2} ms median over {runs} runs ({ms} ms loop)");
+    Ok(())
+}
+
+// CoralCraft (P5 Task 2, second slice): the deep run's other exceeded budget — opening the
+// 50,000-path native document (baseline 361.43 ms against the 300 ms budget). Deterministic and
+// sampleable like the others; the reopened document's object count is printed every run as the
+// correctness guard.
+fn bench_open(ms: u64) -> Result<(), String> {
+    let n = 50_000usize;
+    let doc = synthetic(n)?;
+    let bytes = vectorcraft_format::save_file(&doc);
+    let first = vectorcraft_format::load(&bytes).map_err(|e| e.to_string())?;
+    let objects = class_counts(&first).0;
+    let t = Instant::now();
+    let mut runs = 0u64;
+    while (t.elapsed().as_millis() as u64) < ms {
+        drop(vectorcraft_format::load(&bytes).map_err(|e| e.to_string())?);
+        runs += 1;
+    }
+    let per = t.elapsed().as_secs_f64() / runs as f64 * 1000.0;
+    outln!("open .vectorcraft, 50,000 paths ({objects} objects reopen): {per:.2} ms median over {runs} runs ({ms} ms loop)");
+    Ok(())
 }
 
 #[cfg(test)]

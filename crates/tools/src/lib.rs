@@ -35,6 +35,8 @@ pub mod pie;
 pub mod place;
 pub mod printtiling;
 pub mod repeat_grid;
+// CoralCraft (P3 Task E5)
+pub mod distort_handles;
 pub mod rulerguide;
 pub mod select;
 pub mod settings;

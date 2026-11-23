@@ -201,7 +201,7 @@ impl Session {
                 self.recent_colors.truncate(Self::RECENT_MAX);
             }
             Paint::Gradient(g) => self.last_gradient = (**g).clone(),
-            Paint::None | Paint::Pattern { .. } => {}
+            Paint::None | Paint::Pattern { .. } | Paint::Texture { .. } => {}
         }
     }
 }

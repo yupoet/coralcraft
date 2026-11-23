@@ -38,7 +38,7 @@ pub fn whiten(n: &mut Node) {
                 (s.color, s.swatch, s.tint) = (Color::WHITE, None, 1.0);
             }
         }
-        Paint::None | Paint::Pattern { .. } => {}
+        Paint::None | Paint::Texture { .. } | Paint::Pattern { .. } => {}
     };
     for item in &mut n.appearance.items {
         white(item.paint_mut());

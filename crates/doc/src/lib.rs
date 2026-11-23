@@ -52,6 +52,7 @@ pub mod overprint;
 pub mod pattern;
 pub mod perspective;
 mod pixels;
+mod texture;
 pub use pixels::{GraySource, MAX_RASTER_ALLOC};
 pub mod placed_document;
 pub mod plugin_data;
@@ -123,6 +124,7 @@ pub use text::{
     RubySpan, ScriptMetrics, SingleWordJustify, TabAlign, TabStop, TextFlow, TextKind, TextObject, TextRun, TextStyleDef, TextWrap, VerticalAlign,
     WrapShape,
 };
+pub use texture::{TextureDef, TextureKind};
 pub use trace::TraceView;
 pub use variables::{DataSet, DataValue, Variable, VariableKind, Variables};
 pub use vectorcraft_color as color;
@@ -225,6 +227,10 @@ pub struct Document {
     /// Pattern swatch definitions (Object → Pattern).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patterns: Vec<PatternDef>,
+    /// CoralCraft (P3 Task T1): reusable texture-fill definitions, shared by every object whose
+    /// paint names one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub textures: Vec<TextureDef>,
     /// Pattern editing mode, while active.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern_edit: Option<PatternEdit>,

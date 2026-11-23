@@ -108,7 +108,7 @@ pub fn inflate_options(p: &Value) -> Inflate {
 }
 
 /// The shape a solid is made from: a path's or a compound path's outline.
-fn profile(n: &Node) -> Option<(PathData, FillRule)> {
+pub(crate) fn profile(n: &Node) -> Option<(PathData, FillRule)> {
     match &n.kind {
         NodeKind::Path { path, rule, guide: false, clipping: false, .. } => Some((path.clone(), *rule)),
         NodeKind::Compound { children, rule } => {

@@ -34,6 +34,8 @@ impl Serialize for Node {
             e.trace.is_none(),
             e.wrap.is_none(),
             is_default(&e.page_number),
+            // CoralCraft (P3 Task E6)
+            is_default(&e.contents_unlocked),
             e.graph.is_none(),
             e.series_index.is_none(),
             is_default(&e.type_outlines),
@@ -76,6 +78,8 @@ impl Serialize for Node {
         field!("trace", &e.trace);
         field!("wrap", &e.wrap);
         field!("page_number", &e.page_number);
+        // CoralCraft (P3 Task E6)
+        field!("contents_unlocked", &e.contents_unlocked);
         field!("graph", &e.graph);
         field!("series_index", &e.series_index);
         field!("type_outlines", &e.type_outlines);
@@ -197,6 +201,9 @@ pub(super) struct NodeWire {
     wrap: Option<crate::text::TextWrap>,
     #[serde(default)]
     page_number: bool,
+    /// CoralCraft (P3 Task E6)
+    #[serde(default)]
+    contents_unlocked: bool,
     #[serde(default)]
     graph: Option<Box<crate::graph::GraphSpec>>,
     #[serde(default)]
@@ -245,6 +252,8 @@ impl From<NodeWire> for Node {
             trace: w.trace,
             wrap: w.wrap,
             page_number: w.page_number,
+            // CoralCraft (P3 Task E6)
+            contents_unlocked: w.contents_unlocked,
             graph: w.graph,
             series_index: w.series_index,
             type_outlines: w.type_outlines,

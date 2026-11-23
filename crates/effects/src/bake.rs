@@ -53,6 +53,8 @@ pub fn needs_bake(n: &Node) -> bool {
         || has_adjustment(n)
         || has_crop_marks(n)
         || crate::addons::halftone::has_halftone(n)
+        // CoralCraft (P3 Task E2)
+        || crate::addons::block_shadow::has_block_shadow(n)
         || has_pathfinder(n)
         || has_own_paint(n)
         || has_geometry(&n.appearance.effects)
@@ -107,6 +109,10 @@ fn bake_node(d: &mut Document, n: &Node) -> Option<Node> {
     }
     // Vector Halftone: the object as its dots.
     if let Some(m) = crate::addons::halftone::halftone_art(d, n) {
+        return Some(bake_pieces(d, m));
+    }
+    // CoralCraft (P3 Task E2): the swept silhouette and the object.
+    if let Some(m) = crate::addons::block_shadow::block_shadow_art(n) {
         return Some(bake_pieces(d, m));
     }
     if let Some(m) = crate::revolve_art(n).or_else(|| crate::solid_art(n)) {

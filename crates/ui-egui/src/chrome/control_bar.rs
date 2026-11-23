@@ -342,6 +342,9 @@ pub fn control_bar(app: &mut VectorcraftApp, ui: &mut Ui) {
                 crate::coreldraw_bar::shaping_buttons(app, ui);
                 // CoralCraft: the CorelDRAW workspace's table controls (P2.TABLE-UI).
                 crate::coreldraw_bar::table_buttons(app, ui);
+                crate::coreldraw_bar::symmetry_buttons(app, ui);
+                // CoralCraft (P3 Task E6)
+                crate::coreldraw_bar::lock_contents_button(app, ui);
                 crate::coreldraw_bar::transform_buttons(app, ui);
                 ui.add_space(6.0);
                 // An image or an Image Trace object shows its own controls in place of Fill and Stroke.

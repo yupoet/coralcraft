@@ -8,6 +8,22 @@ use vectorcraft_geom::{Rect, shapes};
 use crate::tests_large_edits::{layer, run_soon, square, undo_gives_back};
 use crate::*;
 
+#[test]
+fn resample_intermediate_budget_covers_extreme_aspect_ratios_and_shortcuts() {
+    let max = cmd::fileio::MAX_RASTER_ALLOC;
+    for (source, output) in [((32_768, 1), (1, 16_384)), ((16_384, 2), (3, 32_768))] {
+        let error = cmd::menucmds::check_resample_intermediates(source.0, source.1, output.0, output.1, max).unwrap_err().to_string();
+        assert!(error.contains("intermediate"), "{source:?} -> {output:?}: {error}");
+    }
+    assert!(cmd::menucmds::check_resample_intermediates(4, 2, 12, 9, max).is_ok());
+    assert!(cmd::menucmds::check_resample_intermediates(1, 32_768, 16_384, 1, max).is_ok(), "a narrow float intermediate stays within the budget");
+    assert!(
+        cmd::menucmds::check_resample_intermediates(32_768, 16_384, 32_768, 16_384, max).is_ok(),
+        "same-size resize copies without the float intermediate"
+    );
+    assert!(cmd::menucmds::check_resample_intermediates(0, 1_000_000_000, 1, 16_384, max).is_ok(), "empty sources return only the output buffer");
+}
+
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", &json!({"width": 800, "height": 600})).unwrap();

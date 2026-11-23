@@ -113,6 +113,8 @@ enum State {
     Mirror(crate::mirror::MirrorDrag),
     /// Drag a grid repeat's row, column or corner handle or a spacing slider.
     GridRepeat(crate::repeat_grid::GridDrag),
+    /// CoralCraft (P3 Task E5): drag a Zipper or Push/Pull dedicated handle.
+    Distort(crate::distort_handles::DistortDrag),
     /// Dragging a bracket of type on a path.
     Bracket(BracketDrag),
     /// Dragging a 9-slice guide of the symbol being edited.
@@ -712,6 +714,13 @@ impl Tool for SelectionTool {
         {
             return d.cancel();
         }
+        // CoralCraft (P3 Task E5)
+        if key == ToolKey::Escape
+            && matches!(self.state, State::Distort(_))
+            && let State::Distort(d) = std::mem::take(&mut self.state)
+        {
+            return d.cancel();
+        }
         if key == ToolKey::Escape
             && matches!(self.state, State::NineSlice(_))
             && let State::NineSlice(d) = std::mem::take(&mut self.state)
@@ -775,6 +784,8 @@ impl Tool for SelectionTool {
             State::Bracket(b) => b.adjusting(),
             State::Mirror(d) => d.adjusting(),
             State::GridRepeat(d) => d.adjusting(),
+            // CoralCraft (P3 Task E5)
+            State::Distort(d) => d.adjusting(),
             _ => false,
         }
     }
@@ -1324,6 +1335,21 @@ impl SelectionTool {
                 _ => return Some(vec![]),
             }
         }
+        if let State::Distort(mut d) = self.state.clone() {
+            match ev.kind {
+                PointerKind::Drag | PointerKind::Up => {
+                    let mut out = d.drag(ev.pos);
+                    if ev.kind == PointerKind::Up {
+                        out.extend(d.finish());
+                        self.state = State::Idle;
+                    } else {
+                        self.state = State::Distort(d);
+                    }
+                    return Some(out);
+                }
+                _ => return Some(vec![]),
+            }
+        }
         if let State::GridRepeat(mut d) = self.state.clone() {
             match ev.kind {
                 PointerKind::Drag | PointerKind::Up => {
@@ -1352,6 +1378,15 @@ impl SelectionTool {
             && let Some(d) = crate::repeat_grid::GridDrag::hit(cx, ev.pos, ev.mods)
         {
             self.state = State::GridRepeat(d);
+            self.hover = None;
+            return Some(vec![]);
+        }
+        // CoralCraft (P3 Task E5)
+        if matches!(self.state, State::Idle)
+            && ev.kind == PointerKind::Down
+            && let Some(d) = crate::distort_handles::DistortDrag::hit(cx, ev.pos, ev.mods)
+        {
+            self.state = State::Distort(d);
             self.hover = None;
             return Some(vec![]);
         }

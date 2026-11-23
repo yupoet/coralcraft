@@ -358,6 +358,11 @@ pub enum Paint {
         #[serde(default, skip_serializing_if = "is_identity")]
         xf: kurbo::Affine,
     },
+    /// CoralCraft (P3 Task T1): a reusable texture-fill definition by name — a distinct paint
+    /// kind, never an ordinary pattern in disguise.
+    Texture {
+        texture: String,
+    },
 }
 
 fn is_identity(a: &kurbo::Affine) -> bool {
@@ -418,6 +423,7 @@ impl Paint {
             Paint::Solid { color, .. } => color.to_hex(),
             Paint::Gradient(g) => format!("{} gradient", g.gradient.kind.label()),
             Paint::Pattern { pattern, .. } => format!("pattern {pattern}"),
+            Paint::Texture { texture } => format!("texture {texture}"),
         }
     }
     /// Apply `f` to the colours of this paint that can link to a swatch (a solid colour, each

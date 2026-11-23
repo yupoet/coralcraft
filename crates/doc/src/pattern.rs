@@ -158,6 +158,175 @@ pub struct Overlap {
     pub bottom_in_front: bool,
 }
 
+// =====================================================================================
+// CoralCraft (P3 Task T2): Corel two-colour pattern sources
+// =====================================================================================
+
+/// The geometric kinds of a two-colour pattern tile (CorelDRAW's two-color pattern fills): the
+/// foreground ink the kind draws over the background inside one square tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TwoColorKind {
+    #[serde(rename = "checkerboard")]
+    Checkerboard,
+    #[serde(rename = "polkaDot")]
+    PolkaDot,
+    #[serde(rename = "horizontalStripe")]
+    HorizontalStripe,
+    #[serde(rename = "verticalStripe")]
+    VerticalStripe,
+    #[serde(rename = "diagonalCrosshatch")]
+    DiagonalCrosshatch,
+}
+
+impl TwoColorKind {
+    /// The parameter name the engine commands accept.
+    pub fn id(self) -> &'static str {
+        match self {
+            TwoColorKind::Checkerboard => "checkerboard",
+            TwoColorKind::PolkaDot => "polkaDot",
+            TwoColorKind::HorizontalStripe => "horizontalStripe",
+            TwoColorKind::VerticalStripe => "verticalStripe",
+            TwoColorKind::DiagonalCrosshatch => "diagonalCrosshatch",
+        }
+    }
+    /// The kind an engine command's `kind` parameter names, if it is one of ours.
+    pub fn of_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "checkerboard" => TwoColorKind::Checkerboard,
+            "polkaDot" => TwoColorKind::PolkaDot,
+            "horizontalStripe" => TwoColorKind::HorizontalStripe,
+            "verticalStripe" => TwoColorKind::VerticalStripe,
+            "diagonalCrosshatch" => TwoColorKind::DiagonalCrosshatch,
+            _ => return None,
+        })
+    }
+    /// The kinds an engine command accepts, in list order.
+    pub const IDS: [&'static str; 5] = ["checkerboard", "polkaDot", "horizontalStripe", "verticalStripe", "diagonalCrosshatch"];
+}
+
+/// A two-colour pattern source (CorelDRAW's two-color pattern fill): the geometric [`TwoColorKind`]
+/// and the two colours its tile art is synthesized from — the foreground ink over the background.
+/// A [`PatternDef`] carrying one renders as an ordinary pattern; editing the source regenerates
+/// the tile art.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TwoColorSource {
+    pub kind: TwoColorKind,
+    pub foreground: vectorcraft_color::Color,
+    pub background: vectorcraft_color::Color,
+}
+
+impl TwoColorSource {
+    /// The tile art of `tile`: the background rectangle with the kind's foreground pieces over
+    /// it, all plain filled paths (deterministic: the same source and tile give the same art).
+    pub fn tile_art(&self, tile: Rect) -> Vec<Arc<Node>> {
+        let (w, h) = (tile.width(), tile.height());
+        if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+            return vec![];
+        }
+        let filled = |path: vectorcraft_geom::PathData, color: vectorcraft_color::Color| {
+            let mut node = Node::path(NodeId(0), path, crate::Appearance::default());
+            node.appearance =
+                crate::Shared::new(crate::Appearance::basic(vectorcraft_color::Paint::solid(color), vectorcraft_color::Paint::None, 0.0));
+            Arc::new(node)
+        };
+        let mut art = vec![filled(vectorcraft_geom::shapes::rectangle(tile), self.background)];
+        let origin = tile.origin().to_vec2();
+        // The kind's foreground pieces over the background, in paint order.
+        let (rects, curves): (Vec<Rect>, Vec<vectorcraft_geom::PathData>) = match self.kind {
+            TwoColorKind::Checkerboard => (vec![Rect::new(0.0, 0.0, w / 2.0, h / 2.0), Rect::new(w / 2.0, h / 2.0, w, h)], vec![]),
+            TwoColorKind::PolkaDot => {
+                // One dot of half the shorter tile edge, centred.
+                let d = w.min(h) / 2.0;
+                let c = tile.center();
+                (vec![], vec![vectorcraft_geom::shapes::ellipse(Rect::new(c.x - d / 2.0, c.y - d / 2.0, c.x + d / 2.0, c.y + d / 2.0))])
+            }
+            TwoColorKind::HorizontalStripe => (vec![Rect::new(0.0, 0.0, w, h / 2.0)], vec![]),
+            TwoColorKind::VerticalStripe => (vec![Rect::new(0.0, 0.0, w / 2.0, h)], vec![]),
+            TwoColorKind::DiagonalCrosshatch => {
+                // Two diagonal bands, each a parallelogram offset perpendicular to its line by an
+                // eighth of the tile edge (they reach past the tile so the lines join across tiles).
+                let (u, (ox, oy)) = (w.min(h) / 8.0, (origin.x, origin.y));
+                let quad = move |pts: [(f64, f64); 4]| {
+                    let pts = pts.map(|(x, y)| (x + ox, y + oy));
+                    let mut bp = vectorcraft_geom::BezPath::new();
+                    bp.move_to(pts[0]);
+                    bp.line_to(pts[1]);
+                    bp.line_to(pts[2]);
+                    bp.line_to(pts[3]);
+                    bp.close_path();
+                    vectorcraft_geom::PathData::from_bezpath(&bp)
+                };
+                (vec![], vec![quad([(0.0, 0.0), (w, h), (w + u, h - u), (u, -u)]), quad([(0.0, h), (w, 0.0), (w + u, u), (u, h + u)])])
+            }
+        };
+        for r in rects {
+            art.push(filled(vectorcraft_geom::shapes::rectangle(r + origin), self.foreground));
+        }
+        for path in curves {
+            art.push(filled(path, self.foreground));
+        }
+        art
+    }
+
+    /// CoralCraft (P3 Task T2 review): the source whose synthesized tile art `art` for `tile`
+    /// is, if it is one — every piece's geometry must match a kind's shapes exactly (paths, not
+    /// ids), every piece a plain solid fill (a fill alone, no effects; a no-paint stroke at
+    /// most), the background first and one colour on every foreground piece. Art edited past
+    /// that — a piece moved, added or deleted, another fill kind, an effect — is no pattern's
+    /// synthesis.
+    pub fn recognized(art: &[Arc<Node>], tile: Rect) -> Option<TwoColorSource> {
+        for kind in [
+            TwoColorKind::Checkerboard,
+            TwoColorKind::PolkaDot,
+            TwoColorKind::HorizontalStripe,
+            TwoColorKind::VerticalStripe,
+            TwoColorKind::DiagonalCrosshatch,
+        ] {
+            let probe =
+                TwoColorSource { kind, foreground: vectorcraft_color::Color::rgb8(1, 2, 3), background: vectorcraft_color::Color::rgb8(4, 5, 6) }
+                    .tile_art(tile);
+            if art.len() != probe.len() {
+                continue;
+            }
+            let colours: Option<Vec<vectorcraft_color::Color>> = art
+                .iter()
+                .zip(&probe)
+                .map(|(piece, expected)| (piece.path_data() == expected.path_data()).then(|| plain_fill(piece)).flatten())
+                .collect();
+            let Some(colours) = colours else { continue };
+            let (background, foreground) = (colours[0], colours[1]);
+            if colours[1..].iter().all(|c| *c == foreground) {
+                return Some(TwoColorSource { kind, foreground, background });
+            }
+        }
+        None
+    }
+}
+
+/// CoralCraft (P3 Task T2 review): `n`'s fill when it is a plain solid one — one fill of a solid
+/// colour without effects (a no-paint stroke beside it is fine, as the synthesized tiles draw).
+fn plain_fill(n: &Node) -> Option<vectorcraft_color::Color> {
+    let mut fill = None;
+    for item in &n.appearance.items {
+        match item {
+            AppearanceItem::Fill(f)
+                if fill.is_none()
+                    && f.opacity == 1.0
+                    && f.blend == vectorcraft_color::BlendMode::Normal
+                    && f.visible
+                    && f.effects.is_empty()
+                    && !f.overprint =>
+            {
+                fill = f.paint.color();
+            }
+            AppearanceItem::Stroke(s) if s.paint.is_none() => {}
+            _ => return None,
+        }
+    }
+    fill
+}
+
 /// A pattern swatch definition.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,6 +358,11 @@ pub struct PatternDef {
     /// (the tile, or the period of a brick or hex tiling), dashed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub show_swatch_bounds: bool,
+    /// CoralCraft (P3 Task T2): the Corel two-colour pattern source this definition's art is
+    /// synthesized from (None: ordinary art). Editing the source regenerates the art; the tile
+    /// rectangle carries the tile size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub two_color: Option<TwoColorSource>,
 }
 
 impl PatternDef {
@@ -208,7 +382,31 @@ impl PatternDef {
             dim_copies: 70.0,
             show_tile_edge: true,
             show_swatch_bounds: false,
+            two_color: None,
         }
+    }
+
+    /// CoralCraft (P3 Task T2): a two-colour pattern of `source` with a `tile_pt`-point square
+    /// tile (its art synthesized from the source).
+    pub fn two_color(name: &str, source: TwoColorSource, tile_pt: f64) -> Self {
+        let tile = Rect::new(0.0, 0.0, tile_pt, tile_pt);
+        let art = source.tile_art(tile);
+        Self { tile, art, two_color: Some(source), ..Self::new(name, vec![]) }
+    }
+
+    /// CoralCraft (P3 Task T2): set the two-colour source (regenerating the art) and, with `size`,
+    /// the square tile size with it. Returns false when the definition has no source and none is
+    /// given (an art pattern is edited through `pattern.options`, not its colours).
+    pub fn set_two_color(&mut self, source: TwoColorSource, size: Option<f64>) -> bool {
+        if self.two_color.is_none() {
+            return false;
+        }
+        if let Some(size) = size {
+            self.tile = Rect::new(0.0, 0.0, size, size);
+        }
+        self.art = source.tile_art(self.tile);
+        self.two_color = Some(source);
+        true
     }
     pub fn width(&self) -> f64 {
         self.tile.width().max(1e-3)
@@ -469,6 +667,11 @@ pub enum RepeatKind {
         start_angle: f64,
         #[serde(default = "full_turn")]
         end_angle: f64,
+        /// CoralCraft (P3 Task E1): CorelDRAW radial symmetry — odd instances are mirrored across
+        /// the radial line through `start_angle` (alternating chirality, the kaleidoscope sectors
+        /// N lines show), where the plain kind only rotates.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        mirror: bool,
     },
     /// Copies on a grid (tile = source bounds + spacing), optionally brick/hex offset and with
     /// alternate rows/columns flipped.
@@ -607,7 +810,7 @@ pub fn reflect_about(c: Point, deg: f64) -> Affine {
 pub fn repeat_transforms(kind: &RepeatKind, source_bounds: Option<Rect>) -> Vec<Affine> {
     let b = source_bounds.unwrap_or(Rect::new(0.0, 0.0, 1.0, 1.0));
     match kind {
-        RepeatKind::Radial { instances, radius, center, reverse_overlap, start_angle, end_angle } => {
+        RepeatKind::Radial { instances, radius, center, reverse_overlap, start_angle, end_angle, mirror } => {
             let n = (*instances).clamp(1, 1000);
             let c0 = b.center();
             let mut d = c0 - *center;
@@ -618,10 +821,15 @@ pub fn repeat_transforms(kind: &RepeatKind, source_bounds: Option<Rect>) -> Vec<
             let sweep = end_angle - start_angle;
             let full = (sweep.abs() - 360.0).abs() < 1e-9;
             let step = if full || n == 1 { sweep / n as f64 } else { sweep / (n - 1) as f64 };
+            let reflect = *mirror && n > 1;
             let mut v: Vec<Affine> = (0..n)
                 .map(|k| {
                     let a = (start_angle + step * k as f64).to_radians();
-                    Affine::translate(center.to_vec2()) * Affine::rotate(a) * Affine::translate(-center.to_vec2()) * pre
+                    let spin = Affine::translate(center.to_vec2()) * Affine::rotate(a) * Affine::translate(-center.to_vec2());
+                    // Odd instances are reflected across the radial line at `start_angle` before
+                    // their rotation (CorelDRAW radial symmetry's alternating chirality).
+                    let base = if reflect && k % 2 == 1 { spin * reflect_about(*center, *start_angle) } else { spin };
+                    base * pre
                 })
                 .collect();
             if *reverse_overlap {
@@ -746,7 +954,10 @@ impl RepeatSpec {
         let b = crate::live::nodes_bounds(&source).unwrap_or(Rect::new(0.0, 0.0, 10.0, 10.0));
         let r = radius.unwrap_or((b.height().max(b.width()) * 1.2).max(10.0));
         let center = b.center() + Vec2::new(0.0, r);
-        Self { kind: RepeatKind::Radial { instances, radius: r, center, reverse_overlap: false, start_angle: 0.0, end_angle: 360.0 }, source }
+        Self {
+            kind: RepeatKind::Radial { instances, radius: r, center, reverse_overlap: false, start_angle: 0.0, end_angle: 360.0, mirror: false },
+            source,
+        }
     }
     pub fn grid(source: Vec<Arc<Node>>, h_spacing: f64, v_spacing: f64) -> Self {
         Self {
@@ -935,6 +1146,33 @@ mod tests {
         assert_eq!(def.preview_offsets().len(), 8);
     }
 
+    // CoralCraft (P3 Task E1): radial symmetry alternates chirality.
+    #[test]
+    fn mirrored_radial_repeats_alternate_chirality() {
+        let mut r = RepeatSpec::radial(vec![sq(-5.0, -105.0, 10.0)], 5, Some(100.0));
+        if let RepeatKind::Radial { mirror, .. } = &mut r.kind {
+            *mirror = true;
+        }
+        let t = r.transforms(None);
+        assert_eq!(t.len(), 5);
+        // The winding of the source's rectangle flips on the mirrored (odd) instances.
+        let rect = Rect::new(-5.0, -105.0, 5.0, -95.0);
+        let corners = [rect.origin(), (rect.x1, rect.y0).into(), (rect.x1, rect.y1).into(), (rect.x0, rect.y1).into()];
+        let signed = |pts: [Point; 4]| pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.x * b.y - b.x * a.y).sum::<f64>();
+        for (k, m) in t.iter().enumerate() {
+            let wound = signed(corners.map(|p| *m * p));
+            assert_eq!(wound.signum() >= 0.0, (k % 2 == 0) == (signed(corners) >= 0.0), "instance {k}");
+        }
+        // The flag round-trips (old documents default it off).
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(s.contains("\"mirror\":true"), "{s}");
+        let back: RepeatSpec = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, r);
+        let plain = RepeatSpec::radial(vec![sq(0.0, 0.0, 10.0)], 4, None);
+        let s = serde_json::to_string(&plain).unwrap();
+        assert!(!s.contains("mirror"), "plain radials stay as they were: {s}");
+    }
+
     #[test]
     fn radial_transforms() {
         let r = RepeatSpec::radial(vec![sq(-5.0, -105.0, 10.0)], 4, Some(100.0));
@@ -1081,5 +1319,138 @@ mod tests {
         // Old pattern paints (no xf) still load.
         let p: Paint = serde_json::from_str(r#"{"type":"pattern","pattern":"Dots"}"#).unwrap();
         assert_eq!(p, pattern_paint("Dots"));
+    }
+
+    // CoralCraft (P3 Task T2): two-colour pattern sources.
+    use vectorcraft_color::Color;
+
+    fn source(kind: TwoColorKind) -> TwoColorSource {
+        TwoColorSource { kind, foreground: Color::rgb8(0xc0, 0x20, 0x20), background: Color::rgb8(0x20, 0x40, 0x80) }
+    }
+
+    #[test]
+    fn two_color_kinds_parse_their_ids() {
+        for id in TwoColorKind::IDS {
+            assert_eq!(TwoColorKind::of_id(id).unwrap().id(), id);
+        }
+        assert_eq!(TwoColorKind::of_id("marble"), None);
+    }
+
+    #[test]
+    fn two_color_tile_art_is_deterministic_and_bounded_per_kind() {
+        let tile = Rect::new(0.0, 0.0, 18.0, 18.0);
+        // Every kind draws the background first and a bounded number of foreground pieces.
+        for (kind, pieces) in [
+            (TwoColorKind::Checkerboard, 2),
+            (TwoColorKind::PolkaDot, 1),
+            (TwoColorKind::HorizontalStripe, 1),
+            (TwoColorKind::VerticalStripe, 1),
+            (TwoColorKind::DiagonalCrosshatch, 2),
+        ] {
+            let art = source(kind).tile_art(tile);
+            assert_eq!(art.len(), pieces + 1, "{kind:?}");
+            assert_eq!(art, source(kind).tile_art(tile), "{kind:?} is deterministic");
+            assert!(art.iter().all(|n| n.path_data().is_some_and(|p| !p.is_empty())), "{kind:?} pieces are filled paths");
+            let fg = art.iter().filter(|n| n.appearance.fill_paint().color() == Some(source(kind).foreground)).count();
+            assert_eq!(fg, pieces, "{kind:?} foreground pieces");
+            assert_eq!(art[0].appearance.fill_paint().color(), Some(source(kind).background), "{kind:?} background first");
+        }
+        // A polka-dot tile holds curved geometry; a checkerboard tile does not.
+        let curved = |kind| {
+            source(kind).tile_art(tile).iter().any(|n| {
+                n.path_data().is_some_and(|p| p.to_bezpath().segments().any(|s| matches!(s, kurbo::PathSeg::Quad(..) | kurbo::PathSeg::Cubic(..))))
+            })
+        };
+        assert!(curved(TwoColorKind::PolkaDot));
+        assert!(!curved(TwoColorKind::Checkerboard));
+        // A non-finite or empty tile synthesizes nothing.
+        assert!(source(TwoColorKind::Checkerboard).tile_art(Rect::new(f64::NAN, 0.0, 12.0, 12.0)).is_empty());
+        assert!(source(TwoColorKind::Checkerboard).tile_art(Rect::new(0.0, 0.0, 0.0, 12.0)).is_empty());
+    }
+
+    #[test]
+    fn two_color_art_is_recognized_back_and_edits_are_told_apart() {
+        let tile = Rect::new(0.0, 0.0, 12.0, 12.0);
+        let src = source(TwoColorKind::Checkerboard);
+        let art = src.tile_art(tile);
+        assert_eq!(TwoColorSource::recognized(&art, tile).as_ref(), Some(&src), "a synthesis is recognized");
+        // A recolour of the foreground pieces is recognized with the new colour.
+        let recolored: Vec<Arc<Node>> = art
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let mut n = (**n).clone();
+                if i > 0
+                    && let Some(fill) = n.appearance.fill_mut()
+                {
+                    fill.paint = vectorcraft_color::Paint::solid(Color::rgb8(0x20, 0xa0, 0x40));
+                }
+                Arc::new(n)
+            })
+            .collect();
+        let recognized = TwoColorSource::recognized(&recolored, tile).expect("a recolour is recognized");
+        assert_eq!(recognized.foreground, Color::rgb8(0x20, 0xa0, 0x40));
+        assert_eq!(recognized.background, src.background);
+        // Structural edits are not: a piece dropped, moved, given a gradient fill or a stroke.
+        assert_eq!(TwoColorSource::recognized(&art[..2], tile), None, "a piece dropped");
+        let moved: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                n.transform(Affine::translate((3.0, 0.0)), false);
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&moved, tile), None, "a piece moved");
+        let gradient: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                if let Some(fill) = n.appearance.fill_mut() {
+                    fill.paint =
+                        vectorcraft_color::Paint::Gradient(Box::new(vectorcraft_color::GradientPaint::new(vectorcraft_color::Gradient::default())));
+                }
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&gradient, tile), None, "a gradient fill");
+        let stroked: Vec<Arc<Node>> = art
+            .iter()
+            .map(|n| {
+                let mut n = (**n).clone();
+                if let Some(stroke) = n.appearance.stroke_mut() {
+                    stroke.paint = vectorcraft_color::Paint::solid(Color::BLACK);
+                }
+                Arc::new(n)
+            })
+            .collect();
+        assert_eq!(TwoColorSource::recognized(&stroked, tile), None, "a visible stroke");
+        // Two pieces of another kind's shapes are not mistaken for it.
+        assert_eq!(
+            TwoColorSource::recognized(&source(TwoColorKind::PolkaDot).tile_art(tile), tile).as_ref().map(|s| s.kind),
+            Some(TwoColorKind::PolkaDot)
+        );
+    }
+
+    #[test]
+    fn two_color_definitions_serde_and_edit() {
+        let mut def = PatternDef::two_color("Coral Checks", source(TwoColorKind::Checkerboard), 12.0);
+        assert_eq!((def.tile.width(), def.tile.height()), (12.0, 12.0));
+        assert_eq!(def.art.len(), 3, "background + two quadrants");
+        let s = serde_json::to_string(&def).unwrap();
+        assert_eq!(serde_json::from_str::<PatternDef>(&s).unwrap(), def, "the source round-trips");
+        // A document without the field still loads (serde default).
+        let bare = PatternDef::new("Bare", vec![sq(0.0, 0.0, 10.0)]);
+        let s = serde_json::to_string(&bare).unwrap();
+        assert!(!s.contains("twoColor"), "an art pattern carries no source: {s}");
+        // Editing the source regenerates the art and can resize the tile.
+        assert!(def.set_two_color(source(TwoColorKind::PolkaDot), Some(30.0)));
+        assert_eq!(def.two_color.as_ref().unwrap().kind, TwoColorKind::PolkaDot);
+        assert_eq!((def.tile.width(), def.tile.height()), (30.0, 30.0));
+        assert_eq!(def.art.len(), 2, "background + dot");
+        // An art pattern has no source to edit.
+        let mut art = PatternDef::new("Art", vec![sq(0.0, 0.0, 10.0)]);
+        assert!(!art.set_two_color(source(TwoColorKind::Checkerboard), None));
+        assert!(art.two_color.is_none() && art.art.len() == 1);
     }
 }

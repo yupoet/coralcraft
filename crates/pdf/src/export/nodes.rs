@@ -372,12 +372,14 @@ impl Exporter<'_> {
     }
 
     /// Is `p` a paint PDF has no paint for when it paints a fill (`fill`) or a stroke, which
-    /// [`Self::area`] draws as art: a pattern swatch or a gradient drawn as pixels
-    /// ([`vectorcraft_color::GradientPaint::draws_as_pixels`]), but not a Perceptual one of spot
-    /// inks ([`Self::perceptual_spot`])?
+    /// [`Self::area`] draws as art: a pattern swatch, a texture period or a gradient drawn as
+    /// pixels ([`vectorcraft_color::GradientPaint::draws_as_pixels`]), but not a Perceptual one of
+    /// spot inks ([`Self::perceptual_spot`])?
     pub(super) fn area_paint(&self, p: &Paint, fill: bool) -> bool {
         match p {
             Paint::Pattern { pattern, .. } => self.doc.pattern(pattern).is_some(),
+            // CoralCraft: texture periods use the same area-paint pipeline as pattern swatches.
+            Paint::Texture { texture } => self.doc.texture(texture).is_some(),
             Paint::Gradient(g) => g.draws_as_pixels(fill) && !self.perceptual_spot(g, fill),
             _ => false,
         }
@@ -385,9 +387,9 @@ impl Exporter<'_> {
 
     /// Paint the area `clip` (filled by `rule`; bounds `area`) with `p` at `transparency` (opacity,
     /// blend mode) when it is an [area paint](Self::area_paint) of a fill (`fill`) or a stroke: a
-    /// pattern's [tiling pattern](Self::tiling) (else its tile instances covering it), or an image
-    /// of a gradient drawn as pixels placed on `bounds` (the painted object's box, as on the
-    /// canvas), clipped to it. False (nothing drawn) for other paints.
+    /// pattern or texture's tiling (else bounded tile instances covering it), or an image of a
+    /// gradient drawn as pixels placed on `bounds` (the painted object's box, as on the canvas),
+    /// clipped to it. False (nothing drawn) for other paints.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn area(
         &mut self,
@@ -406,6 +408,7 @@ impl Exporter<'_> {
         let (opacity, mode) = transparency;
         let tiling = match p {
             Paint::Pattern { pattern, xf } => self.tiling(s, pattern, *xf),
+            Paint::Texture { texture } => self.texture_tiling(s, texture),
             _ => None,
         };
         let mut pushes = 0;
@@ -431,6 +434,14 @@ impl Exporter<'_> {
                     if let Some(def) = doc.pattern(pattern) {
                         self.warn("pattern fills nested more than 4 patterns deep, or with tiles too large for PDF, are written as their tiles");
                         for inst in def.instances_in(*xf, area) {
+                            self.node(s, &inst, area, true);
+                        }
+                    }
+                }
+                Paint::Texture { texture } => {
+                    if let Some(def) = doc.texture(texture) {
+                        self.warn("texture fills that cannot be written as a PDF tiling pattern use bounded tiles; an over-budget area is left out");
+                        for inst in def.tile_nodes(area) {
                             self.node(s, &inst, area, true);
                         }
                     }

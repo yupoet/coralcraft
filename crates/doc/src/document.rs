@@ -45,6 +45,7 @@ impl Document {
             raster_effects_ppi,
             images,
             patterns,
+            textures: _, // texture definitions are compared with the layers below, like patterns
             pattern_edit,
             mask_edit,
             symbol_edit,
@@ -222,6 +223,7 @@ impl Document {
             raster_effects_ppi: 72.0,
             images: BTreeMap::new(),
             patterns: vec![],
+            textures: vec![],
             pattern_edit: None,
             mask_edit: None,
             symbol_edit: None,

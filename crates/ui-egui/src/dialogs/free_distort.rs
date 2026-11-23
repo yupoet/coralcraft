@@ -13,6 +13,8 @@ use crate::{VectorcraftApp, widgets};
 
 /// The Free Distort effect.
 pub(crate) const FREE_DISTORT: &str = "distort.freeDistort";
+/// CoralCraft (P3 Task E3): Add Perspective shares the corners dialog.
+pub(crate) const PERSPECTIVE: &str = "distort.perspective";
 
 /// The corners on the box: top left, top right, bottom right and bottom left, in unit box
 /// coordinates.

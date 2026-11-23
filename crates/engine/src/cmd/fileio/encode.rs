@@ -452,7 +452,7 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
     }
     let failed = vectorcraft_render::decode_failures();
     let mut enc = encode_files(doc, f, p)?;
-    // CoralCraft: CDR/CMX carry the evaluated page text, while native documents keep the field.
+    // CoralCraft: CDR/CMX carry evaluated page text and substituted geometry/appearance, while native documents keep their sources.
     if matches!(f.id, "cdr" | "cmx") {
         let has_page_numbers = doc.layers.iter().any(|layer| {
             let mut found = false;
@@ -463,6 +463,29 @@ fn encode_all_of(doc: &Document, format: &str, p: &Value) -> Result<Encoded> {
             enc.warnings.push(
                 "dynamic page-number fields are flattened to editable per-page text in CDR/CMX; the native document keeps the dynamic fields".into(),
             );
+        }
+        // CoralCraft (P3 Task E6): the lock-contents state is native-only.
+        let has_unlocked_clips = doc.layers.iter().any(|layer| {
+            let mut found = false;
+            layer.walk(&mut |node: &vectorcraft_doc::Node| found |= node.extras().contents_unlocked);
+            found
+        });
+        if has_unlocked_clips {
+            enc.warnings.push("unlocked PowerClip contents (Lock Contents to Frame off) relock in CDR/CMX; native documents keep the flag".into());
+        }
+        let mut live_kinds = std::collections::BTreeSet::new();
+        for layer in &doc.layers {
+            layer.walk(&mut |node| {
+                if vectorcraft_doc::live::is_live(node) {
+                    live_kinds.insert(node.kind_label());
+                }
+            });
+        }
+        if !live_kinds.is_empty() {
+            let kinds = live_kinds.into_iter().collect::<Vec<_>>().join(", ");
+            enc.warnings.push(format!(
+                "live {kinds} objects are expanded to plain vector groups in CDR/CMX; the native document keeps the editable live sources"
+            ));
         }
     }
     // Baking, flattening and drawing stop early when cancelled and leave a truncated result.
@@ -552,14 +575,22 @@ fn encode_files(doc: &Document, f: &Format, p: &Value) -> Result<Encoded> {
         // CoralCraft: CorelDRAW (.cdr) — CDR7 classic RIFF or CDRX modern X4+ ZIP+RIFF.
         "cdr" => {
             let ver = p.get("cdrVersion").or_else(|| p.get("version")).and_then(Value::as_str).unwrap_or("cdr7");
-            match ver.to_ascii_lowercase().as_str() {
-                "cdr7" | "7" | "riff" => corel_import::write_cdr7_document(doc).map_err(|e| bad(C, format!("CDR7 encode failed: {e}")))?,
-                "cdrx" | "x4" | "zip" => corel_import::write_cdrx_zip_document(doc).map_err(|e| bad(C, format!("CDRX encode failed: {e}")))?,
+            let (bytes, warnings) = match ver.to_ascii_lowercase().as_str() {
+                "cdr7" | "7" | "riff" => {
+                    corel_import::write_cdr7_document_with_warnings(doc).map_err(|e| bad(C, format!("CDR7 encode failed: {e}")))?
+                }
+                "cdrx" | "x4" | "zip" => {
+                    corel_import::write_cdrx_zip_document_with_warnings(doc).map_err(|e| bad(C, format!("CDRX encode failed: {e}")))?
+                }
                 other => return Err(bad(C, format!("cdrVersion `{other}`: cdr7 or cdrx"))),
-            }
+            };
+            return Ok(Encoded { warnings, ..Encoded::one(bytes) });
         }
         // CoralCraft: Corel Presentation Exchange (.cmx) — CMX1 RIFF container.
-        "cmx" => corel_import::write_cmx1_document(doc).map_err(|e| bad(C, format!("CMX1 encode failed: {e}")))?,
+        "cmx" => {
+            let (bytes, warnings) = corel_import::write_cmx1_document_with_warnings(doc).map_err(|e| bad(C, format!("CMX1 encode failed: {e}")))?;
+            return Ok(Encoded { warnings, ..Encoded::one(bytes) });
+        }
         "pdf" => {
             let (bytes, warnings) = super::pdf::encode(C, doc, p)?;
             return Ok(Encoded { warnings, ..Encoded::one(bytes) });
